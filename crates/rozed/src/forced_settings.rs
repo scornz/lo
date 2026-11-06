@@ -2,14 +2,14 @@
 //!
 //! They sit in Zed's top settings layer (the "server" layer, merged after the user's), so a
 //! user's `settings.json` can't override them, and a repository's `.zed/settings.json` never
-//! applies at all ([`crate::local_project`]). They keep Zed's account, telemetry, update and AI
+//! applies at all ([`review_ui::local_project`]). They keep Zed's account, telemetry, update and AI
 //! code from starting, point every Zed service URL at a placeholder that rozed's HTTP client
 //! refuses ([`crate::http`]), let only rust-analyzer start, keep Prettier off, and narrow what
 //! rust-analyzer does.
 //!
 //! They don't keep a repository's code from running: rust-analyzer still runs cargo and rustc in
 //! the checkout, and a repository's `.cargo/config.toml` can point those at its own programs. So
-//! only a pull request the user trusts gets a checkout ([`crate::trust`]). `docs/spike.md`,
+//! only a pull request the user trusts gets a checkout ([`review_ui::trust`]). `docs/spike.md`,
 //! "Trust risks", lists what the settings stop and what they don't.
 
 use gpui::{App, UpdateGlobal as _};
@@ -30,7 +30,7 @@ pub const FORCED_SETTINGS: &str = r#"{
   // doesn't start the extension host; if it ever does, this turns off that one default. Entries
   // in the user's settings still apply.
   "auto_install_extensions": { "html": false },
-  // Only rozed decides which worktrees are trusted to run language servers (`crate::trust`).
+  // Only rozed decides which worktrees are trusted to run language servers (`review_ui::trust`).
   "session": { "trust_all_worktrees": false },
   // No inline git blame. In rozed's partial clone, blaming a file downloads each earlier version
   // of it, one request at a time: about 900 for sharkdp/fd#2212.

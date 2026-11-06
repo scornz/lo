@@ -5,15 +5,9 @@
 
 mod accounts_ui;
 mod forced_settings;
-mod github_api;
 mod http;
 mod keymap;
-mod local_copies;
-mod local_project;
-mod pr_diff;
-mod pr_link;
 mod rust_toolchain;
-mod trust;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -42,8 +36,10 @@ use util::ResultExt as _;
 use workspace::notifications::NotifyTaskExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
+use review_ui::pr_link::PrLink;
+use review_ui::{local_copies, local_project, pr_diff, trust};
+
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
-use crate::pr_link::PrLink;
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
