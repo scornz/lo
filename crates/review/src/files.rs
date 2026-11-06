@@ -3,9 +3,11 @@
 
 mod generated;
 mod order;
+mod state;
 
 pub use generated::{Generated, generated, is_lockfile};
 pub use order::path_order;
+pub use state::{InitialState, LARGE_FILE_LINES, initial_state};
 
 /// One file a pull request changes, as GitHub's changed-file list describes it, plus the
 /// `linguist-generated` attribute the caller looks up in the head revision's `.gitattributes`.
@@ -27,4 +29,12 @@ pub struct ChangedFile {
     /// or `linguist-generated=true`), `Some(false)` when it's unset (`-linguist-generated` or
     /// `linguist-generated=false`), and `None` when `.gitattributes` doesn't mention it.
     pub linguist_generated: Option<bool>,
+}
+
+impl ChangedFile {
+    /// Lines added plus lines deleted, GitHub's count of changes. A line edited in place counts
+    /// twice, once deleted and once added.
+    pub fn changed_lines(&self) -> u64 {
+        u64::from(self.additions) + u64::from(self.deletions)
+    }
 }
