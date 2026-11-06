@@ -852,16 +852,13 @@ async fn load(
     // The account that can see the repository, or none for a public one.
     let layer = cx.update(|_, cx| github_layer::ready(cx))?.await;
     let found = match &layer {
-        Some(layer) => {
-            let accounts = layer.read_with(cx, |layer, _| layer.accounts().clone());
-            Some(
-                accounts
-                    .update(cx, |accounts, cx| {
-                        accounts.account_for_repo(&link.owner, &link.repo, cx)
-                    })
-                    .await?,
-            )
-        }
+        Some(layer) => Some(
+            layer
+                .update(cx, |layer, cx| {
+                    layer.account_for_repo(&link.owner, &link.repo, cx)
+                })
+                .await?,
+        ),
         None => None,
     };
     let acting = match account::decide(&link.owner, &link.repo, found.as_ref()) {

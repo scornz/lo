@@ -5,10 +5,10 @@ use std::collections::HashMap;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
-use github::accounts::Accounts;
+use github::accounts::{Accounts, RepoAccount};
 use github::cache::PrCache;
 use github::db::RozedDb;
-use github::poll::{PollConfig, Poller};
+use github::poll::{PollConfig, Poller, RequestQueue};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 /// The accounts, the cache and the pollers, once rozed's database is open.
@@ -74,6 +74,38 @@ impl GithubLayer {
                 cx.new(|cx| Poller::new(accounts, login, cache, PollConfig::default(), cx))
             })
             .clone()
+    }
+
+    /// Which account to open `owner/repo` with ([`Accounts::account_for_repo`]). Each account's
+    /// check waits its turn in that account's queue, behind its polls.
+    pub fn account_for_repo(
+        &mut self,
+        owner: &str,
+        repo: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<RepoAccount>> {
+        let logins: Vec<String> = self
+            .accounts
+            .read(cx)
+            .accounts()
+            .iter()
+            .map(|account| account.login.clone())
+            .collect();
+        let queues: HashMap<String, RequestQueue> = logins
+            .iter()
+            .map(|login| {
+                let queue = self.poller(login, cx).read(cx).queue().clone();
+                (login.to_ascii_lowercase(), queue)
+            })
+            .collect();
+        self.accounts.update(cx, |accounts, cx| {
+            accounts.account_for_repo(
+                owner,
+                repo,
+                move |login| queues.get(&login.to_ascii_lowercase()).cloned(),
+                cx,
+            )
+        })
     }
 
     /// Tells every poller whether rozed is in the foreground. In the background they all slow to
