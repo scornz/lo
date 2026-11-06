@@ -2,9 +2,14 @@
 # Checks that the Zed crates compiled into rozed match script/zed-crates.txt, so a change in what
 # rozed pulls in from Zed shows up in review. With --update, rewrites the list instead.
 #
-# "Compiled in" means reachable from the rozed package through normal dependencies on the host
-# platform, per `cargo metadata`: the crates linked into the binary. Build and dev dependencies
-# don't count. A Zed crate is one whose manifest sits under third_party/zed.
+# "Compiled in" means what `cargo build -p rozed` compiles for the host: the crates reachable from
+# rozed through normal dependencies, with the features a build of the binary turns on. A Zed crate
+# is one whose manifest sits under third_party/zed.
+#
+# This uses `cargo tree` rather than `cargo metadata`: metadata's dependency graph merges in the
+# features rozed's dev-dependencies turn on (`test-support`), which pull in crates the binary never
+# builds, such as `util_macros` and `perf`. `cargo tree -e normal` resolves features as the build
+# does.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -12,24 +17,9 @@ list=script/zed-crates.txt
 
 host=$(rustc -vV | sed -n 's/^host: //p')
 actual=$(
-  cargo metadata --format-version 1 --locked --filter-platform "$host" |
-    jq -r --arg zed "$PWD/third_party/zed/" '
-      (.packages | map({key: .id, value: .}) | from_entries) as $packages
-      | (.resolve.nodes | map({key: .id, value: .}) | from_entries) as $nodes
-      | (.packages[] | select(.name == "rozed" and .source == null) | .id) as $root
-      | {seen: {($root): true}, queue: [$root]}
-      | until(.queue | length == 0;
-          .queue[0] as $id
-          | .queue |= .[1:]
-          | reduce ($nodes[$id].deps[]
-                    | select(any(.dep_kinds[]; .kind == null))
-                    | .pkg) as $dep (.;
-              if .seen[$dep] then . else .seen[$dep] = true | .queue += [$dep] end))
-      | .seen
-      | keys[]
-      | $packages[.]
-      | select(.manifest_path | startswith($zed))
-      | .name' |
+  cargo tree --locked --package rozed --edges normal --target "$host" --prefix none --format '{p}' |
+    grep -F "($PWD/third_party/zed/" |
+    awk '{ print $1 }' |
     sort -u
 )
 
