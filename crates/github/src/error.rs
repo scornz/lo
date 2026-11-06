@@ -223,44 +223,56 @@ impl GithubError {
         }
     }
 
-    /// The error for a GraphQL response's `errors`, which come with HTTP 200.
+    /// The error for a GraphQL response's `errors`, which come with HTTP 200. Every error is
+    /// looked at, and the one rozed can say most about wins: single sign-on, then an org's
+    /// OAuth restriction, then the rate limit, then not found.
     pub fn from_graphql(errors: Vec<GraphQlError>, headers: &HeaderMap) -> Self {
-        let sso_required = headers
-            .get("x-github-sso")
-            .and_then(|value| value.to_str().ok())
-            .and_then(SsoHeader::parse)
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let sso_required = header("x-github-sso")
+            .and_then(|value| SsoHeader::parse(&value))
             .filter(|sso| sso.required);
-        let first = errors.first();
-        let message = first.map(|e| e.message.clone()).unwrap_or_default();
-        let kind = first.and_then(|e| e.r#type.as_deref()).unwrap_or_default();
+        let kind = |error: &GraphQlError| error.r#type.clone().unwrap_or_default();
+        let find = |matches: &dyn Fn(&GraphQlError) -> bool| {
+            errors.iter().find(|error| matches(error)).cloned()
+        };
 
-        if sso_required.is_some() || message.contains("SAML enforcement") {
+        let sso_error = find(&|error| error.message.contains("SAML enforcement"));
+        if sso_required.is_some() || sso_error.is_some() {
             return Self::SsoRequired {
-                message,
+                message: sso_error
+                    .or_else(|| errors.first().cloned())
+                    .map(|error| error.message)
+                    .unwrap_or_default(),
                 url: sso_required.and_then(|sso| sso.url),
             };
         }
-        if is_oauth_restriction(&message) {
+        if let Some(error) = find(&|error| is_oauth_restriction(&error.message)) {
             return Self::OAuthAppRestricted {
-                org: restricting_org(&message),
-                message,
+                org: restricting_org(&error.message),
+                message: error.message,
                 documentation_url: None,
             };
         }
-        if kind == "RATE_LIMITED" || kind == "RATE_LIMIT" {
+        if let Some(error) =
+            find(&|error| matches!(kind(error).as_str(), "RATE_LIMITED" | "RATE_LIMIT"))
+        {
             return Self::RateLimited {
-                message,
+                message: error.message,
                 secondary: false,
-                reset: headers
-                    .get("x-ratelimit-reset")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok()),
-                retry_after: None,
+                reset: header("x-ratelimit-reset").and_then(|v| v.parse().ok()),
+                retry_after: header("retry-after")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(Duration::from_secs),
             };
         }
-        if kind == "NOT_FOUND" {
+        if let Some(error) = find(&|error| kind(error) == "NOT_FOUND") {
             return Self::NotFound {
-                message,
+                message: error.message,
                 documentation_url: None,
             };
         }
@@ -569,6 +581,56 @@ mod tests {
             other.to_string(),
             "Field 'nope' doesn't exist on type 'PullRequest'"
         );
+    }
+
+    #[test]
+    fn graphql_errors_are_classified_by_all_of_them() {
+        let error = |json: serde_json::Value, headers: &HeaderMap| {
+            let errors: Vec<GraphQlError> = serde_json::from_value(json).unwrap();
+            GithubError::from_graphql(errors, headers)
+        };
+        // An org's restriction on a fork, after an unrelated error, still reads as the
+        // restriction, with its link.
+        let restricted = error(
+            serde_json::json!([
+                {"type": "NOT_FOUND", "path": ["repository", "pullRequest", "author"], "message": "gone"},
+                {"type": "FORBIDDEN", "path": ["repository", "pullRequest", "headRepository"], "message": RESTRICTED},
+            ]),
+            &HeaderMap::new(),
+        );
+        assert!(
+            matches!(restricted, GithubError::OAuthAppRestricted { ref org, .. } if org.as_deref() == Some("rozed-dev")),
+            "{restricted:?}"
+        );
+        // Single sign-on comes before a restriction.
+        let sso = error(
+            serde_json::json!([
+                {"type": "FORBIDDEN", "message": RESTRICTED},
+                {"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization."},
+            ]),
+            &HeaderMap::new(),
+        );
+        assert!(matches!(sso, GithubError::SsoRequired { .. }), "{sso:?}");
+        // A rate limit after another error, with how long GitHub asked to wait.
+        let limited = error(
+            serde_json::json!([
+                {"type": "NOT_FOUND", "message": "gone"},
+                {"type": "RATE_LIMITED", "message": "API rate limit exceeded"},
+            ]),
+            &headers(&[("retry-after", "30"), ("x-ratelimit-reset", "1762419600")]),
+        );
+        let GithubError::RateLimited {
+            message,
+            retry_after,
+            reset,
+            ..
+        } = &limited
+        else {
+            panic!("{limited:?}");
+        };
+        assert_eq!(message, "API rate limit exceeded");
+        assert_eq!(*retry_after, Some(Duration::from_secs(30)));
+        assert_eq!(*reset, Some(1762419600));
     }
 
     #[test]

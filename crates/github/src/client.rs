@@ -364,6 +364,34 @@ impl GithubClient {
             .ok_or_else(|| GithubError::Decode("the response had no data".into()))
     }
 
+    /// Runs a GraphQL query whose answer is still useful when GitHub left out a field it
+    /// couldn't show, such as a fork's repository in an org that restricts OAuth apps. Errors
+    /// about fields deeper than `depth` from the root are logged and the rest of the data is
+    /// returned; any other error fails the query, as in [`Self::graphql`].
+    pub(crate) async fn graphql_keeping_partial<Q: GraphQLQuery>(
+        &self,
+        variables: Q::Variables,
+        depth: usize,
+    ) -> Result<Q::ResponseData, GithubError> {
+        let (response, headers) = self.graphql_partial::<Q>(variables).await?;
+        match response.data {
+            Some(data) if response.errors.iter().all(|error| error.is_below(depth)) => {
+                for error in &response.errors {
+                    log::warn!(
+                        "GitHub left out {}: {}",
+                        serde_json::Value::from(error.path.clone()),
+                        error.message
+                    );
+                }
+                Ok(data)
+            }
+            data if response.errors.is_empty() => {
+                data.ok_or_else(|| GithubError::Decode("the response had no data".into()))
+            }
+            _ => Err(GithubError::from_graphql(response.errors, &headers)),
+        }
+    }
+
     /// The signed-in user and the token's scopes (`GET /user`).
     pub async fn user(&self) -> Result<AuthenticatedUser, GithubError> {
         let response = self.send(Method::GET, "/user", None, None).await?;

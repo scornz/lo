@@ -147,7 +147,10 @@ fn not_found(what: String) -> GithubError {
 impl GithubClient {
     /// The signed-in user.
     pub async fn viewer(&self) -> Result<ViewerData, GithubError> {
-        Ok(self.graphql::<Viewer>(viewer::Variables).await?.viewer)
+        Ok(self
+            .graphql_keeping_partial::<Viewer>(viewer::Variables, 1)
+            .await?
+            .viewer)
     }
 
     /// A pull request with every one of its files.
@@ -172,13 +175,18 @@ impl GithubClient {
         page_size: i64,
     ) -> Result<PullRequestData, GithubError> {
         let fetch = |after: Option<String>| async move {
-            self.graphql::<PullRequest>(pull_request::Variables {
-                owner: owner.to_string(),
-                name: name.to_string(),
-                number,
-                files_first: page_size,
-                files_after: after,
-            })
+            // `repository.pullRequest` is what was asked for; errors below it only leave out
+            // what they're about.
+            self.graphql_keeping_partial::<PullRequest>(
+                pull_request::Variables {
+                    owner: owner.to_string(),
+                    name: name.to_string(),
+                    number,
+                    files_first: page_size,
+                    files_after: after,
+                },
+                2,
+            )
             .await?
             .repository
             .and_then(|repository| repository.pull_request)
@@ -225,11 +233,14 @@ impl GithubClient {
         name: &str,
         number: i64,
     ) -> Result<PullRequestCheckData, GithubError> {
-        self.graphql::<PullRequestCheck>(pull_request_check::Variables {
-            owner: owner.to_string(),
-            name: name.to_string(),
-            number,
-        })
+        self.graphql_keeping_partial::<PullRequestCheck>(
+            pull_request_check::Variables {
+                owner: owner.to_string(),
+                name: name.to_string(),
+                number,
+            },
+            2,
+        )
         .await?
         .repository
         .and_then(|repository| repository.pull_request)
@@ -261,12 +272,15 @@ impl GithubClient {
         let mut after = None;
         loop {
             let page = self
-                .graphql::<OpenPullRequests>(open_pull_requests::Variables {
-                    owner: owner.to_string(),
-                    name: name.to_string(),
-                    first: page_size,
-                    after: after.take(),
-                })
+                .graphql_keeping_partial::<OpenPullRequests>(
+                    open_pull_requests::Variables {
+                        owner: owner.to_string(),
+                        name: name.to_string(),
+                        first: page_size,
+                        after: after.take(),
+                    },
+                    2,
+                )
                 .await?
                 .repository
                 .ok_or_else(|| not_found(format!("repository {owner}/{name}")))?

@@ -367,3 +367,82 @@ fn null_pull_requests_dont_make_the_list_look_capped() {
     assert_eq!(list.pull_requests.len(), 2);
     assert!(!list.is_truncated());
 }
+
+#[test]
+fn an_error_on_a_field_that_can_be_null_keeps_the_rest() {
+    use synthetic::*;
+    // A fork in an org that restricts OAuth apps: GitHub nulls the head repository, explains it,
+    // and returns the rest of the pull request.
+    let mut page = pr_page("a", &["one"], false, None);
+    page["repository"]["pullRequest"]["files"]["totalCount"] = 1.into();
+    let http = std::sync::Arc::new(
+        ReplayHttpClient::from_interactions(
+            "partial",
+            [github::cassette::Interaction {
+                request: github::cassette::RecordedRequest {
+                    method: "POST".into(),
+                    url: "https://api.github.com/graphql".into(),
+                    operation: Some("PullRequest".into()),
+                    variables: Some(files_after(None)),
+                    ..Default::default()
+                },
+                response: github::cassette::RecordedResponse {
+                    status: 200,
+                    headers: Default::default(),
+                    body: Some(serde_json::json!({
+                        "data": page,
+                        "errors": [{
+                            "type": "FORBIDDEN",
+                            "path": ["repository", "pullRequest", "headRepository"],
+                            "message": "Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions"
+                        }],
+                    })),
+                    body_text: None,
+                },
+            }],
+        )
+        .unwrap(),
+    );
+    let pr = block_on(client_for(&http).pull_request_paged("o", "r", 2, 1)).unwrap();
+    assert_eq!(pr.number, 2);
+    assert_eq!(pr.head_repository, None);
+}
+
+#[test]
+fn an_error_on_what_was_asked_for_is_the_error() {
+    use synthetic::*;
+    // The pull request itself is forbidden: that's the answer, not a missing field.
+    let http = std::sync::Arc::new(
+        ReplayHttpClient::from_interactions(
+            "forbidden",
+            [github::cassette::Interaction {
+                request: github::cassette::RecordedRequest {
+                    method: "POST".into(),
+                    url: "https://api.github.com/graphql".into(),
+                    operation: Some("PullRequest".into()),
+                    variables: Some(files_after(None)),
+                    ..Default::default()
+                },
+                response: github::cassette::RecordedResponse {
+                    status: 200,
+                    headers: Default::default(),
+                    body: Some(serde_json::json!({
+                        "data": {"repository": {"pullRequest": null}},
+                        "errors": [{
+                            "type": "FORBIDDEN",
+                            "path": ["repository", "pullRequest"],
+                            "message": "Although you appear to have the correct authorization credentials, the `acme` organization has enabled OAuth App access restrictions"
+                        }],
+                    })),
+                    body_text: None,
+                },
+            }],
+        )
+        .unwrap(),
+    );
+    let error = block_on(client_for(&http).pull_request_paged("o", "r", 2, 1)).unwrap_err();
+    assert!(
+        matches!(error, GithubError::OAuthAppRestricted { .. }),
+        "{error:?}"
+    );
+}
