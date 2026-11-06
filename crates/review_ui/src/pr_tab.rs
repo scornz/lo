@@ -3783,7 +3783,27 @@ mod tests {
 
         cx.executor().advance_clock(Duration::from_secs(2));
         cx.run_until_parked();
-        assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(Unviewed)));
+        // GitHub took a.rs's mark and refused b.rs's, which goes back and says why.
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Unviewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        assert_eq!(github.github.mutations().len(), 2);
+        assert_eq!(
+            toasts(cx),
+            [
+                "Couldn't mark b.rs viewed: rozed-bot isn't allowed to (Resource not accessible by \
+              integration). It shows GitHub's mark again."
+            ]
+        );
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
     }
 
     #[gpui::test]
@@ -3791,29 +3811,38 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (workspace, cx) = workspace(cx).await;
+        let files = [("a.rs", lines(5, &[]), lines(5, &[3]))];
         let anonymous = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
-        let head: Oid = HEAD.parse().unwrap();
-        anonymous.update(cx, |tab, cx| {
-            tab.set_acting(Acting::Anonymous, cx);
-            tab.copied(&[changed("src/main.rs", Change::Modified)], &head, cx);
-        });
+        anonymous.update(cx, |tab, cx| tab.set_acting(Acting::Anonymous, cx));
+        show_test_diff(&anonymous, &workspace, &files, cx).await;
 
         cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx),
+            ["Sign in to mark files viewed: this pull request opened without an account."]
+        );
         assert!(has_viewed_toast(&workspace, cx));
-        assert_eq!(marks(&anonymous, cx), [mark("src/main.rs", None)]);
+        assert_eq!(marks(&anonymous, cx), [mark("a.rs", None)]);
 
         // Signed in, but GitHub hasn't sent the pull request's details, which name it for writes.
-        workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
         let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
         let github = sign_in_bot(&tab, "e_without_details", &[], cx).await;
-        tab.update(cx, |tab, cx| {
-            tab.copied(&[changed("a.rs", Change::Modified)], &head, cx);
-        });
+        show_test_diff(&tab, &workspace, &files, cx).await;
 
         cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx)[1..],
+            [
+                "Couldn't mark a.rs viewed: GitHub hasn't sent this pull request's details yet. Try \
+              again in a moment."
+            ]
+        );
         assert!(has_viewed_toast(&workspace, cx));
         assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
         assert_eq!(github.github.mutations(), []);
+        // Each tab's toast is its own, so the first still shows.
+        let first = toast_log(cx)[0].0.clone();
+        assert!(workspace.read_with(cx, |workspace, _| workspace.has_notification(&first)));
     }
 
     #[gpui::test]
@@ -4076,6 +4105,15 @@ mod tests {
         let (in_file, row, listed) = cursor(&tab, &editor, cx);
         assert_eq!((in_file.as_deref(), row), (Some("src/a.rs"), second));
         assert_eq!(listed.as_deref(), Some("src/a.rs"));
+
+        // The first change stays put too.
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(cursor(&tab, &editor, cx).1, first);
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(
+            cursor(&tab, &editor, cx),
+            (Some("src/a.rs".into()), first, Some("src/a.rs".into()))
+        );
     }
 
     #[gpui::test]
