@@ -10,6 +10,7 @@ pub mod cassette;
 mod client;
 pub mod credentials;
 pub mod db;
+pub mod device_flow;
 mod error;
 mod graphql;
 pub mod queries;
