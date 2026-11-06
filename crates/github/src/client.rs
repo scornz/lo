@@ -123,6 +123,17 @@ impl GithubClient {
         }
     }
 
+    /// A client that signs in as nobody, for public repositories: it sends no token, and its
+    /// requests count against GitHub's 60 an hour for each IP address.
+    pub fn anonymous(http: Arc<dyn HttpClient>) -> Self {
+        Self::new(http, Token::new(""))
+    }
+
+    /// Whether the client sends no token: [`Self::anonymous`].
+    pub fn is_anonymous(&self) -> bool {
+        self.token.read().is_empty()
+    }
+
     /// Calls `hook` whenever GitHub refuses the token, retrying the request once with the token
     /// it returns.
     pub fn with_unauthorized_hook(mut self, hook: OnUnauthorized) -> Self {
@@ -184,13 +195,23 @@ impl GithubClient {
         body: Option<Vec<u8>>,
         condition: Condition<'_>,
     ) -> Result<Request<AsyncBody>, GithubError> {
-        let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
-            .map_err(|_| GithubError::Decode("the token isn't a valid header value".into()))?;
-        authorization.set_sensitive(true);
+        // An anonymous client's token is empty, and it sends none.
+        let authorization = (!token.is_empty())
+            .then(|| {
+                let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
+                    .map_err(|_| {
+                        GithubError::Decode("the token isn't a valid header value".into())
+                    })?;
+                authorization.set_sensitive(true);
+                Ok::<_, GithubError>(authorization)
+            })
+            .transpose()?;
         Request::builder()
             .method(method)
             .uri(self.url(path)?)
-            .header("Authorization", authorization)
+            .when_some(authorization, |builder, authorization| {
+                builder.header("Authorization", authorization)
+            })
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
             .header("User-Agent", user_agent())

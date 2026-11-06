@@ -106,6 +106,22 @@ fn rest_pull_conditional() {
 
 #[test]
 #[ignore = "records from GitHub; run by hand"]
+fn rest_pull_files() {
+    record(
+        "rest_pull_files",
+        "GET /pulls/2/files: the files PR #2 changes, each with its patch",
+        |client| async move {
+            let files = client
+                .pull_files(&PullRef::new("rozed-dev", "playground", 2))
+                .await
+                .unwrap();
+            assert!(!files.is_empty());
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
 fn user() {
     record(
         "user",

@@ -1,0 +1,5 @@
+{
+  "description": "GET /pulls/2/files: the files PR #2 changes, each with its patch",
+  "recorded_at": "2026-11-06T14:42:59Z",
+  "repo": "rozed-dev/playground"
+}

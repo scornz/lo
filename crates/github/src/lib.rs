@@ -13,6 +13,7 @@ pub mod credentials;
 pub mod db;
 pub mod device_flow;
 mod error;
+pub mod files;
 pub mod gh_import;
 mod graphql;
 pub mod patch;
