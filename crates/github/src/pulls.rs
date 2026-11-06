@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A repository on github.com. GitHub matches owners and names case-insensitively; so does
@@ -105,7 +106,7 @@ impl From<RepoRef> for Target {
 /// The parts of GitHub's REST view of a pull request (`GET /repos/{owner}/{repo}/pulls/{number}`)
 /// that a tab shows without the full details: enough to notice a push, a retitle, a merge or a
 /// close.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PullSummary {
     pub number: i64,
     pub title: String,
@@ -127,7 +128,7 @@ impl PullSummary {
 }
 
 /// One side of a pull request.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PullBranch {
     #[serde(rename = "ref")]
     pub name: String,

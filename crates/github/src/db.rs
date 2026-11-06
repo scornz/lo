@@ -416,8 +416,8 @@ mod tests {
     impl crate::cache::CacheEntry for Note {
         const NAME: &'static str = "note";
 
-        fn version() -> String {
-            "1".into()
+        fn shape() -> String {
+            "a number".into()
         }
     }
 

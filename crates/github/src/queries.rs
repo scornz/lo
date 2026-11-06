@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use graphql_client::GraphQLQuery;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client::GithubClient;
@@ -70,8 +71,10 @@ pub type PullRequestCheckData = pull_request_check::PullRequestCheckRepositoryPu
 pub type OpenPullRequest = open_pull_requests::OpenPullRequestsRepositoryPullRequestsNodes;
 
 /// A repository's open pull requests.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OpenPullRequestList {
+    /// Their shape is the `OpenPullRequests` query's, which the cache's version covers.
+    #[schemars(with = "Vec<serde_json::Value>")]
     pub pull_requests: Vec<OpenPullRequest>,
     /// How many are open, which is more than `pull_requests` holds when it was capped, or when
     /// GitHub left some out as null.

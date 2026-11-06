@@ -10,6 +10,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
@@ -20,8 +21,8 @@ use crate::credentials::HOST;
 use crate::db::RozedDb;
 use crate::pulls::{PullRef, PullSummary, Target};
 use crate::queries::{
-    OpenPullRequestList, PullRequestCheckData, PullRequestData, open_pull_requests, pull_request,
-    pull_request_check,
+    MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
+    open_pull_requests, pull_request, pull_request_check,
 };
 
 /// Something the cache can hold.
@@ -29,45 +30,108 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     /// The name its rows are stored under.
     const NAME: &'static str;
 
-    /// Changes whenever the stored shape does: for a GraphQL answer, with its query's text.
-    fn version() -> String;
+    /// Everything the shape of its stored JSON depends on: the JSON schema of a type rozed
+    /// defines ([`schema_shape`]), the text of the GraphQL query a generated type comes from, and
+    /// anything else that changes what a stored answer means.
+    fn shape() -> String;
+
+    /// The version its rows are written in: a hash of its [`Self::shape`]. A row in another
+    /// version reads as missing, so a change to the shape can't be misread or kept forever
+    /// behind an unchanged ETag.
+    fn version() -> String {
+        let hash = format!("{:x}", Sha256::digest(Self::shape().as_bytes()));
+        hash[..16].to_string()
+    }
 }
 
-/// The version of a GraphQL answer: a hash of the query's text.
-fn query_version(query: &str) -> String {
-    let hash = format!("{:x}", Sha256::digest(query.as_bytes()));
-    hash[..16].to_string()
+/// The shape of a type rozed defines: its JSON schema, with keys sorted, and without
+/// documentation or type names, which change nothing that's stored.
+pub fn schema_shape<T: JsonSchema>() -> String {
+    let mut schema = schemars::schema_for!(T).to_value();
+    strip_annotations(&mut schema);
+    canonical(&schema)
+}
+
+/// Removes the schema's titles and descriptions, leaving property names alone.
+fn strip_annotations(schema: &mut serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            map.remove("title");
+            map.remove("description");
+            for (key, value) in map.iter_mut() {
+                match (key.as_str(), value) {
+                    // Maps from a property's or a definition's name to its schema.
+                    ("properties" | "$defs" | "definitions", serde_json::Value::Object(named)) => {
+                        named.values_mut().for_each(strip_annotations);
+                    }
+                    (_, value) => strip_annotations(value),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_annotations),
+        _ => {}
+    }
+}
+
+/// JSON with every object's keys sorted, whatever order the map kept them in.
+fn canonical(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let entries: Vec<String> = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::from(key.as_str()),
+                        canonical(value)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", entries.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
 }
 
 impl CacheEntry for PullSummary {
     const NAME: &'static str = "pull";
 
-    fn version() -> String {
-        format!("rest {API_VERSION} 1")
+    fn shape() -> String {
+        format!("REST {API_VERSION}\n{}", schema_shape::<Self>())
     }
 }
 
 impl CacheEntry for PullRequestData {
     const NAME: &'static str = pull_request::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(pull_request::QUERY)
+    fn shape() -> String {
+        pull_request::QUERY.to_string()
     }
 }
 
 impl CacheEntry for PullRequestCheckData {
     const NAME: &'static str = pull_request_check::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(pull_request_check::QUERY)
+    fn shape() -> String {
+        pull_request_check::QUERY.to_string()
     }
 }
 
 impl CacheEntry for OpenPullRequestList {
     const NAME: &'static str = open_pull_requests::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(open_pull_requests::QUERY)
+    fn shape() -> String {
+        format!(
+            "{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page",
+            schema_shape::<Self>(),
+            open_pull_requests::QUERY
+        )
     }
 }
 
@@ -324,10 +388,11 @@ mod tests {
     use super::*;
 
     use futures::executor::block_on;
+    use schemars::JsonSchema;
     use serde::Deserialize;
 
     use crate::db::{Account, AccountSource};
-    use crate::pulls::RepoRef;
+    use crate::pulls::{PullBranch, RepoRef};
 
     fn account(login: &str) -> Account {
         Account {
@@ -480,7 +545,7 @@ mod tests {
     }
 
     /// The same rows as [`PullSummary`], in a newer shape.
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
     struct NewerSummary {
         title: String,
         mergeable: bool,
@@ -489,8 +554,8 @@ mod tests {
     impl CacheEntry for NewerSummary {
         const NAME: &'static str = "pull";
 
-        fn version() -> String {
-            "rest 2022-11-28 2".into()
+        fn shape() -> String {
+            schema_shape::<Self>()
         }
     }
 
@@ -503,9 +568,67 @@ mod tests {
     impl CacheEntry for Mismatched {
         const NAME: &'static str = "pull";
 
-        fn version() -> String {
-            PullSummary::version()
+        fn shape() -> String {
+            PullSummary::shape()
         }
+    }
+
+    /// A summary as it might be written one day, and the same with a field added.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Before {
+        /// The title.
+        title: String,
+        head: PullBranch,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct After {
+        /// The title, documented differently.
+        title: String,
+        head: PullBranch,
+        mergeable_state: Option<String>,
+    }
+
+    #[test]
+    fn a_shape_is_its_fields_and_their_types() {
+        assert_ne!(schema_shape::<Before>(), schema_shape::<After>());
+        // Documentation isn't shape, and neither is the order of keys.
+        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[schemars(rename = "Before")]
+        struct Undocumented {
+            title: String,
+            head: PullBranch,
+        }
+        assert_eq!(schema_shape::<Before>(), schema_shape::<Undocumented>());
+        // A field renamed in the JSON is a different shape.
+        #[derive(Serialize, Deserialize, JsonSchema)]
+        struct Renamed {
+            #[serde(rename = "name")]
+            title: String,
+            head: PullBranch,
+        }
+        assert_ne!(schema_shape::<Before>(), schema_shape::<Renamed>());
+    }
+
+    /// Every version, as of the last change to what the cache stores. When this fails, a stored
+    /// shape changed: rows written in the old one will read as missing and be fetched again.
+    /// Check that's what the change means, then update the versions here.
+    #[test]
+    fn versions_follow_the_stored_shapes() {
+        assert_eq!(
+            [
+                (PullSummary::NAME, PullSummary::version()),
+                (PullRequestData::NAME, PullRequestData::version()),
+                (PullRequestCheckData::NAME, PullRequestCheckData::version()),
+                (OpenPullRequestList::NAME, OpenPullRequestList::version()),
+            ],
+            [
+                ("pull", "b2f1fdde71669374".to_string()),
+                ("PullRequest", "2f6a282f3dfcbf15".to_string()),
+                ("PullRequestCheck", "b900ef4fb7098d20".to_string()),
+                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+            ]
+        );
     }
 
     #[test]
