@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
+use futures::channel::oneshot;
 
 use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
@@ -34,7 +35,7 @@ use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
 use crate::poll_state::{self, PollNote, PollState};
-use crate::pr_banner::{self, BannerKind, Banners};
+use crate::pr_banner::{self, BannerAction, BannerKind, Banners};
 use crate::pr_diff::{self, CopyProgress, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
@@ -218,6 +219,8 @@ pub struct PrTab {
     api_head: Option<String>,
     /// The head GitHub's diff was listed at, once it shows and if GitHub's links say.
     github_head: Option<String>,
+    /// Tries copying again, when rozed stopped trying after failures it doesn't know.
+    retry_copy: Option<oneshot::Sender<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -276,6 +279,7 @@ impl PrTab {
             copy_failed: None,
             api_head: None,
             github_head: None,
+            retry_copy: None,
             _subscriptions: vec![on_focus, on_banners],
         }
     }
@@ -732,14 +736,11 @@ impl PrTab {
             return;
         };
         let when = match left {
-            Some(left) => format!("Trying again in {} s.", left.as_secs().max(1)),
+            // Whole seconds, rounded up, so it never says 0.
+            Some(left) => format!("Trying again in {} s.", left.as_millis().div_ceil(1000)),
             None => "Trying again now.".to_string(),
         };
-        let meanwhile = if self.diff_source == Some(DiffSource::GitHub) {
-            " Until then, this is GitHub's diff: changed lines only."
-        } else {
-            ""
-        };
+        let meanwhile = self.meanwhile();
         let text =
             format!("rozed couldn't copy this pull request locally: {why}. {when}{meanwhile}");
         self.banners.update(cx, |banners, cx| {
@@ -750,6 +751,67 @@ impl PrTab {
             None => "Copying it locally…",
         };
         self.set_status(Status::Loading(step.into()), cx);
+    }
+
+    /// What the tab shows until the local copy's diff is ready, if it shows GitHub's.
+    fn meanwhile(&self) -> &'static str {
+        if self.diff_source == Some(DiffSource::GitHub) {
+            " Until then, this is GitHub's diff: changed lines only."
+        } else {
+            ""
+        }
+    }
+
+    /// Says rozed stopped trying to copy the pull request locally after `tries` failures for
+    /// `why`, a reason it doesn't know, with a button that tries again through `retry`.
+    pub(crate) fn copy_stopped(
+        &mut self,
+        why: &str,
+        tries: usize,
+        retry: oneshot::Sender<()>,
+        cx: &mut Context<Self>,
+    ) {
+        self.retry_copy = Some(retry);
+        let text = format!(
+            "rozed stopped trying to copy this pull request locally after {tries} tries: {why}.{}",
+            self.meanwhile()
+        );
+        let tab = cx.weak_entity();
+        let action = BannerAction::new("Retry", move |_, cx| {
+            tab.update(cx, |tab, cx| tab.retry_copy(cx)).ok();
+        });
+        self.banners.update(cx, |banners, cx| {
+            banners.show_with(
+                BannerKind::LocalCopyFailed,
+                Severity::Error,
+                text,
+                Some(action),
+                cx,
+            )
+        });
+        let status = if self.diff.is_some() {
+            Status::Ready
+        } else if self._github_diff.is_some() {
+            // GitHub's diff shows when it arrives, and it's all there is until a retry.
+            self.copy_failed = Some(why.to_string().into());
+            Status::Loading("Reading GitHub's diff…".into())
+        } else {
+            Status::Failed(why.to_string().into())
+        };
+        self.set_status(status, cx);
+    }
+
+    /// Tries copying the pull request locally again, after rozed stopped trying.
+    pub(crate) fn retry_copy(&mut self, cx: &mut Context<Self>) {
+        let Some(retry) = self.retry_copy.take() else {
+            return;
+        };
+        retry.send(()).ok();
+        self.copy_failed = None;
+        self.banners.update(cx, |banners, cx| {
+            banners.hide(BannerKind::LocalCopyFailed, cx)
+        });
+        self.set_status(Status::Loading("Copying it locally…".into()), cx);
     }
 
     /// Shows that the local copy's diff has `done` of its `total` files.
@@ -1834,6 +1896,8 @@ mod tests {
     use crate::github_api::{Base, BaseRepo, Head, User};
     use crate::pr_diff::DiffPosition;
     use crate::pr_diff::tests::fixtures::Entry;
+    use futures::FutureExt as _;
+
     use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
 
     #[test]
@@ -3361,27 +3425,158 @@ mod tests {
         assert_eq!(scrolled.below_top, 0.);
     }
 
+    /// A copy whose fetch failed with `failure`, as git reports it.
+    fn fetch_failed(failure: repo_cache::FetchFailure) -> anyhow::Error {
+        anyhow::Error::new(repo_cache::Error::Fetch {
+            what: "pull request #1".into(),
+            failure,
+            message: "fatal: unable to access 'https://github.com/owner/repo.git/'".into(),
+        })
+    }
+
+    /// Copies `tab`'s pull request locally as the tab does, trying again after failures, with
+    /// each try answered by the next of `answers`: a failure, or `None` for a copy that works.
+    /// Returns the task, which ends when the copy works or fails for good, and the tries so far.
+    fn copy_with(
+        tab: &Entity<PrTab>,
+        answers: Vec<Option<repo_cache::FetchFailure>>,
+        cx: &mut VisualTestContext,
+    ) -> (
+        Task<anyhow::Result<()>>,
+        std::rc::Rc<std::cell::Cell<usize>>,
+        pr_diff::tests::Copied,
+    ) {
+        let copied = pr_diff::tests::copy(&[Entry::File("a.txt", b"a\n")], &[], false);
+        let local = std::cell::Cell::new(Some(copied.local.clone()));
+        let tries = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut answers = answers.into_iter();
+        let copy_once = {
+            let tries = tries.clone();
+            move |_progress, _cx: &mut AsyncWindowContext| {
+                tries.set(tries.get() + 1);
+                Task::ready(match answers.next().flatten() {
+                    Some(failure) => Err(fetch_failed(failure)),
+                    None => Ok(local.take().expect("a copy that works ends the tries")),
+                })
+            }
+        };
+        // Nothing has focus, so no cursor blinks while the clock runs on.
+        cx.update(|window, cx| window.blur(cx));
+        let task = tab.update_in(cx, |tab, window, cx| {
+            let link = tab.link().clone();
+            cx.spawn_in(window, async move |tab, cx| {
+                pr_diff::copy_with_retries(&tab, &link, copy_once, cx)
+                    .await
+                    .map(|_| ())
+            })
+        });
+        cx.run_until_parked();
+        (task, tries, copied)
+    }
+
+    fn wait(seconds: u64, cx: &mut VisualTestContext) {
+        cx.executor().advance_clock(Duration::from_secs(seconds));
+        cx.run_until_parked();
+    }
+
     #[gpui::test]
-    async fn a_failed_copy_shows_a_banner_until_it_works(cx: &mut TestAppContext) {
+    async fn a_copy_that_fails_on_the_network_is_tried_again_ever_later(cx: &mut TestAppContext) {
+        use repo_cache::FetchFailure::{Network, RateLimited};
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(&tab, vec![github_file("a.txt", 50)], cx);
+        // As many failures as stop a copy that fails for an unknown reason, then a copy that
+        // works.
+        let mut answers = vec![Some(Network), Some(RateLimited)];
+        answers.extend([Some(Network); 3]);
+        answers.push(None);
+
+        let (task, tries, _copied) = copy_with(&tab, answers, cx);
+
+        let why = "can't fetch pull request #1: the network failed (fatal: unable to access \
+                   'https://github.com/owner/repo.git/')";
+        assert_eq!(
+            banners(&tab, cx),
+            [format!(
+                "rozed couldn't copy this pull request locally: {why}. Trying again in 5 s. \
+                 Until then, this is GitHub's diff: changed lines only."
+            )]
+        );
+        // It counts down a second at a time.
+        wait(1, cx);
+        assert!(banners(&tab, cx)[0].contains("Trying again in 4 s."));
+        wait(4, cx);
+        assert_eq!(tries.get(), 2);
+        // Each wait doubles ([`pr_diff::next_wait`] caps it at 5 minutes).
+        for (try_, seconds) in [10, 20, 40, 80].into_iter().enumerate() {
+            let banner = &banners(&tab, cx)[0];
+            assert!(
+                banner.contains(&format!("Trying again in {seconds} s.")),
+                "{banner}"
+            );
+            wait(seconds, cx);
+            assert_eq!(tries.get(), try_ + 3);
+        }
+
+        // The sixth try works, and the banner goes.
+        assert!(banners(&tab, cx).is_empty());
+        assert!(task.now_or_never().unwrap().is_ok());
+    }
+
+    #[gpui::test]
+    async fn a_copy_that_keeps_failing_for_an_unknown_reason_stops_with_a_retry_button(
+        cx: &mut TestAppContext,
+    ) {
+        use repo_cache::FetchFailure::Other;
         let (workspace, cx) = workspace(cx).await;
         let tab = open_unloaded(&workspace, PULL, cx);
         show_github_files(&tab, vec![github_file("a.txt", 50)], cx);
 
-        let why = "can't fetch pull request #1: the network failed";
-        tab.update(cx, |tab, cx| {
-            tab.copy_retried(Some((why, Some(Duration::from_secs(20)))), cx)
-        });
-        assert_eq!(
-            banners(&tab, cx),
-            [format!(
-                "rozed couldn't copy this pull request locally: {why}. Trying again in 20 s. \
-                 Until then, this is GitHub's diff: changed lines only."
-            )]
-        );
-        tab.update(cx, |tab, cx| tab.copy_retried(Some((why, None)), cx));
-        assert!(banners(&tab, cx)[0].contains("Trying again now."));
+        let (task, tries, _copied) = copy_with(&tab, vec![Some(Other); 5], cx);
+        for seconds in [5, 10, 20, 40] {
+            wait(seconds, cx);
+        }
 
-        tab.update(cx, |tab, cx| tab.copy_retried(None, cx));
+        assert_eq!(tries.get(), 5);
+        let shown = tab.read_with(cx, |tab, cx| tab.banners().read(cx).messages().to_vec());
+        assert_eq!(
+            shown[0].text.as_ref(),
+            "rozed stopped trying to copy this pull request locally after 5 tries: can't fetch \
+             pull request #1: fatal: unable to access 'https://github.com/owner/repo.git/'. \
+             Until then, this is GitHub's diff: changed lines only."
+        );
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.status().clone()),
+            Status::Ready
+        );
+        // It waits for the button, however long.
+        wait(60, cx);
+        assert_eq!(tries.get(), 5);
+
+        let retry = shown[0].action.clone().unwrap();
+        assert_eq!(retry.label.as_ref(), "Retry");
+        cx.update(|window, cx| (retry.on_click)(window, cx));
+        cx.run_until_parked();
+
+        assert_eq!(tries.get(), 6);
+        assert!(banners(&tab, cx).is_empty());
+        assert!(task.now_or_never().unwrap().is_ok());
+    }
+
+    #[gpui::test]
+    async fn a_copy_that_fails_for_good_isnt_tried_again(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+
+        let (task, tries, _copied) =
+            copy_with(&tab, vec![Some(repo_cache::FetchFailure::Auth)], cx);
+
+        assert_eq!(tries.get(), 1);
+        let error = task.now_or_never().unwrap().unwrap_err();
+        assert!(
+            format!("{error:#}").contains("sign in with one"),
+            "{error:#}"
+        );
         assert!(banners(&tab, cx).is_empty());
     }
 
