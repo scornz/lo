@@ -1,5 +1,5 @@
-//! The one GitHub API call the spike makes: reading a public pull request, without signing in.
-//! Milestone 3's `github` crate replaces it.
+//! The one GitHub API call the spike makes: reading a pull request, signed in when rozed has a
+//! token. Milestone 3's `github` crate replaces it.
 
 use std::sync::Arc;
 
@@ -8,6 +8,8 @@ use futures::AsyncReadExt as _;
 use http_client::http::{HeaderMap, StatusCode};
 use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request};
 use serde::Deserialize;
+
+use repo_cache::Token;
 
 use crate::pr_link::PrLink;
 
@@ -29,32 +31,53 @@ pub struct Base {
     /// The branch the pull request merges into.
     #[serde(rename = "ref")]
     pub branch: String,
+    /// The base commit GitHub compared against, which stands in for the branch once it's gone.
+    pub sha: String,
     pub repo: BaseRepo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BaseRepo {
+    /// The repository's canonical `owner/name`, which names its local copy. A link to a renamed
+    /// or transferred repository still names the old one.
+    pub full_name: String,
     /// Where to clone the repository from. Pull requests from forks are fetched from here too,
     /// through `refs/pull/<n>/head`.
     pub clone_url: String,
 }
 
-/// `GET /repos/{owner}/{repo}/pulls/{number}`, unauthenticated, so it works for public
-/// repositories only and counts against GitHub's 60 requests an hour per IP address.
+impl BaseRepo {
+    /// The owner and name in [`Self::full_name`].
+    pub fn owner_and_name(&self) -> anyhow::Result<(&str, &str)> {
+        self.full_name
+            .split_once('/')
+            .filter(|(owner, name)| !owner.is_empty() && !name.is_empty() && !name.contains('/'))
+            .with_context(|| format!("GitHub named the repository {:?}", self.full_name))
+    }
+}
+
+/// `GET /repos/{owner}/{repo}/pulls/{number}`. With `token`, signed in, so private repositories
+/// work. Without one, it works for public repositories only and counts against GitHub's 60
+/// requests an hour per IP address.
 pub async fn fetch_pull_request(
     http: Arc<dyn HttpClient>,
     link: &PrLink,
+    token: Option<&Token>,
 ) -> anyhow::Result<PullRequest> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/pulls/{}",
         link.owner, link.repo, link.number
     );
-    let request = Request::get(&url)
+    let mut request = Request::get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        // A renamed repository answers with a redirect to its new name.
-        .follow_redirects(RedirectPolicy::FollowAll)
-        .body(AsyncBody::empty())?;
+        // A renamed repository answers with a redirect to its new name. rozed's HTTP client
+        // drops the token on a redirect to another host.
+        .follow_redirects(RedirectPolicy::FollowAll);
+    if let Some(token) = token {
+        request = request.header("Authorization", format!("Bearer {}", token.expose()));
+    }
+    let request = request.body(AsyncBody::empty())?;
     let mut response = http
         .send(request)
         .await
@@ -65,7 +88,13 @@ pub async fn fetch_pull_request(
         .read_to_string(&mut body)
         .await
         .with_context(|| format!("reading GitHub's answer for {link}"))?;
-    check_status(response.status(), response.headers(), &body, link)?;
+    check_status(
+        response.status(),
+        response.headers(),
+        &body,
+        link,
+        token.is_some(),
+    )?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
@@ -75,6 +104,7 @@ fn check_status(
     headers: &HeaderMap,
     body: &str,
     link: &PrLink,
+    signed_in: bool,
 ) -> anyhow::Result<()> {
     if status.is_success() {
         return Ok(());
@@ -83,14 +113,20 @@ fn check_status(
         .get("x-ratelimit-remaining")
         .is_some_and(|remaining| remaining == "0");
     if rate_limited && matches!(status.as_u16(), 403 | 429) {
+        if signed_in {
+            bail!("GitHub's rate limit for the token is used up; try again later");
+        }
         bail!(
             "GitHub's limit of 60 requests an hour without signing in is used up; try again later"
         );
     }
     if status == StatusCode::NOT_FOUND {
+        if signed_in {
+            bail!("GitHub has no pull request {link}, or the token can't see it");
+        }
         bail!(
             "GitHub has no public pull request {link}. rozed can't sign in yet, so it opens \
-             pull requests in public repositories only"
+             pull requests in public repositories only, unless ROZED_GITHUB_TOKEN holds a token"
         );
     }
     let message = serde_json::from_str::<serde_json::Value>(body)
@@ -107,6 +143,7 @@ fn parse_pull_request(body: &str) -> anyhow::Result<PullRequest> {
         clone_url.starts_with("https://github.com/"),
         "the repository's clone URL {clone_url} isn't on github.com"
     );
+    pull_request.base.repo.owner_and_name()?;
     Ok(pull_request)
 }
 
@@ -193,7 +230,12 @@ mod tests {
     }
 
     fn fetch(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212()))
+        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), None))
+    }
+
+    fn fetch_signed_in(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
+        let token = Token::new("gho_secret");
+        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), Some(&token)))
     }
 
     #[test]
@@ -209,7 +251,9 @@ mod tests {
                 },
                 base: Base {
                     branch: "master".into(),
+                    sha: "cc4e40fa4e32d61733cd72926e233a3fb6c8d56d".into(),
                     repo: BaseRepo {
+                        full_name: "sharkdp/fd".into(),
                         clone_url: "https://github.com/sharkdp/fd.git".into()
                     },
                 },
@@ -228,6 +272,36 @@ mod tests {
             request.extensions().get::<RedirectPolicy>(),
             Some(&RedirectPolicy::FollowAll)
         );
+    }
+
+    #[test]
+    fn signs_in_with_a_token() {
+        let http = Canned::new(200, FD_2212);
+        let pull_request = fetch_signed_in(http.clone()).unwrap();
+        assert_eq!(
+            pull_request.base.repo.owner_and_name().unwrap(),
+            ("sharkdp", "fd")
+        );
+        let request = http.request.lock().unwrap().take().unwrap();
+        assert_eq!(request.headers()["Authorization"], "Bearer gho_secret");
+
+        let error = fetch_signed_in(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "GitHub has no pull request sharkdp/fd#2212, or the token can't see it"
+        );
+    }
+
+    #[test]
+    fn refuses_a_repository_name_that_isnt_owner_slash_name() {
+        for name in ["fd", "/fd", "sharkdp/", "a/b/c"] {
+            let body = FD_2212.replace("\"sharkdp/fd\"", &format!("{name:?}"));
+            let error = parse_pull_request(&body).unwrap_err();
+            assert!(
+                error.to_string().contains("named the repository"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

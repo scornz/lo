@@ -8075,6 +8075,7 @@ dependencies = [
  "paths",
  "project",
  "release_channel",
+ "repo_cache",
  "reqwest_client",
  "semver",
  "serde",

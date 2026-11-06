@@ -82,7 +82,8 @@ impl Token {
         Self(token.trim().to_string())
     }
 
-    pub(crate) fn expose(&self) -> &str {
+    /// The token itself, for an `Authorization` header. The one way to read it.
+    pub fn expose(&self) -> &str {
         &self.0
     }
 }

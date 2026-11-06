@@ -124,7 +124,8 @@ Not compiled in: `auto_update`, `extension_host`, `git_ui`, `git_ui_core`, `call
 
 1. `GET api.github.com/repos/<owner>/<repo>/pulls/<n>`, without signing in, for the base branch and
    the clone URL.
-2. The local copy (`crates/rozed/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`): a
+2. The local copy (`crates/rozed/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`,
+   which has since replaced it): a
    bare `blob:none` partial clone at `~/Library/Caches/rozed/repos/github.com/<owner>/<repo>.git`, a
    fetch of `refs/pull/<n>/head` and the base branch into `refs/rozed/pull/<n>/head` and
    `refs/rozed/base/<branch>`, their merge base, the changed files (`git diff -M` with
@@ -328,8 +329,9 @@ could do to the machine today, which milestone 10 has to close:
 - **rust-analyzer always comes from GitHub,** where design §2 says rozed uses an installed copy
   when it finds one. The copy on `PATH` is usually rustup's proxy (see "Trust risks"); an installed
   binary that isn't a proxy would be safe to use. Milestone 10 decides.
-- **A force-pushed head replaces the old one** in `refs/rozed/pull/<n>/head`, so older revisions
-  don't survive yet; milestone 4 keeps every fetched revision.
+- **A force-pushed head replaced the old one** in `refs/rozed/pull/<n>/head`, so older revisions
+  didn't survive. Milestone 4's `repo_cache` pins every fetched head under
+  `refs/rozed/pull/<n>/revs/<sha>`.
 - **Big pull requests:** rozed runs one `git cat-file` per file and adds each file's hunks at once.
   `git cat-file --batch` and adding hunks in batches, as Zed's commit view does, would keep large
   diffs responsive.

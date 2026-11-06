@@ -7,7 +7,7 @@ mod forced_settings;
 mod github_api;
 mod http;
 mod keymap;
-mod local_copy;
+mod local_copies;
 mod pr_diff;
 mod pr_link;
 mod trust;
@@ -44,6 +44,10 @@ use crate::pr_link::PrLink;
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
+
+/// A GitHub token to sign in with, until milestone 3's accounts. rozed reads it at launch and
+/// removes it from its environment, so no child process inherits it.
+const TOKEN_VAR: &str = "ROZED_GITHUB_TOKEN";
 
 const USAGE: &str = "usage: rozed [<pull request link>]
 example: rozed https://github.com/sharkdp/fd/pull/2212";
@@ -101,8 +105,13 @@ fn main() {
         std::process::exit(1);
     }
 
+    let token = std::env::var(TOKEN_VAR)
+        .ok()
+        .map(repo_cache::Token::new)
+        .filter(|token| !token.expose().is_empty());
     // SAFETY: no other thread exists yet, so nothing reads the environment concurrently.
     unsafe {
+        std::env::remove_var(TOKEN_VAR);
         std::env::set_var(SHELL_ENV_GUARD, std::process::id().to_string());
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
@@ -142,6 +151,8 @@ fn main() {
         gpui_tokio::init(cx);
         settings::init(cx);
         forced_settings::apply(cx);
+        // Checks git and cleans up old clones in the background.
+        local_copies::init(token, cx);
 
         let http = http_client(cx);
         cx.set_http_client(http.clone());
@@ -364,7 +375,15 @@ fn open_window(
                     })
                     .detach_and_notify_err(workspace.downgrade(), window, cx);
             }
-            None => workspace.update(cx, |workspace, cx| show_source(workspace, window, cx)),
+            None => {
+                workspace.update(cx, |workspace, cx| show_source(workspace, window, cx));
+                // Opening a pull request reports a missing or old git itself. Without one, say
+                // so as soon as the launch check finds it.
+                let check = local_copies::cache(cx);
+                window
+                    .spawn(cx, async move |_| check.await.map(|_| ()))
+                    .detach_and_notify_err(workspace.downgrade(), window, cx);
+            }
         }
     })?;
     Ok(())
