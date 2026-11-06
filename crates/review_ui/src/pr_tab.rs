@@ -1416,12 +1416,14 @@ async fn load(
             let pull_request = queue
                 .read(|| github_api::fetch_as(&client, login, &link))
                 .await?;
-            let token = repo_cache::Token::new(client.token().expose());
+            let token = client
+                .token()
+                .map(|token| repo_cache::Token::new(token.expose()));
             let reader = FilesReader {
                 client: client.clone(),
                 queue: Some(queue),
             };
-            (pull_request, Some(token), reader, Some(poller))
+            (pull_request, token, reader, Some(poller))
         }
         _ => {
             let http = cx.update(|_, cx| cx.http_client())?;
