@@ -110,3 +110,13 @@ fn crlf_line_endings_are_not_part_of_a_line() {
         ]
     );
 }
+
+#[test]
+fn two_empty_files_have_no_rows() {
+    assert_eq!(rows("json", "", ""), Vec::<String>::new());
+}
+
+#[test]
+fn a_file_without_a_final_line_ending() {
+    assert_eq!(rows("json", "[1]", "[2]\n"), ["1 [[1]] | 1 [[2]]"]);
+}
