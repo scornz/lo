@@ -2,9 +2,17 @@
 
 use std::time::{Duration, Instant};
 
-use stacks::{PullRequest, Rule, Stacks, State};
+use stacks::{NeedsRebase, Parent, PullRequest, Rule, Stacks, State};
 
 use crate::support::{With, pr};
+
+/// The time budget, which holds for an optimized build. Debug builds run several times slower,
+/// so they only catch a blow-up.
+const BUDGET: Duration = if cfg!(debug_assertions) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_millis(50)
+};
 
 const STACKS: u64 = 250;
 const LAYERS: u64 = 4;
@@ -57,7 +65,7 @@ fn oid(number: u64, commit: u64) -> String {
 }
 
 #[test]
-fn finds_stacks_among_1000_prs_within_50_ms() {
+fn finds_stacks_among_1000_prs_within_budget() {
     let prs = busy_repo();
     assert_eq!(prs.len(), 1000);
     let merged = prs.iter().filter(|pr| pr.state != State::Open).count();
@@ -84,8 +92,52 @@ fn finds_stacks_among_1000_prs_within_50_ms() {
     assert!(stacks.layer(2).unwrap().needs_rebase.is_some());
 
     assert!(
-        elapsed < Duration::from_millis(50),
+        elapsed < BUDGET,
         "took {elapsed:?} to find stacks among 1,000 PRs"
     );
     eprintln!("found stacks among 1,000 PRs in {elapsed:?}");
+}
+
+#[test]
+fn walks_a_long_merged_chain_within_budget() {
+    // 5,000 squash-merged PRs, each stacked on the one before by commits, and 1,000 open PRs on
+    // the last one.
+    const MERGED: u64 = 5000;
+    const OPEN: u64 = 1000;
+    let mut prs = Vec::new();
+    let mut commits: Vec<String> = Vec::new();
+    for number in 1..=MERGED {
+        commits.push(format!("m{number}"));
+        let listed = &commits[commits.len().saturating_sub(COMMITS_LISTED)..];
+        let listed: Vec<&str> = listed.iter().map(String::as_str).collect();
+        let head = format!("m{number}");
+        prs.push(pr(number, "main", &head).commits(&listed).merged(false));
+    }
+    let top = format!("m{MERGED}");
+    for number in MERGED + 1..=MERGED + OPEN {
+        let head = format!("o{number}");
+        prs.push(pr(number, "main", &head).commits(&[top.as_str(), head.as_str()]));
+    }
+
+    let start = Instant::now();
+    let stacks = Stacks::find(&prs, &["main"]);
+    let elapsed = start.elapsed();
+
+    let root = &stacks.roots()[0];
+    assert_eq!(root.branch, "main");
+    assert_eq!(root.stacks.len() as u64, OPEN);
+    let layer = stacks.layer(MERGED + 1).unwrap();
+    assert_eq!(layer.parent, Parent::Branch("main".into()));
+    assert_eq!(
+        layer.needs_rebase,
+        Some(NeedsRebase {
+            merged: MERGED,
+            compare_against: top.clone(),
+        })
+    );
+    assert!(
+        elapsed < BUDGET,
+        "took {elapsed:?} to walk {MERGED} merged PRs under {OPEN} open ones"
+    );
+    eprintln!("walked {MERGED} merged PRs under {OPEN} open ones in {elapsed:?}");
 }

@@ -266,9 +266,10 @@ impl Stacks {
         let graph = Graph::new(prs, trunks);
         let mut links = graph.links();
         let cycles = graph.break_cycles(&mut links);
+        let mut landings = vec![None; graph.prs.len()];
         let placed = (0..graph.prs.len())
             .filter(|&index| graph.prs[index].state == State::Open)
-            .map(|index| graph.place(index, &links))
+            .map(|index| graph.place(index, &links, &mut landings))
             .collect();
         Self {
             cycles,
@@ -405,6 +406,17 @@ struct Graph<'a> {
     trunks: HashSet<&'a str>,
 }
 
+/// Where a layer on a merged PR sits.
+#[derive(Clone, Debug)]
+struct Landing<'a> {
+    /// The open PR or root branch that following links down from the merged PR reaches.
+    parent: Parent,
+    /// The branch that is: none for a fork PR's.
+    base: Option<&'a String>,
+    /// Whether a squash- or rebase-merged PR was on the way.
+    squashed: bool,
+}
+
 /// Each rule's lookup from what it matches to the PR below, as indexes into [`Graph::prs`].
 struct Lookups<'a> {
     /// By GitHub stack and position.
@@ -526,7 +538,12 @@ impl<'a> Graph<'a> {
 
     /// Where the open PR `prs[index]` sits. When its link reaches a merged PR, it sits where that
     /// PR would, following links down to an open PR or a root branch.
-    fn place(&self, index: usize, links: &[Option<Edge>]) -> Placed<'a> {
+    fn place(
+        &self,
+        index: usize,
+        links: &[Option<Edge>],
+        landings: &mut [Option<Landing<'a>>],
+    ) -> Placed<'a> {
         let pr = self.prs[index];
         let Some(edge) = links[index] else {
             return Placed {
@@ -537,27 +554,11 @@ impl<'a> Graph<'a> {
                 retarget_to: None,
             };
         };
-        let mut squashed = false;
-        // `break_cycles` has run, so this ends.
-        let mut next = edge.below;
-        // What it sits on, and the branch that is: none for a fork's.
-        let (parent, base) = loop {
-            let below = self.prs[next];
-            let State::Merged { head_in_base } = below.state else {
-                let base = below.head_in_base_repo.then_some(&below.head_ref);
-                break (Parent::Pr(below.number), base);
-            };
-            squashed |= !head_in_base;
-            match links[next] {
-                Some(link) => next = link.below,
-                None => {
-                    break (
-                        Parent::Branch(below.base_ref.clone()),
-                        Some(&below.base_ref),
-                    );
-                }
-            }
-        };
+        let Landing {
+            parent,
+            base,
+            squashed,
+        } = self.land(edge.below, links, landings);
         let retarget_to = base.filter(|&base| *base != pr.base_ref).cloned();
         // GitHub rebases a stack's layers itself when a lower one merges.
         let merged = self.prs[edge.below];
@@ -581,6 +582,52 @@ impl<'a> Graph<'a> {
             needs_rebase,
             retarget_to,
         }
+    }
+
+    /// Where a layer on `prs[start]` sits: on that PR if it's open, or where following links down
+    /// from it through merged PRs lands. Remembers the landing of every merged PR on the way in
+    /// `landings`, so each chain of merged PRs is walked once.
+    fn land(
+        &self,
+        start: usize,
+        links: &[Option<Edge>],
+        landings: &mut [Option<Landing<'a>>],
+    ) -> Landing<'a> {
+        let mut path = Vec::new();
+        let mut next = start;
+        // `break_cycles` has run, so this ends.
+        let mut landing = loop {
+            if let Some(landing) = &landings[next] {
+                break landing.clone();
+            }
+            let below = self.prs[next];
+            if below.state == State::Open {
+                break Landing {
+                    parent: Parent::Pr(below.number),
+                    base: below.head_in_base_repo.then_some(&below.head_ref),
+                    squashed: false,
+                };
+            }
+            path.push(next);
+            match links[next] {
+                Some(link) => next = link.below,
+                None => {
+                    break Landing {
+                        parent: Parent::Branch(below.base_ref.clone()),
+                        base: Some(&below.base_ref),
+                        squashed: false,
+                    };
+                }
+            }
+        };
+        for &merged in path.iter().rev() {
+            landing.squashed |= self.prs[merged].state
+                == State::Merged {
+                    head_in_base: false,
+                };
+            landings[merged] = Some(landing.clone());
+        }
+        landing
     }
 
     /// Breaks each cycle in `links` by dropping one link, and returns the cycles.
