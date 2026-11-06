@@ -16,6 +16,7 @@ pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
 mod read_only;
+pub mod recent_prs;
 pub mod tabs;
 #[cfg(test)]
 mod test_support;
@@ -44,6 +45,7 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
 pub fn init_workspaces(cx: &mut App) {
     pr_tab::bind_keys(cx);
     account_picker::bind_keys(cx);
+    recent_prs::bind_keys(cx);
     open_box::bind_keys(cx);
     read_only::hide_from_palette(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
@@ -87,7 +89,14 @@ fn workspace_event(
             window_title::update(workspace, window, cx);
         }
         workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
-        workspace::Event::ItemAdded { item } => read_only::item_added(item.as_ref(), cx),
+        workspace::Event::ItemAdded { item } => {
+            read_only::item_added(item.as_ref(), cx);
+            if item.downcast::<PrTab>().is_some() {
+                recent_prs::pull_request_opened(workspace, window, cx);
+            }
+        }
+        // With no pull request left, the window lists the recent ones.
+        workspace::Event::ItemRemoved { .. } => recent_prs::tab_closed(workspace, window, cx),
         _ => {}
     }
 }

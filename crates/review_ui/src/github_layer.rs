@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use futures::FutureExt as _;
 use futures::future::Shared;
 use github::accounts::{Accounts, RepoAccount};
-use github::cache::{PrCache, RECENT_PRS};
+use github::cache::{PrCache, RECENT_PRS, RecentPr};
 use github::db::RozedDb;
 use github::poll::{PollConfig, Poller, RequestQueue};
 use github::queries::PullRequestData;
@@ -97,6 +97,15 @@ impl GithubLayer {
             .clone()
     }
 
+    /// The pull requests opened recently with any account, newest first. It's read from rozed's
+    /// database, so it's there at once, online or not.
+    pub fn recent(&self) -> Vec<RecentPr> {
+        self.cache
+            .recent(RECENT_PRS)
+            .inspect_err(|error| log::warn!("reading recent pull requests: {error:#}"))
+            .unwrap_or_default()
+    }
+
     /// What rozed saved about `pull` the last time an account fetched it: the account remembered
     /// for its owner's, else the account it was last opened with's, else any account's that has
     /// it. It's read from rozed's database, so it's there at once, online or not.
@@ -108,10 +117,7 @@ impl GithubLayer {
             .ok()
             .flatten();
         let last_opened_with = self
-            .cache
-            .recent(RECENT_PRS)
-            .inspect_err(|error| log::warn!("reading recent pull requests: {error:#}"))
-            .unwrap_or_default()
+            .recent()
             .into_iter()
             .find(|recent| &recent.pull == pull)
             .map(|recent| recent.account);
