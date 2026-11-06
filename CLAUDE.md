@@ -76,8 +76,10 @@ The local copy is the `repo_cache` crate, which runs git with an environment of 
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
 repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git
 in, and without signing in when none can and GitHub gave no other reason, which works for public
-repositories. When several accounts can see it, rozed asks once per owner which to use. Offline, a
-pull request whose head the local copy has shows its diff from the copy.
+repositories. When several accounts can see it, rozed asks once per owner which to use, or for that
+repository alone when the owner's account can't see it. Offline, a pull request whose saved head and
+base the local copy has shows its diff from the copy, read without downloading, and the tab loads
+from GitHub by itself once it answers again.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
