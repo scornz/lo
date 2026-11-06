@@ -1,8 +1,9 @@
 //! Finds stacks among a repository's pull requests.
 //!
 //! A stack is a tree of open pull requests. Each layer sits on the PR below it, and the bottom
-//! layer sits on a root branch with no open PR, such as `main` or `feature-x`. [`Stacks::find`]
-//! builds the forest from the repo's PRs, and the result drives the stack sidebar and its walk.
+//! layer sits on a root branch: a trunk such as `main`, or a branch no open PR comes from, such as
+//! `feature-x`. [`Stacks::find`] builds the forest from the repo's PRs, and the result drives the
+//! stack sidebar and its walk.
 //!
 //! ```
 //! use std::time::SystemTime;
@@ -135,7 +136,8 @@ pub fn branches_to_look_up(prs: &[PullRequest], trunks: &[&str]) -> Vec<String> 
 
 /// The rule that linked a layer to the PR below it. When several rules apply, the first in this
 /// order wins, so they sort strongest first. When a rule matches several PRs equally well, an open
-/// PR wins over a merged one, then the newest.
+/// PR wins over a merged one, then the newest, except that a commit several merged PRs list
+/// belongs to the oldest of them, which brought it in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
     /// The PR below is the next layer down in the same GitHub stack. Closed layers, and layers
@@ -157,7 +159,8 @@ pub enum Rule {
 pub enum Parent {
     /// The open pull request below it.
     Pr(u64),
-    /// A root branch: one with no open PR, such as `main` or `feature-x`.
+    /// A root branch: a trunk such as `main`, or a branch no open PR comes from, such as
+    /// `feature-x`.
     Branch(String),
 }
 
