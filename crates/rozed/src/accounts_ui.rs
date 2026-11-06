@@ -140,6 +140,9 @@ enum SignInStep {
     WaitingForUser {
         user_code: SharedString,
         expires_at: Instant,
+        /// Whether rozed put the code on the clipboard. The modal never reads the clipboard to
+        /// find out, since it may hold something else the user copied, such as a password.
+        copied: bool,
     },
     Finishing,
 }
@@ -344,15 +347,15 @@ impl AccountsModal {
             let result = async {
                 let codes = device_flow::request_codes(&http).await?;
                 this.update(cx, |this, cx| {
-                    // Copy the code and open GitHub's page, so the user only has to paste.
-                    cx.write_to_clipboard(ClipboardItem::new_string(codes.user_code.clone()));
-                    cx.open_url(device_flow::VERIFICATION_URL);
                     this.mode = Mode::SignIn(SignInStep::WaitingForUser {
                         user_code: codes.user_code.clone().into(),
                         expires_at: Instant::now() + codes.expires_in,
+                        copied: false,
                     });
+                    // Copy the code and open GitHub's page, so the user only has to paste.
+                    this.copy_code(cx);
+                    cx.open_url(device_flow::VERIFICATION_URL);
                     this.start_ticker(cx);
-                    cx.notify();
                 })?;
                 let executor = cx.background_executor().clone();
                 let token = device_flow::wait_for_token(&http, &codes, &executor).await?;
@@ -378,6 +381,26 @@ impl AccountsModal {
             })
             .ok();
         }));
+    }
+
+    /// Puts the sign-in code on the clipboard.
+    fn copy_code(&mut self, cx: &mut Context<Self>) {
+        if let Mode::SignIn(SignInStep::WaitingForUser {
+            user_code, copied, ..
+        }) = &mut self.mode
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(user_code.to_string()));
+            *copied = true;
+            cx.notify();
+        }
+    }
+
+    /// The copy button's label: "Copied" once rozed has put the code on the clipboard.
+    pub fn copy_label(&self) -> &'static str {
+        match &self.mode {
+            Mode::SignIn(SignInStep::WaitingForUser { copied: true, .. }) => "Copied",
+            _ => "Copy code",
+        }
     }
 
     fn start_ticker(&mut self, cx: &mut Context<Self>) {
@@ -575,8 +598,8 @@ impl AccountsModal {
                     self.start_import(cx);
                 }
             }
-            Mode::SignIn(SignInStep::WaitingForUser { user_code, .. }) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(user_code.to_string()));
+            Mode::SignIn(SignInStep::WaitingForUser { .. }) => {
+                self.copy_code(cx);
                 cx.open_url(device_flow::VERIFICATION_URL);
             }
             Mode::Import(ImportStep::Choose { .. }) => self.import_chosen(cx),
@@ -765,13 +788,10 @@ impl AccountsModal {
             SignInStep::WaitingForUser {
                 user_code,
                 expires_at,
+                copied,
             } => {
                 let remaining = expires_at.saturating_duration_since(Instant::now());
-                let copied = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .is_some_and(|text| text == user_code.as_ref());
-                let code = user_code.clone();
+                let copied = *copied;
                 v_flex()
                     .gap_2()
                     .items_center()
@@ -790,21 +810,13 @@ impl AccountsModal {
                         h_flex()
                             .gap_2()
                             .child(
-                                Button::new(
-                                    "copy-code",
-                                    if copied { "Copied" } else { "Copy code" },
-                                )
-                                .start_icon(Icon::new(if copied {
-                                    IconName::Check
-                                } else {
-                                    IconName::Copy
-                                }))
-                                .on_click(move |_, window, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        code.to_string(),
-                                    ));
-                                    window.refresh();
-                                }),
+                                Button::new("copy-code", self.copy_label())
+                                    .start_icon(Icon::new(if copied {
+                                        IconName::Check
+                                    } else {
+                                        IconName::Copy
+                                    }))
+                                    .on_click(cx.listener(|this, _, _, cx| this.copy_code(cx))),
                             )
                             .child(
                                 Button::new("open-github", "Open github.com/login/device")
@@ -1062,6 +1074,11 @@ mod tests {
             cx.opened_url().as_deref(),
             Some("https://github.com/login/device")
         );
+        // "Copied" comes from what rozed did, not from reading the clipboard, which may hold
+        // something the user copied since, such as a password.
+        modal.read_with(cx, |modal, _| assert_eq!(modal.copy_label(), "Copied"));
+        cx.write_to_clipboard(ClipboardItem::new_string("hunter2".into()));
+        modal.read_with(cx, |modal, _| assert_eq!(modal.copy_label(), "Copied"));
 
         // Polls go out 6, 12 and 18 s in; the third gets the token.
         wait(10, cx);
