@@ -5,6 +5,7 @@
 
 mod github;
 
+pub mod drafts;
 pub mod files;
 pub mod merge;
 pub mod pending;
