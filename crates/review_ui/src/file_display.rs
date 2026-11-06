@@ -30,7 +30,8 @@ pub(crate) enum Collapsed {
     TooLarge { why: String },
     /// Every change in it is to whitespace, and whitespace changes are hidden.
     WhitespaceOnly,
-    /// Its text didn't change: it was renamed, or only its mode or line endings changed.
+    /// Nothing in its text that shows changed: it was renamed, or only its mode, its line endings
+    /// or bytes that aren't UTF-8 changed.
     NoChanges,
 }
 
@@ -61,7 +62,7 @@ impl Collapsed {
             ),
             Self::TooLarge { .. } => "too large to show".to_string(),
             Self::WhitespaceOnly => "whitespace only".to_string(),
-            Self::NoChanges => "no changes".to_string(),
+            Self::NoChanges => "no visible change".to_string(),
         }
     }
 
@@ -86,7 +87,10 @@ impl Collapsed {
                 "Every change to this file is to whitespace, and whitespace changes are hidden."
                     .to_string()
             }
-            Self::NoChanges => "This file's text didn't change.".to_string(),
+            Self::NoChanges => "Nothing in this file's text that shows changed: it was renamed, \
+                                or only its mode, its line endings or bytes that aren't UTF-8 \
+                                changed."
+                .to_string(),
         }
     }
 

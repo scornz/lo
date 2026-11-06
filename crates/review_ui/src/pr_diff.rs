@@ -1299,7 +1299,7 @@ fn try_plan_file(
             SharedString::from(if normalized(old) == normalized(&new_bytes) {
                 "line endings only"
             } else {
-                "no visible change"
+                "non-UTF-8 bytes only"
             })
         });
     let from_git = |warning: Option<Warning>| FilePlan {
@@ -2242,7 +2242,7 @@ pub(crate) mod tests {
             vec![(
                 "a.txt".into(),
                 FilePlan {
-                    badge: Some("no visible change".into()),
+                    badge: Some("non-UTF-8 bytes only".into()),
                     ..FilePlan::diff(Some("caf\u{fffd}\n".into()), from_git("caf\u{fffd}\n"))
                 }
             )]

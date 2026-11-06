@@ -1992,7 +1992,7 @@ mod tests {
         assert!(is_folded(&diff, "new/b.txt", cx));
         assert_eq!(
             collapsed_label(&diff, "new/b.txt", cx).as_deref(),
-            Some("no changes")
+            Some("no visible change")
         );
     }
 }

@@ -1527,9 +1527,19 @@ impl PrTab {
                         .gap_3()
                         .when(whitespace, |this| {
                             this.child(
-                                Label::new("Whitespace changes hidden")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                div()
+                                    .id("whitespace-hidden")
+                                    .child(
+                                        Label::new("Whitespace changes hidden")
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .tooltip(Tooltip::text(
+                                        "Lines whose only change is to whitespace show as \
+                                         unchanged, with the head's whitespace on both sides, \
+                                         so text copied from the left side has the head's \
+                                         whitespace too.",
+                                    )),
                             )
                         })
                         .when(github, |this| {
