@@ -58,7 +58,7 @@ fn last_opened_days_ago(git_dir: &Path, days: u64) {
 
 /// [`RepoCache::remove_unused`], once a lock just let go is free. A child process another test
 /// thread starts at that moment can hold a copy of the lock's file descriptor until it runs git, so
-/// this allows a moment.
+/// this allows a moment. The same goes for every test that lets go of a `Repo` and then cleans up.
 fn remove_unused_once_free(cache: &RepoCache) -> Vec<String> {
     let mut removed = Vec::new();
     for _ in 0..100 {
@@ -159,7 +159,7 @@ fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
     fs::create_dir_all(&orphan).unwrap();
     fs::write(orphan.join("file.txt"), "orphaned\n").unwrap();
 
-    let removed = cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+    let removed = remove_unused_once_free(&cache);
 
     assert_eq!(removed, vec!["owner/old".to_string()]);
     let checkouts = dir.path().join("checkouts/github.com");
@@ -238,7 +238,10 @@ fn cleanup_never_follows_a_symlinked_owner_folder() {
     )
     .unwrap();
 
-    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+    assert_eq!(
+        remove_unused_once_free(&cache),
+        vec!["owner/old".to_string()]
+    );
 
     assert!(untouched(&outside));
     // The real unused clone still goes.
@@ -263,7 +266,10 @@ fn cleanup_never_follows_a_symlinked_repository_or_checkouts_folder() {
     )
     .unwrap();
 
-    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+    assert_eq!(
+        remove_unused_once_free(&cache),
+        vec!["owner/old".to_string()]
+    );
 
     assert!(untouched(&outside));
     assert!(!old.exists());
@@ -281,7 +287,10 @@ fn cleanup_never_follows_a_symlink_above_a_clones_checkouts() {
     fs::remove_dir_all(&checkouts).unwrap();
     symlink(outside.path(), &checkouts).unwrap();
 
-    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+    assert_eq!(
+        remove_unused_once_free(&cache),
+        vec!["owner/old".to_string()]
+    );
 
     assert!(untouched(&outside));
     assert!(!old.exists());
@@ -355,11 +364,17 @@ fn removes_checkouts_unused_for_two_weeks() {
     let git_dir = repo.git_dir().to_path_buf();
     drop(repo);
 
-    // No clone goes, but the stale checkout does.
-    assert_eq!(
-        cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
-        Vec::<String>::new()
-    );
+    // No clone goes, but the stale checkout does, once the clone's in-use lock is free.
+    for _ in 0..100 {
+        assert_eq!(
+            cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
+            Vec::<String>::new()
+        );
+        if !stale.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 
     assert!(!stale.exists());
     assert!(!stale.parent().unwrap().exists(), "its empty pull-1 folder");
