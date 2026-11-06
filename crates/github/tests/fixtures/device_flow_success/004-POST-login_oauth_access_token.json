@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://github.com/login/oauth/access_token",
+    "body": "client_id=Ov23liBORqwRdiPzqsPP&device_code=FAKE-DEVICE-CODE&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "access_token": "gho_FAKE_SIGNED_IN",
+      "token_type": "bearer",
+      "scope": "read:org,repo,workflow"
+    }
+  }
+}
