@@ -283,22 +283,25 @@ pub(crate) async fn show_local_copy(
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let banners = tab.read_with(cx, |tab, _| tab.banners().clone())?;
-    banners.update(cx, |banners, cx| {
-        if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
-            banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
-        }
-        if trust == Trust::Checkout {
-            banners.show(
-                BannerKind::CheckingOut,
-                Severity::Info,
-                format!(
-                    "Checking {link} out for language servers. Until it's ready, every file \
-                     shows from git."
-                ),
-                cx,
-            );
-        }
-    });
+    // What the banners say about this diff, once it shows.
+    let show_banners = |cx: &mut AsyncWindowContext| {
+        banners.update(cx, |banners, cx| {
+            if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
+                banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
+            }
+            if trust == Trust::Checkout {
+                banners.show(
+                    BannerKind::CheckingOut,
+                    Severity::Info,
+                    format!(
+                        "Checking {link} out for language servers. Until it's ready, every file \
+                         shows from git."
+                    ),
+                    cx,
+                );
+            }
+        })
+    };
 
     let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, cx)?;
     editor.update(cx, |editor, cx| {
@@ -320,6 +323,9 @@ pub(crate) async fn show_local_copy(
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (false, positions)
     })?;
+    if !replacing {
+        show_banners(cx);
+    }
 
     let target = Target {
         repo_name: &local.name,
@@ -336,7 +342,9 @@ pub(crate) async fn show_local_copy(
     let mut not_shown = 0;
     let mut not_loaded = 0;
     for (index, file) in local.files.iter().enumerate() {
-        tab.update(cx, |tab, cx| tab.loading_diff(index, local.files.len(), cx))?;
+        tab.update(cx, |tab, cx| {
+            tab.loading_diff(index + 1, local.files.len(), cx)
+        })?;
         let plan = cx
             .background_spawn({
                 let repo = local.repo.clone();
@@ -419,6 +427,7 @@ pub(crate) async fn show_local_copy(
         tab.diff_loaded(cx);
     })?;
     if replacing {
+        show_banners(cx);
         log::info!(
             "{link}: switched from GitHub's diff to the local copy's {:?} after launch",
             launched.elapsed()

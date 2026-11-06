@@ -872,15 +872,15 @@ impl PrTab {
         self.set_status(Status::Loading("Copying it locally…".into()), cx);
     }
 
-    /// Shows that the local copy's diff has `done` of its `total` files.
-    pub(crate) fn loading_diff(&mut self, done: usize, total: usize, cx: &mut Context<Self>) {
+    /// Shows that the local copy's diff is loading file `file` of its `total`, counting from 1.
+    pub(crate) fn loading_diff(&mut self, file: usize, total: usize, cx: &mut Context<Self>) {
         let what = if self.diff_source == Some(DiffSource::GitHub) {
             "the local copy's diff"
         } else {
             "the diff"
         };
         self.set_status(
-            Status::Loading(format!("Loading {what}: {done} of {total} files…").into()),
+            Status::Loading(format!("Loading {what}: file {file} of {total}…").into()),
             cx,
         );
     }
