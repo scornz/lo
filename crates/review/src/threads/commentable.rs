@@ -152,15 +152,23 @@ impl fmt::Display for PatchError {
 
 impl std::error::Error for PatchError {}
 
-/// The lines of one file on screen that GitHub takes a line comment on.
+/// Which comments GitHub takes on one file on screen: line comments on some lines, only a
+/// file-level comment, or none at all.
+///
+/// - A file in the pull request's diff at the right column's revision takes line comments on the
+///   lines of its hunks, and a file-level comment.
+/// - One whose hunks have no lines in a column that takes comments, such as a binary file, a pure
+///   rename, or a deleted file between revisions, takes only a file-level comment.
+/// - One outside that diff, such as a file a later revision put back as it was, takes no comment
+///   at all, though a diff between revisions lists it.
 ///
 /// Comments go on the right column's revision, so the left column takes them only in a revision's
 /// whole diff, where it shows the base. Between revisions it shows another revision, whose lines
-/// GitHub's left side can't name. An empty set, for a binary file or one too large for GitHub to
-/// diff, takes only file-level comments.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// GitHub's left side can't name.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommentableLines {
-    hunks: Vec<Hunk>,
+    /// The file's hunks, or `None` when it isn't in the pull request's diff.
+    hunks: Option<Vec<Hunk>>,
     left: bool,
 }
 
@@ -173,22 +181,43 @@ pub enum RangeError {
 }
 
 impl CommentableLines {
-    /// The lines of a file on `screen` that take a comment. `hunks` are the file's hunks in the pull
-    /// request's diff at the right column's revision, from that revision's base to its head, with
-    /// the three lines of context GitHub uses: the right column's hunks in the revision's whole
-    /// diff, but not the hunks of a diff between revisions.
+    /// The comments a file on `screen` takes, when it's in the pull request's diff at the right
+    /// column's revision.
+    ///
+    /// `hunks` are the file's hunks in that diff, in order: from the revision's base to its head,
+    /// with the three lines of context GitHub uses. They aren't the hunks of a diff between
+    /// revisions, nor the latest head's `patch` when an older revision is on screen. The GitHub
+    /// layer parses them from GitHub's `patch` for the file at the latest head. GitHub leaves
+    /// `patch` out for binary files and pure renames, which have no hunks, but also for some
+    /// ordinary text files, apparently by size. For those, and for older revisions, it takes them
+    /// from the local copy with `git diff -U3`, ignoring the user's git config
+    /// (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), whose `diff.context`,
+    /// `diff.interHunkContext` or `diff.algorithm` would make other hunks than GitHub's.
     pub fn new(screen: &Screen, hunks: Vec<Hunk>) -> Self {
         Self {
-            hunks,
+            hunks: Some(hunks),
             left: screen.left == Left::Base,
         }
     }
 
-    /// Whether no line takes a comment, so the file takes only file-level comments.
-    pub fn is_empty(&self) -> bool {
-        !self
-            .hunks
-            .iter()
+    /// A file that isn't in the pull request's diff at the right column's revision, which takes no
+    /// comment: GitHub refuses even a file-level one there.
+    pub fn not_in_diff() -> Self {
+        Self {
+            hunks: None,
+            left: false,
+        }
+    }
+
+    /// Whether the file takes a file-level comment: it's in the pull request's diff.
+    pub fn takes_file_comment(&self) -> bool {
+        self.hunks.is_some()
+    }
+
+    /// Whether any line of the file takes a comment. When none does, it takes only a file-level
+    /// comment, if [`takes_file_comment`](Self::takes_file_comment).
+    pub fn takes_line_comment(&self) -> bool {
+        (self.hunks.iter().flatten())
             .any(|hunk| !hunk.new.is_empty() || (self.left && !hunk.old.is_empty()))
     }
 
@@ -221,7 +250,7 @@ impl CommentableLines {
         if line.side == DiffSide::Left && !self.left {
             return None;
         }
-        (self.hunks.iter().enumerate()).find_map(|(index, hunk)| {
+        (self.hunks.iter().flatten().enumerate()).find_map(|(index, hunk)| {
             let position = hunk.position(line)?;
             let line = match line.side {
                 DiffSide::Left => hunk.right_number(position).map_or(line, Line::right),
@@ -506,14 +535,33 @@ index 3b18e51..a7c3d2f 100644
 
     #[test]
     fn a_file_with_no_hunks_takes_only_file_comments() {
+        // A binary file, or a pure rename.
         let binary = CommentableLines::new(&Screen::full("a2"), Vec::new());
 
-        assert!(binary.is_empty());
+        assert!(binary.takes_file_comment());
+        assert!(!binary.takes_line_comment());
         assert_eq!(binary.line(Line::right(1)), None);
-        assert!(!full().is_empty());
+        assert!(full().takes_file_comment());
+        assert!(full().takes_line_comment());
         // Between revisions, a deleted file has no right column.
         let deleted = Hunk::parse("@@ -1,2 +0,0 @@\n-a\n-b\n").unwrap();
-        assert!(CommentableLines::new(&Screen::between("a1", "a2"), deleted).is_empty());
+        let deleted = CommentableLines::new(&Screen::between("a1", "a2"), deleted);
+        assert!(deleted.takes_file_comment());
+        assert!(!deleted.takes_line_comment());
+    }
+
+    #[test]
+    fn a_file_outside_the_pull_requests_diff_takes_no_comment() {
+        // r1 edited it and r2 put it back, so it's between r1 and r2 but not in r2's diff.
+        let reverted = CommentableLines::not_in_diff();
+
+        assert!(!reverted.takes_file_comment());
+        assert!(!reverted.takes_line_comment());
+        assert_eq!(reverted.line(Line::right(1)), None);
+        assert_eq!(
+            reverted.range(Line::right(1), Line::right(2)),
+            Err(RangeError::NotCommentable(Line::right(1)))
+        );
     }
 
     #[test]

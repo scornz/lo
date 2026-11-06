@@ -10,7 +10,7 @@
 //! panel shows, by [`PanelFilter`].
 //!
 //! [`CommentableLines`] says which lines of a file on screen GitHub takes a new comment on, from
-//! the file's [`Hunk`]s, so the UI offers a file-level comment elsewhere, and
+//! the file's [`Hunk`]s, and whether it takes a file-level comment, which the UI offers elsewhere.
 //! [`suggestion_block`] starts a suggested change.
 //!
 //! ```
