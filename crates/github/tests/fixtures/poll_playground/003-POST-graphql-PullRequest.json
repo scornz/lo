@@ -1,0 +1,70 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequest",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 1,
+      "filesFirst": 100,
+      "filesAfter": null
+    },
+    "query_sha256": "2f6a282f3dfcbf1587c23af67efd7874025166ae659254edd8c9437ca6af351c"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4993",
+      "x-ratelimit-reset": "1793969325",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "7"
+    },
+    "body": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
+            "number": 1,
+            "title": "feat: stack layer A",
+            "url": "https://github.com/rozed-dev/playground/pull/1",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-06T08:15:07Z",
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot",
+              "avatarUrl": "https://avatars.githubusercontent.com/u/353226052?v=4"
+            },
+            "baseRefName": "main",
+            "baseRefOid": "6ce218eb1930c49db64d5744c76a6739d4525e82",
+            "headRefName": "stack-a",
+            "headRefOid": "b046244d9569964088e952243e5e557312322488",
+            "isCrossRepository": false,
+            "headRepository": {
+              "nameWithOwner": "rozed-dev/playground",
+              "isFork": false
+            },
+            "files": {
+              "totalCount": 1,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "path": "stack-a.md",
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

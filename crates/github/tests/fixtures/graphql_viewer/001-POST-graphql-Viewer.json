@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Viewer",
+    "variables": null,
+    "query_sha256": "de03b673cc8146ab2ca4f484d26b9c6619d5df12fac8431cd933060c18ab3bcc"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4996",
+      "x-ratelimit-reset": "1793961351",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "4"
+    },
+    "body": {
+      "data": {
+        "viewer": {
+          "login": "rozed-bot",
+          "databaseId": 353226052,
+          "name": null,
+          "avatarUrl": "https://avatars.githubusercontent.com/u/353226052?v=4"
+        }
+      }
+    }
+  }
+}

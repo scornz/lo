@@ -1,0 +1,40 @@
+[package]
+name = "github"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The replaying and recording HTTP clients, for tests here and in other crates.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+credentials_provider.workspace = true
+futures.workspace = true
+gpui.workspace = true
+graphql_client.workspace = true
+http_client.workspace = true
+libc.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+paths.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+sha2.workspace = true
+sqlez.workspace = true
+sqlez_macros.workspace = true
+# The token file's temporary file: created exclusively, with a random name.
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+apollo-compiler.workspace = true
+credentials_provider = { workspace = true, features = ["test-support"] }
+github = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
+reqwest_client.workspace = true

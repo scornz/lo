@@ -1,0 +1,6 @@
+{
+  "description": "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (conditional GET, PullRequestCheck, then PullRequest the first time), PR #2 as a watched one (conditional GET), and the playground's open PRs (conditional GET of the list, then OpenPullRequests the first time)",
+  "recorded_at": "2026-11-06T12:23:52Z",
+  "repo": "rozed-dev/playground",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}
