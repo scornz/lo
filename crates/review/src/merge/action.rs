@@ -5,8 +5,9 @@ use super::{MergeMethod, MergeSnapshot, PullRequestState, blockers};
 /// What merging the pull request does now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeAction {
-    /// Merge it now, with one of `methods`: those the repository allows, in the order GitHub's
-    /// merge button lists them. `default` is the one to pick first. The merge carries the head on
+    /// Merge it now, with one of `methods`: those allowed here, in the order GitHub's merge button
+    /// lists them, without rebase when the base branch requires signed commits. `default` is the
+    /// one to pick first: the one you last used here, else GitHub's default for you. The merge carries the head on
     /// screen, so GitHub refuses it if someone pushed since (design §11).
     Merge {
         methods: Vec<MergeMethod>,
@@ -62,9 +63,9 @@ pub fn merge_action(snapshot: &MergeSnapshot) -> MergeAction {
             method: snapshot.queue.method,
         };
     }
-    match snapshot.methods.choose(snapshot.preferred_method) {
+    match snapshot.method() {
         Some(default) => MergeAction::Merge {
-            methods: snapshot.methods.to_vec(),
+            methods: snapshot.allowed_methods().to_vec(),
             default,
         },
         None => not_possible(NotPossible::NoMethod),
@@ -145,6 +146,24 @@ mod tests {
             merge_action(&snapshot),
             MergeAction::Merge {
                 methods: vec![MergeMethod::Merge],
+                default: MergeMethod::Merge,
+            }
+        );
+    }
+
+    #[test]
+    fn rebase_is_not_offered_when_the_base_requires_signed_commits() {
+        let snapshot = MergeSnapshot {
+            preferred_method: Some(MergeMethod::Rebase),
+            default_method: Some(MergeMethod::Merge),
+            signed_commits: true,
+            ..ready()
+        };
+
+        assert_eq!(
+            merge_action(&snapshot),
+            MergeAction::Merge {
+                methods: vec![MergeMethod::Merge, MergeMethod::Squash],
                 default: MergeMethod::Merge,
             }
         );

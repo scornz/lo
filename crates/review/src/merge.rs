@@ -164,9 +164,15 @@ pub struct MergeSnapshot {
     pub auto_merge: Option<AutoMerge>,
     /// The merge methods the repository allows.
     pub methods: AllowedMethods,
-    /// The method to pick first when several are allowed: the one you last used in the repository,
-    /// which rozed remembers, else GitHub's `Repository.viewerDefaultMergeMethod`.
+    /// Whether the base branch requires signed commits (`requiresCommitSignatures`, a ruleset's
+    /// `required_signatures`). GitHub can't sign the commits a rebase merge makes, so rozed doesn't
+    /// offer rebase there.
+    pub signed_commits: bool,
+    /// The method you last used in the repository, which rozed remembers: the one to pick first.
     pub preferred_method: Option<MergeMethod>,
+    /// GitHub's default method for you (`Repository.viewerDefaultMergeMethod`): the one to pick
+    /// when you haven't used one here, or the one you used is no longer allowed.
+    pub default_method: Option<MergeMethod>,
     /// The account rozed acts as.
     pub viewer: Viewer,
     /// The head commit GitHub has now (`headRefOid`), as a full SHA. Empty when GitHub didn't
@@ -175,6 +181,27 @@ pub struct MergeSnapshot {
     /// The head of the revision on screen, as a full SHA: what you looked at, so what approving
     /// approves. Empty when there's no revision on screen yet.
     pub head_on_screen: String,
+}
+
+impl MergeSnapshot {
+    /// The merge methods allowed here: the repository's, without rebase when the base branch
+    /// requires signed commits.
+    fn allowed_methods(&self) -> AllowedMethods {
+        AllowedMethods {
+            rebase: self.methods.rebase && !self.signed_commits,
+            ..self.methods
+        }
+    }
+
+    /// The method to pick first: the one you last used here, else GitHub's default for you, else
+    /// the first allowed, whichever is allowed first.
+    fn method(&self) -> Option<MergeMethod> {
+        let preferred: Vec<MergeMethod> = [self.preferred_method, self.default_method]
+            .into_iter()
+            .flatten()
+            .collect();
+        self.allowed_methods().choose(&preferred)
+    }
 }
 
 /// A reviewer's latest approval or request for changes, or its dismissal: an entry of
@@ -339,7 +366,8 @@ pub struct AutoMerge {
 
 /// The merge methods the repository allows (`mergeCommitAllowed`, `squashMergeAllowed`,
 /// `rebaseMergeAllowed`), narrowed by the `allowedMergeMethods` of the base branch's rulesets, and
-/// to squash and rebase when the base requires linear history.
+/// to squash and rebase when the base requires linear history. rozed itself leaves out rebase when
+/// the base requires signed commits ([`MergeSnapshot::signed_commits`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllowedMethods {
     pub merge: bool,
@@ -365,10 +393,10 @@ impl AllowedMethods {
             .collect()
     }
 
-    /// The method to pick first: the preferred one when it's allowed, else the first allowed.
-    pub fn choose(&self, preferred: Option<MergeMethod>) -> Option<MergeMethod> {
-        preferred
-            .filter(|&method| self.allows(method))
+    /// The method to pick first: the first of `preferred` that's allowed, else the first allowed.
+    pub fn choose(&self, preferred: &[MergeMethod]) -> Option<MergeMethod> {
+        (preferred.iter().copied())
+            .find(|&method| self.allows(method))
             .or_else(|| self.to_vec().into_iter().next())
     }
 }
@@ -508,14 +536,54 @@ mod tests {
         };
 
         assert_eq!(
-            methods.choose(Some(MergeMethod::Squash)),
+            methods.choose(&[MergeMethod::Squash]),
             Some(MergeMethod::Squash)
         );
         assert_eq!(
-            methods.choose(Some(MergeMethod::Rebase)),
+            methods.choose(&[MergeMethod::Rebase, MergeMethod::Squash]),
+            Some(MergeMethod::Squash)
+        );
+        assert_eq!(
+            methods.choose(&[MergeMethod::Rebase]),
             Some(MergeMethod::Merge)
         );
-        assert_eq!(methods.choose(None), Some(MergeMethod::Merge));
-        assert_eq!(AllowedMethods::default().choose(None), None);
+        assert_eq!(methods.choose(&[]), Some(MergeMethod::Merge));
+        assert_eq!(AllowedMethods::default().choose(&[]), None);
+    }
+
+    #[test]
+    fn rebase_is_not_offered_when_the_base_requires_signed_commits() {
+        let snapshot = MergeSnapshot {
+            methods: AllowedMethods {
+                merge: false,
+                squash: true,
+                rebase: true,
+            },
+            signed_commits: true,
+            ..Default::default()
+        };
+
+        assert_eq!(snapshot.allowed_methods().to_vec(), [MergeMethod::Squash]);
+    }
+
+    #[test]
+    fn the_method_is_the_remembered_one_then_githubs_default_for_you() {
+        let snapshot = MergeSnapshot {
+            methods: AllowedMethods {
+                merge: true,
+                squash: true,
+                rebase: false,
+            },
+            preferred_method: Some(MergeMethod::Rebase),
+            default_method: Some(MergeMethod::Squash),
+            ..Default::default()
+        };
+        let remembered_allowed = MergeSnapshot {
+            preferred_method: Some(MergeMethod::Merge),
+            ..snapshot.clone()
+        };
+
+        assert_eq!(snapshot.method(), Some(MergeMethod::Squash));
+        assert_eq!(remembered_allowed.method(), Some(MergeMethod::Merge));
     }
 }

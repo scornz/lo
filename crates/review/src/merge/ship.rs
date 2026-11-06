@@ -372,7 +372,7 @@ fn ship(snapshot: &MergeSnapshot) -> Ship {
         };
     }
     let viewer = &snapshot.viewer;
-    let method = snapshot.methods.choose(snapshot.preferred_method);
+    let method = snapshot.method();
     if blockers.is_empty() && github_lets_it_merge(snapshot) {
         if !viewer.can_merge {
             Ship::Stop(Stop::NoPermission)
@@ -660,6 +660,48 @@ mod tests {
         assert_eq!(
             approve_and_ship(&snapshot),
             plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        );
+    }
+
+    #[test]
+    fn a_remembered_method_no_longer_allowed_falls_back_to_githubs_default_for_you() {
+        let rebase_disallowed = MergeSnapshot {
+            methods: AllowedMethods {
+                merge: true,
+                squash: true,
+                rebase: false,
+            },
+            preferred_method: Some(MergeMethod::Rebase),
+            default_method: Some(MergeMethod::Squash),
+            ..reviewing()
+        };
+        let signed_commits = MergeSnapshot {
+            preferred_method: Some(MergeMethod::Rebase),
+            default_method: Some(MergeMethod::Squash),
+            signed_commits: true,
+            ..reviewing()
+        };
+        let only_rebase = MergeSnapshot {
+            methods: AllowedMethods {
+                merge: false,
+                squash: false,
+                rebase: true,
+            },
+            signed_commits: true,
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&rebase_disallowed),
+            plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&signed_commits),
+            plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&only_rebase),
+            plan(Approval::Approve, Ship::Stop(Stop::NoMethod))
         );
     }
 
