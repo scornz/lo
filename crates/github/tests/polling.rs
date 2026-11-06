@@ -961,6 +961,45 @@ async fn a_poll_that_comes_due_while_a_write_holds_the_queue_waits(cx: &mut Test
 }
 
 #[gpui::test]
+async fn a_waiting_write_goes_before_the_polls_that_come_due(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::with(
+        "write_before_polls",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| {
+        poller.watch(pr(2), cx);
+        poller.set_open(Some(pr(1)), cx)
+    });
+    t.run_until(1);
+    // Sent while the open PR's poll is in flight, with the other PR and the repository due.
+    let write = t.update(post_comment);
+    t.run_until(15);
+    write.await.unwrap();
+    let requests = t.requests();
+    let what: Vec<&str> = requests.iter().map(|(_, what)| what.as_str()).collect();
+    assert_eq!(
+        what,
+        [
+            "GET /pulls/1",
+            "PullRequestCheck",
+            "PullRequest",
+            "POST /issues/1/comments",
+            "GET /pulls/2",
+            "GET /pulls?state=open&per_page=100",
+            "OpenPullRequests",
+        ],
+        "{requests:?}"
+    );
+}
+
+#[gpui::test]
 async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut TestAppContext) {
     let r = recorded();
     let mut interactions = r.clone();
