@@ -10,6 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use http_client::http::HeaderMap;
 use serde::Deserialize;
 
+/// How far apart, in seconds, two answers' reset times can be and still be one window: a
+/// GraphQL query's `rateLimit.resetAt` and its headers' `x-ratelimit-reset` can differ by a second.
+pub const SAME_WINDOW: u64 = 2;
+
 /// One resource's limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RateLimit {
@@ -59,15 +63,19 @@ impl RateLimits {
 
     /// Records a limit GitHub reported.
     ///
-    /// GitHub's servers can disagree from one response to the next, so within one window (the same
-    /// reset time) this keeps the lowest `remaining` seen. A later reset time starts a new window.
+    /// GitHub's servers can disagree from one response to the next, so within one window (reset
+    /// times at most [`SAME_WINDOW`] apart) this keeps the lowest `remaining` seen. A later
+    /// reset time starts a new window, and an answer from an earlier window, from a server that
+    /// hasn't seen the reset yet, is ignored.
     pub fn record(&mut self, resource: &str, limit: RateLimit) {
         match self.resources.get_mut(resource) {
-            Some(known) if limit.reset <= known.reset => {
+            Some(known) if known.reset.abs_diff(limit.reset) <= SAME_WINDOW => {
                 known.remaining = known.remaining.min(limit.remaining);
                 known.used = known.used.max(limit.used);
                 known.limit = limit.limit;
+                known.reset = known.reset.max(limit.reset);
             }
+            Some(known) if limit.reset < known.reset => {}
             _ => {
                 self.resources.insert(resource.to_string(), limit);
             }
@@ -216,6 +224,38 @@ mod tests {
         // A new window starts over.
         limits.record("core", at(4999, 1, 200));
         assert_eq!(limits.core(), Some(at(4999, 1, 200)));
+    }
+
+    #[test]
+    fn ignores_a_late_answer_from_a_window_that_has_reset() {
+        let mut limits = RateLimits::default();
+        let at = |remaining, reset| RateLimit {
+            limit: 5000,
+            remaining,
+            used: 5000 - remaining,
+            reset,
+        };
+        limits.record("core", at(0, 100));
+        limits.record("core", at(4999, 3700));
+        // A server that hasn't seen the reset yet still answers with the old window.
+        limits.record("core", at(0, 100));
+        assert_eq!(limits.core(), Some(at(4999, 3700)));
+    }
+
+    #[test]
+    fn answers_a_second_apart_are_one_window() {
+        let mut limits = RateLimits::default();
+        let at = |remaining, reset| RateLimit {
+            limit: 5000,
+            remaining,
+            used: 5000 - remaining,
+            reset,
+        };
+        limits.record("graphql", at(4990, 100));
+        limits.record("graphql", at(4995, 101));
+        assert_eq!(limits.graphql(), Some(at(4990, 101)));
+        limits.record("graphql", at(4980, 100));
+        assert_eq!(limits.graphql(), Some(at(4980, 101)));
     }
 
     #[test]

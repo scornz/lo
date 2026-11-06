@@ -47,6 +47,9 @@ pub enum GithubError {
         reset: Option<u64>,
         /// How long GitHub asked to wait.
         retry_after: Option<Duration>,
+        /// The limit that was hit (`core`, `graphql`, `search` and so on), from
+        /// `x-ratelimit-resource`.
+        resource: Option<String>,
     },
 
     #[error("{message}")]
@@ -84,6 +87,11 @@ pub enum GithubError {
     /// The request didn't get an answer.
     #[error("couldn't reach GitHub: {0:#}")]
     Network(anyhow::Error),
+
+    /// The account's token couldn't be read, such as from a locked Keychain. The account is still
+    /// signed in; trying again later may work.
+    #[error("couldn't read the account's token: {0}")]
+    TokenUnavailable(String),
 
     /// The answer wasn't what rozed expected.
     #[error("couldn't read GitHub's answer: {0}")]
@@ -205,6 +213,7 @@ impl GithubError {
                     secondary: remaining != Some(0),
                     reset: header("x-ratelimit-reset").and_then(|v| v.parse().ok()),
                     retry_after,
+                    resource: header("x-ratelimit-resource"),
                     message,
                 };
             }
@@ -261,13 +270,17 @@ impl GithubError {
         if let Some(error) =
             find(&|error| matches!(kind(error).as_str(), "RATE_LIMITED" | "RATE_LIMIT"))
         {
+            // As for REST: the limit is used up when GitHub says none of it is left, and
+            // otherwise its secondary limits kicked in.
+            let remaining = header("x-ratelimit-remaining").and_then(|v| v.parse::<u64>().ok());
             return Self::RateLimited {
                 message: error.message,
-                secondary: false,
+                secondary: remaining != Some(0),
                 reset: header("x-ratelimit-reset").and_then(|v| v.parse().ok()),
                 retry_after: header("retry-after")
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .map(Duration::from_secs),
+                resource: header("x-ratelimit-resource"),
             };
         }
         if let Some(error) = find(&|error| kind(error) == "NOT_FOUND") {
@@ -490,6 +503,47 @@ mod tests {
         };
         assert!(secondary);
         assert_eq!(retry_after, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn rate_limits_name_the_limit_hit() {
+        let used_up = GithubError::from_response(
+            403,
+            &headers(&[
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-resource", "search"),
+            ]),
+            br#"{"message":"API rate limit exceeded for user ID 1."}"#,
+        );
+        assert!(
+            matches!(&used_up, GithubError::RateLimited { resource: Some(r), secondary: false, .. } if r == "search"),
+            "{used_up:?}"
+        );
+        let graphql = |remaining: &'static str| {
+            GithubError::from_graphql(
+                vec![GraphQlError {
+                    message: "API rate limit exceeded".into(),
+                    r#type: Some("RATE_LIMITED".into()),
+                    path: Vec::new(),
+                    extensions: None,
+                }],
+                &headers(&[
+                    ("x-ratelimit-remaining", remaining),
+                    ("x-ratelimit-resource", "graphql"),
+                ]),
+            )
+        };
+        // GraphQL's limit used up, or GitHub's secondary limits with some of it left.
+        assert!(
+            matches!(graphql("0"), GithubError::RateLimited { resource: Some(r), secondary: false, .. } if r == "graphql")
+        );
+        assert!(matches!(
+            graphql("4000"),
+            GithubError::RateLimited {
+                secondary: true,
+                ..
+            }
+        ));
     }
 
     #[test]

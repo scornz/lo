@@ -1,5 +1,8 @@
 # The cheap poll: enough to tell whether a pull request changed, for 1 point. A PR's updatedAt
-# doesn't move when it joins a stack, but its timeline's does, so this asks for both.
+# doesn't move when it joins a stack, but its timeline's does, so this asks for both. It also holds
+# what the UI shows without the details and that moves nothing else: the checks' combined state,
+# the review decision, the merge state, which review threads are resolved (the first 100), and the
+# merge queue entry.
 query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
   rateLimit {
     cost
@@ -16,6 +19,15 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
       baseRefName
       baseRefOid
       headRefOid
+      reviewDecision
+      mergeStateStatus
+      statusCheckRollup {
+        state
+      }
+      mergeQueueEntry {
+        state
+        position
+      }
       timelineItems {
         updatedAt
         totalCount
@@ -26,8 +38,11 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
       reviews {
         totalCount
       }
-      reviewThreads {
+      reviewThreads(first: 100) {
         totalCount
+        nodes {
+          isResolved
+        }
       }
       comments {
         totalCount
