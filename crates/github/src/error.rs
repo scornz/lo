@@ -158,6 +158,17 @@ impl GithubError {
         matches!(self, Self::Unauthorized { .. })
     }
 
+    /// Whether GitHub couldn't be reached at all: no connection could be made, as when the Mac
+    /// is offline, has no route or DNS answer, or goes through a proxy that's down. A request
+    /// that connected and then timed out on a slow connection isn't, nor is any answer GitHub
+    /// gave.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Self::Network(error) => is_connection_failure(error),
+            _ => false,
+        }
+    }
+
     /// The error for an unsuccessful REST response, or a GraphQL one that failed before running.
     pub fn from_response(status: u16, headers: &HeaderMap, body: &[u8]) -> Self {
         #[derive(Deserialize, Default)]
@@ -359,9 +370,76 @@ impl SsoHeader {
     }
 }
 
+/// Whether an HTTP client's `error` says no connection could be made. rozed's client is
+/// reqwest, built on hyper: a failure to connect, including to a proxy and including the
+/// connect timeout, is hyper's `client error (Connect)` with hyper's `tcp connect error` or
+/// `dns error` under it, and the OS's own error under those. A request that connected and then
+/// ran out of time is reqwest's `operation timed out` alone, and doesn't count.
+pub fn is_connection_failure(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    error.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                ErrorKind::ConnectionRefused
+                    | ErrorKind::NotConnected
+                    | ErrorKind::AddrNotAvailable
+                    | ErrorKind::NetworkUnreachable
+                    | ErrorKind::HostUnreachable
+                    | ErrorKind::NetworkDown
+            )
+        {
+            return true;
+        }
+        let text = cause.to_string();
+        text == "client error (Connect)" || text == "tcp connect error" || text == "dns error"
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_failure_to_connect_means_github_cant_be_reached() {
+        let network = |error: anyhow::Error| GithubError::Network(error);
+        let io = |kind: std::io::ErrorKind| anyhow::Error::new(std::io::Error::from(kind));
+        // A proxy that's down, and no network at all.
+        assert!(network(io(std::io::ErrorKind::ConnectionRefused)).is_unreachable());
+        assert!(network(io(std::io::ErrorKind::NetworkDown)).is_unreachable());
+        assert!(
+            network(
+                io(std::io::ErrorKind::HostUnreachable).context("error sending request for url")
+            )
+            .is_unreachable()
+        );
+        // hyper's errors around the OS's, as reqwest nests them.
+        let dns = anyhow::anyhow!("failed to lookup address information: nodename nor servname")
+            .context("dns error")
+            .context("client error (Connect)")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(network(dns).is_unreachable());
+        let connect_timeout = anyhow::anyhow!("operation timed out")
+            .context("client error (Connect)")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(network(connect_timeout).is_unreachable());
+
+        // Connected, and then slow.
+        let slow = anyhow::anyhow!("operation timed out")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(!network(slow).is_unreachable());
+        assert!(!network(io(std::io::ErrorKind::TimedOut)).is_unreachable());
+        // Cut off halfway through an answer.
+        assert!(!network(io(std::io::ErrorKind::ConnectionReset)).is_unreachable());
+        // Any answer.
+        assert!(
+            !GithubError::NotFound {
+                message: "Not Found".into(),
+                documentation_url: None
+            }
+            .is_unreachable()
+        );
+    }
 
     use http_client::http::{HeaderName, HeaderValue};
 
