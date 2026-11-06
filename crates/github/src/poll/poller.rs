@@ -18,6 +18,7 @@ use super::governor::{
     Cooldown, PauseReason, PollConfig, RateLimitState, Tier, backoff, interval, rate_limit_state,
 };
 use super::queue::RequestQueue;
+use super::reads::{CachedRead, ReadJob, ReadState, ReadType, Value, stamp};
 use crate::accounts::Accounts;
 use crate::cache::{CacheEntry, Cached, PrCache, RecentPr};
 use crate::client::{Conditional, GithubClient};
@@ -27,6 +28,7 @@ use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
 };
 use crate::rate_limit::RateLimits;
+use crate::revision_marks::RevisionMarks;
 
 /// What a poll found.
 #[derive(Clone, Debug)]
@@ -58,6 +60,16 @@ pub enum PollEvent {
     /// pull request that's gone or an organization's SSO. It's tried again at its next interval.
     Failed {
         target: Target,
+        error: Arc<GithubError>,
+    },
+    /// A read [`Poller::read_cached`] keeps for a pull request changed, or was read for the first
+    /// time: [`Poller::cached_read`] has it. `name` is its [`CacheEntry::NAME`].
+    Read { pull: PullRef, name: &'static str },
+    /// A read [`Poller::read_cached`] keeps failed for a reason that isn't the network, the rate
+    /// limit or the token. It's tried again at the open pull request's next interval.
+    ReadFailed {
+        pull: PullRef,
+        name: &'static str,
         error: Arc<GithubError>,
     },
 }
@@ -137,7 +149,20 @@ struct PullState {
     check: Option<Cached<Arc<PullRequestCheckData>>>,
     /// The latest check, as [`Poller::check`] returns it and [`PollEvent::Check`] sends it.
     latest_check: Option<Arc<PullRequestCheckData>>,
+    /// The latest check as JSON, which reads' stamps come from.
+    check_json: Option<serde_json::Value>,
     details: Option<Cached<Arc<PullRequestData>>>,
+    /// The reads [`Poller::read_cached`] keeps, by name.
+    reads: BTreeMap<&'static str, ReadState>,
+}
+
+impl PullState {
+    fn set_latest_check(&mut self, check: Option<Arc<PullRequestCheckData>>) {
+        self.check_json = (check.as_deref())
+            .and_then(|check| serde_json::to_value(check).ok())
+            .filter(|json| !json.is_null());
+        self.latest_check = check;
+    }
 }
 
 #[derive(Default)]
@@ -178,6 +203,8 @@ enum Job {
         listed: Option<Arc<ListedPulls>>,
         have_list: bool,
     },
+    /// A read [`Poller::read_cached`] keeps for the open PR.
+    Read { pull: PullRef, read: ReadJob },
 }
 
 enum Outcome {
@@ -188,6 +215,11 @@ enum Outcome {
     Repo {
         listed: ListedPulls,
         list: Option<OpenPullRequestList>,
+    },
+    Read {
+        name: &'static str,
+        value: Value,
+        stamp: String,
     },
 }
 
@@ -259,8 +291,18 @@ struct OpenOutcome {
 impl Job {
     fn target(&self) -> Target {
         match self {
-            Self::Open { pull, .. } | Self::Watched { pull, .. } => Target::Pull(pull.clone()),
+            Self::Open { pull, .. } | Self::Watched { pull, .. } | Self::Read { pull, .. } => {
+                Target::Pull(pull.clone())
+            }
             Self::Repo { repo, .. } => Target::Repo(repo.clone()),
+        }
+    }
+
+    /// The name of the read it runs, if it runs one.
+    fn read(&self) -> Option<&'static str> {
+        match self {
+            Self::Read { read, .. } => Some(read.name),
+            _ => None,
         }
     }
 
@@ -306,6 +348,11 @@ impl Job {
                 };
                 Ok(Outcome::Repo { listed, list })
             }
+            Self::Read { read, .. } => Ok(Outcome::Read {
+                name: read.name,
+                value: (read.run)(client, read.known).await?,
+                stamp: read.stamp,
+            }),
         }
     }
 }
@@ -333,6 +380,7 @@ pub struct Poller {
     accounts: Entity<Accounts>,
     login: String,
     cache: PrCache,
+    marks: RevisionMarks,
     config: PollConfig,
     queue: RequestQueue,
     foreground: bool,
@@ -386,6 +434,7 @@ impl Poller {
         Self {
             accounts,
             login: login.into(),
+            marks: RevisionMarks::new(cache.db().clone()),
             cache,
             queue: RequestQueue::new(cx.background_executor().clone(), config.write_spacing),
             config,
@@ -447,12 +496,12 @@ impl Poller {
         let check = self
             .cached::<PullRequestCheckData>(&target)
             .map(|c| c.map(Arc::new));
-        let state = PullState {
+        let mut state = PullState {
             summary: self.cached::<PullSummary>(&target).map(|c| c.map(Arc::new)),
-            latest_check: check.as_ref().map(|c| c.value.clone()),
-            check,
             ..PullState::default()
         };
+        state.set_latest_check(check.as_ref().map(|c| c.value.clone()));
+        state.check = check;
         if !self.repos.contains_key(&pull.repo) {
             let repo = Target::Repo(pull.repo.clone());
             let state = RepoState {
@@ -554,6 +603,79 @@ impl Poller {
     /// A watched repository's open pull requests, as last fetched.
     pub fn open_pull_requests(&self, repo: &RepoRef) -> Option<Cached<Arc<OpenPullRequestList>>> {
         self.repos.get(repo)?.list.clone()
+    }
+
+    /// What this account's poller and the others saw of pull requests' revisions, and where you
+    /// last left each.
+    pub fn revision_marks(&self) -> &RevisionMarks {
+        &self.marks
+    }
+
+    /// Reads something about `pull` with `request`, keeping it in the cache as `T`, watching
+    /// `pull` if it wasn't. Returns what rozed has at once, if anything: what was read before, or
+    /// what's in the cache, even from before a restart.
+    ///
+    /// While `pull` is the open pull request, `request` runs in the account's queue, after the
+    /// open PR's poll: when rozed has nothing yet, when a field `T` watches in the open PR's check
+    /// ([`CachedRead::WATCHED`]) is no longer what it was when `T` was read, and, like the details,
+    /// on the 5-minute refresh in the foreground. `request` is given the value rozed has, so it can
+    /// ask GitHub whether that changed. Each time the value changes, [`PollEvent::Read`] says so.
+    /// A read is kept for as long as `pull` is watched; asking again replaces its `request`.
+    pub fn read_cached<T, F, Fut>(
+        &mut self,
+        pull: PullRef,
+        request: F,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<T>>>
+    where
+        T: CachedRead,
+        F: Fn(GithubClient, Option<Arc<T>>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T, GithubError>> + Send + 'static,
+    {
+        self.watch(pull.clone(), cx);
+        let run: super::reads::ReadFn = Arc::new(move |client, known: Option<Value>| {
+            let known = known.and_then(|known| known.downcast::<T>().ok());
+            let read = request(client, known);
+            async move { Ok(Arc::new(read.await?) as Value) }.boxed()
+        });
+        let (cache, login) = (self.cache.clone(), self.login.clone());
+        let state = self.pulls.get_mut(&pull).expect("watched above");
+        match state.reads.get_mut(T::NAME) {
+            Some(read) => read.run = run,
+            None => {
+                let ty = ReadType::of::<T>();
+                let loaded = (ty.load)(&cache, &login, &Target::Pull(pull.clone()));
+                let (value, stamp, fetched_at) = match loaded {
+                    Some((value, stamp, fetched_at)) => (Some(value), stamp, Some(fetched_at)),
+                    None => (None, None, None),
+                };
+                state.reads.insert(
+                    T::NAME,
+                    ReadState {
+                        ty,
+                        run,
+                        value,
+                        stamp,
+                        fetched_at,
+                        failed_at: None,
+                    },
+                );
+                self.wake();
+                cx.notify();
+            }
+        }
+        self.cached_read::<T>(&pull)
+    }
+
+    /// What a read [`Self::read_cached`] keeps for `pull` holds, and when GitHub last confirmed
+    /// it.
+    pub fn cached_read<T: CachedRead>(&self, pull: &PullRef) -> Option<Cached<Arc<T>>> {
+        let read = self.pulls.get(pull)?.reads.get(T::NAME)?;
+        Some(Cached {
+            value: read.value.clone()?.downcast::<T>().ok()?,
+            etag: None,
+            fetched_at: read.fetched_at?,
+        })
     }
 
     /// Runs a write (a comment, a review, viewed marks, a merge) that changes `target`, with the
@@ -779,6 +901,50 @@ impl Poller {
                 have_list: state.list.is_some(),
             });
         }
+        // The open PR's reads, once its check says what they watch.
+        if let Some(open) = &self.open
+            && let Some(state) = self.pulls.get(open)
+            && let Some(check) = &state.check_json
+            && let Some(retry) = interval(
+                Tier::Open,
+                self.foreground,
+                &self.status.rate_limit,
+                &self.config,
+            )
+        {
+            for (name, read) in &state.reads {
+                let current = stamp(check, read.ty.watched);
+                let at = if read.value.is_none() || read.stamp.as_deref() != Some(current.as_str())
+                {
+                    // A read that just failed waits out the open PR's interval.
+                    Some(read.failed_at.map_or(now, |failed| failed + retry))
+                } else if refresh_details && let Some(fetched_at) = read.fetched_at {
+                    let age = wall.duration_since(fetched_at).unwrap_or_default();
+                    Some(now + self.config.details_max_age.saturating_sub(age))
+                } else {
+                    None
+                };
+                if let Some(at) = at
+                    && next.as_ref().is_none_or(|(best, ..)| at < *best)
+                {
+                    let read = ReadJob {
+                        name,
+                        run: read.run.clone(),
+                        known: read.value.clone(),
+                        stamp: current,
+                    };
+                    next = Some((
+                        at,
+                        Job::Read {
+                            pull: open.clone(),
+                            read,
+                        },
+                        0,
+                        false,
+                    ));
+                }
+            }
+        }
         // While the limit is low, intervals are longer and some tiers aren't polled at all. Wake at
         // its reset, when they're back.
         let until_reset = match &self.status.rate_limit {
@@ -827,6 +993,7 @@ impl Poller {
         let now = cx.background_executor().now();
         let wall = self.config.wall_clock.now();
         let target = job.target();
+        let read = job.read();
         let mut writes = Vec::new();
         if answered(&result) {
             self.offline = None;
@@ -835,11 +1002,16 @@ impl Poller {
             Ok(outcome) => {
                 self.secondary_attempts = 0;
                 self.failures.remove(&target);
-                self.schedule(&target, |schedule| schedule.polled(now, ticket));
+                // A read keeps its own times, apart from its pull request's polls.
+                if read.is_none() {
+                    self.schedule(&target, |schedule| schedule.polled(now, ticket));
+                }
                 writes = self.apply(outcome, &target, wall, cx);
             }
             Err(GithubError::Network(error)) => {
-                self.schedule(&target, |schedule| schedule.served(ticket));
+                if read.is_none() {
+                    self.schedule(&target, |schedule| schedule.served(ticket));
+                }
                 self.back_off(format!("{error:#}"), now, wall, cx);
             }
             Err(GithubError::RateLimited {
@@ -859,23 +1031,39 @@ impl Poller {
             {
                 self.signed_out = true;
             }
-            Err(error) => {
-                // Logged once while it keeps failing the same way.
-                let message = format!("{error:#}");
-                if self.failures.get(&target) == Some(&message) {
-                    log::debug!("polling {target:?}: {message}");
-                } else {
-                    log::info!("polling {target:?}: {message}");
-                    self.failures.insert(target.clone(), message);
+            Err(error) => match (read, &target) {
+                (Some(name), Target::Pull(pull)) => {
+                    log::info!("reading {name} for {pull}: {error:#}");
+                    let state = self.pulls.get_mut(pull);
+                    if let Some(read) = state.and_then(|state| state.reads.get_mut(name)) {
+                        read.failed_at = Some(now);
+                    }
+                    if self.is_watched(&target) {
+                        cx.emit(PollEvent::ReadFailed {
+                            pull: pull.clone(),
+                            name,
+                            error: Arc::new(error),
+                        });
+                    }
                 }
-                if self.is_watched(&target) {
-                    self.schedule(&target, |schedule| schedule.polled(now, ticket));
-                    cx.emit(PollEvent::Failed {
-                        target,
-                        error: Arc::new(error),
-                    });
+                _ => {
+                    // Logged once while it keeps failing the same way.
+                    let message = format!("{error:#}");
+                    if self.failures.get(&target) == Some(&message) {
+                        log::debug!("polling {target:?}: {message}");
+                    } else {
+                        log::info!("polling {target:?}: {message}");
+                        self.failures.insert(target.clone(), message);
+                    }
+                    if self.is_watched(&target) {
+                        self.schedule(&target, |schedule| schedule.polled(now, ticket));
+                        cx.emit(PollEvent::Failed {
+                            target,
+                            error: Arc::new(error),
+                        });
+                    }
                 }
-            }
+            },
         }
         self.refresh_status(cx);
         writes
@@ -997,6 +1185,23 @@ impl Poller {
             );
         };
         let (cache, login) = (self.cache.clone(), self.login.clone());
+        // Every head a poll brings is noted as seen, once for each answer that brings it anew.
+        let marks = self.marks.clone();
+        let see = |writes: &mut Vec<CacheWrite>, pull: &PullRef, heads: Vec<&str>| {
+            let mut heads: Vec<String> = heads.into_iter().map(str::to_string).collect();
+            heads.sort();
+            heads.dedup();
+            let (marks, login, pull) = (marks.clone(), login.clone(), pull.clone());
+            writes.push(
+                async move {
+                    for head in heads {
+                        marks.record_seen(&login, &pull, &head, wall).await?;
+                    }
+                    Ok(())
+                }
+                .boxed(),
+            );
+        };
         match (outcome, target) {
             (Outcome::Open(open), Target::Pull(pull)) => {
                 let OpenOutcome {
@@ -1010,7 +1215,7 @@ impl Poller {
                 let summary = Self::take_summary(state, summary, wall);
                 let check = Arc::new(check);
                 let changed_check = (state.latest_check.as_ref() != Some(&check)).then(|| {
-                    state.latest_check = Some(check.clone());
+                    state.set_latest_check(Some(check.clone()));
                     check.clone()
                 });
                 let changed_details = match details {
@@ -1048,6 +1253,21 @@ impl Poller {
                         None
                     }
                 };
+                let heads: Vec<&str> = [
+                    summary.as_ref().map(|summary| summary.head.sha.as_str()),
+                    changed_check
+                        .as_ref()
+                        .map(|check| check.head_ref_oid.as_str()),
+                    changed_details
+                        .as_ref()
+                        .map(|details| details.head_ref_oid.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                if !heads.is_empty() {
+                    see(&mut writes, pull, heads);
+                }
                 match summary {
                     Some(summary) => {
                         put(&mut writes, &cache, &login, Put::Summary(summary.clone()));
@@ -1083,6 +1303,7 @@ impl Poller {
                         // The details need fetching again when it's opened, even if the check
                         // doesn't show what changed.
                         state.check = None;
+                        see(&mut writes, pull, vec![&summary.head.sha]);
                         put(&mut writes, &cache, &login, Put::ForgetCheck);
                         put(&mut writes, &cache, &login, Put::Summary(summary.clone()));
                         cx.emit(PollEvent::Summary {
@@ -1139,6 +1360,31 @@ impl Poller {
                         }
                         put(&mut writes, &cache, &login, Put::TouchList);
                     }
+                }
+            }
+            (Outcome::Read { name, value, stamp }, Target::Pull(pull)) => {
+                let state = self.pulls.get_mut(pull);
+                let Some(read) = state.and_then(|state| state.reads.get_mut(name)) else {
+                    return writes;
+                };
+                let changed =
+                    (read.value.as_ref()).is_none_or(|known| !(read.ty.same)(known, &value));
+                let restamped = read.stamp.as_deref() != Some(stamp.as_str());
+                read.value = Some(value.clone());
+                read.stamp = Some(stamp.clone());
+                read.fetched_at = Some(wall);
+                read.failed_at = None;
+                let target = target.clone();
+                writes.push(if changed || restamped {
+                    (read.ty.put)(cache, login, target, Some(stamp), value, wall)
+                } else {
+                    (read.ty.touch)(cache, login, target, wall)
+                });
+                if changed {
+                    cx.emit(PollEvent::Read {
+                        pull: pull.clone(),
+                        name,
+                    });
                 }
             }
             _ => {}

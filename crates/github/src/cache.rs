@@ -229,6 +229,10 @@ impl PrCache {
         Self { db }
     }
 
+    pub(crate) fn db(&self) -> &RozedDb {
+        &self.db
+    }
+
     /// `account`'s cached answer about `target`, if there's one in the current shape.
     pub fn get<T: CacheEntry>(&self, account: &str, target: &Target) -> Result<Option<Cached<T>>> {
         let repo = target.repo();
