@@ -231,13 +231,18 @@ pub(crate) struct Images {
 }
 
 /// `old` with each line whose change was only to whitespace replaced by `new`'s line, as `git diff
-/// -w` shows it: compared with `new`, only changes to more than whitespace remain. Lines keep their
-/// places, so line numbers stay `old`'s, and lines that changed in more than whitespace keep
-/// `old`'s text.
+/// -w` shows it: compared with `new`, only changes to more than whitespace remain. Whitespace is
+/// what git and GitHub ignore: spaces, tabs, carriage returns and line feeds, never other Unicode
+/// spaces, which can change what code means. Lines keep their places and their own line endings,
+/// so line numbers stay `old`'s, and lines that changed in more than whitespace keep `old`'s text.
 pub(crate) fn without_whitespace_changes(old: &str, new: &str) -> String {
     let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let key = |line: &&str| -> String { line.chars().filter(|c| !c.is_whitespace()).collect() };
+    let key = |line: &&str| -> String {
+        line.chars()
+            .filter(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
+            .collect()
+    };
     let mut input = InternedInput::default();
     input.update_before(old_lines.iter().map(key));
     input.update_after(new_lines.iter().map(key));
@@ -245,9 +250,14 @@ pub(crate) fn without_whitespace_changes(old: &str, new: &str) -> String {
 
     let mut text = String::with_capacity(old.len());
     let (mut at_old, mut at_new) = (0, 0);
+    // A matched line is the head's, ended as the base's was, so a head without a final newline
+    // never joins two base lines, nor a base without one gains a row.
     let matched = |text: &mut String, to: usize, at_old: &mut usize, at_new: &mut usize| {
         while *at_old < to {
-            text.push_str(new_lines[*at_new]);
+            text.push_str(new_lines[*at_new].trim_end_matches('\n'));
+            if old_lines[*at_old].ends_with('\n') {
+                text.push('\n');
+            }
             *at_old += 1;
             *at_new += 1;
         }
@@ -444,6 +454,43 @@ pub(crate) mod tests {
         let old = "a\nb\n";
         let new = "a\n\nb\n";
         assert_eq!(without_whitespace_changes(old, new), old);
+    }
+
+    #[test]
+    fn only_spaces_tabs_and_line_breaks_count_as_whitespace() {
+        // In JavaScript a line separator ends the line, so cleanup() becomes code.
+        let old = "// TODO: call cleanup() later\n";
+        let new = "// TODO: call\u{2028}cleanup() later\n";
+        assert_eq!(without_whitespace_changes(old, new), old);
+        // A no-break space in a string, an ideographic space, a form feed.
+        for (old, new) in [
+            ("s = \"a b\";\n", "s = \"a\u{a0}b\";\n"),
+            ("x = 1\n", "x\u{3000}= 1\n"),
+            ("a b\n", "a\u{c}b\n"),
+        ] {
+            assert_eq!(without_whitespace_changes(old, new), old, "{new:?}");
+        }
+        // Tabs and carriage returns are whitespace, as for `git diff -w`.
+        assert_eq!(without_whitespace_changes("a b\n", "a\tb\r\n"), "a\tb\r\n");
+    }
+
+    #[test]
+    fn a_missing_final_newline_on_either_side_keeps_the_bases_lines() {
+        // The head drops the base's last line and its own final newline.
+        assert_eq!(without_whitespace_changes("a\nb\nc\n", "a\nb"), "a\nb\nc\n");
+        assert_eq!(
+            without_whitespace_changes("one\ntwo\nthree\nfour\n", "one\n  two\nthree"),
+            "one\n  two\nthree\nfour\n"
+        );
+        // The base has no final newline, and the head adds a line after it.
+        assert_eq!(without_whitespace_changes("a\n b", "a\nb\nc\n"), "a\nb");
+        for (old, new) in [("a\nb\nc\n", "a\nb"), ("a\n b", "a\nb\nc\n")] {
+            assert_eq!(
+                without_whitespace_changes(old, new).matches('\n').count(),
+                old.matches('\n').count(),
+                "{old:?} against {new:?}"
+            );
+        }
     }
 
     #[test]

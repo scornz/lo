@@ -1190,6 +1190,51 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn alt_w_keeps_the_left_sides_lines_without_a_final_newline(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let base = "one\ntwo\nthree\nfour\n";
+        let (diff, _copy) = show(
+            &tab,
+            &[Entry::File("a.txt", base.as_bytes())],
+            &[Entry::File("a.txt", b"one\n  two\nthree")],
+            cx,
+        );
+        cx.simulate_keystrokes("alt-w");
+        cx.run_until_parked();
+
+        let left = file(&diff, "a.txt", cx, |file, cx| {
+            file.diff.read(cx).base_text_buffer().read(cx).text()
+        });
+        // Two's indentation reads as the head's; four is still the base's own line, numbered 4.
+        assert_eq!(left, "one\n  two\nthree\nfour\n");
+        assert_eq!(left.lines().count(), base.lines().count());
+        let lhs = diff.read_with(cx, |diff, cx| diff.lhs_editor().unwrap().read(cx).text(cx));
+        assert!(lhs.lines().any(|line| line == "four"), "{lhs:?}");
+        assert!(!lhs.contains("threefour"), "{lhs:?}");
+    }
+
+    #[gpui::test]
+    async fn alt_w_still_shows_a_change_to_a_line_separator(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let (diff, _copy) = show(
+            &tab,
+            &[Entry::File(
+                "a.js",
+                "// TODO: call cleanup() later\nrun();\n".as_bytes(),
+            )],
+            &[Entry::File(
+                "a.js",
+                "// TODO: call\u{2028}cleanup() later\nrun();\n".as_bytes(),
+            )],
+            cx,
+        );
+        cx.simulate_keystrokes("alt-w");
+        cx.run_until_parked();
+        assert!(!is_folded(&diff, "a.js", cx));
+        assert_eq!(collapsed_label(&diff, "a.js", cx), None);
+    }
+
+    #[gpui::test]
     async fn alt_w_keeps_collapsed_and_folded_files_folded(cx: &mut TestAppContext) {
         let (tab, cx) = tab(cx).await;
         let (diff, _copy) = show(
