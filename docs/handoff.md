@@ -93,7 +93,7 @@ The `ash-mac` Mac devbox on `scornz-mini` has 64 GB of memory, 18 cores and abou
 
 ## GitHub
 
-- **`scornz/rozed`** is public. Its `main` has the user's README commit.
+- **`scornz/lo`** is public. Its `main` has the user's README commit.
 - **The `protect-main` ruleset** is active:
   - PRs only, merged by squash, with linear history
   - no force-pushes and no deleting `main`
@@ -175,7 +175,7 @@ really behave. A suggested order:
    GitHub stacks.
 10. **Code features:** the syntax index served as a language server, trust, language servers and peek.
 11. **Moved code and the syntax-aware view.**
-12. **Opening links** (`⌘O`, link routers, `rozed://`, the CLI), the keymap and `?`, and settings.
+12. **Opening links** (`⌘O`, link routers, `lo://`, the CLI), the keymap and `?`, and settings.
 13. **End-to-end tests** on `rozed-dev`, the network allowlist check, performance, and the release
     workflow.
 
@@ -206,7 +206,7 @@ work is done. Its work was deliberately discarded. Start fresh, but keep what it
 ## Notes from the design session
 
 - **Keychain prompts.** Unsigned rebuilds change the code signature, so macOS asks for Keychain access
-  on every rebuild. Debug builds may keep tokens in a file under `~/.config/rozed/` with mode 600.
+  on every rebuild. Debug builds may keep tokens in a file under `~/.config/lo/` with mode 600.
   Release builds use the Keychain.
 - **Stacked PRs** are in public preview. Check that `GET /repos/{owner}/{repo}/stacks` works on a
   `rozed-dev` repo. If GitHub needs an opt-in, add it to "Waiting on the user."

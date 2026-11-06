@@ -413,7 +413,7 @@ fn the_clones_own_config_cant_turn_attributes_on() {
     // attributes from, as `attr.tree` does, would apply it.
     git(
         f.repo.git_dir(),
-        &["config", "attr.tree", "refs/rozed/pull/1/head"],
+        &["config", "attr.tree", "refs/lo/pull/1/head"],
     );
 
     let files = f.repo.changed_files(&f.base, &f.head).unwrap();

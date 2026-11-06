@@ -35,7 +35,7 @@ const MAX_REDIRECTS: u32 = 3;
 
 /// The `User-Agent` rozed sends. GitHub requires one.
 pub fn user_agent() -> String {
-    format!("rozed/{}", env!("CARGO_PKG_VERSION"))
+    format!("lo/{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// What a client does when GitHub refuses its token (a `401`). It's given the refused token,
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(seen.header("x-github-api-version"), Some("2022-11-28"));
         assert_eq!(
             seen.header("user-agent"),
-            Some(concat!("rozed/", env!("CARGO_PKG_VERSION")))
+            Some(concat!("lo/", env!("CARGO_PKG_VERSION")))
         );
         assert_eq!(seen.header("if-none-match"), None);
     }

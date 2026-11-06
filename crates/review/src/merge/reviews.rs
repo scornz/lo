@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn a_review_github_requires_for_a_reason_rozed_cannot_see_is_still_missing() {
+    fn a_review_github_requires_for_a_reason_lo_cannot_see_is_still_missing() {
         let snapshot = MergeSnapshot {
             reviews: vec![review("alice", ReviewState::Approved)],
             rules: requiring_code_owners(1),

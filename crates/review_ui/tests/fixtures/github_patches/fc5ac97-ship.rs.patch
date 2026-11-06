@@ -46,5 +46,5 @@
 +    }
 +
      #[test]
-     fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_rozed_cannot_see() {
+     fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_lo_cannot_see() {
          // Copilot opened it, or a ruleset requires a reviewer for these files: GitHub still needs

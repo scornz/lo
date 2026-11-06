@@ -4728,9 +4728,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn a_poller_started_while_rozed_is_in_the_background_starts_slow(
-        cx: &mut TestAppContext,
-    ) {
+    async fn a_poller_started_while_lo_is_in_the_background_starts_slow(cx: &mut TestAppContext) {
         let (_workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         sign_in(&github, &[("home", "gho_HOME")], cx).await;
@@ -4877,7 +4875,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn offline_what_rozed_saved_shows_with_its_age(cx: &mut TestAppContext) {
+    async fn offline_what_lo_saved_shows_with_its_age(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -5520,9 +5518,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn with_rozeds_title_format_a_new_folder_doesnt_retitle_the_window(
-        cx: &mut TestAppContext,
-    ) {
+    async fn with_los_title_format_a_new_folder_doesnt_retitle_the_window(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         // As rozed's forced settings have it.
         cx.update(|_, cx| {
@@ -5781,9 +5777,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn a_load_rozed_starts_never_asks_which_account_and_escape_sticks(
-        cx: &mut TestAppContext,
-    ) {
+    async fn a_load_lo_starts_never_asks_which_account_and_escape_sticks(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -6777,7 +6771,7 @@ mod tests {
         cx: &mut VisualTestContext,
     ) -> SignedIn {
         let github = std::sync::Arc::new(WriteGithub::default());
-        let db = github::db::RozedDb::open_test(name).await;
+        let db = github::db::LoDb::open_test(name).await;
         let store = std::sync::Arc::new(
             credentials_provider::test_support::FakeCredentialsProvider::default(),
         );
@@ -8656,7 +8650,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn rozeds_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
+    fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
         init(cx);
         cx.update(|cx| {
             let keymap = cx.key_bindings();

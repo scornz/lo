@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn rozed_opens_only_githubs_page() {
+    fn lo_opens_only_githubs_page() {
         assert_eq!(VERIFICATION_URL, "https://github.com/login/device");
     }
 

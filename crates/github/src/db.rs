@@ -1,4 +1,4 @@
-//! rozed's own SQLite database, `rozed.sqlite`, through Zed's `sqlez`.
+//! rozed's own SQLite database, `lo.sqlite`, through Zed's `sqlez`.
 //!
 //! It's a separate file from Zed's `db.sqlite`, and unlike Zed's it never falls back to an
 //! in-memory database: it holds durable state, such as which account to use for each owner, and
@@ -17,9 +17,9 @@ use sqlez_macros::sql;
 /// rozed's database connection. Reads run on the calling thread; writes are queued to one
 /// background thread.
 #[derive(Clone)]
-pub struct RozedDb(ThreadSafeConnection);
+pub struct LoDb(ThreadSafeConnection);
 
-impl Domain for RozedDb {
+impl Domain for LoDb {
     const NAME: &str = "rozed";
     const MIGRATIONS: &[&str] = &[
         sql!(
@@ -142,10 +142,10 @@ pub fn default_path() -> PathBuf {
     };
     paths::database_dir()
         .join(format!("0-{scope}"))
-        .join("rozed.sqlite")
+        .join("lo.sqlite")
 }
 
-impl RozedDb {
+impl LoDb {
     /// Opens or creates the database at `path`, running its migrations.
     pub async fn open(path: &Path) -> Result<Self> {
         let dir = path.parent().context("the database path has no folder")?;
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn accounts_round_trip_and_update_in_place() {
         futures::executor::block_on(async {
-            let db = RozedDb::open_test("accounts_round_trip").await;
+            let db = LoDb::open_test("accounts_round_trip").await;
             assert_eq!(db.accounts().unwrap(), []);
             db.save_account(account("b", 2)).await.unwrap();
             db.save_account(account("a", 1)).await.unwrap();
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn removing_an_account_forgets_its_owners() {
         futures::executor::block_on(async {
-            let db = RozedDb::open_test("owner_accounts").await;
+            let db = LoDb::open_test("owner_accounts").await;
             db.save_account(account("a", 1)).await.unwrap();
             db.save_account(account("b", 2)).await.unwrap();
             let set = |owner: &str, login: &str| {
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn a_repositorys_own_account_is_kept_apart_from_its_owners() {
         futures::executor::block_on(async {
-            let db = RozedDb::open_test("repo_accounts").await;
+            let db = LoDb::open_test("repo_accounts").await;
             db.save_account(account("a", 1)).await.unwrap();
             db.save_account(account("b", 2)).await.unwrap();
             db.set_owner_account("github.com".into(), "acme".into(), "a".into())
@@ -504,9 +504,9 @@ mod tests {
     #[test]
     fn opens_a_file_and_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("0-dev/rozed.sqlite");
+        let path = dir.path().join("0-dev/lo.sqlite");
         futures::executor::block_on(async {
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             db.save_account(account("a", 1)).await.unwrap();
         });
         assert!(path.exists());
@@ -545,13 +545,13 @@ mod tests {
     struct BeforeTheCache;
 
     impl Domain for BeforeTheCache {
-        const NAME: &str = RozedDb::NAME;
+        const NAME: &str = LoDb::NAME;
         const MIGRATIONS: &[&str] = &[SHIPPED_STEP_0];
     }
 
     #[test]
     fn the_first_migration_never_changes() {
-        assert_eq!(RozedDb::MIGRATIONS[0], SHIPPED_STEP_0);
+        assert_eq!(LoDb::MIGRATIONS[0], SHIPPED_STEP_0);
     }
 
     #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn upgrades_a_database_from_before_the_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         futures::executor::block_on(async {
             let old =
                 ThreadSafeConnection::builder::<BeforeTheCache>(&path.to_string_lossy(), true)
@@ -587,7 +587,7 @@ mod tests {
             .unwrap();
             drop(old);
 
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
             let cache = crate::cache::PrCache::new(db);
             let target = crate::PullRef::new("o", "r", 1).into();
@@ -606,14 +606,14 @@ mod tests {
     struct BeforeViewedFiles;
 
     impl Domain for BeforeViewedFiles {
-        const NAME: &str = RozedDb::NAME;
-        const MIGRATIONS: &[&str] = &[RozedDb::MIGRATIONS[0], RozedDb::MIGRATIONS[1]];
+        const NAME: &str = LoDb::NAME;
+        const MIGRATIONS: &[&str] = &[LoDb::MIGRATIONS[0], LoDb::MIGRATIONS[1]];
     }
 
     #[test]
     fn upgrades_a_database_from_before_viewed_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         futures::executor::block_on(async {
             let old =
                 ThreadSafeConnection::builder::<BeforeViewedFiles>(&path.to_string_lossy(), true)
@@ -632,7 +632,7 @@ mod tests {
             .unwrap();
             drop(old);
 
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
             let records = crate::viewed::ViewedRecords::new(db);
             let pull = crate::PullRef::new("o", "r", 1);
@@ -655,15 +655,15 @@ mod tests {
     struct BeforeRepoAccounts;
 
     impl Domain for BeforeRepoAccounts {
-        const NAME: &str = RozedDb::NAME;
+        const NAME: &str = LoDb::NAME;
         // The first three steps: `[..3]`, which a constant can't index with.
-        const MIGRATIONS: &[&str] = RozedDb::MIGRATIONS.split_at(3).0;
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(3).0;
     }
 
     #[test]
     fn upgrades_a_database_from_before_accounts_per_repository() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         futures::executor::block_on(async {
             let old =
                 ThreadSafeConnection::builder::<BeforeRepoAccounts>(&path.to_string_lossy(), true)
@@ -689,7 +689,7 @@ mod tests {
             .unwrap();
             drop(old);
 
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             assert_eq!(
                 db.owner_account("github.com", "acme").unwrap().as_deref(),
                 Some("a")
@@ -725,9 +725,9 @@ mod tests {
     fn refuses_to_fall_back_to_memory() {
         let dir = tempfile::tempdir().unwrap();
         // A folder where the file should be: SQLite can't open it.
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         std::fs::create_dir(&path).unwrap();
-        let Err(error) = futures::executor::block_on(RozedDb::open(&path)) else {
+        let Err(error) = futures::executor::block_on(LoDb::open(&path)) else {
             panic!("opened a folder as a database");
         };
         // sqlez fell back to memory, and rozed's own check refused that.

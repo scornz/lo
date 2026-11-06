@@ -166,7 +166,7 @@ mod tests {
             "",
             "remote: Total 4 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)",
             "From https://github.com/sharkdp/fd",
-            " * [new ref]         refs/pull/1/head -> refs/rozed/pull/1/head",
+            " * [new ref]         refs/pull/1/head -> refs/lo/pull/1/head",
             "fatal: couldn't find remote ref refs/pull/2/head",
             "remote: Repository not found.",
             "error: RPC failed; curl 56 Recv failure: Connection reset by peer",

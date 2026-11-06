@@ -9,7 +9,7 @@
 //! ```no_run
 //! use repo_cache::{Git, PullRequestRefs, RepoCache};
 //!
-//! let cache = RepoCache::new("/Users/me/Library/Caches/rozed", Git::find()?)?;
+//! let cache = RepoCache::new("/Users/me/Library/Caches/Lo", Git::find()?)?;
 //! let repo = cache.open("sharkdp", "fd", None)?;
 //! let pull = repo.fetch_pull(&PullRequestRefs {
 //!     number: 2212,

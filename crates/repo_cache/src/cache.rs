@@ -11,11 +11,11 @@ use crate::lock::RepoLock;
 use crate::repo::{Access, Repo};
 use crate::{Error, Oid, checkout};
 
-/// rozed's local copies of repositories, in one folder (`~/Library/Caches/rozed`):
+/// rozed's local copies of repositories, in one folder (`~/Library/Caches/Lo`):
 ///
 /// - `repos/github.com/<owner>/<repo>.git`: a bare partial clone (`--filter=blob:none`) of each
 ///   repository, so file contents download only when something reads them. Everything fetched
-///   goes under rozed's own refs, `refs/rozed/...`.
+///   goes under rozed's own refs, `refs/lo/...`.
 /// - `checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`: a checkout of a pull request's head,
 ///   one per head, for language servers.
 /// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone, and
@@ -64,7 +64,7 @@ impl GitEnv {
 const HOST: &str = "github.com";
 
 /// The file in a clone that records when rozed last opened it.
-pub(crate) const LAST_USED_FILE: &str = "rozed-last-used";
+pub(crate) const LAST_USED_FILE: &str = "lo-last-used";
 
 impl RepoCache {
     /// The cache in `root`, using `git`. Creates the folder if it's missing.

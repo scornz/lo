@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn carriage_returns_and_empty_unchanged_lines_read_as_rozeds_buffers_have_them() {
+    fn carriage_returns_and_empty_unchanged_lines_read_as_los_buffers_have_them() {
         let patch = "@@ -1,3 +1,3 @@\r\n a\r\n\n-b\r\n+c\r\n";
         let parsed = parse_patch(patch).unwrap();
         assert_eq!(

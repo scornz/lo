@@ -23,7 +23,7 @@ These bind every change (design §1).
 
 ## Layout
 
-- `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
+- `crates/<name>/`: rozed's crates, one Cargo workspace. `lo` is the app. Design §2 lists the
   rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`), plus
   `symbol_index`, the syntax-based symbol index (design §7).
 - `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
@@ -50,22 +50,22 @@ Zed.
 
 Building needs Xcode (not just the Command Line Tools), because gpui compiles Metal shaders, and
 cmake, because Zed's tree-sitter builds wasmtime. If your shell doesn't activate mise, run cargo,
-Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p rozed`). mise's cmake shim
+Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p lo`). mise's cmake shim
 fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
 `PATH`, which activation or `mise exec` provides.
 
 ## Build, test and run
 
 ```sh
-cargo build -p rozed
-cargo run -p rozed -- https://github.com/sharkdp/fd/pull/2212           # a public pull request
-cargo run -p rozed -- --trust https://github.com/sharkdp/fd/pull/2212   # with rust-analyzer
+cargo build -p lo
+cargo run -p lo -- https://github.com/sharkdp/fd/pull/2212           # a public pull request
+cargo run -p lo -- --trust https://github.com/sharkdp/fd/pull/2212   # with rust-analyzer
 cargo test --workspace
 ```
 
-`rozed <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
+`lo <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
 while it copies the pull request into a partial clone per repository under
-`~/Library/Caches/rozed/repos/`. Then the copy's diff of whole files replaces it in Zed's
+`~/Library/Caches/Lo/repos/`. Then the copy's diff of whole files replaces it in Zed's
 side-by-side diff, at the same file and line, both sides read from git, with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
@@ -88,10 +88,10 @@ repository alone when the owner's account can't see it. Offline, a pull request 
 base the local copy has shows its diff from the copy, read without downloading, and the tab loads
 from GitHub by itself once it answers again.
 
-rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
-`~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
-`~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
-`RUST_LOG=info,rozed=debug` also logs the host and path of every HTTP request and redirect.
+rozed keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`,
+`~/Library/Caches/Lo` and `~/Library/Logs/Lo`, never Zed's. It logs to
+`~/Library/Logs/Lo/Lo.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
+`RUST_LOG=info,lo=debug` also logs the host and path of every HTTP request and redirect.
 
 ## Verify
 
@@ -136,8 +136,8 @@ On top of `v1.27.0`, in order. To change, reorder or drop one, make a new branch
 Zed").
 
 1. `paths: use rozed's folders`. Sets `APP_NAME` to `"rozed"` in `crates/paths/src/paths.rs`, so
-   rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
-   and `~/Library/Logs/rozed`, never Zed's folders.
+   rozed uses `~/.config/lo`, `~/Library/Application Support/Lo`, `~/Library/Caches/Lo`
+   and `~/Library/Logs/Lo`, never Zed's folders.
 2. `project: let an app ignore worktrees' own settings files`. Adds
    `SettingsObserver::ignore_worktree_settings_files` and `Project::settings_observer`. rozed calls
    it on every project, so a repository's `.zed/settings.json`, `.zed/tasks.json`,

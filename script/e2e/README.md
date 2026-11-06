@@ -19,7 +19,7 @@ rozed's revisions (milestone 6) and stacks (milestone 7) are checked against. It
 
 - **Credentials.** The token comes from `ROZED_BOT_TOKEN`, and the script checks that it belongs to
   `rozed-bot` before doing anything.
-  - It runs `/opt/homebrew/bin/gh` (or `ROZED_E2E_GH`) with an empty config, and gives gh the token
+  - It runs `/opt/homebrew/bin/gh` (or `LO_E2E_GH`) with an empty config, and gives gh the token
     on each call.
   - Git runs in a scratch clone, deleted on exit, without your git config or `GIT_*` variables.
     It pushes over HTTPS through a credential helper that reads the token from the environment.

@@ -13,18 +13,18 @@ use anyhow::Result;
 use sqlez_macros::sql;
 
 use crate::credentials::HOST;
-use crate::db::RozedDb;
+use crate::db::LoDb;
 use crate::pulls::PullRef;
 
 /// The heads at which an account marked a pull request's files viewed with rozed, in rozed's
 /// database.
 #[derive(Clone)]
 pub struct ViewedRecords {
-    db: RozedDb,
+    db: LoDb,
 }
 
 impl ViewedRecords {
-    pub fn new(db: RozedDb) -> Self {
+    pub fn new(db: LoDb) -> Self {
         Self { db }
     }
 
@@ -126,8 +126,8 @@ mod tests {
         }
     }
 
-    async fn records(name: &str, logins: &[&str]) -> (RozedDb, ViewedRecords) {
-        let db = RozedDb::open_test(name).await;
+    async fn records(name: &str, logins: &[&str]) -> (LoDb, ViewedRecords) {
+        let db = LoDb::open_test(name).await;
         for login in logins {
             db.save_account(account(login)).await.unwrap();
         }

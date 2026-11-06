@@ -95,7 +95,7 @@ fn opens_a_bare_partial_clone_on_first_use() {
         git(&git_dir, &["config", "remote.origin.partialclonefilter"]),
         "blob:none"
     );
-    assert!(git_dir.join("rozed-last-used").is_file());
+    assert!(git_dir.join("lo-last-used").is_file());
     // No template, so no sample hooks.
     assert!(!git_dir.join("hooks").exists());
 
@@ -131,12 +131,9 @@ fn git_never_uses_a_repository_above_the_cache() {
     git(home.path(), &["init", "-q"]);
     let origin = format!("{}/owner/repo.git", server.base_url());
     git(home.path(), &["config", "remote.origin.url", &origin]);
-    let cache = RepoCache::new(
-        home.path().join("Library/Caches/rozed"),
-        Git::find().unwrap(),
-    )
-    .unwrap()
-    .with_remote_base(server.base_url());
+    let cache = RepoCache::new(home.path().join("Library/Caches/Lo"), Git::find().unwrap())
+        .unwrap()
+        .with_remote_base(server.base_url());
     let repo = cache.open("owner", "not-on-the-server", None).unwrap();
     // Half deleted, as by a cleanup that was interrupted.
     fs::remove_file(repo.git_dir().join("HEAD")).unwrap();
@@ -208,14 +205,14 @@ fn fetches_a_pull_requests_head_and_base_and_pins_them() {
             base_source: BaseSource::Branch,
         }
     );
-    assert_eq!(rev_parse(&repo, "refs/rozed/pull/1/head"), pr.head.as_str());
+    assert_eq!(rev_parse(&repo, "refs/lo/pull/1/head"), pr.head.as_str());
     assert_eq!(
-        rev_parse(&repo, "refs/rozed/pull/1/base"),
+        rev_parse(&repo, "refs/lo/pull/1/base"),
         pr.trunk_tip.as_str()
     );
-    let revs = format!("refs/rozed/pull/1/revs/{}", pr.head);
+    let revs = format!("refs/lo/pull/1/revs/{}", pr.head);
     assert_eq!(rev_parse(&repo, &revs), pr.head.as_str());
-    let bases = format!("refs/rozed/pull/1/bases/{}", pr.trunk_tip);
+    let bases = format!("refs/lo/pull/1/bases/{}", pr.trunk_tip);
     assert_eq!(rev_parse(&repo, &bases), pr.trunk_tip.as_str());
     assert_eq!(repo.pull_revisions(1).unwrap(), vec![pr.head.clone()]);
     assert_eq!(
@@ -227,8 +224,7 @@ fn fetches_a_pull_requests_head_and_base_and_pins_them() {
     let git_dir = repo.git_dir();
     let refs = git(git_dir, &["for-each-ref", "--format=%(refname)"]);
     assert!(
-        refs.lines()
-            .all(|name| name.starts_with("refs/rozed/pull/1/")),
+        refs.lines().all(|name| name.starts_with("refs/lo/pull/1/")),
         "{refs}"
     );
     assert!(!git_dir.join("FETCH_HEAD").exists());
@@ -284,7 +280,7 @@ fn a_force_pushed_revision_stays_readable() {
     assert_eq!(fetch(&repo, 1).head, r2);
 
     // refs/pull/1/head moved on; rozed kept both.
-    assert_eq!(rev_parse(&repo, "refs/rozed/pull/1/head"), r2.as_str());
+    assert_eq!(rev_parse(&repo, "refs/lo/pull/1/head"), r2.as_str());
     let mut revisions = repo.pull_revisions(1).unwrap();
     revisions.sort();
     let mut expected = vec![r1.clone(), r2.clone()];
@@ -462,7 +458,7 @@ fn a_deleted_base_branch_falls_back_to_the_apis_base() {
     assert_eq!(fetched.head, upper);
     assert_eq!(fetched.base_tip, pr.head);
     assert_eq!(fetched.base_source, BaseSource::Api);
-    assert_eq!(rev_parse(&repo, "refs/rozed/pull/2/base"), pr.head.as_str());
+    assert_eq!(rev_parse(&repo, "refs/lo/pull/2/base"), pr.head.as_str());
 }
 
 #[test]
@@ -554,7 +550,7 @@ fn fetches_a_commit_by_id_and_pins_it() {
     repo.fetch_commit(&elsewhere).unwrap();
 
     assert_eq!(
-        rev_parse(&repo, &format!("refs/rozed/commits/{elsewhere}")),
+        rev_parse(&repo, &format!("refs/lo/commits/{elsewhere}")),
         elsewhere.as_str()
     );
     assert_eq!(

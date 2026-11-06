@@ -2,7 +2,7 @@
 # Checks that the Zed crates compiled into rozed match script/zed-crates.txt, so a change in what
 # rozed pulls in from Zed shows up in review. With --update, rewrites the list instead.
 #
-# "Compiled in" means what `cargo build -p rozed` compiles for the host: the crates reachable from
+# "Compiled in" means what `cargo build -p lo` compiles for the host: the crates reachable from
 # rozed through normal dependencies, with the features a build of the binary turns on. A Zed crate
 # is one whose manifest sits under third_party/zed.
 #
@@ -17,7 +17,7 @@ list=script/zed-crates.txt
 
 host=$(rustc -vV | sed -n 's/^host: //p')
 actual=$(
-  cargo tree --locked --package rozed --edges normal --target "$host" --prefix none --format '{p}' |
+  cargo tree --locked --package lo --edges normal --target "$host" --prefix none --format '{p}' |
     grep -F "($PWD/third_party/zed/" |
     awk '{ print $1 }' |
     sort -u

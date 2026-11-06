@@ -3,7 +3,7 @@
 //! A pull request's images are untrusted: a few hundred bytes can declare a huge canvas, an SVG can
 //! point an `<image>` at any file on disk, and an SVG's nesting, patterns, layers and filters can
 //! take gigabytes, overflow a stack or run for hours however small its canvas. So rozed decodes
-//! every preview in a helper process, `rozed --render-preview`, which [`crate::preview_pool`]
+//! every preview in a helper process, `lo --render-preview`, which [`crate::preview_pool`]
 //! starts, watches and kills when it runs too long or grows too large. The helper reads the
 //! image's format, the size it should fit and its bytes on stdin, and writes the preview, or why
 //! there's none, on stdout.
@@ -43,7 +43,7 @@ pub(crate) const MAX_INPUT: usize = 64 * 1024 * 1024;
 pub const HELPER_FLAG: &str = "--render-preview";
 
 /// What starts the helper's reply on stdout, so anything printed before it is skipped.
-pub(crate) const REPLY_MAGIC: &[u8] = b"\nROZED-PREVIEW-REPLY 1\n";
+pub(crate) const REPLY_MAGIC: &[u8] = b"\nLO-PREVIEW-REPLY 1\n";
 
 /// The stack the helper decodes on: usvg and resvg recurse once a nesting level.
 const DECODE_STACK: usize = 64 * 1024 * 1024;

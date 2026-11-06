@@ -3232,9 +3232,9 @@ pub(crate) mod tests {
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_AUTHOR_NAME", "rozed test")
-                .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+                .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
                 .env("GIT_COMMITTER_NAME", "rozed test")
-                .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+                .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());

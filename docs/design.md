@@ -88,7 +88,7 @@ Zed's into its own workspace.
 
 | Crate | Does |
 |---|---|
-| `rozed` | The app: startup, windows, menus, settings and update checks |
+| `lo` | The app: startup, windows, menus, settings and update checks |
 | `github` | Sign-in, accounts, GraphQL and REST calls, polling and the local cache |
 | `repo_cache` | Partial clones, fetching PR commits, checkouts for trusted repos and the git check |
 | `stacks` | Finding stacks, the stack tree and turning chains into GitHub stacks |
@@ -150,7 +150,7 @@ sign-in for attachment uploads.
 - **Database.** A SQLite file in Application Support stores cached PR data for instant reopening,
   "last seen" revisions, which account to use per owner, trusted repos and recent PRs. Only the
   cached PR data can be thrown away safely.
-- **Repo copies.** Each repo gets a bare partial clone in `~/Library/Caches/rozed`. rozed fetches
+- **Repo copies.** Each repo gets a bare partial clone in `~/Library/Caches/Lo`. rozed fetches
   PR heads (`refs/pull/<n>/head`, including PRs from forks) and base branches as it needs them. It
   keeps every revision it has fetched under its own refs, so force-pushed commits survive. Git
   signs in with the account's token through `GIT_ASKPASS`, and your git config is never touched.
@@ -428,7 +428,7 @@ root branch and marks it "needs rebase."
 
 Vim-style single keys by default, from Zed's `vim` crate. Arrow keys also work. Nothing in a diff is
 editable, so Vim's insert mode exists only in comment boxes. Every key can be remapped in a keymap
-file in Zed's format, kept with the settings in `~/.config/rozed/`. `?` shows every key.
+file in Zed's format, kept with the settings in `~/.config/lo/`. `?` shows every key.
 
 | What | Keys |
 |---|---|
@@ -459,8 +459,8 @@ across all accounts.
 - **Link routers.** rozed registers as an app that can open web links, without becoming the
   default browser, so Finicky, Velja or Choosy can send PR links to it. rozed's docs include
   ready-made rules. Any link rozed can't show goes back to the default browser.
-- **`rozed://` and the CLI.** `rozed://github.com/<owner>/<repo>/pull/<n>` opens a PR. "Install
-  command-line tool" in the app menu adds `rozed <url>`.
+- **`lo://` and the CLI.** `lo://github.com/<owner>/<repo>/pull/<n>` opens a PR. "Install
+  command-line tool" in the app menu adds `lo <url>`.
 - **What counts as a PR link.** `github.com/<owner>/<repo>/pull/<n>`, plus its `/files`,
   `/commits` and `/checks` pages. Links to a file, a line, a commit or a comment open at that
   spot.

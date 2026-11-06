@@ -43,15 +43,15 @@ Things that surprised:
   branch, isn't on the fork's default branch. `git submodule update --init --depth 1` fetches the
   pinned commit alone (32 MB, 7 s), as CI's checkout does.
 - **Zed-owned files.** A run creates only rozed's folders. It also creates
-  `~/Library/Logs/rozed/telemetry.log`, empty, because Zed's `Client` sets up its telemetry sink;
+  `~/Library/Logs/Lo/telemetry.log`, empty, because Zed's `Client` sets up its telemetry sink;
   nothing is sent.
 
 ## Zed crates compiled in
 
-rozed compiles in 107 Zed crates: everything reachable from the `rozed` package through normal
+rozed compiles in 107 Zed crates: everything reachable from the `lo` package through normal
 dependencies on macOS, which is what gets linked into the binary. `script/zed-crates.txt` lists
 them, and `script/check-zed-crates.sh`, which CI runs, fails when the set changes, so a new Zed
-crate shows up in review. It lists them with `cargo tree -p rozed -e normal` for the host platform.
+crate shows up in review. It lists them with `cargo tree -p lo -e normal` for the host platform.
 `cargo metadata` would list two more, `util_macros` and `perf`: its dependency graph merges in the
 `test-support` features rozed's dev-dependencies turn on, which a build of the binary doesn't.
 
@@ -122,22 +122,22 @@ Not compiled in: `auto_update`, `extension_host`, `git_ui`, `git_ui_core`, `call
 
 ## The pull request diff
 
-`cargo run -p rozed -- <pull request link>` opens a public pull request in Zed's side-by-side diff:
+`cargo run -p lo -- <pull request link>` opens a public pull request in Zed's side-by-side diff:
 
 1. `GET api.github.com/repos/<owner>/<repo>/pulls/<n>`, without signing in, for the base branch and
    the clone URL.
-2. The local copy (`crates/rozed/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`,
+2. The local copy (`crates/lo/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`,
    which has since replaced it): a bare `blob:none` partial clone at
-   `~/Library/Caches/rozed/repos/github.com/<owner>/<repo>.git`, a fetch of `refs/pull/<n>/head`
-   and the base branch into `refs/rozed/pull/<n>/head` and
-   `refs/rozed/base/<branch>`, their merge base, and the changed files with each side's mode and
+   `~/Library/Caches/Lo/repos/github.com/<owner>/<repo>.git`, a fetch of `refs/pull/<n>/head`
+   and the base branch into `refs/lo/pull/<n>/head` and
+   `refs/lo/base/<branch>`, their merge base, and the changed files with each side's mode and
    blob ID (`git diff -M` with `--raw` and `--numstat`).
 3. Every changed file goes into one `SplittableEditor`, in git's order, both sides read from git
    with `git cat-file` into in-memory buffers, as in Zed's `commit_view.rs`. There's no checkout, no
    project folder and no language server.
 
 With `--trust`, rozed also checks the head out, detached, as a `git worktree` at
-`~/Library/Caches/rozed/checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`, trusts that folder and
+`~/Library/Caches/Lo/checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`, trusts that folder and
 nothing else, and opens it as the project's only folder. A file whose bytes there hash to the
 head's blob (`git hash-object --no-filters`, against the blob ID from `--raw`) shows the checkout's
 project buffer on the right, so rust-analyzer attaches to it, as in Zed's `file_diff_view.rs`. A
@@ -192,7 +192,7 @@ Method: runs of the debug build on `sharkdp/fd#2212`, each from a clean state.
 - **Clean state.** rozed ran with `HOME` set to a new, empty folder, so its four folders, the clone
   cache and the rust-analyzer download all started empty, without touching the machine's own
   (`CARGO_HOME` and `RUSTUP_HOME` still pointed at the real toolchain).
-- **Logging.** `RUST_LOG=info,rozed=debug` logged every request and redirect through rozed's HTTP
+- **Logging.** `RUST_LOG=info,lo=debug` logged every request and redirect through rozed's HTTP
   client, and any refused Zed host at `warn`. A script sampled `lsof -i -n -P -a -p <pids>` and the
   command line of rozed and every process it had started, every second.
 - **Runs A, B and C** checked the first version, which trusted every pull request. Run A, 3
@@ -261,8 +261,8 @@ Local, on an 18-core Apple silicon Mac with 64 GB:
 
 | | |
 |---|---|
-| Clean debug build of `rozed` | 1 min 33 s (770 s of CPU) |
-| Rebuild after changing `crates/rozed` | about 2 s |
+| Clean debug build of `lo` | 1 min 33 s (770 s of CPU) |
+| Rebuild after changing `crates/lo` | about 2 s |
 | `target/` after a clean debug build | 11 GB (14 GB with clippy and test builds) |
 | Debug binary | 518 MB |
 | Release build (thin LTO, one codegen unit) | 6 min |
@@ -272,8 +272,8 @@ With the pull request diff, measured while another Zed build ran on the same mac
 
 | | |
 |---|---|
-| Clean debug build of `rozed` | 1 min 44 s (786 s of CPU) |
-| Rebuild after changing `crates/rozed` | 2 to 4 s |
+| Clean debug build of `lo` | 1 min 44 s (786 s of CPU) |
+| Rebuild after changing `crates/lo` | 2 to 4 s |
 | `target/` after a clean debug build | 11 GB (14 GB with clippy and test builds) |
 | Debug binary | 527 MB |
 
@@ -398,9 +398,9 @@ Still open with `--trust`, so only trust a pull request whose code you'd run:
 - **rust-analyzer always comes from GitHub,** where design §2 says rozed uses an installed copy
   when it finds one. The copy on `PATH` is usually rustup's proxy (see "Trust risks"); an installed
   binary that isn't a proxy would be safe to use. Milestone 10 decides.
-- **A force-pushed head replaced the old one** in `refs/rozed/pull/<n>/head`, so older revisions
+- **A force-pushed head replaced the old one** in `refs/lo/pull/<n>/head`, so older revisions
   didn't survive. Milestone 4's `repo_cache` pins every fetched head under
-  `refs/rozed/pull/<n>/revs/<sha>`.
+  `refs/lo/pull/<n>/revs/<sha>`.
 - **Big pull requests:** rozed reads both sides through one long-lived `git cat-file --batch` per
   repository, with `--trust` runs a `git hash-object` per file, and adds each file's hunks at once.
   Adding hunks in batches, as Zed's commit view does, would keep large diffs responsive.

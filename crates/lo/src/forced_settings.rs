@@ -24,7 +24,7 @@ pub const FORCED_SETTINGS: &str = r#"{
   // No telemetry: no usage events and no crash or diagnostics reports.
   "telemetry": { "diagnostics": false, "metrics": false },
   // Every URL Zed's crates build for a Zed service points at a host that doesn't exist.
-  "server_url": "https://rozed.invalid",
+  "server_url": "https://lo.invalid",
   "auto_update": false,
   // No AI features. This also keeps the multi-workspace sidebar off.
   "disable_ai": true,
@@ -157,7 +157,7 @@ mod tests {
         let telemetry = content.telemetry.unwrap();
         assert_eq!(telemetry.diagnostics, Some(false));
         assert_eq!(telemetry.metrics, Some(false));
-        assert_eq!(content.server_url.as_deref(), Some("https://rozed.invalid"));
+        assert_eq!(content.server_url.as_deref(), Some("https://lo.invalid"));
         assert_eq!(content.auto_update, Some(false));
         assert_eq!(content.project.disable_ai, Some(SaturatingBool(true)));
         assert_eq!(
@@ -206,7 +206,7 @@ mod tests {
         assert!(!telemetry.diagnostics, "telemetry diagnostics are on");
         assert_eq!(
             ClientSettings::get_global(cx).server_url,
-            "https://rozed.invalid"
+            "https://lo.invalid"
         );
         assert!(DisableAiSettings::get_global(cx).disable_ai, "AI is on");
         assert!(
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn rust_analyzer_gets_no_wrappers_and_the_toolchain_rozed_found(cx: &mut gpui::TestAppContext) {
+    fn rust_analyzer_gets_no_wrappers_and_the_toolchain_lo_found(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             settings::init(cx);
             set_user_settings(CONTRARY_USER_SETTINGS, cx);

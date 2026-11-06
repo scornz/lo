@@ -5,7 +5,7 @@
 //! `rozed-dev/playground`:
 //!
 //! ```sh
-//! ROZED_LIVE_TOKEN_FILE=<file> cargo test -p repo_cache --test live_github -- --ignored --nocapture
+//! LO_LIVE_TOKEN_FILE=<file> cargo test -p repo_cache --test live_github -- --ignored --nocapture
 //! ```
 //!
 //! The test reads the token from that file and never prints it. Without the variable it skips.
@@ -37,16 +37,16 @@ const ADDED: &str = "stack-b.md";
 const BELOW: &str = "stack-a.md";
 
 /// The variable rozed's credential helper reads the token from.
-const TOKEN_VAR: &str = "ROZED_GIT_TOKEN";
+const TOKEN_VAR: &str = "LO_GIT_TOKEN";
 
 const JSON: &str = "application/vnd.github+json";
 const RAW: &str = "application/vnd.github.raw+json";
 
 #[test]
-#[ignore = "fetches a private repository from github.com; needs ROZED_LIVE_TOKEN_FILE"]
+#[ignore = "fetches a private repository from github.com; needs LO_LIVE_TOKEN_FILE"]
 fn fetches_a_private_repository_through_the_credential_helper() {
-    let Some(token_file) = std::env::var_os("ROZED_LIVE_TOKEN_FILE") else {
-        eprintln!("skipped: ROZED_LIVE_TOKEN_FILE isn't set");
+    let Some(token_file) = std::env::var_os("LO_LIVE_TOKEN_FILE") else {
+        eprintln!("skipped: LO_LIVE_TOKEN_FILE isn't set");
         return;
     };
     let token_file = PathBuf::from(token_file);
@@ -102,12 +102,12 @@ fn fetches_a_private_repository_through_the_credential_helper() {
         assert_eq!(fetched.base_source, BaseSource::Branch);
 
         // The head is pinned under the pull request's revisions.
-        let pinned = for_each_ref(repo.git_dir(), &format!("refs/rozed/pull/{PULL}/"));
+        let pinned = for_each_ref(repo.git_dir(), &format!("refs/lo/pull/{PULL}/"));
         println!("refs:\n{pinned}");
         assert!(
             pinned
                 .lines()
-                .any(|line| line == format!("{head} refs/rozed/pull/{PULL}/revs/{head}")),
+                .any(|line| line == format!("{head} refs/lo/pull/{PULL}/revs/{head}")),
             "{pinned}"
         );
         let revisions = check(repo.pull_revisions(PULL), &token, "listing revisions");

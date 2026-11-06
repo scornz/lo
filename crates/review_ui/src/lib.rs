@@ -31,7 +31,7 @@ pub mod viewed_marks;
 pub mod window_title;
 
 use github::accounts::Accounts;
-use github::db::RozedDb;
+use github::db::LoDb;
 use gpui::{App, Context, Entity, Task, Window};
 use workspace::Workspace;
 
@@ -43,7 +43,7 @@ pub use pr_tab::{PrTab, PrTabEvent, open};
 
 /// Sets up the PR tab: Zed's keys and its own, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
 /// their database, or `None` without one), and rozed's changes to every workspace.
-pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
+pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
     init_workspaces(cx);
 }

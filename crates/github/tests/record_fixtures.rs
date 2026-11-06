@@ -7,7 +7,7 @@
 //! cargo test -p github --test record_fixtures -- --ignored [cassette_name]
 //! ```
 //!
-//! They use rozed's own OAuth token for the test bot, read from `ROZED_FIXTURE_TOKEN_FILE`
+//! They use rozed's own OAuth token for the test bot, read from `LO_FIXTURE_TOKEN_FILE`
 //! (default `~/.config/rozed-dev/oauth-token`), the same kind of token users have. Don't run a
 //! device flow per recording: GitHub keeps 10 tokens per user, app and scope set, and revokes the
 //! oldest beyond that. The recorder refuses to write the token or anything shaped like a GitHub
@@ -27,7 +27,7 @@ use serde::de::IgnoredAny;
 const REPO: &str = "rozed-dev/playground";
 
 fn token() -> Token {
-    let path = std::env::var_os("ROZED_FIXTURE_TOKEN_FILE")
+    let path = std::env::var_os("LO_FIXTURE_TOKEN_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))

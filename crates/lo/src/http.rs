@@ -4,7 +4,7 @@
 //! and this client refuses any request to Zed's hosts that gets through anyway, logging it at
 //! `warn`. It follows redirects itself, so every hop gets the same check. Every request and
 //! redirect is logged at `debug` by host and path, never by query, which can hold tokens, so a run
-//! with `RUST_LOG=rozed=debug` lists everything rozed contacted.
+//! with `RUST_LOG=lo=debug` lists everything rozed contacted.
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ const ZED_DOMAIN: &str = "zed.dev";
 /// The placeholder rozed sets as Zed's `server_url`, so every URL Zed's crates build for a Zed
 /// service points here instead. `.invalid` never resolves (RFC 6761), and this client refuses it
 /// before trying, so a request here shows up in the log.
-pub const ZED_SERVICES_PLACEHOLDER: &str = "rozed.invalid";
+pub const ZED_SERVICES_PLACEHOLDER: &str = "lo.invalid";
 
 /// How many redirects a request without a [`RedirectPolicy`] follows: reqwest's default, which
 /// Zed's client used.
@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn refuses_the_zed_services_placeholder() {
-        assert!(is_refused_host("rozed.invalid"));
-        assert!(is_refused_host("api.rozed.invalid"));
+        assert!(is_refused_host("lo.invalid"));
+        assert!(is_refused_host("api.lo.invalid"));
     }
 
     #[test]

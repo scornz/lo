@@ -5051,6 +5051,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "lo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askpass",
+ "assets",
+ "client",
+ "clock",
+ "command_palette",
+ "credentials_provider",
+ "db",
+ "editor",
+ "feature_flags",
+ "fs",
+ "futures",
+ "github",
+ "gpui",
+ "gpui_platform",
+ "gpui_tokio",
+ "http_client",
+ "language",
+ "languages",
+ "log",
+ "menu",
+ "node_runtime",
+ "paths",
+ "project",
+ "release_channel",
+ "reqwest_client",
+ "review_ui",
+ "semver",
+ "serde_json",
+ "session",
+ "settings",
+ "tempfile",
+ "theme",
+ "theme_settings",
+ "ui",
+ "util",
+ "uuid",
+ "workspace",
+ "zed_actions",
+ "zlog",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8387,52 +8433,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "rozed"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "askpass",
- "assets",
- "client",
- "clock",
- "command_palette",
- "credentials_provider",
- "db",
- "editor",
- "feature_flags",
- "fs",
- "futures",
- "github",
- "gpui",
- "gpui_platform",
- "gpui_tokio",
- "http_client",
- "language",
- "languages",
- "log",
- "menu",
- "node_runtime",
- "paths",
- "project",
- "release_channel",
- "reqwest_client",
- "review_ui",
- "semver",
- "serde_json",
- "session",
- "settings",
- "tempfile",
- "theme",
- "theme_settings",
- "ui",
- "util",
- "uuid",
- "workspace",
- "zed_actions",
- "zlog",
 ]
 
 [[package]]

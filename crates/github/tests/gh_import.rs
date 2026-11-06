@@ -62,10 +62,10 @@ fn lists_ghs_accounts() {
 }
 
 /// The fake gh fails when `GH_TOKEN` or `GITHUB_TOKEN` reach it. They're only in its
-/// environment if rozed's own has them, so [`gh_never_sees_tokens_from_rozeds_environment`] runs
+/// environment if rozed's own has them, so [`gh_never_sees_tokens_from_los_environment`] runs
 /// this in a copy of this test binary with both set.
 #[test]
-#[ignore = "run by gh_never_sees_tokens_from_rozeds_environment, with tokens in the environment"]
+#[ignore = "run by gh_never_sees_tokens_from_los_environment, with tokens in the environment"]
 fn with_tokens_in_the_environment() {
     if std::env::var_os("GH_TOKEN").is_none() {
         return;
@@ -79,7 +79,7 @@ fn with_tokens_in_the_environment() {
 }
 
 #[test]
-fn gh_never_sees_tokens_from_rozeds_environment() {
+fn gh_never_sees_tokens_from_los_environment() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "with_tokens_in_the_environment", "--ignored"])
         .env("GH_TOKEN", "gho_FAKE_FROM_THE_ENVIRONMENT")

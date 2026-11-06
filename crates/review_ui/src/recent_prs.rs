@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn without_rozeds_database_the_list_says_so(cx: &mut TestAppContext) {
+    async fn without_los_database_the_list_says_so(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         workspace.update_in(cx, show);
         cx.run_until_parked();

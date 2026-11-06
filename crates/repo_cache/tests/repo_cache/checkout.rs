@@ -454,7 +454,7 @@ fn names_a_disk_folds_together_never_both_hash_to_their_blobs() {
             "{path:?}"
         );
     }
-    let base = git(f.repo.git_dir(), &["rev-parse", "refs/rozed/pull/1/base"]);
+    let base = git(f.repo.git_dir(), &["rev-parse", "refs/lo/pull/1/base"]);
     let files = f.repo.changed_files(&base.parse().unwrap(), &head).unwrap();
 
     let dir = f.repo.checkout(1, &head).unwrap();

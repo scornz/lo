@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn zeds_keymap_binds_file_actions_that_rozed_drops(cx: &mut TestAppContext) {
+    fn zeds_keymap_binds_file_actions_that_lo_drops(cx: &mut TestAppContext) {
         // Without the filter, these keys would open, create and save files.
         cx.update(|cx| {
             let content = util::asset_str::<SettingsAssets>(settings::DEFAULT_KEYMAP_PATH);

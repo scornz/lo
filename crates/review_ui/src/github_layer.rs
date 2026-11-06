@@ -8,7 +8,7 @@ use futures::FutureExt as _;
 use futures::future::Shared;
 use github::accounts::{Accounts, RepoAccount};
 use github::cache::{PrCache, RECENT_PRS, RecentPr};
-use github::db::RozedDb;
+use github::db::LoDb;
 use github::poll::{PollConfig, Poller, RequestQueue};
 use github::queries::PullRequestData;
 use github::viewed::ViewedRecords;
@@ -46,7 +46,7 @@ impl Global for GlobalLayer {}
 
 /// Sets the layer up from `accounts`, which resolves to the loaded accounts and their database, or
 /// to `None` when the database couldn't be opened.
-pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
+pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
     let ready = cx
         .spawn(async move |cx| {
             let (accounts, db) = accounts.await?;

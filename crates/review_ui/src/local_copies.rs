@@ -22,7 +22,7 @@ struct LocalCopies {
 
 impl Global for LocalCopies {}
 
-/// Where the clones and checkouts live: `~/Library/Caches/rozed`. Zed's `paths` crate calls
+/// Where the clones and checkouts live: `~/Library/Caches/Lo`. Zed's `paths` crate calls
 /// rozed's cache folder its "temp dir".
 pub fn cache_dir() -> PathBuf {
     paths::temp_dir().clone()

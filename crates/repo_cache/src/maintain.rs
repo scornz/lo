@@ -126,9 +126,9 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
             .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(
@@ -251,7 +251,7 @@ mod tests {
             // Every pack is still a promisor pack, so what isn't downloaded stays downloadable.
             assert!(after.iter().all(|(_, promisor)| *promisor), "{after:?}");
             // The refs are packed.
-            let loose_refs = f.git_dir().join("refs/rozed");
+            let loose_refs = f.git_dir().join("refs/lo");
             assert!(
                 !loose_refs.exists() || fs::read_dir(&loose_refs).unwrap().count() == 0,
                 "{version}"

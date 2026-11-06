@@ -14,7 +14,7 @@ use http_client::HttpClient;
 
 use crate::client::{GithubClient, OnUnauthorized};
 use crate::credentials::{HOST, server_for};
-use crate::db::{Account, AccountSource, RozedDb};
+use crate::db::{Account, AccountSource, LoDb};
 use crate::error::GithubError;
 use crate::gh_import;
 use crate::poll::RequestQueue;
@@ -27,7 +27,7 @@ use crate::user::AuthenticatedUser;
 /// Its clients handle a `401` themselves: GitHub refusing a token signs the account out, after
 /// one more read of the token from `gh` for an account imported from it ([`Self::refused`]).
 pub struct Accounts {
-    db: RozedDb,
+    db: LoDb,
     store: Arc<dyn CredentialsProvider>,
     http: Arc<dyn HttpClient>,
     accounts: Vec<Account>,
@@ -195,7 +195,7 @@ fn now() -> i64 {
 impl Accounts {
     /// Reads the accounts from the database.
     pub fn load(
-        db: RozedDb,
+        db: LoDb,
         store: Arc<dyn CredentialsProvider>,
         http: Arc<dyn HttpClient>,
         cx: &mut App,
@@ -887,8 +887,8 @@ mod tests {
         name: &str,
         http: Arc<dyn HttpClient>,
         cx: &mut TestAppContext,
-    ) -> (Entity<Accounts>, Arc<KeychainLike>, RozedDb) {
-        let db = RozedDb::open_test(name).await;
+    ) -> (Entity<Accounts>, Arc<KeychainLike>, LoDb) {
+        let db = LoDb::open_test(name).await;
         let store = Arc::new(KeychainLike::default());
         let accounts = cx
             .update(|cx| Accounts::load(db.clone(), store.clone(), http, cx))

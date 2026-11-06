@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_pull_request_says_when_rozed_may_not_see_every_rule() {
+    fn a_waiting_pull_request_says_when_lo_may_not_see_every_rule() {
         let snapshot = MergeSnapshot {
             sees_every_rule: false,
             ..checks(&[("test", CheckState::Running)])

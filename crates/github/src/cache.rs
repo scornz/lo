@@ -18,7 +18,7 @@ use sqlez_macros::sql;
 
 use crate::client::API_VERSION;
 use crate::credentials::HOST;
-use crate::db::RozedDb;
+use crate::db::LoDb;
 use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
@@ -195,7 +195,7 @@ pub struct Row {
 /// The cache, over rozed's database. Clones share the connection.
 #[derive(Clone)]
 pub struct PrCache {
-    db: RozedDb,
+    db: LoDb,
 }
 
 fn to_secs(time: SystemTime) -> i64 {
@@ -225,7 +225,7 @@ fn key<T: CacheEntry>(
 }
 
 impl PrCache {
-    pub fn new(db: RozedDb) -> Self {
+    pub fn new(db: LoDb) -> Self {
         Self { db }
     }
 
@@ -498,8 +498,8 @@ mod tests {
         }
     }
 
-    async fn cache(name: &str) -> (PrCache, RozedDb) {
-        let db = RozedDb::open_test(name).await;
+    async fn cache(name: &str) -> (PrCache, LoDb) {
+        let db = LoDb::open_test(name).await;
         db.save_account(account("bot")).await.unwrap();
         db.save_account(account("other")).await.unwrap();
         (PrCache::new(db.clone()), db)
@@ -767,7 +767,7 @@ mod tests {
         }
     }
 
-    async fn refuse_rows(db: &RozedDb) {
+    async fn refuse_rows(db: &LoDb) {
         db.connection()
             .write(|connection| {
                 connection.exec(

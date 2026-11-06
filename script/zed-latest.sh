@@ -67,7 +67,7 @@ done
 made_dir=0
 if [[ -z $dir ]]; then
   tmp=${TMPDIR:-/tmp}
-  dir=$(mktemp -d "${tmp%/}/rozed-zed-latest.XXXXXX")
+  dir=$(mktemp -d "${tmp%/}/lo-zed-latest.XXXXXX")
   made_dir=1
 else
   [[ -e $dir ]] || made_dir=1
@@ -120,12 +120,12 @@ fi
 tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-pre)?$'
 [[ $tag =~ $tag_pattern ]] || die "$tag isn't a Zed release tag, such as v1.28.0 or v1.28.0-pre"
 
-rozed_short=$(git rev-parse --short HEAD)
+lo_short=$(git rev-parse --short HEAD)
 if [[ $skip_pinned -eq 1 && $tag == "$base" ]]; then
   {
     echo "## rozed against Zed $tag"
     echo
-    echo "rozed already builds against Zed $tag, the release it pins, at rozed \`$rozed_short\`." \
+    echo "rozed already builds against Zed $tag, the release it pins, at rozed \`$lo_short\`." \
       "CI checks that build on every pull request, so there's nothing newer to try."
   } >"$report"
   cat "$report"
@@ -133,7 +133,7 @@ if [[ $skip_pinned -eq 1 && $tag == "$base" ]]; then
 fi
 
 mkdir "$logs"
-echo "zed-latest: building rozed $rozed_short against Zed $tag in $dir"
+echo "zed-latest: building rozed $lo_short against Zed $tag in $dir"
 git worktree add --quiet --detach "$wt" HEAD
 added=1
 
@@ -155,7 +155,7 @@ patches=$(zgit rev-list --reverse --no-merges "refs/tags/$base..$pinned")
 pinned_short=$(zgit rev-parse --short "$pinned")
 
 channel() { sed -n 's/^channel = "\(.*\)"$/\1/p'; }
-rust_rozed=$(git show HEAD:rust-toolchain.toml | channel)
+rust_lo=$(git show HEAD:rust-toolchain.toml | channel)
 rust_zed=
 if [[ -f $zed/rust-toolchain.toml ]]; then rust_zed=$(channel <"$zed/rust-toolchain.toml"); fi
 
@@ -376,9 +376,9 @@ fi
   fi
   echo
   echo "Zed [$tag](https://github.com/zed-industries/zed/releases/tag/$tag) with rozed's patches" \
-    "from \`$branch\` (\`$pinned_short\`), at rozed \`$rozed_short\`."
-  if [[ -n $rust_zed && $rust_zed != "$rust_rozed" ]]; then
-    echo "Zed $tag moves Rust from $rust_rozed to $rust_zed."
+    "from \`$branch\` (\`$pinned_short\`), at rozed \`$lo_short\`."
+  if [[ -n $rust_zed && $rust_zed != "$rust_lo" ]]; then
+    echo "Zed $tag moves Rust from $rust_lo to $rust_zed."
   fi
   echo
   echo "| Step | Result |"

@@ -48,14 +48,14 @@ fn without_proxies() {
 /// A client that goes straight to the host.
 fn client() -> Arc<ReqwestClient> {
     without_proxies();
-    Arc::new(ReqwestClient::user_agent("rozed-test").unwrap())
+    Arc::new(ReqwestClient::user_agent("lo-test").unwrap())
 }
 
 /// A client that sends everything through the proxy at `port`.
 fn client_through(port: u16) -> Arc<ReqwestClient> {
     without_proxies();
     let proxy: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
-    Arc::new(ReqwestClient::proxy_and_user_agent(Some(proxy), "rozed-test").unwrap())
+    Arc::new(ReqwestClient::proxy_and_user_agent(Some(proxy), "lo-test").unwrap())
 }
 
 /// A port nothing listens on.
@@ -101,7 +101,7 @@ fn a_port_nothing_listens_on_is_unreachable() {
 fn a_host_with_no_dns_answer_is_unreachable() {
     let error = get(
         &client(),
-        "http://api.rozed-test.invalid/",
+        "http://api.lo-test.invalid/",
         Duration::from_secs(10),
     );
     assert!(error.is_unreachable(), "{error:#}");

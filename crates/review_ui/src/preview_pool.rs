@@ -1,4 +1,4 @@
-//! Running the preview helper, `rozed --render-preview` (see [`crate::image_preview`]), for each
+//! Running the preview helper, `lo --render-preview` (see [`crate::image_preview`]), for each
 //! image a diff shows, and watching it.
 //!
 //! At most [`HELPERS`] run at once, from a queue. Each gets [`Limits::deadline`] of wall-clock
@@ -270,7 +270,7 @@ fn run_watched(
         .ok_or("rozed doesn't preview this format")?;
     let mut command = helper_command().map_err(|error| format!("no helper: {error}"))?;
     command
-        .env_remove("ROZED_PARENT_PID")
+        .env_remove("LO_PARENT_PID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -414,14 +414,14 @@ pub(crate) mod tests {
     use crate::image_preview::tests::png_of_zeros;
 
     /// Set in the test binary's environment when it runs as the helper.
-    pub(crate) const HELPER_ENV: &str = "ROZED_TEST_PREVIEW_HELPER";
+    pub(crate) const HELPER_ENV: &str = "LO_TEST_PREVIEW_HELPER";
 
     /// Makes the helper crash.
-    const ABORT_ENV: &str = "ROZED_TEST_PREVIEW_ABORT";
+    const ABORT_ENV: &str = "LO_TEST_PREVIEW_ABORT";
 
     /// Makes the helper enter its sandbox and try to read this file and the network, exiting 0
     /// when neither works.
-    const PROBE_ENV: &str = "ROZED_TEST_PREVIEW_PROBE";
+    const PROBE_ENV: &str = "LO_TEST_PREVIEW_PROBE";
 
     /// The helper, when the test binary runs as one; otherwise nothing.
     #[test]
@@ -442,7 +442,7 @@ pub(crate) mod tests {
     }
 
     /// Set when a test runs alone, in a process of its own.
-    const ALONE_ENV: &str = "ROZED_TEST_ALONE";
+    const ALONE_ENV: &str = "LO_TEST_ALONE";
 
     /// Whether this is `test` running alone in a process of its own, where other tests don't
     /// move the process's memory. Otherwise, runs it so, checks it passed, and returns false.
@@ -596,10 +596,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat() {
-        if !alone(
-            "preview_pool::tests::bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat",
-        ) {
+    fn bombs_end_within_the_deadline_and_leave_lo_s_memory_flat() {
+        if !alone("preview_pool::tests::bombs_end_within_the_deadline_and_leave_lo_s_memory_flat") {
             return;
         }
         let limits = Limits {

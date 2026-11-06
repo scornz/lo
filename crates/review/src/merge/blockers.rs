@@ -600,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn rozed_may_not_see_every_rule_behind_a_block_it_explains_in_part() {
+    fn lo_may_not_see_every_rule_behind_a_block_it_explains_in_part() {
         // An unsigned commit or a required workflow rozed wasn't told about, beside a running
         // check: the running check is only part of why.
         let snapshot = MergeSnapshot {
@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn rozed_sees_every_rule_when_the_caller_says_so_or_github_does_not_block() {
+    fn lo_sees_every_rule_when_the_caller_says_so_or_github_does_not_block() {
         let seen = MergeSnapshot {
             required_checks: vec![check("test", CheckState::Running)],
             sees_every_rule: true,

@@ -1032,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_requested_by_someone_rozed_cannot_name_are_expected_to_stay() {
+    fn changes_requested_by_someone_lo_cannot_name_are_expected_to_stay() {
         // Carol's request counts for GitHub, but rozed reads her as without write access: she
         // lost it after reviewing, or her review is past the page fetched.
         let snapshot = MergeSnapshot {
@@ -1351,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn a_block_rozed_cannot_explain_is_expected_to_stop_it() {
+    fn a_block_lo_cannot_explain_is_expected_to_stop_it() {
         let snapshot = MergeSnapshot {
             review_decision: Some(ReviewDecision::Approved),
             reviews: vec![review("carol", ReviewState::Approved, HEAD)],
@@ -1370,7 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn a_review_github_requires_for_a_reason_rozed_cannot_see_is_expected_to_be_waited_on() {
+    fn a_review_github_requires_for_a_reason_lo_cannot_see_is_expected_to_be_waited_on() {
         let snapshot = MergeSnapshot {
             reviews: vec![review("carol", ReviewState::Approved, HEAD)],
             ..reviewing()
@@ -1525,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn a_push_after_you_approved_turns_off_the_auto_merge_rozed_turned_on() {
+    fn a_push_after_you_approved_turns_off_the_auto_merge_lo_turned_on() {
         let plan = the_plan(&keeping_stale_approvals(needing_another_approval()));
         let pushed = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e";
         for enabled_by in [Some("alice"), Some("ALICE"), None] {
@@ -1645,7 +1645,7 @@ mod tests {
     }
 
     #[test]
-    fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_rozed_cannot_see() {
+    fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_lo_cannot_see() {
         // Copilot opened it, or a ruleset requires a reviewer for these files: GitHub still needs
         // a review after yours, and nothing in the snapshot says why.
         let snapshot = reviewing();
@@ -1788,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn it_stops_when_rozed_sees_a_blocker_github_does_not_report() {
+    fn it_stops_when_lo_sees_a_blocker_github_does_not_report() {
         // GitHub says CLEAN, but the checks read beside it show a required one failed.
         let plan = the_plan(&reviewing());
         let after = MergeSnapshot {

@@ -180,12 +180,12 @@ const INHERITED_VARS: &[&str] = &[
 
 /// The variable the credential helper reads the token from. It's set only on git children that
 /// sign in.
-pub(crate) const TOKEN_VAR: &str = "ROZED_GIT_TOKEN";
+pub(crate) const TOKEN_VAR: &str = "LO_GIT_TOKEN";
 
 /// The credential helper, a shell function git runs with the action (`get`, `store` or `erase`)
 /// as its argument. It answers `get` with the token in [`TOKEN_VAR`], and nothing else.
 const CREDENTIAL_HELPER: &str = "!f() { test \"$1\" = get || exit 0; \
-     printf 'username=x-access-token\\npassword=%s\\n' \"$ROZED_GIT_TOKEN\"; }; f";
+     printf 'username=x-access-token\\npassword=%s\\n' \"$LO_GIT_TOKEN\"; }; f";
 
 impl Git {
     /// Finds git, `/usr/bin/git` first and then each `git` on `PATH`, and checks that it's new
@@ -678,7 +678,7 @@ mod tests {
             ("GIT_ASKPASS", "/tmp/steal"),
             ("SSH_ASKPASS", "/tmp/steal"),
             ("HTTP_PROXY", "http://from-a-header"),
-            ("ROZED_GITHUB_TOKEN", "secret"),
+            ("LO_GITHUB_TOKEN", "secret"),
             ("LANG", "fr_FR.UTF-8"),
         ]);
         let all = kept.iter().chain(&dropped).cloned();
@@ -693,9 +693,9 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
             .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(
@@ -816,7 +816,7 @@ mod tests {
                 ("GIT_ATTR_SOURCE", &second),
                 ("GIT_PROTOCOL_FROM_USER", "1"),
             ]);
-            let home = root.join("rozed-home");
+            let home = root.join("lo-home");
             fs::create_dir(&home).unwrap();
             let url = format!("file://{}", root.join("remote.git").display());
             Self {
@@ -943,7 +943,7 @@ mod tests {
             ("ssh://git@example.invalid/a/b.git", "ssh"),
             ("git@example.invalid:a/b.git", "ssh"),
             ("git://example.invalid/a/b.git", "git"),
-            ("ext::sh -c touch% /tmp/rozed-ext", "ext"),
+            ("ext::sh -c touch% /tmp/lo-ext", "ext"),
         ] {
             let error = hostile
                 .git(Location::Nowhere, &[])

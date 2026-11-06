@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_is_rozeds_own() {
+    fn the_environment_is_los_own() {
         let environment = environment();
         assert_eq!(
             environment.get("PATH").map(String::as_str),

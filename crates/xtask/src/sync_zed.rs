@@ -155,8 +155,8 @@ fn merge_locks(zed: &str, rozed: &str) -> Result<String> {
     else {
         bail!("Zed's Cargo.lock lists no packages");
     };
-    if let Some(rozed_packages) = rozed.get("package").and_then(Item::as_array_of_tables) {
-        for package in rozed_packages {
+    if let Some(lo_packages) = rozed.get("package").and_then(Item::as_array_of_tables) {
+        for package in lo_packages {
             let name = package.get("name").and_then(Item::as_str);
             if name.is_some_and(|name| !zed_packages.contains(name)) {
                 packages.push(package.clone());
@@ -794,7 +794,7 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
     }
 
     #[test]
-    fn merge_locks_takes_zeds_versions_and_keeps_rozeds_own() {
+    fn merge_locks_takes_zeds_versions_and_keeps_los_own() {
         let zed = lock(&[("shared", "1.1.0", true), ("zed_only", "2.0.0", true)]);
         let rozed = lock(&[
             ("app", "0.1.0", false),
@@ -813,7 +813,7 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
     }
 
     #[test]
-    fn merge_locks_without_a_lock_of_rozeds_is_zeds() {
+    fn merge_locks_without_a_lock_of_los_is_zeds() {
         let zed = lock(&[("shared", "1.1.0", true)]);
         assert_eq!(
             locked(&merge_locks(&zed, "").unwrap()),

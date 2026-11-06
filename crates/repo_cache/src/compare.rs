@@ -8,8 +8,8 @@ use crate::diff::ChangedFile;
 use crate::git::{Finished, failure_message};
 use crate::{Error, Oid, Repo, RepoCache};
 
-/// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<process ID>`.
-const REPLAYS: &str = "refs/rozed/replays/";
+/// Where replayed trees are pinned: `refs/lo/replays/<tree>/<process ID>`.
+const REPLAYS: &str = "refs/lo/replays/";
 
 /// One revision of a pull request, as git sees it: its head, and the commit its changes start
 /// from.
@@ -32,7 +32,7 @@ pub struct Revision {
 ///
 /// A replayed tree ([`Self::old`] after a clean replay, or [`Replay::Conflicted`]'s) and the
 /// files merged into it exist only in the clone. Each is pinned at
-/// `refs/rozed/replays/<tree>/<process ID>` the first time this process makes it, and stays
+/// `refs/lo/replays/<tree>/<process ID>` the first time this process makes it, and stays
 /// pinned while the process has the clone open: the next [`RepoCache::open`] of the clone with no
 /// rozed having it open removes the pins. So keep a [`Repo`] of the clone open while showing a
 /// comparison. A comparison holds none, and dropping one runs nothing.
@@ -289,7 +289,7 @@ impl Repo {
         Err(failure.expect("each attempt that doesn't return fails"))
     }
 
-    /// Pins `tree` at `refs/rozed/replays/<tree>/<process ID>`, and says whether the tree is
+    /// Pins `tree` at `refs/lo/replays/<tree>/<process ID>`, and says whether the tree is
     /// there once pinned.
     fn pin_replay(&self, tree: &Oid) -> Result<bool, Error> {
         let reference = format!("{REPLAYS}{tree}/{}", std::process::id());
@@ -510,9 +510,9 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
             .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(

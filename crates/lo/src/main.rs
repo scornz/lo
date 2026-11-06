@@ -41,10 +41,10 @@ use crate::forced_settings::Servers;
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
-const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
+const SHELL_ENV_GUARD: &str = "LO_PARENT_PID";
 
-const USAGE: &str = "usage: rozed [--trust] [<pull request link>]
-example: rozed https://github.com/sharkdp/fd/pull/2212
+const USAGE: &str = "usage: lo [--trust] [<pull request link>]
+example: lo https://github.com/sharkdp/fd/pull/2212
 
   --trust  Check the pull request out and run rust-analyzer on it. rust-analyzer runs cargo
            and rustc there, which the repository can point at its own programs, so only trust
@@ -70,7 +70,7 @@ fn main() {
             return;
         }
         // Zed's askpass crate makes this executable the program git and ssh run to ask for a
-        // password, through a script that runs `rozed --askpass=<socket>` with the prompt on
+        // password, through a script that runs `lo --askpass=<socket>` with the prompt on
         // stdin. rozed passes the prompt to the running rozed over the socket and prints the
         // answer, as Zed does.
         Some(flag) if flag == "--askpass" || flag.starts_with("--askpass=") => {
@@ -308,8 +308,8 @@ fn parse_args(args: &[String]) -> anyhow::Result<Options> {
 }
 
 /// Creates rozed's folders. Zed's `paths` crate, patched to use the name rozed, puts them in
-/// `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed` and
-/// `~/Library/Logs/rozed`.
+/// `~/.config/lo`, `~/Library/Application Support/Lo`, `~/Library/Caches/Lo` and
+/// `~/Library/Logs/Lo`.
 fn create_dirs() -> anyhow::Result<()> {
     for dir in [
         paths::config_dir(),
@@ -324,8 +324,8 @@ fn create_dirs() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Logs to `~/Library/Logs/rozed/rozed.log`, and to stdout too when it's a terminal.
-/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=rozed=debug` to log every HTTP request.
+/// Logs to `~/Library/Logs/Lo/Lo.log`, and to stdout too when it's a terminal.
+/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=lo=debug` to log every HTTP request.
 fn init_logging() {
     zlog::init();
     if let Err(error) = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file())) {
@@ -340,7 +340,7 @@ fn init_logging() {
 /// The one HTTP client for everything, which refuses Zed's hosts, redirects included.
 fn http_client(cx: &mut App) -> Arc<dyn HttpClient> {
     let user_agent = format!(
-        "rozed/{} ({}; {})",
+        "lo/{} ({}; {})",
         version(),
         std::env::consts::OS,
         std::env::consts::ARCH

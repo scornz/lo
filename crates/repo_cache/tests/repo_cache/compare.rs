@@ -112,7 +112,7 @@ fn replay_pins(repo: &Repo) -> Vec<(String, String)> {
         &[
             "for-each-ref",
             "--format=%(objectname) %(refname)",
-            "refs/rozed/replays/",
+            "refs/lo/replays/",
         ],
     )
     .lines()
@@ -1311,11 +1311,7 @@ fn a_replayed_tree_is_pinned_once_and_stays_pinned_while_the_clone_is_open() {
 
     let pin = (
         comparison.old.to_string(),
-        format!(
-            "refs/rozed/replays/{}/{}",
-            comparison.old,
-            std::process::id()
-        ),
+        format!("refs/lo/replays/{}/{}", comparison.old, std::process::id()),
     );
     assert_eq!(f.replay_pins(), std::slice::from_ref(&pin));
     // Comparing the same revisions again, here or through another `Repo` of the clone, makes
@@ -1339,8 +1335,7 @@ fn a_replayed_tree_is_pinned_once_and_stays_pinned_while_the_clone_is_open() {
     let refs = git(f.repo.git_dir(), &["for-each-ref", "--format=%(refname)"]);
     assert!(
         refs.lines()
-            .all(|name| name.starts_with("refs/rozed/pull/")
-                || name.starts_with("refs/rozed/replays/")),
+            .all(|name| name.starts_with("refs/lo/pull/") || name.starts_with("refs/lo/replays/")),
         "{refs}"
     );
     f.push(1, "trunk");
@@ -1637,7 +1632,7 @@ fn a_commit_the_clone_lacks_is_an_error_and_never_downloaded() {
 /// Pins outlive the process that made them: a rozed that quits runs no destructors, and one that
 /// crashes can't. Opening the clone with no rozed having it open removes them all.
 #[test]
-fn pins_go_once_the_clone_is_opened_with_no_rozed_having_it_open() {
+fn pins_go_once_the_clone_is_opened_with_no_lo_having_it_open() {
     let Rebased { f, m1, m2, r1, r2 } = rebased();
     let comparison = f
         .repo
@@ -1647,9 +1642,9 @@ fn pins_go_once_the_clone_is_opened_with_no_rozed_having_it_open() {
         )
         .unwrap();
     let tree = comparison.old.to_string();
-    let own = format!("refs/rozed/replays/{tree}/{}", std::process::id());
+    let own = format!("refs/lo/replays/{tree}/{}", std::process::id());
     // What another rozed that showed the comparison left when it quit.
-    let left = format!("refs/rozed/replays/{tree}/99999");
+    let left = format!("refs/lo/replays/{tree}/99999");
     git(f.repo.git_dir(), &["update-ref", &left, &tree]);
     let mut pins = vec![(tree.clone(), own), (tree.clone(), left)];
     pins.sort();

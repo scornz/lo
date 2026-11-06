@@ -13,7 +13,7 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use github::accounts::Accounts;
 use github::cache::PrCache;
-use github::db::{AccountSource, RozedDb};
+use github::db::{AccountSource, LoDb};
 use github::{AuthenticatedUser, Token, User};
 use gpui::{Entity, Task, TestAppContext, VisualTestContext};
 use http_client::http::HeaderValue;
@@ -468,7 +468,7 @@ pub async fn sign_in(
 ) -> (Entity<Accounts>, PrCache) {
     static DATABASES: AtomicUsize = AtomicUsize::new(0);
     let name = format!("review_ui-{}", DATABASES.fetch_add(1, Ordering::SeqCst));
-    let db = RozedDb::open_test(&name).await;
+    let db = LoDb::open_test(&name).await;
     let store = Arc::new(credentials_provider::test_support::FakeCredentialsProvider::default());
     let http: Arc<dyn HttpClient> = Arc::new(github.clone());
     let entity = cx
@@ -760,9 +760,9 @@ fn git(dir: &Path, args: &[&str], stdin: Option<&[u8]>, index: Option<&Path>) ->
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "rozed test")
-        .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+        .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
         .env("GIT_COMMITTER_NAME", "rozed test")
-        .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+        .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

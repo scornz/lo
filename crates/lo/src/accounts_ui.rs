@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use github::accounts::{Accounts, SignedOut};
-use github::db::{Account, AccountSource, RozedDb};
+use github::db::{Account, AccountSource, LoDb};
 use github::device_flow::{self, DeviceFlowError};
 use github::gh_import::{self, GhAccount};
 use github::{GithubError, HelpLink};
@@ -52,7 +52,7 @@ impl Global for AccountsUnavailable {}
 /// Opens rozed's database, loads the accounts and registers the modal's actions. Call it after
 /// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
 /// to `None` when the database couldn't be opened.
-pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, RozedDb)>> {
+pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
     cx.bind_keys([
         KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-backspace", RemoveSelected, Some(KEY_CONTEXT)),
@@ -80,7 +80,7 @@ pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, RozedDb)>> {
     let store = github::credentials::token_store();
     let path = github::db::default_path();
     cx.spawn(async move |cx| {
-        let db = RozedDb::open(&path).await;
+        let db = LoDb::open(&path).await;
         cx.update(|cx| {
             match db.and_then(|db| Ok((Accounts::load(db.clone(), store, http, cx)?, db))) {
                 Ok((accounts, db)) => {
@@ -743,7 +743,7 @@ fn account_warning(signed_out: Option<SignedOut>, scopes: &[String]) -> Option<S
 }
 
 /// The notes beside an account in gh's list.
-fn gh_account_notes(account: &GhAccount, already_in_rozed: bool) -> Vec<String> {
+fn gh_account_notes(account: &GhAccount, already_in_lo: bool) -> Vec<String> {
     let mut notes = Vec::new();
     if account.active {
         notes.push("active in gh".to_string());
@@ -765,7 +765,7 @@ fn gh_account_notes(account: &GhAccount, already_in_rozed: bool) -> Vec<String> 
             missing => notes.push(format!("missing scopes: {}", missing.join(", "))),
         }
     }
-    if already_in_rozed {
+    if already_in_lo {
         notes.push("already in rozed; importing replaces its token".to_string());
     }
     notes
@@ -1103,7 +1103,7 @@ mod tests {
         http: Arc<dyn HttpClient>,
         cx: &mut TestAppContext,
     ) -> Entity<Accounts> {
-        let db = RozedDb::open_test(name).await;
+        let db = LoDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
         cx.update(|cx| Accounts::load(db, store, http, cx)).unwrap()
     }
@@ -1368,15 +1368,14 @@ esac
     #[gpui::test]
     async fn without_a_database_the_modal_says_so(cx: &mut TestAppContext) {
         let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
-        let modal = cx.new(|cx| {
-            AccountsModal::new(None, Some("couldn't open rozed.sqlite".into()), http, cx)
-        });
+        let modal =
+            cx.new(|cx| AccountsModal::new(None, Some("couldn't open lo.sqlite".into()), http, cx));
         modal.update(cx, |modal, cx| modal.start(Start::SignIn, cx));
         modal.read_with(cx, |modal, _| {
             assert!(modal.is_listing());
             assert_eq!(
                 modal.notice().unwrap().message.as_ref(),
-                "Accounts are unavailable: couldn't open rozed.sqlite"
+                "Accounts are unavailable: couldn't open lo.sqlite"
             );
         });
     }
