@@ -100,7 +100,7 @@ fn checks_out_a_pull_request_detached() {
         dir,
         f.cache_dir
             .path()
-            .join("checkouts/github.com/owner/repo/pull-1")
+            .join(format!("checkouts/github.com/owner/repo/pull-1/{}", f.r1))
     );
     assert_eq!(git(&dir, &["rev-parse", "HEAD"]), f.r1.as_str());
     assert_eq!(git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
@@ -121,7 +121,32 @@ fn checks_out_a_pull_request_detached() {
 }
 
 #[test]
-fn the_checkout_follows_a_new_head_and_keeps_only_what_git_put_there() {
+fn each_head_gets_a_checkout_of_its_own() {
+    let f = fixture();
+    let r1_dir = f.repo.checkout(1, &f.r1).unwrap();
+
+    f.push_r2();
+    let r2_dir = f.repo.checkout(1, &f.r2).unwrap();
+
+    // A window still showing r1 keeps its checkout as it was.
+    assert_ne!(r1_dir, r2_dir);
+    assert_eq!(git(&r1_dir, &["rev-parse", "HEAD"]), f.r1.as_str());
+    assert_eq!(
+        fs::read_to_string(r1_dir.join("src/lib.rs")).unwrap(),
+        "pub fn a() { 1 }\n"
+    );
+    assert!(r1_dir.join("removed_later.txt").is_file());
+    assert_eq!(git(&r2_dir, &["rev-parse", "HEAD"]), f.r2.as_str());
+    assert_eq!(
+        fs::read_to_string(r2_dir.join("src/lib.rs")).unwrap(),
+        "pub fn a() { 2 }\n"
+    );
+    assert!(r2_dir.join("added_later.txt").is_file());
+    assert!(!r2_dir.join("removed_later.txt").exists());
+}
+
+#[test]
+fn checking_a_head_out_again_keeps_only_what_git_put_there() {
     let f = fixture();
     let dir = f.repo.checkout(1, &f.r1).unwrap();
     // A language server leaves things behind, and a file gets changed.
@@ -130,17 +155,9 @@ fn the_checkout_follows_a_new_head_and_keeps_only_what_git_put_there() {
     fs::write(dir.join("target/debug/x"), "build output\n").unwrap();
     fs::write(dir.join("README.md"), "changed on disk\n").unwrap();
 
-    f.push_r2();
-    let moved = f.repo.checkout(1, &f.r2).unwrap();
+    let again = f.repo.checkout(1, &f.r1).unwrap();
 
-    assert_eq!(moved, dir);
-    assert_eq!(git(&dir, &["rev-parse", "HEAD"]), f.r2.as_str());
-    assert_eq!(
-        fs::read_to_string(dir.join("src/lib.rs")).unwrap(),
-        "pub fn a() { 2 }\n"
-    );
-    assert!(dir.join("added_later.txt").is_file());
-    assert!(!dir.join("removed_later.txt").exists());
+    assert_eq!(again, dir);
     assert!(!dir.join("untracked.txt").exists());
     assert!(!dir.join("target").exists());
     assert_eq!(
@@ -148,6 +165,37 @@ fn the_checkout_follows_a_new_head_and_keeps_only_what_git_put_there() {
         "# repo\n"
     );
     assert_eq!(git(&dir, &["status", "--porcelain", "--ignored"]), "");
+}
+
+#[test]
+fn a_checkout_from_before_heads_had_their_own_is_replaced() {
+    let f = fixture();
+    // Earlier, a pull request had one checkout, `pull-<n>`, moved to each new head.
+    let old = f
+        .cache_dir
+        .path()
+        .join("checkouts/github.com/owner/repo/pull-1");
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    git(
+        f.repo.git_dir(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            old.to_str().unwrap(),
+            f.r1.as_str(),
+        ],
+    );
+
+    let dir = f.repo.checkout(1, &f.r1).unwrap();
+
+    assert_eq!(dir, old.join(f.r1.as_str()));
+    assert!(!old.join(".git").exists());
+    assert!(!old.join("README.md").exists());
+    assert_eq!(git(&dir, &["rev-parse", "HEAD"]), f.r1.as_str());
+    let worktrees = git(f.repo.git_dir(), &["worktree", "list"]);
+    assert_eq!(worktrees.lines().count(), 2, "{worktrees}");
 }
 
 #[test]
@@ -215,17 +263,14 @@ fn checkouts_at_once_all_succeed() {
         })
         .collect();
 
-    let mut dirs = Vec::new();
     for thread in threads {
-        dirs.push(thread.join().unwrap().0);
+        let (dir, head) = thread.join().unwrap();
+        assert_eq!(git(&dir, &["rev-parse", "HEAD"]), head.as_str());
+        assert_eq!(git(&dir, &["status", "--porcelain"]), "");
     }
-    let dir = &dirs[0];
-    assert!(dirs.iter().all(|other| other == dir));
-    let head = git(dir, &["rev-parse", "HEAD"]);
-    assert!(head == f.r1.as_str() || head == f.r2.as_str(), "{head}");
-    assert_eq!(git(dir, &["status", "--porcelain"]), "");
+    // The clone, and a checkout for each head.
     let worktrees = git(f.repo.git_dir(), &["worktree", "list"]);
-    assert_eq!(worktrees.lines().count(), 2, "{worktrees}");
+    assert_eq!(worktrees.lines().count(), 3, "{worktrees}");
     let _ = &f.server;
 }
 

@@ -9,17 +9,23 @@ use crate::git::Location;
 use crate::{Error, Oid, Repo};
 
 impl Repo {
-    /// Checks `head` out, detached, as pull request `number`'s checkout, and returns its folder:
-    /// `<cache>/checkouts/github.com/<owner>/<repo>/pull-<n>`, a `git worktree` of the clone.
-    /// Called again after a push, it moves the checkout to the new head, leaving only what git
-    /// put there.
+    /// Checks `head` out, detached, for pull request `number`, and returns its folder:
+    /// `<cache>/checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`, a `git worktree` of the
+    /// clone. Each head has a checkout of its own, so a window showing one head never sees its
+    /// files change to another's. Called again for the same head, it leaves only what git put
+    /// there.
     ///
     /// Only for repositories the user trusts: a checkout is what language servers run in. The
     /// caller decides. Symlinks become plain files holding their target, so nothing in a checkout
     /// points outside it, and no hook or filter runs.
     pub fn checkout(&self, number: u64, head: &Oid) -> Result<PathBuf, Error> {
-        let dir = self.checkouts_dir().join(format!("pull-{number}"));
+        let pull_dir = self.checkouts_dir().join(format!("pull-{number}"));
+        let dir = pull_dir.join(head.as_str());
         let _lock = self.lock()?;
+        // Earlier, `pull-<n>` itself was the checkout, moved to each new head.
+        if fs::symlink_metadata(pull_dir.join(".git")).is_ok() {
+            self.trash(&pull_dir)?;
+        }
         if let Some(git_dir) = self.worktree_git_dir(&dir) {
             let checkout = Location::Checkout {
                 git_dir: &git_dir,

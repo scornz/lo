@@ -16,8 +16,8 @@ use crate::repo::Repo;
 /// - `repos/github.com/<owner>/<repo>.git`: a bare partial clone (`--filter=blob:none`) of each
 ///   repository, so file contents download only when something reads them. Everything fetched
 ///   goes under rozed's own refs, `refs/rozed/...`.
-/// - `checkouts/github.com/<owner>/<repo>/pull-<n>`: a checkout of a pull request's head, for
-///   language servers.
+/// - `checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`: a checkout of a pull request's head,
+///   one per head, for language servers.
 /// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone (see
 ///   [`crate::lock`]).
 /// - `git-env/home`: the empty `HOME` git runs with.

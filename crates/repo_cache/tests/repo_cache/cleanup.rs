@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use repo_cache::{PullRequestRefs, Repo, RepoCache};
 use tempfile::TempDir;
 
-use crate::support::Server;
+use crate::support::{Server, git};
 
 /// A server with repositories `owner/old` and `owner/new`, each with pull request #1.
 fn server() -> Server {
@@ -141,7 +141,12 @@ fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
     assert!(!old.git_dir().exists());
     assert!(!checkouts.join("owner/old").exists());
     assert!(new.git_dir().is_dir());
-    assert!(checkouts.join("owner/new/pull-1/README.md").is_file());
+    let head = git(new.git_dir(), &["rev-parse", "refs/rozed/pull/1/head"]);
+    assert!(
+        checkouts
+            .join(format!("owner/new/pull-1/{head}/README.md"))
+            .is_file()
+    );
     assert!(!dir.path().join("checkouts/github.com/someone").exists());
     // Each was moved aside, then deleted, leaving nothing behind.
     assert_eq!(fs::read_dir(dir.path().join("tmp")).unwrap().count(), 0);
