@@ -1,0 +1,28 @@
+//! The files a pull request changes: the order they're listed in and how each one starts out
+//! (design §5, "File order", "Generated files", "Very large files").
+
+mod order;
+
+pub use order::path_order;
+
+/// One file a pull request changes, as GitHub's changed-file list describes it, plus the
+/// `linguist-generated` attribute the caller looks up in the head revision's `.gitattributes`.
+///
+/// Paths are relative to the repository root and `/`-separated, as GitHub and git report them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChangedFile {
+    /// The file's path in the head revision. For a deleted file, its path in the base.
+    pub path: String,
+    /// The file's path in the base revision when the pull request renames it.
+    pub previous_path: Option<String>,
+    /// Lines added. Zero for a binary file.
+    pub additions: u32,
+    /// Lines deleted. Zero for a binary file.
+    pub deletions: u32,
+    /// Whether git sees the file as binary.
+    pub binary: bool,
+    /// The file's `linguist-generated` attribute: `Some(true)` when it's set (`linguist-generated`
+    /// or `linguist-generated=true`), `Some(false)` when it's unset (`-linguist-generated` or
+    /// `linguist-generated=false`), and `None` when `.gitattributes` doesn't mention it.
+    pub linguist_generated: Option<bool>,
+}
