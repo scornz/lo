@@ -20,7 +20,7 @@
 //!     PushRecord::Review { commit: "a2".into(), at: at(25) },
 //!     PushRecord::ForcePush { before: Some("a2".into()), after: "b1".into(), at: at(30) },
 //! ];
-//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()]);
+//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()], "b1");
 //!
 //! let heads: Vec<_> = revisions.iter().map(|revision| revision.head.as_str()).collect();
 //! assert_eq!(heads, ["a1", "a2", "b1"]);
@@ -109,8 +109,8 @@ pub enum Source {
     CheckSuite,
     /// rozed's poller.
     Poller,
-    /// git: the pull request's head in rozed's local copy, the last of its current commits.
-    Git,
+    /// The pull request's current head (`headRefOid`), which is always the latest revision.
+    Head,
 }
 
 /// When a revision was pushed.
@@ -174,7 +174,7 @@ impl Revisions {
         self.list.is_empty()
     }
 
-    /// The newest revision: the pull request's head.
+    /// The newest revision, which is always the pull request's head passed to [`build_revisions`].
     pub fn latest(&self) -> Option<&Revision> {
         self.list.last()
     }
@@ -269,6 +269,7 @@ mod tests {
         build_revisions(
             &[polled("x1", 1), polled("a1", 10), polled("a2", 20)],
             &commits,
+            "a2",
         )
     }
 

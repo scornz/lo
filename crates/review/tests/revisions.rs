@@ -127,7 +127,7 @@ fn normal_pushes_from_the_activity_api() {
         check_suite(r5, r6, "2026-10-06T14:07:26Z"),
         polled(r6, "2026-10-06T14:08:00Z"),
     ];
-    let revisions = build_revisions(&records, &normal_commits());
+    let revisions = build_revisions(&records, &normal_commits(), r6);
 
     assert_eq!(heads(&revisions), NORMAL_HEADS);
     assert_eq!(
@@ -145,7 +145,7 @@ fn normal_pushes_from_the_activity_api() {
             Source::Activity,
             Source::CheckSuite,
             Source::Poller,
-            Source::Git
+            Source::Head
         ]
         .into()
     );
@@ -164,7 +164,7 @@ fn normal_pushes_from_check_suites_when_the_activity_api_is_unavailable() {
         check_suite(r1, r2, "2026-10-02T17:41:03Z"),
         check_suite(r2, r3, "2026-10-03T09:12:37Z"),
     ];
-    let revisions = build_revisions(&records, &normal_commits());
+    let revisions = build_revisions(&records, &normal_commits(), r6);
 
     assert_eq!(heads(&revisions), NORMAL_HEADS);
     assert_eq!(
@@ -231,7 +231,7 @@ fn force_push_timeline() -> Vec<PushRecord> {
 fn force_pushes_from_every_source() {
     let mut records = force_push_activity();
     records.extend(force_push_timeline());
-    let revisions = build_revisions(&records, &rebased_commits());
+    let revisions = build_revisions(&records, &rebased_commits(), R5);
 
     assert_eq!(heads(&revisions), [R1, R2, R3, R4, R5]);
     assert_eq!(
@@ -260,7 +260,7 @@ fn force_pushes_from_every_source() {
 
 #[test]
 fn force_pushes_without_the_activity_api() {
-    let revisions = build_revisions(&force_push_timeline(), &rebased_commits());
+    let revisions = build_revisions(&force_push_timeline(), &rebased_commits(), R5);
 
     assert_eq!(heads(&revisions), [R1, R2, R3, R4, R5]);
     assert_eq!(
@@ -293,6 +293,7 @@ fn a_normal_push_only_a_force_push_event_saw() {
             polled(R5, "2026-11-06T10:00:00Z"),
         ],
         &rebased_commits(),
+        R5,
     );
 
     assert_eq!(heads(&revisions), [R1, R2, R3, R4, R5]);
@@ -306,7 +307,7 @@ fn a_normal_push_only_a_force_push_event_saw() {
 fn a_review_on_a_commit_since_force_pushed_away() {
     let mut records = force_push_activity();
     records.extend(force_push_timeline());
-    let mut revisions = build_revisions(&records, &rebased_commits());
+    let mut revisions = build_revisions(&records, &rebased_commits(), R5);
 
     // You approved r3; the author has force-pushed twice since.
     assert_eq!(
@@ -349,6 +350,35 @@ fn a_review_on_a_commit_since_force_pushed_away() {
     );
 }
 
+// A review submitted after a force-push, on a head that push replaced, on a fork pull request
+// with no activity log and no check suites. The author pushed X and then Y, both unseen, then
+// force-pushed Z over Y; rozed first saw the pull request at Z. A review started on X was
+// submitted after that.
+
+const X: &str = "5e4d3c2b";
+const Y: &str = "9a8b7c6d";
+const Z: &str = "c0ffee12";
+
+#[test]
+fn a_review_submitted_after_a_force_push_on_a_head_it_replaced() {
+    let records = [
+        force_push(Y, Z, "2026-10-30T16:02:41Z"),
+        polled(Z, "2026-10-30T16:10:00Z"),
+        review(X, "2026-10-30T16:25:18Z"),
+    ];
+    let revisions = build_revisions(&records, &commits(&["7b6a5948", Z]), Z);
+
+    assert_eq!(revisions.latest().unwrap().head, Z);
+    assert_eq!(default_comparison(&revisions, Some(X), None), between(X, Z));
+    assert_eq!(
+        viewed_file_comparison(&revisions, ViewedState::Dismissed, Some(Y), Some(X)),
+        Some(FileComparison::SinceViewed {
+            from: Y.to_string(),
+            to: Z.to_string()
+        })
+    );
+}
+
 // A rebase on a fork pull request from before the activity API's history: no activity log and no
 // check suites. The author pushed a fix, rebased onto the moved base branch adding a commit, then
 // pushed once more.
@@ -368,7 +398,7 @@ fn a_rebase() {
         polled(LATEST, "2022-11-17T14:47:20Z"),
     ];
     let current = commits(&["e1d2c3b4", "a5b6c7d8", "9f8e7d6c", REBASED, LATEST]);
-    let revisions = build_revisions(&records, &current);
+    let revisions = build_revisions(&records, &current, LATEST);
 
     assert_eq!(heads(&revisions), [OPENED, FIXED, REBASED, LATEST]);
     assert_eq!(
@@ -407,7 +437,7 @@ fn polled_records() -> Vec<PushRecord> {
 #[test]
 fn pushes_only_the_poller_saw() {
     let current = commits(&["1a2b3c4d", P1, "5e6f7a8b", P2, P3]);
-    let revisions = build_revisions(&polled_records(), &current);
+    let revisions = build_revisions(&polled_records(), &current, P3);
 
     assert_eq!(heads(&revisions), [P1, P2, P3]);
     assert_eq!(previous(&revisions), [None, Some(P1), Some(P2)]);
@@ -427,7 +457,7 @@ fn a_force_push_only_the_poller_saw() {
     let mut records = polled_records();
     records.push(polled(P4, "2026-09-10T07:30:00Z"));
     // The author squashed everything into one commit.
-    let revisions = build_revisions(&records, &commits(&[P4]));
+    let revisions = build_revisions(&records, &commits(&[P4]), P4);
 
     assert_eq!(heads(&revisions), [P1, P2, P3, P4]);
     assert_eq!(forced(&revisions), [None, None, None, Some(true)]);
@@ -453,7 +483,11 @@ fn conflicting_records() -> Vec<PushRecord> {
 
 #[test]
 fn conflicting_sources() {
-    let revisions = build_revisions(&conflicting_records(), &commits(&["0f1e2d3c", AFTER]));
+    let revisions = build_revisions(
+        &conflicting_records(),
+        &commits(&["0f1e2d3c", AFTER]),
+        AFTER,
+    );
 
     assert_eq!(heads(&revisions), [BEFORE, AFTER]);
     let after = revisions.latest().unwrap();
@@ -475,7 +509,7 @@ fn conflicting_sources_place_a_review_submitted_after_the_next_push() {
     let records: Vec<_> = (conflicting_records().into_iter())
         .filter(|record| !matches!(record, PushRecord::Polled { head, .. } if head == BEFORE))
         .collect();
-    let revisions = build_revisions(&records, &commits(&["0f1e2d3c", AFTER]));
+    let revisions = build_revisions(&records, &commits(&["0f1e2d3c", AFTER]), AFTER);
 
     assert_eq!(heads(&revisions), [BEFORE, AFTER]);
     assert_eq!(
@@ -489,7 +523,7 @@ fn conflicting_sources_trust_the_activity_api_first() {
     let mut records = conflicting_records();
     records.push(activity(NO_COMMIT, BEFORE, "2026-10-27T13:40:30Z", false));
     records.push(activity(BEFORE, AFTER, "2026-10-27T14:02:10Z", true));
-    let revisions = build_revisions(&records, &commits(&["0f1e2d3c", AFTER]));
+    let revisions = build_revisions(&records, &commits(&["0f1e2d3c", AFTER]), AFTER);
 
     assert_eq!(heads(&revisions), [BEFORE, AFTER]);
     assert_eq!(

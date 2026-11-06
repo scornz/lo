@@ -103,6 +103,7 @@ mod tests {
                 pushed(Some("a3"), "a4", 40),
             ],
             &commits,
+            "a4",
         )
     }
 
@@ -179,6 +180,7 @@ mod tests {
                 pushed(Some("a3"), "a4", 40),
             ],
             &commits,
+            "a4",
         );
 
         assert_eq!(

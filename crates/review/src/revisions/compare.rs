@@ -89,6 +89,7 @@ mod tests {
                 pushed(Some("a3"), "a4", 40),
             ],
             &commits,
+            "a4",
         )
     }
 
@@ -185,6 +186,7 @@ mod tests {
         let revisions = build_revisions(
             &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
             &commits,
+            "a2",
         );
 
         assert_eq!(
@@ -199,6 +201,7 @@ mod tests {
         let revisions = build_revisions(
             &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
             &commits,
+            "a2",
         );
 
         assert_eq!(default_comparison(&revisions, Some("c0"), None), full());
