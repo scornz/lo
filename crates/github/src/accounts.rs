@@ -1119,11 +1119,13 @@ esac
             ..Default::default()
         });
         let (accounts, _, _) = setup("account_for_repo", http, cx).await;
+        // In login order, so the accounts' order (when added, then login) doesn't depend on
+        // which second each one is added in.
         for (login, token) in [
-            ("work", "gho_WORK"),
             ("home", "gho_HOME"),
             ("old", "gho_REVOKED"),
             ("other", "gho_OTHER"),
+            ("work", "gho_WORK"),
         ] {
             accounts
                 .update(cx, |accounts, cx| {
@@ -1216,12 +1218,14 @@ esac
             ..Default::default()
         });
         let (accounts, _, _) = setup("account_for_repo_problems", http, cx).await;
+        // In login order, so the accounts' order (when added, then login) doesn't depend on
+        // which second each one is added in.
         for (login, token) in [
-            ("work", "gho_WORK"),
-            ("home", "gho_HOME"),
-            ("sso", "gho_SSO"),
             ("down", "gho_DOWN"),
             ("elsewhere", "gho_ELSEWHERE"),
+            ("home", "gho_HOME"),
+            ("sso", "gho_SSO"),
+            ("work", "gho_WORK"),
         ] {
             add_with(&accounts, login, token, AccountSource::DeviceFlow, cx).await;
         }
