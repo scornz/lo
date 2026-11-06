@@ -97,7 +97,7 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
     let zed = root.join(ZED_DIR);
     if !zed.join("Cargo.toml").exists() {
         bail!(
-            "{} is empty. Run `git submodule update --init` first.",
+            "{} is empty. Run `git submodule update --init --depth 1` first.",
             zed.display()
         );
     }
@@ -669,6 +669,19 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
     fn lock_packages_lists_names() {
         let lock = "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n\n[[package]]\nname = \"b\"\nversion = \"2.0.0\"\n";
         assert_eq!(lock_packages(lock).unwrap(), packages(&["a", "b"]));
+    }
+
+    #[test]
+    fn an_empty_zed_checkout_says_how_to_fetch_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(ZED_DIR)).unwrap();
+        for mode in [Mode::Write, Mode::Check, Mode::SeedLock] {
+            let error = run_mode(root.path(), mode).unwrap_err().to_string();
+            assert!(
+                error.contains("Run `git submodule update --init --depth 1` first."),
+                "{error}"
+            );
+        }
     }
 
     #[test]

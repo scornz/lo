@@ -24,8 +24,10 @@ These bind every change (design §1).
 ## Layout
 
 - `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
-  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`). `xtask` holds repo
-  tasks (`cargo xtask <task>`).
+  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`).
+- `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
+  Cargo workspace, with its own `Cargo.lock`, so it runs even when rozed's workspace can't resolve
+  (an empty `third_party/zed`, or a Zed update that needs a new patch).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
 - `docs/`: the design, plan, status and decisions.
@@ -73,6 +75,14 @@ cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 script/check-symlinks.sh
+```
+
+xtask is a separate workspace, so check it too when you change it:
+
+```sh
+cargo fmt --check --manifest-path crates/xtask/Cargo.toml
+cargo clippy --manifest-path crates/xtask/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path crates/xtask/Cargo.toml
 ```
 
 ## Zed submodule

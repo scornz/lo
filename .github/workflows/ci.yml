@@ -117,7 +117,15 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      # --locked everywhere: sync-zed prunes against Cargo.lock, so it must be committed up to date.
+      # xtask (crates/xtask) is its own workspace, so the steps for rozed's workspace skip it.
+      - name: Check xtask
+        run: |
+          cargo fmt --check --manifest-path crates/xtask/Cargo.toml
+          cargo clippy --locked --manifest-path crates/xtask/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path crates/xtask/Cargo.toml
+
+      # --locked everywhere. sync-zed prunes against Cargo.lock, which the clippy and test steps
+      # check is committed up to date.
       - name: Check the Cargo settings copied from Zed
         run: cargo --locked xtask sync-zed --check
 
