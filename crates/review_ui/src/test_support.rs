@@ -33,6 +33,8 @@ pub struct FakePull {
     pub head: String,
     pub base_branch: String,
     pub base: String,
+    /// GitHub's list of the files the pull request changes, each with its patch.
+    pub files: Vec<serde_json::Value>,
 }
 
 /// An answer to one request: its status, headers and body.
@@ -134,6 +136,7 @@ impl FakeGithub {
         let Some(rest) = path.strip_prefix("/repos/") else {
             return Ok(not_found());
         };
+        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
         let segments: Vec<&str> = rest.split('/').collect();
         let (owner, repo) = match segments.as_slice() {
             [owner, repo, ..] => (*owner, *repo),
@@ -175,9 +178,52 @@ impl FakeGithub {
                 };
                 Ok(Answer::new(200, pull_json(pull).to_string()))
             }
+            [_, _, "pulls", number, "files"] => {
+                let Some(pull) = state.pulls.iter().find(|pull| {
+                    pull.repo.eq_ignore_ascii_case(&canonical) && number.parse() == Ok(pull.number)
+                }) else {
+                    return Ok(not_found());
+                };
+                Ok(files_page(pull, query))
+            }
             _ => Ok(not_found()),
         }
     }
+}
+
+/// One page of `pull`'s files, as `query` (`per_page` and `page`) asks, with a `Link` header to
+/// the next page as GitHub gives it: a full URL.
+fn files_page(pull: &FakePull, query: &str) -> Answer {
+    let param = |name: &str| {
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+            .and_then(|value| value.parse::<usize>().ok())
+    };
+    let per_page = param("per_page").unwrap_or(30);
+    let page = param("page").unwrap_or(1);
+    let start = (page - 1) * per_page;
+    let files: Vec<_> = pull
+        .files
+        .iter()
+        .skip(start)
+        .take(per_page)
+        .cloned()
+        .collect();
+    let mut answer = Answer::new(200, serde_json::Value::from(files).to_string());
+    if start + per_page < pull.files.len() {
+        answer = answer.header(
+            "link",
+            format!(
+                "<https://api.github.com/repos/{}/pulls/{}/files?per_page={per_page}&page={}>; \
+                 rel=\"next\"",
+                pull.repo,
+                pull.number,
+                page + 1
+            ),
+        );
+    }
+    answer
 }
 
 /// GitHub's REST view of `pull`.
@@ -356,6 +402,7 @@ impl GitServer {
             None,
             None,
         );
+        let files = pull_files(&git_dir, repo, &base_commit, &head_commit);
         FakePull {
             repo: repo.to_string(),
             old_names: Vec::new(),
@@ -364,8 +411,58 @@ impl GitServer {
             head: head_commit,
             base_branch: "main".into(),
             base: base_commit,
+            files,
         }
     }
+}
+
+/// GitHub's list of the files changed from `base` to `head`, with their patches, as git makes
+/// them. A removed file's links name the base, as GitHub's do.
+fn pull_files(git_dir: &Path, repo: &str, base: &str, head: &str) -> Vec<serde_json::Value> {
+    let statuses = git(git_dir, &["diff", "--name-status", base, head], None, None);
+    statuses
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(status, path)| {
+            let status = match status {
+                "A" => "added",
+                "D" => "removed",
+                _ => "modified",
+            };
+            let diff = git(
+                git_dir,
+                &["diff", "-U3", "--no-color", base, head, "--", path],
+                None,
+                None,
+            );
+            let patch = diff
+                .find("\n@@ ")
+                .map(|start| diff[start + 1..].to_string());
+            let count = |prefix: char| {
+                patch.as_deref().map_or(0, |patch| {
+                    patch
+                        .lines()
+                        .filter(|line| line.starts_with(prefix))
+                        .count()
+                })
+            };
+            let (additions, deletions) = (count('+'), count('-'));
+            let at = if status == "removed" { base } else { head };
+            serde_json::json!({
+                "filename": path,
+                "status": status,
+                "additions": additions,
+                "deletions": deletions,
+                "changes": additions + deletions,
+                "patch": patch,
+                "blob_url": format!("https://github.com/{repo}/blob/{at}/{path}"),
+                "raw_url": format!("https://github.com/{repo}/raw/{at}/{path}"),
+                "contents_url": format!(
+                    "https://api.github.com/repos/{repo}/contents/{path}?ref={at}"
+                ),
+            })
+        })
+        .collect()
 }
 
 /// Writes a commit holding exactly `files`, and returns its ID.

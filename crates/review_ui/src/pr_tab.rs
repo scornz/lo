@@ -1856,7 +1856,10 @@ mod tests {
         });
         assert_eq!(
             github.requests(),
-            ["GET /repos/sharkdp/fd/pulls/2212 as nobody"]
+            [
+                "GET /repos/sharkdp/fd/pulls/2212 as nobody",
+                "GET /repos/sharkdp/fd/pulls/2212/files?per_page=100 as nobody"
+            ]
         );
     }
 
