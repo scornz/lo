@@ -37,6 +37,13 @@ pub enum PollEvent {
         pull: PullRef,
         summary: Arc<PullSummary>,
     },
+    /// The open pull request's cheap check changed, or was made for the first time: its checks'
+    /// state, review decision, merge state, review threads or merge queue entry, or anything that
+    /// means its details changed.
+    Check {
+        pull: PullRef,
+        check: Arc<PullRequestCheckData>,
+    },
     /// The open pull request's details changed, or were fetched for the first time.
     Details {
         pull: PullRef,
@@ -93,8 +100,11 @@ struct PullState {
     /// Poll as soon as possible: just opened, or rozed just came to the foreground.
     force: bool,
     summary: Option<Cached<Arc<PullSummary>>>,
-    /// The check the details were last fetched at. A different check means they're stale.
-    check: Option<PullRequestCheckData>,
+    /// The check the details were last fetched at. A different check means they're stale, and
+    /// none means they must be fetched again whatever the check says.
+    check: Option<Arc<PullRequestCheckData>>,
+    /// The latest check, as [`Poller::check`] returns it and [`PollEvent::Check`] sends it.
+    latest_check: Option<Arc<PullRequestCheckData>>,
     details: Option<Cached<Arc<PullRequestData>>>,
 }
 
@@ -121,7 +131,7 @@ enum Job {
     Open {
         pull: PullRef,
         summary: Option<Arc<PullSummary>>,
-        check: Option<PullRequestCheckData>,
+        check: Option<Arc<PullRequestCheckData>>,
         have_details: bool,
     },
     /// Another watched PR: the conditional GET alone.
@@ -235,7 +245,7 @@ impl Job {
                 let new_check = client.pull_request_check(owner, name, pull.number).await?;
                 let changed = !have_details
                     || summary_changed(&summary, known.as_deref())
-                    || check.as_ref() != Some(&new_check);
+                    || check.as_deref() != Some(&new_check);
                 let details = if changed {
                     Some(client.pull_request(owner, name, pull.number).await?)
                 } else {
@@ -397,11 +407,13 @@ impl Poller {
             return;
         }
         let target = Target::Pull(pull.clone());
+        let check = self
+            .cached::<PullRequestCheckData>(&target)
+            .map(|c| Arc::new(c.value));
         let state = PullState {
             summary: self.cached::<PullSummary>(&target).map(|c| c.map(Arc::new)),
-            check: self
-                .cached::<PullRequestCheckData>(&target)
-                .map(|c| c.value),
+            check: check.clone(),
+            latest_check: check,
             ..PullState::default()
         };
         if !self.repos.contains_key(&pull.repo) {
@@ -487,6 +499,12 @@ impl Poller {
             fetched_at: details.fetched_at,
             offline_age,
         })
+    }
+
+    /// The open pull request's cheap check, as of its details: its checks' state, review
+    /// decision, merge state, review threads and merge queue entry.
+    pub fn check(&self, pull: &PullRef) -> Option<Arc<PullRequestCheckData>> {
+        self.pulls.get(pull)?.latest_check.clone()
     }
 
     /// GitHub's REST view of a watched pull request, as last fetched.
@@ -817,7 +835,7 @@ impl Poller {
                         Put::TouchSummary => {
                             cache.touch::<PullSummary>(&login, &target, wall).await
                         }
-                        Put::Check(value) => cache.put(&login, &target, &value, None, wall).await,
+                        Put::Check(value) => cache.put(&login, &target, &*value, None, wall).await,
                         Put::Details(value) => {
                             cache.put(&login, &target, &*value, None, wall).await
                         }
@@ -852,6 +870,11 @@ impl Poller {
                     return writes;
                 };
                 let summary = Self::take_summary(state, summary, wall);
+                let check = Arc::new(check);
+                let changed_check = (state.latest_check.as_ref() != Some(&check)).then(|| {
+                    state.latest_check = Some(check.clone());
+                    check.clone()
+                });
                 let changed_details = match details {
                     Some(details) => {
                         let changed = state
@@ -887,6 +910,12 @@ impl Poller {
                         });
                     }
                     None => put(&mut writes, &cache, &login, Put::TouchSummary),
+                }
+                if let Some(check) = changed_check {
+                    cx.emit(PollEvent::Check {
+                        pull: pull.clone(),
+                        check,
+                    });
                 }
                 if let Some(details) = changed_details {
                     if self.open.as_ref() == Some(pull) {
@@ -1017,7 +1046,7 @@ fn jitter_sample() -> f64 {
 enum Put {
     Summary(Arc<PullSummary>),
     TouchSummary,
-    Check(PullRequestCheckData),
+    Check(Arc<PullRequestCheckData>),
     Details(Arc<PullRequestData>),
     Listed(Arc<ListedPulls>),
     TouchListed,

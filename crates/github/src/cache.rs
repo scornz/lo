@@ -638,7 +638,7 @@ mod tests {
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
-                ("PullRequestCheck", "b900ef4fb7098d20".to_string()),
+                ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
                 ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
             ]
         );

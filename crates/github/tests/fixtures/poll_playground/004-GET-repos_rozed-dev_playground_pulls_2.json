@@ -13,10 +13,10 @@
       "x-github-api-version-selected": "2022-11-28",
       "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4992",
+      "x-ratelimit-remaining": "4989",
       "x-ratelimit-reset": "1793972985",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "8"
+      "x-ratelimit-used": "11"
     },
     "body": {
       "url": "https://api.github.com/repos/rozed-dev/playground/pulls/2",

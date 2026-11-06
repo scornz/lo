@@ -68,7 +68,23 @@ pub type PullRequestData = pull_request::PullRequestRepositoryPullRequest;
 pub type PullRequestFile = pull_request::PullRequestRepositoryPullRequestFilesNodes;
 pub use pull_request::{FileViewedState, PullRequestState};
 pub type PullRequestCheckData = pull_request_check::PullRequestCheckRepositoryPullRequest;
+pub use pull_request_check::{
+    MergeQueueEntryState, MergeStateStatus, PullRequestReviewDecision, StatusState,
+};
 pub type OpenPullRequest = open_pull_requests::OpenPullRequestsRepositoryPullRequestsNodes;
+
+impl PullRequestCheckData {
+    /// How many of the first 100 review threads aren't resolved.
+    pub fn unresolved_threads(&self) -> usize {
+        self.review_threads
+            .nodes
+            .iter()
+            .flatten()
+            .flatten()
+            .filter(|thread| !thread.is_resolved)
+            .count()
+    }
+}
 
 /// A repository's open pull requests.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

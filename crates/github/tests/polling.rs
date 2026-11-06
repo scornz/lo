@@ -264,6 +264,7 @@ impl Polling {
                 PollEvent::Details { pull, details } => {
                     format!("details #{}: {}", pull.number, details.title)
                 }
+                PollEvent::Check { pull, .. } => format!("check #{}", pull.number),
                 PollEvent::OpenPullRequests { repo, list } => {
                     format!("open PRs of {repo}: {}", list.pull_requests.len())
                 }
@@ -434,6 +435,7 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
         t.events(),
         [
             "summary #1: feat: stack layer A",
+            "check #1",
             "details #1: feat: stack layer A",
             "summary #2: feat: stack layer B",
             "open PRs of rozed-dev/playground: 2",
@@ -534,8 +536,10 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
         t.events(),
         [
             "summary #1: feat: stack layer A",
+            "check #1",
             "details #1: feat: stack layer A",
             "open PRs of rozed-dev/playground: 2",
+            "check #1",
             "details #1: retitled",
             "summary #1: retitled again",
             "details #1: retitled again",
@@ -592,6 +596,7 @@ async fn a_watched_pr_that_changed_is_fetched_in_full_when_opened_again(cx: &mut
             (130, "PullRequest"),
         ])
     );
+    // The check is the same, so no check event.
     assert_eq!(t.events(), ["details #2: layer B, pushed"]);
 }
 
@@ -661,7 +666,42 @@ async fn a_pull_request_that_answers_200_unchanged_isnt_fetched_again(cx: &mut T
     // PR #2 answered 200 unchanged at 120 s: its check stands, so opening it fetches its
     // details only because they were never fetched, and sends no summary.
     t.update(|poller, cx| poller.set_open(Some(pr(2)), cx));
-    assert_eq!(t.events(), ["details #2: layer B"]);
+    assert_eq!(t.events(), ["check #2", "details #2: layer B"]);
+}
+
+#[gpui::test]
+async fn a_check_that_changes_is_sent(cx: &mut TestAppContext) {
+    let r = recorded();
+    // Checks start running and a review thread is opened; nothing else moves.
+    let moved = with_body(r[1].clone(), |body| {
+        let pull = &mut body["data"]["repository"]["pullRequest"];
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["reviewThreads"] =
+            serde_json::json!({"totalCount": 1, "nodes": [{"isResolved": false}]});
+    });
+    let mut interactions = vec![
+        r[0].clone(),
+        r[6].clone(),
+        r[1].clone(),
+        moved,
+        r[2].clone(),
+    ];
+    interactions.extend(repo_answers(&r));
+    let mut t = Polling::new("check_changes", interactions, cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    t.events();
+    t.run_until(20);
+    assert_eq!(t.events(), ["check #1"]);
+    let check = t.read(|poller| poller.check(&pr(1))).unwrap();
+    assert_eq!(check.unresolved_threads(), 1);
+    assert_eq!(
+        check
+            .status_check_rollup
+            .as_ref()
+            .map(|rollup| &rollup.state),
+        Some(&github::queries::StatusState::PENDING)
+    );
 }
 
 #[gpui::test]
