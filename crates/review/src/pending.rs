@@ -216,7 +216,9 @@ pub enum Refusal {
     /// comment would join your pending review, and GitHub puts the threads it adds to one on the
     /// latest head. Submit the pending review first, or switch to the latest revision.
     NotLatest { head: String },
-    /// Your pending review is recorded on another revision, `review_on`.
+    /// Your pending review is recorded on another revision, `review_on`, so approving it or
+    /// requesting changes with it would record that on code that isn't on screen. Submit it as a
+    /// comment, or switch to its revision.
     OtherRevision { review_on: String },
     /// You opened the pull request, and GitHub lets its author only comment.
     OwnPullRequest,
@@ -238,7 +240,7 @@ pub struct SubmitDialog {
     /// The revision the review is recorded on: your pending review's, or else the right column's.
     pub on: String,
     /// Whether that's the revision on screen. When it isn't, your pending review was started on
-    /// another, and the dialog says which.
+    /// another, and the dialog says which: it submits only as a comment there.
     pub on_screen: bool,
 }
 
@@ -390,7 +392,9 @@ impl YourReview {
     }
 
     /// What submitting sends: your pending review with `event` and the summary `body`, or a review
-    /// of revision `on` when you have no pending review. A blank summary is sent empty.
+    /// of revision `on`, the right column's, when you have no pending review. A blank summary is
+    /// sent empty. Approving or requesting changes with a pending review recorded on another
+    /// revision than `on` is refused (design §11: a review records the commit you looked at).
     pub fn submit(
         &self,
         event: ReviewEvent,
@@ -400,6 +404,14 @@ impl YourReview {
     ) -> Result<Mutation, Refusal> {
         if !choices(own).contains(&event) {
             return Err(Refusal::OwnPullRequest);
+        }
+        if let Some(pending) = &self.pending
+            && event != ReviewEvent::Comment
+            && pending.commit != on
+        {
+            return Err(Refusal::OtherRevision {
+                review_on: pending.commit.clone(),
+            });
         }
         let blank = body.trim().is_empty();
         if event != ReviewEvent::Approve && blank && self.pending_comments() == 0 {
@@ -815,7 +827,7 @@ mod tests {
 
     #[test]
     fn submitting_sends_the_pending_review_and_ends_it() {
-        let mut review = pending("a2", 2);
+        let mut review = pending("a3", 2);
         let submit = review
             .submit(ReviewEvent::Approve, "", false, "a3")
             .unwrap();
@@ -831,6 +843,38 @@ mod tests {
         review.accepted(&submit, None);
         assert_eq!(review.pending(), None);
         assert_eq!(review.pending_comments(), 0);
+    }
+
+    #[test]
+    fn approving_or_requesting_changes_needs_the_pending_reviews_revision_on_screen() {
+        // GitHub would record the approval on r3, code that isn't on screen.
+        let review = pending("a3", 1);
+        let other_revision = Err(Refusal::OtherRevision {
+            review_on: "a3".to_string(),
+        });
+
+        assert_eq!(
+            review.submit(ReviewEvent::Approve, "", false, "a2"),
+            other_revision
+        );
+        assert_eq!(
+            review.submit(ReviewEvent::RequestChanges, "Wait.", false, "a2"),
+            other_revision
+        );
+        // A comment approves nothing, so it's sent from any revision.
+        assert_eq!(
+            review.submit(ReviewEvent::Comment, "", false, "a2"),
+            Ok(Mutation::SubmitReview {
+                review: "PRR_1".to_string(),
+                event: ReviewEvent::Comment,
+                body: String::new(),
+            })
+        );
+        // Your own pull request's refusal comes first.
+        assert_eq!(
+            review.submit(ReviewEvent::Approve, "", true, "a2"),
+            Err(Refusal::OwnPullRequest)
+        );
     }
 
     #[test]

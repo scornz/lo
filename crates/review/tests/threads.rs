@@ -520,10 +520,23 @@ fn a_pending_review_started_before_a_push_keeps_its_revision() {
         ));
     }
 
-    // The dialog says the review is recorded on r2.
+    // The dialog says the review is recorded on r2, so it won't approve r3 with it: GitHub would
+    // record approving r2. It still submits it as a comment.
     let dialog = review.submit_dialog("alice", false, R3);
     assert_eq!(revisions.label(&dialog.on).as_deref(), Some("r2"));
     assert!(!dialog.on_screen);
+    assert_eq!(
+        review.submit(ReviewEvent::Approve, "", false, R3),
+        Err(Refusal::OtherRevision {
+            review_on: R2.to_string(),
+        })
+    );
+    assert!(matches!(
+        review.submit(ReviewEvent::Comment, "", false, R3),
+        Ok(Mutation::SubmitReview { .. })
+    ));
+    // On r2, she can approve what she sees.
+    assert!(review.submit(ReviewEvent::Approve, "", false, R2).is_ok());
 }
 
 #[test]
@@ -690,4 +703,13 @@ fn erin_comments_on_r2_after_r3_was_pushed() {
         review.add(R3, R3, &nit(12)),
         Ok(Mutation::AddThread { .. })
     ));
+
+    // The review is recorded on r2, so it approves r2 only while r2 is on screen.
+    assert_eq!(
+        review.submit(ReviewEvent::Approve, "", false, R3),
+        Err(Refusal::OtherRevision {
+            review_on: R2.to_string(),
+        })
+    );
+    assert!(review.submit(ReviewEvent::Approve, "", false, R2).is_ok());
 }
