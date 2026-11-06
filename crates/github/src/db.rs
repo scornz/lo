@@ -198,9 +198,15 @@ impl RozedDb {
     pub async fn delete_account(&self, host: String, login: String) -> Result<()> {
         self.0
             .write(move |connection| {
-                connection.exec_bound::<(String, String)>(sql!(
-                    DELETE FROM accounts WHERE host = ?1 AND login = ?2
-                ))?((host, login))
+                connection.with_savepoint("delete_account", || {
+                    // Its owners and cached answers go with it, by their foreign keys.
+                    connection.exec_bound::<(String, String)>(sql!(
+                        DELETE FROM accounts WHERE host = ?1 AND login = ?2
+                    ))?((host.clone(), login.clone()))?;
+                    connection.exec_bound::<(String, String)>(sql!(
+                        DELETE FROM recent_prs WHERE host = ?1 AND account = ?2
+                    ))?((host, login))
+                })
             })
             .await
     }
@@ -402,12 +408,46 @@ mod tests {
         assert!(path.exists());
     }
 
+    /// The first migration, as existing databases applied it. sqlez refuses to open a database
+    /// whose applied migrations' text differs, so step 0 must never change.
+    const SHIPPED_STEP_0: &str = sql!(
+        // One row per signed-in account. Tokens aren't here: they're in the token store.
+        CREATE TABLE accounts(
+            host TEXT NOT NULL,
+            login TEXT NOT NULL COLLATE NOCASE,
+            user_id INTEGER NOT NULL,
+            name TEXT,
+            avatar_url TEXT,
+            // Comma-separated, as GitHub's x-oauth-scopes header lists them.
+            scopes TEXT NOT NULL,
+            // "device_flow" or "gh".
+            source TEXT NOT NULL,
+            // Seconds since the Unix epoch.
+            added_at INTEGER NOT NULL,
+            PRIMARY KEY(host, login)
+        ) STRICT;
+
+        // The account to open an owner's PRs with, when several accounts can see them.
+        CREATE TABLE owner_accounts(
+            host TEXT NOT NULL,
+            owner TEXT NOT NULL COLLATE NOCASE,
+            login TEXT NOT NULL COLLATE NOCASE,
+            PRIMARY KEY(host, owner),
+            FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
+        ) STRICT;
+    );
+
     /// rozed's database as it was before the cache.
     struct BeforeTheCache;
 
     impl Domain for BeforeTheCache {
         const NAME: &str = RozedDb::NAME;
-        const MIGRATIONS: &[&str] = &[RozedDb::MIGRATIONS[0]];
+        const MIGRATIONS: &[&str] = &[SHIPPED_STEP_0];
+    }
+
+    #[test]
+    fn the_first_migration_never_changes() {
+        assert_eq!(RozedDb::MIGRATIONS[0], SHIPPED_STEP_0);
     }
 
     #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -416,8 +456,8 @@ mod tests {
     impl crate::cache::CacheEntry for Note {
         const NAME: &'static str = "note";
 
-        fn version() -> String {
-            "1".into()
+        fn shape() -> String {
+            "a number".into()
         }
     }
 

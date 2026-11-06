@@ -879,7 +879,7 @@ async fn load(
                 .await?;
             let queue = poller.read_with(cx, |poller, _| poller.queue().clone());
             let pull_request = queue
-                .read(github_api::fetch_as(&client, login, &link))
+                .read(|| github_api::fetch_as(&client, login, &link))
                 .await?;
             let token = repo_cache::Token::new(client.token().expose());
             (pull_request, Some(token))

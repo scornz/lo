@@ -68,6 +68,9 @@ pub struct RecordedRequest {
     /// The ETag the request sent, for conditional requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub if_none_match: Option<String>,
+    /// The time a conditional request asked about changes since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_modified_since: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -136,8 +139,14 @@ pub fn graphql_body(url: &Url, body: &[u8]) -> Option<GraphQlBody> {
 }
 
 /// The key a request is matched by. A conditional request only matches the response recorded
-/// for the same ETag, so a wrong ETag can't get a recorded `304`.
-pub fn key(method: &str, url: &Url, body: &[u8], if_none_match: Option<&str>) -> String {
+/// for the same ETag or time, so a wrong one can't get a recorded `304`.
+pub fn key(
+    method: &str,
+    url: &Url,
+    body: &[u8],
+    if_none_match: Option<&str>,
+    if_modified_since: Option<&str>,
+) -> String {
     let graphql = graphql_body(url, body);
     let url = normalize_url(url);
     let key = if let Some(graphql) = graphql {
@@ -147,7 +156,7 @@ pub fn key(method: &str, url: &Url, body: &[u8], if_none_match: Option<&str>) ->
     } else {
         format!("{method} {url} body={}", sha256(body))
     };
-    with_etag(key, if_none_match)
+    with_conditions(key, if_none_match, if_modified_since)
 }
 
 /// The key of a recorded request.
@@ -164,14 +173,25 @@ pub fn recorded_key(request: &RecordedRequest) -> Result<String> {
     } else {
         format!("{} {normalized}", request.method)
     };
-    Ok(with_etag(key, request.if_none_match.as_deref()))
+    Ok(with_conditions(
+        key,
+        request.if_none_match.as_deref(),
+        request.if_modified_since.as_deref(),
+    ))
 }
 
-fn with_etag(key: String, if_none_match: Option<&str>) -> String {
-    match if_none_match {
-        Some(etag) => format!("{key} if-none-match={etag}"),
-        None => key,
+fn with_conditions(
+    mut key: String,
+    if_none_match: Option<&str>,
+    if_modified_since: Option<&str>,
+) -> String {
+    if let Some(etag) = if_none_match {
+        key = format!("{key} if-none-match={etag}");
     }
+    if let Some(time) = if_modified_since {
+        key = format!("{key} if-modified-since={time}");
+    }
+    key
 }
 
 fn graphql_key(method: &str, url: &str, operation: &str, variables: &serde_json::Value) -> String {
@@ -391,11 +411,29 @@ mod tests {
     #[test]
     fn query_order_does_not_change_the_key() {
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?b=2&a=1"), b"", None),
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
+            key(
+                "GET",
+                &url("https://api.github.com/x?b=2&a=1"),
+                b"",
+                None,
+                None
+            ),
+            key(
+                "GET",
+                &url("https://api.github.com/x?a=1&b=2"),
+                b"",
+                None,
+                None
+            ),
         );
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
+            key(
+                "GET",
+                &url("https://api.github.com/x?a=1&b=2"),
+                b"",
+                None,
+                None
+            ),
             "GET https://api.github.com/x?a=1&b=2"
         );
     }
@@ -406,16 +444,17 @@ mod tests {
         let b = br#"{"operationName":"A","variables":{"a":2,"b":1},"query":"query A {x}"}"#;
         let graphql = url("https://api.github.com/graphql");
         assert_eq!(
-            key("POST", &graphql, a, None),
-            key("POST", &graphql, b, None)
+            key("POST", &graphql, a, None, None),
+            key("POST", &graphql, b, None, None)
         );
         assert!(
-            key("POST", &graphql, a, None).starts_with("POST https://api.github.com/graphql A ")
+            key("POST", &graphql, a, None, None)
+                .starts_with("POST https://api.github.com/graphql A ")
         );
         let other = br#"{"query":"query A { x }","operationName":"A","variables":{"a":3}}"#;
         assert_ne!(
-            key("POST", &graphql, a, None),
-            key("POST", &graphql, other, None)
+            key("POST", &graphql, a, None, None),
+            key("POST", &graphql, other, None, None)
         );
     }
 
@@ -432,7 +471,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &graphql, body, None)
+            key("POST", &graphql, body, None, None)
         );
 
         let form = "client_id=abc&scope=repo";
@@ -445,7 +484,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &device, form.as_bytes(), None)
+            key("POST", &device, form.as_bytes(), None, None)
         );
     }
 

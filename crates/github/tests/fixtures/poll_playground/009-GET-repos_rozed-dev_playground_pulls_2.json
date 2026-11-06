@@ -2,19 +2,19 @@
   "request": {
     "method": "GET",
     "url": "https://api.github.com/repos/rozed-dev/playground/pulls/2",
-    "if_none_match": "\"bdccb11e58e63b5354a2b3cf6058c1faa48d4e9dcd982496a1f9bc2c0bef45f2\""
+    "if_modified_since": "Fri, 06 Nov 2026 08:15:08 GMT"
   },
   "response": {
     "status": 304,
     "headers": {
-      "etag": "\"bdccb11e58e63b5354a2b3cf6058c1faa48d4e9dcd982496a1f9bc2c0bef45f2\"",
+      "etag": "\"da9e8cda157f080c41c21a15ae32c1a3dd0314710bb4db8e82b879fb19b5df58\"",
       "last-modified": "Fri, 06 Nov 2026 08:15:08 GMT",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4989",
-      "x-ratelimit-reset": "1793969325",
+      "x-ratelimit-remaining": "4988",
+      "x-ratelimit-reset": "1793972985",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "11"
+      "x-ratelimit-used": "12"
     }
   }
 }

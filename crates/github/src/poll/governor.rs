@@ -21,6 +21,9 @@ pub struct PollConfig {
     pub watched_interval: Duration,
     /// Everything, while rozed is in the background.
     pub background_interval: Duration,
+    /// The longest the open PR's details go without being fetched in full while rozed is in the
+    /// foreground. Viewed marks set elsewhere change nothing a cheaper poll sees.
+    pub details_max_age: Duration,
     /// Below this share of a rate limit left, every interval doubles.
     pub slow_below: f64,
     /// Below this share, only the open PR is polled, at most every `open_only_interval`.
@@ -29,7 +32,8 @@ pub struct PollConfig {
     /// After a network error: the first wait before retrying, doubling up to `offline_max_wait`.
     pub offline_first_wait: Duration,
     pub offline_max_wait: Duration,
-    /// After a secondary rate limit without a `retry-after`: the first wait, doubling up to
+    /// After a secondary rate limit without a `retry-after`: the wait for the first one in a row,
+    /// doubling with each after it (those with a `retry-after` count too) up to
     /// `secondary_max_wait`. GitHub asks for at least a minute.
     pub secondary_first_wait: Duration,
     pub secondary_max_wait: Duration,
@@ -38,6 +42,10 @@ pub struct PollConfig {
     /// The least time between the end of one write and the start of the next. GitHub asks for a
     /// second between mutations.
     pub write_spacing: Duration,
+    /// The longest the poller sleeps before working out again what's due. Timers don't count
+    /// while the Mac sleeps, so a pause until a rate limit's reset is checked against the wall
+    /// clock at least this often.
+    pub max_wait: Duration,
     /// Wall-clock time, for rate-limit resets and the age of cached data.
     pub wall_clock: WallClock,
 }
@@ -48,6 +56,7 @@ impl Default for PollConfig {
             open_interval: Duration::from_secs(20),
             watched_interval: Duration::from_secs(2 * 60),
             background_interval: Duration::from_secs(5 * 60),
+            details_max_age: Duration::from_secs(5 * 60),
             slow_below: 0.20,
             open_only_below: 0.05,
             open_only_interval: Duration::from_secs(2 * 60),
@@ -57,6 +66,7 @@ impl Default for PollConfig {
             secondary_max_wait: Duration::from_secs(15 * 60),
             jitter: 0.2,
             write_spacing: Duration::from_secs(1),
+            max_wait: Duration::from_secs(60),
             wall_clock: WallClock::system(),
         }
     }
@@ -69,6 +79,11 @@ pub struct WallClock(Arc<dyn Fn() -> SystemTime + Send + Sync>);
 impl WallClock {
     pub fn system() -> Self {
         Self(Arc::new(SystemTime::now))
+    }
+
+    /// A clock that reads `now`.
+    pub fn new(now: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
+        Self(Arc::new(now))
     }
 
     /// A clock that reads `start` now and then moves with `executor`'s clock, which in tests is

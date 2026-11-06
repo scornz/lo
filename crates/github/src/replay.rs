@@ -87,6 +87,7 @@ impl ReplayHttpClient {
             &url,
             &request.body,
             request.header("if-none-match"),
+            request.header("if-modified-since"),
         );
         let graphql = cassette::graphql_body(&url, &request.body);
         let mut replay = self.0.lock();
@@ -271,6 +272,51 @@ mod tests {
     fn a_wrong_etag_fails_the_test() {
         let client = ReplayHttpClient::from_interactions("t", [conditional("W/\"abc\"")]).unwrap();
         get_with_etag(&client, "W/\"wrong\"");
+    }
+
+    fn modified_since(date: &str) -> Interaction {
+        let mut recorded = interaction("GET", "https://api.github.com/repos/o/r", 304, "");
+        recorded.request.if_modified_since = Some(date.into());
+        recorded
+    }
+
+    fn get_modified_since(client: &ReplayHttpClient, date: &str) -> u16 {
+        let request = Request::get("https://api.github.com/repos/o/r")
+            .header("If-Modified-Since", date)
+            .body(AsyncBody::empty())
+            .unwrap();
+        futures::executor::block_on(client.send(request))
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+
+    #[test]
+    fn a_request_modified_since_gets_the_304_recorded_for_its_date() {
+        let date = "Fri, 06 Nov 2026 08:15:07 GMT";
+        let client = ReplayHttpClient::from_interactions(
+            "t",
+            [
+                interaction("GET", "https://api.github.com/repos/o/r", 200, "{}"),
+                modified_since(date),
+            ],
+        )
+        .unwrap();
+        assert_eq!(get(&client, "https://api.github.com/repos/o/r").0, 200);
+        assert_eq!(get_modified_since(&client, date), 304);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "has no response for\n  GET https://api.github.com/repos/o/r if-modified-since=Thu, 05 Nov 2026 00:00:00 GMT"
+    )]
+    fn a_wrong_date_fails_the_test() {
+        let client = ReplayHttpClient::from_interactions(
+            "t",
+            [modified_since("Fri, 06 Nov 2026 08:15:07 GMT")],
+        )
+        .unwrap();
+        get_modified_since(&client, "Thu, 05 Nov 2026 00:00:00 GMT");
     }
 
     #[test]

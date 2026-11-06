@@ -7,16 +7,16 @@
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "etag": "\"6f000167632d43ccc9de08b960a579ac28d4c25176f1834d10494e4ee0bd0eb2\"",
+      "etag": "\"6ee83fe7a7bf92f673d4700e72e0d4bcb89fefd1a77b0605bd68a0aa2878b4b2\"",
       "last-modified": "Fri, 06 Nov 2026 08:15:07 GMT",
       "x-accepted-oauth-scopes": "repo",
       "x-github-api-version-selected": "2022-11-28",
       "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4991",
-      "x-ratelimit-reset": "1793969325",
+      "x-ratelimit-remaining": "4990",
+      "x-ratelimit-reset": "1793972985",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "9"
+      "x-ratelimit-used": "10"
     },
     "body": {
       "url": "https://api.github.com/repos/rozed-dev/playground/pulls/1",
@@ -124,7 +124,7 @@
           "has_downloads": false,
           "has_discussions": false,
           "has_pull_requests": true,
-          "pushed_at": "2026-11-06T08:14:57Z",
+          "pushed_at": "2026-11-06T12:49:58Z",
           "created_at": "2026-11-06T08:10:31Z",
           "updated_at": "2026-11-06T08:10:36Z",
           "allow_forking": false,
@@ -253,7 +253,7 @@
           "has_downloads": false,
           "has_discussions": false,
           "has_pull_requests": true,
-          "pushed_at": "2026-11-06T08:14:57Z",
+          "pushed_at": "2026-11-06T12:49:58Z",
           "created_at": "2026-11-06T08:10:31Z",
           "updated_at": "2026-11-06T08:10:36Z",
           "allow_forking": false,

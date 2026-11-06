@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use graphql_client::GraphQLQuery;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client::GithubClient;
@@ -67,11 +68,29 @@ pub type PullRequestData = pull_request::PullRequestRepositoryPullRequest;
 pub type PullRequestFile = pull_request::PullRequestRepositoryPullRequestFilesNodes;
 pub use pull_request::{FileViewedState, PullRequestState};
 pub type PullRequestCheckData = pull_request_check::PullRequestCheckRepositoryPullRequest;
+pub use pull_request_check::{
+    MergeQueueEntryState, MergeStateStatus, PullRequestReviewDecision, StatusState,
+};
 pub type OpenPullRequest = open_pull_requests::OpenPullRequestsRepositoryPullRequestsNodes;
 
+impl PullRequestCheckData {
+    /// How many of the first 100 review threads aren't resolved.
+    pub fn unresolved_threads(&self) -> usize {
+        self.review_threads
+            .nodes
+            .iter()
+            .flatten()
+            .flatten()
+            .filter(|thread| !thread.is_resolved)
+            .count()
+    }
+}
+
 /// A repository's open pull requests.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OpenPullRequestList {
+    /// Their shape is the `OpenPullRequests` query's, which the cache's version covers.
+    #[schemars(with = "Vec<serde_json::Value>")]
     pub pull_requests: Vec<OpenPullRequest>,
     /// How many are open, which is more than `pull_requests` holds when it was capped, or when
     /// GitHub left some out as null.
