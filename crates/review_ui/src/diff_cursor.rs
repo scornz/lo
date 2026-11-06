@@ -5,7 +5,8 @@
 //! cursor beside it. Each file's excerpts sit under [`crate::pr_diff::path_key`], whose sort
 //! prefix is the file's position in review order.
 
-use editor::{Direction, SplittableEditor};
+use editor::ToPoint as _;
+use editor::{Direction, SelectionEffects, SplittableEditor};
 use gpui::{App, Entity, Window};
 use language::Point;
 
@@ -18,6 +19,59 @@ pub fn file_at_cursor(diff: &Entity<SplittableEditor>, cx: &App) -> Option<(usiz
     let key = snapshot.path_for_buffer(buffer.remote_id())?;
     let position = usize::try_from(key.sort_prefix?).ok()?;
     Some((position, key.path.as_unix_str().to_string()))
+}
+
+/// Where the diff's cursor is: its file, and the point in the file's head version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CursorPosition {
+    /// The file's path in the pull request.
+    pub path: String,
+    pub point: Point,
+}
+
+/// Where the diff's cursor is, if it's in a file.
+pub fn cursor_position(diff: &Entity<SplittableEditor>, cx: &App) -> Option<CursorPosition> {
+    let editor = diff.read(cx).rhs_editor().read(cx);
+    let snapshot = editor.buffer().read(cx).snapshot(cx);
+    let head = editor.selections.newest_anchor().head().to_point(&snapshot);
+    let (buffer, point) = snapshot.point_to_buffer_point(head)?;
+    let key = snapshot.path_for_buffer(buffer.remote_id())?;
+    Some(CursorPosition {
+        path: key.path.as_unix_str().to_string(),
+        point,
+    })
+}
+
+/// Puts the diff's cursor at `position`, or at the nearest line its file shows, without
+/// scrolling. Returns whether the diff has the file.
+pub fn move_cursor_to(
+    diff: &Entity<SplittableEditor>,
+    position: &CursorPosition,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let editor = diff.read(cx).rhs_editor().clone();
+    let anchor = {
+        let multi_buffer = editor.read(cx).buffer().read(cx);
+        let snapshot = multi_buffer.snapshot(cx);
+        multi_buffer
+            .all_buffers_iter()
+            .find(|buffer| {
+                snapshot
+                    .path_for_buffer(buffer.read(cx).remote_id())
+                    .is_some_and(|key| key.path.as_unix_str() == position.path)
+            })
+            .and_then(|buffer| multi_buffer.buffer_point_to_anchor(&buffer, position.point, cx))
+    };
+    let Some(anchor) = anchor else {
+        return false;
+    };
+    editor.update(cx, |editor, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+            selections.select_anchor_ranges([anchor..anchor])
+        })
+    });
+    true
 }
 
 /// Moves the diff's cursor to the start of the next change after it, or the previous one before
