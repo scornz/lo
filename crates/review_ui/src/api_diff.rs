@@ -132,7 +132,7 @@ pub(crate) async fn show(
                 let plan = match error.downcast_ref::<OutsideGithubsHunks>() {
                     Some(OutsideGithubsHunks(why)) => {
                         log::warn!("{link}: showing GitHub's patch of {path} as text: {why}");
-                        patch_text(file.patch.as_deref().unwrap_or_default(), deleted, why)
+                        patch_text_plan(file, why)
                     }
                     None => FilePlan::failed(&error),
                 };
@@ -436,8 +436,23 @@ pub(crate) fn plan(file: &PullFile) -> FilePlan {
             ),
         ),
     };
-    // GitHub's list says nothing of `.gitattributes` or sizes, so lockfiles by name and files
-    // with too many changed lines.
+    with_header(file, plan)
+}
+
+/// `file`'s patch as text, for when its hunks didn't lie where GitHub put them (`why`), with
+/// what its header says as [`plan`] would have it.
+pub(crate) fn patch_text_plan(file: &PullFile, why: &str) -> FilePlan {
+    let deleted = file.status == FileStatus::Removed;
+    with_header(
+        file,
+        patch_text(file.patch.as_deref().unwrap_or_default(), deleted, why),
+    )
+}
+
+/// `plan` with what `file`'s header says besides its status: a badge, and whether it starts
+/// collapsed. GitHub's list says nothing of `.gitattributes` or sizes, so lockfiles count by name
+/// and large files by their changed lines.
+fn with_header(file: &PullFile, plan: FilePlan) -> FilePlan {
     let collapsed = initial_collapse(&file_entry(file).file, true);
     FilePlan {
         badge: badge(file),
@@ -851,6 +866,23 @@ mod tests {
     }
 
     #[test]
+    fn a_patch_shown_as_text_keeps_its_collapse_and_badge() {
+        let mut lockfile = file(FileStatus::Copied, Some("@@ -1 +1 @@\n-a\n+b"));
+        lockfile.filename = "web/yarn.lock".into();
+        lockfile.previous_filename = Some("yarn.lock".into());
+
+        let plan = patch_text_plan(&lockfile, "a hunk lies outside GitHub's");
+
+        assert_eq!(
+            plan.collapsed,
+            Some(Collapsed::Generated(review::files::Generated::Lockfile))
+        );
+        assert_eq!(plan.badge.as_deref(), Some("copied from yarn.lock"));
+        assert_eq!(plan.warning.as_ref().unwrap().label, GITHUBS_PATCH);
+        assert!(placeholder(&plan).contains("+b"));
+    }
+
+    #[test]
     fn lockfiles_start_collapsed_in_githubs_diff_too() {
         let mut lockfile = file(FileStatus::Modified, Some("@@ -1 +1 @@\n-a\n+b"));
         lockfile.filename = "web/pnpm-lock.yaml".into();
@@ -923,7 +955,7 @@ mod tests {
         assert!(error.contains("line 60,000"), "{error}");
         let plan = plan_of(FileStatus::Modified, Some(patch));
         assert_eq!(placeholder(&plan), patch);
-        assert_eq!(plan.warning.unwrap().label, GITHUBS_PATCH);
+        assert_eq!(plan.warning.as_ref().unwrap().label, GITHUBS_PATCH);
 
         // Up to the limit, it's laid out.
         let patch = format!("@@ -{MAX_ROWS} +{MAX_ROWS} @@\n-a\n+b");
