@@ -44,10 +44,11 @@ use repo_cache::{
     Token,
 };
 
-use crate::github_api::{self, PullRequest};
+use crate::github_api::PullRequest;
 use crate::local_copies;
-use crate::pr_banner::{BannerKind, Banners, BannersAddon};
+use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
+use crate::pr_tab::PrTab;
 use crate::trust;
 
 /// Whether the pull request gets a checkout and language servers. The caller decides.
@@ -60,19 +61,22 @@ pub enum Trust {
     Checkout,
 }
 
-/// Fetches the pull request, copies it locally and shows it in a new tab of `workspace`, from git
-/// first. When `trust` asks for a checkout, it's made in the background, and each file whose
-/// checkout copy matches the head switches to the checkout's project buffer when it's ready, or a
-/// banner says why there's none. `launched` is when rozed started, for timing.
+/// Copies the pull request locally, signed in with `token` for a private repository, and shows
+/// it in `tab`'s diff, from git first. When `trust` asks for a checkout, it's made in the
+/// background, and each file whose checkout copy matches the head switches to the checkout's
+/// project buffer when it's ready, or a banner says why there's none. `launched` is when the tab
+/// opened, for timing.
+#[allow(clippy::too_many_arguments)]
 pub async fn open(
+    tab: WeakEntity<PrTab>,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
+    pull_request: PullRequest,
+    token: Option<Token>,
     trust: Trust,
     launched: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
-    let (http, token) = cx.update(|_, cx| (cx.http_client(), local_copies::token(cx)))?;
-    let pull_request = github_api::fetch_pull_request(http, &link, token.as_ref()).await?;
     log::info!(
         "{link}: {} merges into {} ({:?} after launch)",
         pull_request.head.sha,
@@ -98,10 +102,12 @@ pub async fn open(
         local.base,
         local.head
     );
+    // The tab lists the files, and says where each goes in the diff.
+    let positions = tab.update(cx, |tab, cx| tab.copied(&local.files, &local.head, cx))?;
 
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
-    let banners = cx.new(|_| Banners::default());
+    let banners = tab.read_with(cx, |tab, _| tab.banners().clone())?;
     banners.update(cx, |banners, cx| {
         if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
             banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
@@ -125,9 +131,9 @@ pub async fn open(
         multi_buffer.set_all_diff_hunks_expanded(cx);
         multi_buffer
     });
-    let editor = workspace.update_in(cx, |workspace, window, cx| {
+    let editor = workspace.update_in(cx, |_, window, cx| {
         let workspace_entity = cx.entity();
-        let editor = cx.new(|cx| {
+        cx.new(|cx| {
             let editor = SplittableEditor::new(
                 EditorSettings::get_global(cx).diff_view_style,
                 multi_buffer.clone(),
@@ -141,7 +147,6 @@ pub async fn open(
             editor.rhs_editor().update(cx, |editor, cx| {
                 editor.set_show_bookmarks(false, cx);
                 editor.set_show_breakpoints(false, cx);
-                editor.register_addon(BannersAddon(banners.clone()));
                 // Keeps the clone open, so no cleanup removes it or its checkout while the tab
                 // shows it.
                 editor.register_addon(OpenClone {
@@ -149,9 +154,10 @@ pub async fn open(
                 });
             });
             editor
-        });
-        workspace.add_item_to_active_pane(Box::new(editor.clone()), None, true, window, cx);
-        editor
+        })
+    })?;
+    tab.update_in(cx, |tab, window, cx| {
+        tab.show_diff(editor.clone(), window, cx)
     })?;
 
     let target = Target {
@@ -176,12 +182,13 @@ pub async fn open(
                 async move { plan_file(&repo, &file, None) }
             })
             .await;
-        let shown = match target.add_file(index, file, plan.clone(), cx).await {
+        let position = positions[index];
+        let shown = match target.add_file(position, file, plan.clone(), cx).await {
             Ok(shown) => Ok((shown, plan)),
             Err(error) => {
                 let plan = FilePlan::failed(&error);
                 target
-                    .add_file(index, file, plan.clone(), cx)
+                    .add_file(position, file, plan.clone(), cx)
                     .await
                     .map(|shown| (shown, plan))
             }
@@ -258,7 +265,11 @@ pub async fn open(
     let checkout = check_out(&local, &link, &project, cx).await;
     banners.update(cx, |banners, cx| banners.hide(BannerKind::CheckingOut, cx));
     let checkout = match checkout {
-        Ok(checkout) => checkout,
+        Ok(checkout) => {
+            // Its worktree, and the language servers in it, go with the last tab using it.
+            tab.update(cx, |tab, _| tab.uses_checkout(checkout.worktree_id))?;
+            checkout
+        }
         Err(error) => {
             log::warn!("{link}: {error:#}");
             banners.update(cx, |banners, cx| {
@@ -299,7 +310,8 @@ pub async fn open(
                     headers.warnings.insert(*buffer_id, warning);
                 });
             }
-            Swap::ToCheckout(plan) => match target.add_file(index, file, plan, cx).await {
+            Swap::ToCheckout(plan) => match target.add_file(positions[index], file, plan, cx).await
+            {
                 Ok(shown) => update_headers(&editor, cx, |headers| {
                     headers.move_to(*buffer_id, shown.buffer_id);
                     if let Some(badge) = shown.badge {
@@ -525,6 +537,12 @@ fn copy(
         head_source: fetched.head_source,
         files,
     })
+}
+
+/// The key a file's excerpts sit under in the diff: its position in the tab's order, then its
+/// path, so the diff lists files in that order.
+pub fn path_key(position: usize, path: Arc<RelPath>) -> PathKey {
+    PathKey::with_sort_prefix(position as u64, path)
 }
 
 /// Files with more changed lines than this get a placeholder instead of loading (design §5).
@@ -800,10 +818,10 @@ struct Shown {
 }
 
 impl Target<'_> {
-    /// Adds one changed file to the diff, after the ones before it.
+    /// Adds one changed file to the diff, at `position` in the tab's order.
     async fn add_file(
         &self,
-        index: usize,
+        position: usize,
         file: &ChangedFile,
         plan: FilePlan,
         cx: &mut AsyncWindowContext,
@@ -902,8 +920,7 @@ impl Target<'_> {
                 ranges
             }
         })?;
-        // The sort prefix keeps files in the order git listed them.
-        let key = PathKey::with_sort_prefix(index as u64, path);
+        let key = path_key(position, path);
         let buffer_id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
         self.editor.update_in(cx, |editor, window, cx| {
             editor.update_excerpts_for_path(

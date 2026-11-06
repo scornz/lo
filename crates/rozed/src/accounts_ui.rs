@@ -50,8 +50,9 @@ struct AccountsUnavailable(SharedString);
 impl Global for AccountsUnavailable {}
 
 /// Opens rozed's database, loads the accounts and registers the modal's actions. Call it after
-/// the app's HTTP client is set.
-pub fn init(cx: &mut App) {
+/// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
+/// to `None` when the database couldn't be opened.
+pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, RozedDb)>> {
     cx.bind_keys([
         KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-backspace", RemoveSelected, Some(KEY_CONTEXT)),
@@ -80,17 +81,20 @@ pub fn init(cx: &mut App) {
     let path = github::db::default_path();
     cx.spawn(async move |cx| {
         let db = RozedDb::open(&path).await;
-        cx.update(
-            |cx| match db.and_then(|db| Accounts::load(db, store, http, cx)) {
-                Ok(accounts) => Accounts::set_global(accounts, cx),
+        cx.update(|cx| {
+            match db.and_then(|db| Ok((Accounts::load(db.clone(), store, http, cx)?, db))) {
+                Ok((accounts, db)) => {
+                    Accounts::set_global(accounts.clone(), cx);
+                    Some((accounts, db))
+                }
                 Err(error) => {
                     log::error!("accounts are unavailable: {error:#}");
                     cx.set_global(AccountsUnavailable(format!("{error:#}").into()));
+                    None
                 }
-            },
-        )
+            }
+        })
     })
-    .detach();
 }
 
 /// Opens the modal in the active rozed window, or the first one.

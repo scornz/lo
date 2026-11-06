@@ -23,6 +23,7 @@ buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
 command_palette = { path = "third_party/zed/crates/command_palette" }
+command_palette_hooks = { path = "third_party/zed/crates/command_palette_hooks" }
 credentials_provider = { path = "third_party/zed/crates/credentials_provider" }
 db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
@@ -61,6 +62,8 @@ zlog = { path = "third_party/zed/crates/zlog" }
 # rozed's crates.
 github = { path = "crates/github" }
 repo_cache = { path = "crates/repo_cache" }
+review = { path = "crates/review" }
+review_ui = { path = "crates/review_ui" }
 
 # Other crates. Versions match Zed's where Zed has them.
 anyhow = "1.0.86"
