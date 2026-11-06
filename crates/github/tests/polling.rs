@@ -133,13 +133,15 @@ fn user() -> AuthenticatedUser {
 
 impl Polling {
     async fn new(name: &str, interactions: Vec<Interaction>, cx: &mut TestAppContext) -> Self {
-        Self::with_delay(name, interactions, None, cx).await
+        Self::with(name, interactions, None, AccountSource::DeviceFlow, cx).await
     }
 
-    async fn with_delay(
+    /// A poller whose requests each take `delay`, for an account added from `source`.
+    async fn with(
         name: &str,
         interactions: Vec<Interaction>,
         delay: Option<Duration>,
+        source: AccountSource,
         cx: &mut TestAppContext,
     ) -> Self {
         let executor = cx.executor();
@@ -153,15 +155,12 @@ impl Polling {
         });
         let db = RozedDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
-        let accounts = cx.new(|_| Accounts::new(db.clone(), store, http.clone()).unwrap());
+        let accounts = cx
+            .update(|cx| Accounts::load(db.clone(), store, http.clone(), cx))
+            .unwrap();
         accounts
             .update(cx, |accounts, cx| {
-                accounts.add(
-                    user(),
-                    Token::new("gho_FAKE"),
-                    AccountSource::DeviceFlow,
-                    cx,
-                )
+                accounts.add(user(), Token::new("gho_FAKE"), source, cx)
             })
             .await
             .unwrap();
@@ -317,6 +316,20 @@ fn rate_limit(resource: &str, remaining: u32, reset: u64) -> Vec<(&'static str, 
     ]
 }
 
+/// The answer to a conditional request that sent `etag`, now carrying `new_etag`.
+fn answering(mut interaction: Interaction, etag: &str, new_etag: &str) -> Interaction {
+    interaction.request.if_none_match = Some(etag.into());
+    interaction
+        .response
+        .headers
+        .insert("etag".into(), new_etag.into());
+    interaction
+}
+
+fn etag(interaction: &Interaction) -> String {
+    interaction.response.headers["etag"].clone()
+}
+
 fn with_body(
     mut interaction: Interaction,
     edit: impl FnOnce(&mut serde_json::Value),
@@ -426,7 +439,7 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
 async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppContext) {
     let r = recorded();
     let changed_rest = with_body(
-        with_headers(r[0].clone(), &[("etag", "\"changed\"".into())]),
+        answering(r[0].clone(), &etag(&r[0]), "\"changed\""),
         |body| body["title"] = "retitled again".into(),
     );
     let moved_timeline = with_body(r[1].clone(), |body| {
@@ -434,12 +447,12 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
             "2026-11-06T12:00:00Z".into();
     });
     let mut interactions = vec![
-        // GET /pulls/1: 200, two 304s, a 200 for a retitle, then 304s.
+        // GET /pulls/1: 200, two 304s, a 200 for a retitle, then 304s for its new ETag.
         r[0].clone(),
         r[6].clone(),
         r[6].clone(),
         changed_rest,
-        r[6].clone(),
+        answering(r[6].clone(), "\"changed\"", "\"changed\""),
         // The check: the same twice, then the timeline moves.
         r[1].clone(),
         r[1].clone(),
@@ -499,7 +512,7 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
 async fn a_watched_pr_that_changed_is_fetched_in_full_when_opened_again(cx: &mut TestAppContext) {
     let r = recorded();
     let pushed = with_body(
-        with_headers(r[3].clone(), &[("etag", "\"pushed\"".into())]),
+        answering(r[3].clone(), &etag(&r[3]), "\"pushed\""),
         |body| body["head"]["sha"] = "0123456789abcdef0123456789abcdef01234567".into(),
     );
     let mut interactions = vec![
@@ -507,10 +520,10 @@ async fn a_watched_pr_that_changed_is_fetched_in_full_when_opened_again(cx: &mut
         r[1].clone(),
         r[2].clone(),
         r[6].clone(),
-        // GET /pulls/2: 200, then a push, then 304s.
+        // GET /pulls/2: 200, then a push, then 304s for its new ETag.
         r[3].clone(),
         pushed,
-        r[8].clone(),
+        answering(r[8].clone(), "\"pushed\"", "\"pushed\""),
         // PR #2's check never changes; its details do.
         for_pull(&r[1], 2),
         for_pull(&details_titled(&r, "layer B"), 2),
@@ -854,7 +867,14 @@ async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut Te
     };
     let mut interactions = r.clone();
     interactions.push(comment);
-    let mut t = Polling::with_delay("write", interactions, Some(Duration::from_secs(1)), cx).await;
+    let mut t = Polling::with(
+        "write",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
     t.run_until(1);
     let post = |poller: &mut Poller, cx: &mut gpui::Context<Poller>| {
@@ -897,15 +917,7 @@ async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut Te
 async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut TestAppContext) {
     let r = recorded();
     let mut interactions = r.clone();
-    interactions.insert(
-        6,
-        answer(
-            &r[6],
-            401,
-            &[],
-            r#"{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}"#,
-        ),
-    );
+    interactions.insert(6, answer(&r[6], 401, &[], BAD_CREDENTIALS));
     let mut t = Polling::new("signed_out", interactions, cx).await;
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
     t.run_until(20);
@@ -937,6 +949,60 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
     assert_eq!(
         t.http.replay.seen().last().unwrap().header("authorization"),
         Some("token gho_NEW")
+    );
+}
+
+const BAD_CREDENTIALS: &str = r#"{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}"#;
+
+/// A `gh` that has a newer token for rozed-bot.
+const FAKE_GH: &str = r#"#!/bin/sh
+case "$*" in
+  "auth token --hostname github.com --user rozed-bot")
+    printf 'gho_FAKE_FROM_GH\n' ;;
+  *)
+    echo "no oauth token found for github.com" >&2
+    exit 1 ;;
+esac
+"#;
+
+#[gpui::test]
+async fn a_refused_gh_token_is_read_from_gh_again_and_polling_goes_on(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.insert(6, answer(&r[6], 401, &[], BAD_CREDENTIALS));
+    // GitHub says the token gh hands over is rozed-bot's.
+    let (_, user) = cassette::read_cassette(&cassette::fixtures_dir().join("user")).unwrap();
+    interactions.extend(user.into_iter().map(|(_, i)| i));
+    let mut t = Polling::with("gh_reread", interactions, None, AccountSource::Gh, cx).await;
+    let dir = tempfile::tempdir().unwrap();
+    let gh = dir.path().join("gh");
+    std::fs::write(&gh, FAKE_GH).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    t.accounts
+        .update(&mut t.cx, |accounts, _| accounts.set_gh_path(gh));
+
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    t.requests();
+    t.run_until(40);
+    assert_eq!(
+        t.requests(),
+        log(&[
+            // Refused, read from gh again and checked, then sent again with gh's token.
+            (20, "GET /pulls/1 (etag)"),
+            (20, "GET /user"),
+            (20, "GET /pulls/1 (etag)"),
+            (20, "PullRequestCheck"),
+            (40, "GET /pulls/1 (etag)"),
+            (40, "PullRequestCheck"),
+        ])
+    );
+    assert!(!t.status().signed_out);
+    assert_eq!(
+        t.http.replay.seen().last().unwrap().header("authorization"),
+        Some("token gho_FAKE_FROM_GH")
     );
 }
 

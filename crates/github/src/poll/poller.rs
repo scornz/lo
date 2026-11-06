@@ -682,10 +682,11 @@ impl Poller {
                     }
                 });
             }
-            Err(error @ GithubError::Unauthorized { .. }) => {
-                let login = self.login.clone();
-                self.accounts
-                    .update(cx, |accounts, cx| accounts.report_error(&login, &error, cx));
+            // The client's hook has already read a newer token from gh for an account imported
+            // from it, and signed the account out when there was none.
+            Err(GithubError::Unauthorized { .. })
+                if self.accounts.read(cx).is_signed_out(&self.login) =>
+            {
                 self.signed_out = true;
             }
             Err(error) => {
