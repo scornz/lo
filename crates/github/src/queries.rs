@@ -163,7 +163,7 @@ impl GithubClient {
         .ok_or_else(|| not_found(format!("pull request {owner}/{name}#{number}")))
     }
 
-    /// A repository's open pull requests, up to [`MAX_OPEN_PULL_REQUESTS`].
+    /// A repository's open pull requests, newest first, up to [`MAX_OPEN_PULL_REQUESTS`].
     pub async fn open_pull_requests(
         &self,
         owner: &str,

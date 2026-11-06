@@ -113,17 +113,25 @@ fn open_pull_requests_with_their_stack() {
             )
         })
         .collect();
+    // Newest first, so the cap drops the oldest PRs rather than the newest.
     assert_eq!(
         layers,
         [
-            (1, "main", "stack-a", 3, 1),
-            (2, "stack-a", "stack-b", 3, 2)
+            (2, "stack-a", "stack-b", 3, 2),
+            (1, "main", "stack-a", 3, 1)
         ]
     );
     // Layer 2's base is layer 1's head.
     assert_eq!(
-        list.pull_requests[1].base_ref_oid,
-        list.pull_requests[0].head_ref_oid
+        list.pull_requests[0].base_ref_oid,
+        list.pull_requests[1].head_ref_oid
+    );
+    // The query asks for that order.
+    let variables: serde_json::Value = serde_json::from_slice(&http.seen()[0].body).unwrap();
+    let query = variables["query"].as_str().unwrap();
+    assert!(
+        query.contains("orderBy: { field: CREATED_AT, direction: DESC }"),
+        "{query}"
     );
 }
 
