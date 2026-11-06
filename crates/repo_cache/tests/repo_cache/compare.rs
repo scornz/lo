@@ -1,6 +1,7 @@
 //! Comparing two revisions of a pull request, across a rebase.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,6 +62,12 @@ impl Fixture {
     /// Publishes the working copy's commit as pull request `number`'s head, with `base_branch` as
     /// it is, and fetches both, as rozed does after each push. Returns the head.
     fn push(&self, number: u64, base_branch: &str) -> Oid {
+        self.push_revision(number, base_branch).head
+    }
+
+    /// [`Self::push`], returning the revision with its base as rozed works it out: the merge
+    /// base of its head with the base branch as it is now, when it was pushed.
+    fn push_revision(&self, number: u64, base_branch: &str) -> Revision {
         self.remote.publish(&format!("refs/pull/{number}/head"));
         let fetched = self
             .repo
@@ -71,7 +78,14 @@ impl Fixture {
                 base: None,
             })
             .unwrap();
-        fetched.head
+        Revision {
+            base: self
+                .repo
+                .merge_base(&fetched.head, &fetched.base_tip)
+                .unwrap()
+                .unwrap(),
+            head: fetched.head,
+        }
     }
 
     /// What a plain comparison of the two heads shows: every path, base changes included.
@@ -238,6 +252,10 @@ fn a_rebase_onto_a_moved_base_shows_only_the_authors_new_change() {
     assert_eq!(old.oid.as_str(), blob_id(&f.remote.work, &m2, "c.txt"));
     assert_eq!(new.oid.as_str(), blob_id(&f.remote.work, &r2, "c.txt"));
     assert_eq!(old.size, Some(text("c", &[]).len() as u64));
+    assert_eq!(
+        new.size,
+        Some(text("c", &[(15, "c line 15, the change r2 adds")]).len() as u64)
+    );
     assert_eq!(
         c.lines.map(|lines| (lines.added, lines.deleted)),
         Some((1, 1))
@@ -590,6 +608,8 @@ fn a_file_deleted_on_one_side_and_changed_on_the_other_is_marked() {
     assert_eq!(dropped.oid.as_str(), blob_id(&f.remote.work, &m2, "f.txt"));
 }
 
+/// The base branch moves on between two pushes that don't rebase, so each revision's base, the
+/// merge base of its head with the base branch as it was when it was pushed, is the same.
 #[test]
 fn revisions_on_the_same_base_get_the_plain_comparison() {
     let f = fixture();
@@ -603,39 +623,130 @@ fn revisions_on_the_same_base_get_the_plain_comparison() {
         .switch("feature")
         .write("a.txt", text("a", &[(3, "a line 3, changed by the PR")]));
     remote.commit("change a.txt");
-    let r1 = f.push(1, "trunk");
-    // Trunk moves on, but the pull request only adds a commit, so both revisions start at m1.
+    let r1 = f.push_revision(1, "trunk");
     remote.switch("trunk").write("e.txt", text("e", &[]));
-    remote.commit("m2");
+    let m2 = remote.commit("m2");
     remote.publish("refs/heads/trunk");
     remote
         .switch("feature")
         .write("c.txt", text("c", &[(15, "c line 15, the change r2 adds")]));
     remote.commit("change c.txt");
-    let r2 = f.push(1, "trunk");
+    let r2 = f.push_revision(1, "trunk");
+    assert!(!f.repo.is_ancestor(&m2, &r2.head).unwrap());
+    assert_eq!((&r1.base, &r2.base), (&m1, &m1));
 
-    let comparison = f
-        .repo
-        .compare_revisions(
-            &Revision {
-                base: m1.clone(),
-                head: r1.clone(),
-            },
-            &Revision {
-                base: m1,
-                head: r2.clone(),
-            },
-        )
-        .unwrap();
+    let comparison = f.repo.compare_revisions(&r1, &r2).unwrap();
 
     assert_eq!(comparison.replay, Replay::SameBase);
     assert_eq!(paths(&comparison.files), ["c.txt"]);
     assert_eq!(
         changes(&comparison.files),
-        f.repo.changed_files(&r1, &r2).unwrap()
+        f.repo.changed_files(&r1.head, &r2.head).unwrap()
     );
-    assert_eq!((&comparison.old, &comparison.new), (&r1, &r2));
+    assert_eq!((&comparison.old, &comparison.new), (&r1.head, &r2.head));
     assert_eq!(f.replay_pins(), []);
+}
+
+/// What the replay merges cleanly but a plain comparison can't show: the author dropping a
+/// change the base made, as r2 does here to line 7 of a.txt. r1 and r2 both have a.txt as it was.
+#[test]
+fn a_change_the_author_drops_from_the_base_shows() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("a.txt", text("a", &[]));
+    remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").write("pr.txt", "pr\n");
+    remote.commit("r1");
+    let r1 = f.push_revision(1, "trunk");
+    remote
+        .switch("trunk")
+        .write("a.txt", text("a", &[(7, "a line 7, trunk's")]));
+    remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("feature-2")
+        .write("pr.txt", "pr\n")
+        .write("a.txt", text("a", &[]));
+    remote.commit("r2");
+    let r2 = f.push_revision(1, "trunk");
+    assert_eq!(f.plain_paths(&r1.head, &r2.head), Vec::<String>::new());
+
+    let comparison = f.repo.compare_revisions(&r1, &r2).unwrap();
+
+    assert_eq!(comparison.replay, Replay::Clean);
+    assert_eq!(paths(&comparison.files), ["a.txt"]);
+    assert_eq!(
+        f.read(&comparison.old, "a.txt"),
+        Some(text("a", &[(7, "a line 7, trunk's")]))
+    );
+}
+
+/// The pull request makes a script executable, which the base edits: the replay keeps both.
+#[test]
+fn a_mode_change_on_one_side_and_an_edit_on_the_other_replay_cleanly() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("s.sh", text("s", &[]));
+    remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").executable("s.sh");
+    remote.commit("r1");
+    let r1 = f.push_revision(1, "trunk");
+    remote
+        .switch("trunk")
+        .write("s.sh", text("s", &[(10, "s line 10, trunk's")]));
+    remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").executable("s.sh");
+    remote.commit("r2");
+    let r2 = f.push_revision(1, "trunk");
+
+    let comparison = f.repo.compare_revisions(&r1, &r2).unwrap();
+
+    assert_eq!(comparison.replay, Replay::Clean);
+    assert_eq!(comparison.files, []);
+    // Taking the mode change back out shows as a mode change alone.
+    fs::set_permissions(remote.work.join("s.sh"), fs::Permissions::from_mode(0o644)).unwrap();
+    remote.commit("r3");
+    let r3 = f.push_revision(1, "trunk");
+    let comparison = f.repo.compare_revisions(&r1, &r3).unwrap();
+    assert_eq!(comparison.replay, Replay::Clean);
+    assert_eq!(paths(&comparison.files), ["s.sh"]);
+    assert!(changes(&comparison.files)[0].is_mode_change_only());
+}
+
+/// A submodule only the pull request moves replays with no download: its commits are in another
+/// repository, and nothing else changed on both sides.
+#[test]
+fn a_submodule_only_the_pull_request_moves_replays_cleanly() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote
+        .write(
+            ".gitmodules",
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = https://example.com/sub.git\n",
+        )
+        .gitlink("sub", "1111111111111111111111111111111111111111");
+    remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    let s2 = "2222222222222222222222222222222222222222";
+    remote.switch("feature").gitlink("sub", s2);
+    remote.commit("r1");
+    let r1 = f.push_revision(1, "trunk");
+    remote.switch("trunk").write("other.txt", "other\n");
+    remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").gitlink("sub", s2);
+    remote.commit("r2");
+    let r2 = f.push_revision(1, "trunk");
+    let before = packs(f.repo.git_dir());
+
+    let comparison = f.repo.compare_revisions(&r1, &r2).unwrap();
+
+    assert_eq!(comparison.replay, Replay::Clean);
+    assert_eq!(comparison.files, []);
+    assert_eq!(packs(f.repo.git_dir()), before);
 }
 
 /// A stack: pull request #2 (`upper`) on #1 (`lower`), on `trunk`. The lower layer is amended and

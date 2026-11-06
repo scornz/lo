@@ -101,6 +101,13 @@ impl Remote {
         self
     }
 
+    /// Makes the file at `path` executable.
+    pub fn executable(&self, path: &str) -> &Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(self.work.join(path), fs::Permissions::from_mode(0o755)).unwrap();
+        self
+    }
+
     /// Replaces whatever is at `path` with a symlink to `target`.
     pub fn symlink(&self, path: &str, target: &str) -> &Self {
         let path = self.work.join(path);
