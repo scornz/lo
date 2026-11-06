@@ -3,10 +3,11 @@
 //!
 //! The GitHub layer fills a [`Thread`] from GraphQL's `PullRequestReviewThread`. [`place`] says
 //! where it shows in the diff on screen, a [`Screen`]: under a line of either column, on the file's
-//! header, or only in the threads panel. GitHub keeps a thread on the pull request's latest head
-//! while its lines are unchanged, and marks it outdated once they change. An outdated thread still
-//! shows where it was written whenever the diff on screen shows that revision. [`panel`] lists the
-//! threads the threads panel shows, by [`PanelFilter`].
+//! header, or only in the threads panel. GitHub reports a thread's current lines on its first
+//! comment's commit. On each push it moves the thread to the new head while its lines are
+//! unchanged, and marks it outdated once they change. An outdated thread still shows where it was
+//! written whenever the diff on screen shows that revision. [`panel`] lists the threads the threads
+//! panel shows, by [`PanelFilter`].
 //!
 //! [`CommentableLines`] says which lines of a file on screen GitHub takes a new comment on, from
 //! the file's [`Hunk`]s, so the UI offers a file-level comment elsewhere, and
@@ -21,14 +22,16 @@
 //!     path: "src/parse.rs".into(),
 //!     side: "RIGHT".parse().unwrap(),
 //!     line: Some(14),
+//!     start_line: Some(14),
 //!     original_line: Some(10),
+//!     current_on: Some("a3".into()),
 //!     written_on: Some("a1".into()),
 //!     ..Default::default()
 //! };
 //! let under = |line| Placement::Lines(Lines::one(line));
-//! assert_eq!(place(&thread, &Screen::full("a3"), "a3"), under(Line::right(14)));
-//! assert_eq!(place(&thread, &Screen::full("a1"), "a3"), under(Line::right(10)));
-//! assert_eq!(place(&thread, &Screen::full("a2"), "a3"), Placement::NotOnScreen);
+//! assert_eq!(place(&thread, &Screen::full("a3")), under(Line::right(14)));
+//! assert_eq!(place(&thread, &Screen::full("a1")), under(Line::right(10)));
+//! assert_eq!(place(&thread, &Screen::full("a2")), Placement::NotOnScreen);
 //! assert!(thread.starts_open());
 //!
 //! // GitHub takes comments on the lines of the pull request's hunks, and nowhere else.
@@ -151,9 +154,12 @@ impl Lines {
 /// A review thread, as GraphQL's `PullRequestReviewThread` describes it. Field docs name the
 /// GraphQL field each one comes from.
 ///
-/// GitHub keeps two places for a line thread: where it is on the pull request's latest head
-/// (`line`, `startLine`), while its lines are unchanged since, and where it was written
+/// GitHub keeps two places for a line thread: where it is now (`line`, `startLine`, on
+/// `current_on`), while its lines are unchanged since it was written, and where it was written
 /// (`originalLine`, `originalStartLine`, on `written_on`). Both use the same sides.
+///
+/// GitHub gives a one-line thread a `startLine` equal to its `line`, or none, and never a
+/// `startDiffSide`; it gives a file-level thread `line: 1`. Neither makes a range.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Thread {
     /// `id`.
@@ -164,13 +170,13 @@ pub struct Thread {
     pub subject: Subject,
     /// `diffSide`: the side of its last line.
     pub side: DiffSide,
-    /// `startDiffSide`: the side of its first line, for a range. When it's `None` and a start line
-    /// is set, the range starts on `side`.
+    /// `startDiffSide`: the side of its first line, for a range. GitHub sets it for every range;
+    /// when it's `None` and a start line is set, the range starts on `side`.
     pub start_side: Option<DiffSide>,
-    /// `line`: its last line on the pull request's latest head. `None` for a file-level thread,
-    /// and once it's outdated.
+    /// `line`: its last line on `current_on`. `None` once it's outdated. A file-level thread has
+    /// no lines, whatever GitHub gives here.
     pub line: Option<u32>,
-    /// `startLine`: its first line on the latest head, for a range.
+    /// `startLine`: its first line on `current_on`, for a range.
     pub start_line: Option<u32>,
     /// `originalLine`: its last line on the revision it was written on.
     pub original_line: Option<u32>,
@@ -180,6 +186,13 @@ pub struct Thread {
     pub outdated: bool,
     /// `isResolved`.
     pub resolved: bool,
+    /// The revision `line` and `startLine` are on, by head SHA: its first comment's `commit.oid`.
+    /// GitHub moves a thread to each new head when it's pushed, while the thread's lines are
+    /// unchanged, so this is usually the latest head. A thread written on an older revision after
+    /// a newer one was pushed stays on the older one until the next push, and one read just before
+    /// a push is on the head before it. Once outdated it's `written_on`. `None` when GitHub no
+    /// longer has the commit.
+    pub current_on: Option<String>,
     /// The revision it was written on, by head SHA: its first comment's `originalCommit.oid`.
     /// `None` when GitHub no longer has the commit.
     pub written_on: Option<String>,
@@ -188,8 +201,7 @@ pub struct Thread {
 }
 
 impl Thread {
-    /// Its lines on the pull request's latest head: `None` for a file-level thread, and once it's
-    /// outdated.
+    /// Its lines on `current_on`: `None` for a file-level thread, and once it's outdated.
     pub fn current_lines(&self) -> Option<Lines> {
         self.lines(self.start_line, self.line)
     }

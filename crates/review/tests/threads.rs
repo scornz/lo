@@ -56,6 +56,8 @@ struct Node {
     original_start_line: Option<u32>,
     is_outdated: bool,
     is_resolved: bool,
+    /// The first comment's `commit.oid`.
+    commit: Option<&'static str>,
     /// The first comment's `originalCommit.oid`.
     original_commit: Option<&'static str>,
     /// Each comment's `author.login` and `state`.
@@ -76,6 +78,7 @@ fn thread(node: Node) -> Thread {
         original_start_line: node.original_start_line,
         outdated: node.is_outdated,
         resolved: node.is_resolved,
+        current_on: node.commit.map(str::to_string),
         written_on: node.original_commit.map(str::to_string),
         comments: (node.comments.iter().enumerate())
             .map(|(index, (author, state))| ThreadComment {
@@ -89,10 +92,11 @@ fn thread(node: Node) -> Thread {
     }
 }
 
-/// Bob's pull request's threads, after three pushes. As GitHub gives them, a one-line thread that
-/// isn't outdated has `startLine` equal to `line` and no `startDiffSide`, and a file-level thread is
-/// on line 1.
-fn threads() -> [Thread; 5] {
+/// Bob's pull request's threads, after three pushes, as GitHub gives them: a one-line thread that
+/// GitHub has moved to the latest head has `startLine` equal to `line`, and no `startDiffSide`; a
+/// one-line thread on an older commit, or outdated, has no `startLine`; an outdated thread's first
+/// comment stays on the commit it was written on; and a file-level thread is on line 1.
+fn threads() -> [Thread; 6] {
     let line = Node {
         id: "",
         path: "src/parse.rs",
@@ -105,6 +109,7 @@ fn threads() -> [Thread; 5] {
         original_start_line: None,
         is_outdated: false,
         is_resolved: false,
+        commit: None,
         original_commit: None,
         comments: &[("bob", "SUBMITTED")],
     };
@@ -115,6 +120,7 @@ fn threads() -> [Thread; 5] {
             line: Some(14),
             start_line: Some(14),
             original_line: Some(10),
+            commit: Some(R3),
             original_commit: Some(R1),
             ..line
         }),
@@ -124,6 +130,7 @@ fn threads() -> [Thread; 5] {
             line: None,
             original_line: Some(20),
             is_outdated: true,
+            commit: Some(R1),
             original_commit: Some(R1),
             comments: &[("bob", "SUBMITTED"), ("alice", "SUBMITTED")],
             ..line
@@ -136,6 +143,7 @@ fn threads() -> [Thread; 5] {
             start_line: Some(30),
             original_line: Some(33),
             original_start_line: Some(30),
+            commit: Some(R3),
             original_commit: Some(R3),
             comments: &[("alice", "PENDING")],
             ..line
@@ -148,6 +156,7 @@ fn threads() -> [Thread; 5] {
             start_line: Some(5),
             original_line: Some(5),
             is_resolved: true,
+            commit: Some(R3),
             original_commit: Some(R2),
             comments: &[("carol", "SUBMITTED")],
             ..line
@@ -158,22 +167,27 @@ fn threads() -> [Thread; 5] {
             subject_type: "FILE",
             line: Some(1),
             original_line: Some(1),
+            commit: Some(R3),
             original_commit: Some(R2),
+            ..line
+        }),
+        // Dan's comment on line 40 of r2, written after r3 was pushed. GitHub keeps it on r2 until
+        // the next push, so its `line` is r2's line 40, which is r3's line 44.
+        thread(Node {
+            id: "PRRT_older",
+            line: Some(40),
+            original_line: Some(40),
+            commit: Some(R2),
+            original_commit: Some(R2),
+            comments: &[("dan", "SUBMITTED")],
             ..line
         }),
     ]
 }
 
-fn placements(screen: &Screen) -> Vec<(&'static str, Placement)> {
-    let ids = [
-        "PRRT_current",
-        "PRRT_outdated",
-        "PRRT_range",
-        "PRRT_base",
-        "PRRT_file",
-    ];
-    (ids.into_iter())
-        .zip(threads().iter().map(|thread| place(thread, screen, R3)))
+fn placements(screen: &Screen) -> Vec<(String, Placement)> {
+    (threads().iter())
+        .map(|thread| (thread.id.clone(), place(thread, screen)))
         .collect()
 }
 
@@ -181,11 +195,19 @@ fn lines(lines: Lines) -> Placement {
     Placement::Lines(lines)
 }
 
+/// The placements of the six threads, in order, by id.
+fn expect(placements: [(&str, Placement); 6]) -> Vec<(String, Placement)> {
+    (placements.into_iter())
+        .map(|(id, placement)| (id.to_string(), placement))
+        .collect()
+}
+
 #[test]
 fn threads_on_the_latest_revisions_whole_diff() {
+    // Dan's thread isn't on r3 until GitHub moves it there.
     assert_eq!(
         placements(&Screen::full(R3)),
-        [
+        expect([
             ("PRRT_current", lines(Lines::one(Line::right(14)))),
             ("PRRT_outdated", Placement::Outdated),
             (
@@ -194,7 +216,8 @@ fn threads_on_the_latest_revisions_whole_diff() {
             ),
             ("PRRT_base", lines(Lines::one(Line::left(5)))),
             ("PRRT_file", Placement::File),
-        ]
+            ("PRRT_older", Placement::NotOnScreen),
+        ])
     );
 }
 
@@ -204,7 +227,7 @@ fn threads_between_r1_and_r3() {
     // screen.
     assert_eq!(
         placements(&Screen::between(R1, R3)),
-        [
+        expect([
             ("PRRT_current", lines(Lines::one(Line::right(14)))),
             ("PRRT_outdated", lines(Lines::one(Line::left(20)))),
             (
@@ -213,43 +236,16 @@ fn threads_between_r1_and_r3() {
             ),
             ("PRRT_base", Placement::NotOnScreen),
             ("PRRT_file", Placement::File),
-        ]
+            ("PRRT_older", Placement::NotOnScreen),
+        ])
     );
 }
 
 #[test]
-fn threads_on_r1s_whole_diff_are_where_they_were_written() {
+fn threads_between_r2_and_r3() {
     assert_eq!(
-        placements(&Screen::full(R1)),
-        [
-            ("PRRT_current", lines(Lines::one(Line::right(10)))),
-            ("PRRT_outdated", lines(Lines::one(Line::right(20)))),
-            ("PRRT_range", Placement::NotOnScreen),
-            ("PRRT_base", Placement::NotOnScreen),
-            ("PRRT_file", Placement::File),
-        ]
-    );
-}
-
-#[test]
-fn threads_on_r2s_whole_diff() {
-    assert_eq!(
-        placements(&Screen::full(R2)),
-        [
-            ("PRRT_current", Placement::NotOnScreen),
-            ("PRRT_outdated", Placement::Outdated),
-            ("PRRT_range", Placement::NotOnScreen),
-            ("PRRT_base", lines(Lines::one(Line::left(5)))),
-            ("PRRT_file", Placement::File),
-        ]
-    );
-}
-
-#[test]
-fn threads_with_r1_replayed_onto_r3s_base() {
-    assert_eq!(
-        placements(&Screen::replayed(R1, R3)),
-        [
+        placements(&Screen::between(R2, R3)),
+        expect([
             ("PRRT_current", lines(Lines::one(Line::right(14)))),
             ("PRRT_outdated", Placement::Outdated),
             (
@@ -258,7 +254,56 @@ fn threads_with_r1_replayed_onto_r3s_base() {
             ),
             ("PRRT_base", Placement::NotOnScreen),
             ("PRRT_file", Placement::File),
-        ]
+            ("PRRT_older", lines(Lines::one(Line::left(40)))),
+        ])
+    );
+}
+
+#[test]
+fn threads_on_r1s_whole_diff_are_where_they_were_written() {
+    assert_eq!(
+        placements(&Screen::full(R1)),
+        expect([
+            ("PRRT_current", lines(Lines::one(Line::right(10)))),
+            ("PRRT_outdated", lines(Lines::one(Line::right(20)))),
+            ("PRRT_range", Placement::NotOnScreen),
+            ("PRRT_base", Placement::NotOnScreen),
+            ("PRRT_file", Placement::File),
+            ("PRRT_older", Placement::NotOnScreen),
+        ])
+    );
+}
+
+#[test]
+fn threads_on_r2s_whole_diff() {
+    assert_eq!(
+        placements(&Screen::full(R2)),
+        expect([
+            ("PRRT_current", Placement::NotOnScreen),
+            ("PRRT_outdated", Placement::Outdated),
+            ("PRRT_range", Placement::NotOnScreen),
+            ("PRRT_base", lines(Lines::one(Line::left(5)))),
+            ("PRRT_file", Placement::File),
+            ("PRRT_older", lines(Lines::one(Line::right(40)))),
+        ])
+    );
+}
+
+#[test]
+fn threads_with_r1_replayed_onto_r3s_base() {
+    assert_eq!(
+        placements(&Screen::replayed(R1, R3)),
+        expect([
+            ("PRRT_current", lines(Lines::one(Line::right(14)))),
+            ("PRRT_outdated", Placement::Outdated),
+            (
+                "PRRT_range",
+                lines(Lines::range(Line::right(30), Line::right(33)))
+            ),
+            ("PRRT_base", Placement::NotOnScreen),
+            ("PRRT_file", Placement::File),
+            ("PRRT_older", Placement::NotOnScreen),
+        ])
     );
 }
 
@@ -273,15 +318,21 @@ fn the_threads_panel_and_how_threads_start() {
 
     assert_eq!(
         listed(PanelFilter::Unresolved),
-        ["PRRT_current", "PRRT_outdated", "PRRT_range", "PRRT_file"]
+        [
+            "PRRT_current",
+            "PRRT_outdated",
+            "PRRT_range",
+            "PRRT_file",
+            "PRRT_older"
+        ]
     );
     assert_eq!(listed(PanelFilter::Yours), ["PRRT_outdated", "PRRT_range"]);
-    assert_eq!(listed(PanelFilter::All).len(), 5);
+    assert_eq!(listed(PanelFilter::All).len(), 6);
 
     let open: Vec<bool> = threads.iter().map(Thread::starts_open).collect();
-    assert_eq!(open, [true, true, true, false, true]);
+    assert_eq!(open, [true, true, true, false, true, true]);
     let pending: Vec<bool> = threads.iter().map(Thread::is_pending).collect();
-    assert_eq!(pending, [false, false, true, false, false]);
+    assert_eq!(pending, [false, false, true, false, false, false]);
     assert_eq!(threads[2].comments[0].state, CommentState::Pending);
 }
 

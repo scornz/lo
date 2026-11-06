@@ -65,21 +65,29 @@ pub enum Placement {
     NotOnScreen,
 }
 
-/// Where `thread` shows in the diff on `screen`, given the pull request's latest head (`headRefOid`),
-/// which GitHub's current `line`s are on.
+/// Where `thread` shows in the diff on `screen`.
 ///
-/// - A thread that isn't outdated shows under its line on the latest head, when a column shows it.
-///   GitHub says where it is on the latest head only, so on an older revision it shows only if it
+/// - A thread that isn't outdated shows under its current lines on [`Thread::current_on`], when a
+///   column shows that revision. That's usually the latest head, but not always: GitHub moves a
+///   thread to each new head only on the next push, so a thread written on an older revision
+///   after a newer one was pushed, or one read just before a push, is still on an older revision.
+///   GitHub says where a thread is on that one revision only, so on any other it shows only if it
 ///   was written there.
 /// - Any thread shows where it was written, when a column shows that revision. For an outdated
 ///   thread that's the only place in the diff; elsewhere it's [`Placement::Outdated`].
-/// - When both places are on screen, the right column wins, then the latest head: between r1 and
-///   r3, a thread written on r1 and unchanged since shows once, on r3's line.
+/// - When both places are on screen, the right column wins, then the current lines: between r1
+///   and r3, a thread written on r1 and unchanged since shows once, on r3's line.
 /// - A line on GitHub's left side is on the base, so it shows only in a revision's whole diff.
 ///   When only one end of a range is on screen, the thread shows under that line alone.
 /// - A file-level thread shows on the file's header, unless it's outdated and the revision it was
 ///   written on isn't on screen.
-pub fn place(thread: &Thread, screen: &Screen, head: &str) -> Placement {
+///
+/// It doesn't look at paths: the UI looks a file's threads up by the path a column shows. Between
+/// revisions of a renamed file, a thread written on the older one under its old path shows in the
+/// left column only if the UI looks threads up by the left file's path too. A thread written in
+/// GitHub's view of a single commit is on a commit that isn't a revision's head, so it shows only
+/// in the panel until GitHub moves it to a later head.
+pub fn place(thread: &Thread, screen: &Screen) -> Placement {
     let written_on = thread.written_on.as_deref();
     if thread.subject == Subject::File {
         let on_screen = written_on.is_some_and(|revision| screen.shows(revision));
@@ -91,7 +99,7 @@ pub fn place(thread: &Thread, screen: &Screen, head: &str) -> Placement {
     }
     let current = (thread.current_lines())
         .filter(|_| !thread.outdated)
-        .map(|lines| (lines, head));
+        .zip(thread.current_on.as_deref());
     let written = thread.written_lines().zip(written_on);
     for column in [DiffSide::Right, DiffSide::Left] {
         for (lines, revision) in [current, written].into_iter().flatten() {
@@ -166,7 +174,7 @@ mod tests {
 
     /// A thread on one line of the right side, written on `written_on` at `original_line`, and on
     /// `line` of the latest head while it isn't outdated. Like GitHub, it gives its `startLine` as
-    /// its `line`.
+    /// its `line`, and an outdated thread's first comment stays on the commit it was written on.
     fn thread(written_on: &str, original_line: u32, line: Option<u32>) -> Thread {
         Thread {
             id: "PRRT_1".to_string(),
@@ -175,6 +183,7 @@ mod tests {
             start_line: line,
             original_line: Some(original_line),
             outdated: line.is_none(),
+            current_on: Some(if line.is_some() { HEAD } else { written_on }.to_string()),
             written_on: Some(written_on.to_string()),
             comments: vec![comment()],
             ..Default::default()
@@ -190,7 +199,7 @@ mod tests {
         let thread = thread("a3", 12, Some(12));
 
         assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
+            place(&thread, &Screen::full("a3")),
             on(Lines::one(Line::right(12)))
         );
     }
@@ -201,7 +210,7 @@ mod tests {
         let thread = thread("a1", 10, Some(14));
 
         assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
+            place(&thread, &Screen::full("a3")),
             on(Lines::one(Line::right(14)))
         );
     }
@@ -210,10 +219,7 @@ mod tests {
     fn a_thread_written_on_r1_whose_line_changed_is_outdated_on_r3() {
         let thread = thread("a1", 10, None);
 
-        assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
-            Placement::Outdated
-        );
+        assert_eq!(place(&thread, &Screen::full("a3")), Placement::Outdated);
     }
 
     #[test]
@@ -221,7 +227,7 @@ mod tests {
         let thread = thread("a1", 10, None);
 
         assert_eq!(
-            place(&thread, &Screen::full("a1"), HEAD),
+            place(&thread, &Screen::full("a1")),
             on(Lines::one(Line::right(10)))
         );
     }
@@ -231,7 +237,7 @@ mod tests {
         let thread = thread("a1", 10, None);
 
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             on(Lines::one(Line::left(10)))
         );
     }
@@ -241,7 +247,7 @@ mod tests {
         let thread = thread("a1", 10, Some(14));
 
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             on(Lines::one(Line::right(14)))
         );
     }
@@ -251,12 +257,9 @@ mod tests {
         // Its line on r2 is unknown: GitHub only says where it is on the latest.
         let thread = thread("a1", 10, Some(14));
 
+        assert_eq!(place(&thread, &Screen::full("a2")), Placement::NotOnScreen);
         assert_eq!(
-            place(&thread, &Screen::full("a2"), HEAD),
-            Placement::NotOnScreen
-        );
-        assert_eq!(
-            place(&thread, &Screen::between("a2", "a3"), HEAD),
+            place(&thread, &Screen::between("a2", "a3")),
             on(Lines::one(Line::right(14)))
         );
     }
@@ -266,13 +269,10 @@ mod tests {
         let thread = thread("a1", 10, None);
 
         assert_eq!(
-            place(&thread, &Screen::between("a2", "a3"), HEAD),
+            place(&thread, &Screen::between("a2", "a3")),
             Placement::Outdated
         );
-        assert_eq!(
-            place(&thread, &Screen::full("a2"), HEAD),
-            Placement::Outdated
-        );
+        assert_eq!(place(&thread, &Screen::full("a2")), Placement::Outdated);
     }
 
     #[test]
@@ -280,7 +280,7 @@ mod tests {
         let thread = thread("a1", 10, None);
 
         assert_eq!(
-            place(&thread, &Screen::replayed("a1", "a3"), HEAD),
+            place(&thread, &Screen::replayed("a1", "a3")),
             Placement::Outdated
         );
     }
@@ -291,11 +291,11 @@ mod tests {
         let thread = thread("a1", 10, Some(14));
 
         assert_eq!(
-            place(&thread, &Screen::replayed("a1", "a3"), HEAD),
+            place(&thread, &Screen::replayed("a1", "a3")),
             on(Lines::one(Line::right(14)))
         );
         assert_eq!(
-            place(&thread, &Screen::replayed("a1", "a2"), HEAD),
+            place(&thread, &Screen::replayed("a1", "a2")),
             Placement::NotOnScreen
         );
     }
@@ -308,7 +308,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
+            place(&thread, &Screen::full("a3")),
             on(Lines::one(Line::left(5)))
         );
     }
@@ -321,7 +321,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             Placement::NotOnScreen
         );
     }
@@ -334,11 +334,11 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::full("a1"), HEAD),
+            place(&thread, &Screen::full("a1")),
             on(Lines::one(Line::left(5)))
         );
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             Placement::Outdated
         );
     }
@@ -352,7 +352,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
+            place(&thread, &Screen::full("a3")),
             on(Lines::range(Line::right(10), Line::right(14)))
         );
     }
@@ -365,11 +365,11 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::full("a1"), HEAD),
+            place(&thread, &Screen::full("a1")),
             on(Lines::range(Line::right(3), Line::right(6)))
         );
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             on(Lines::range(Line::left(3), Line::left(6)))
         );
     }
@@ -384,7 +384,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
+            place(&thread, &Screen::full("a3")),
             on(Lines::range(Line::left(7), Line::right(9)))
         );
     }
@@ -399,7 +399,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             on(Lines::one(Line::right(9)))
         );
     }
@@ -416,7 +416,7 @@ mod tests {
         };
 
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             on(Lines::one(Line::right(10)))
         );
     }
@@ -434,9 +434,9 @@ mod tests {
     fn a_file_thread_shows_on_the_files_header() {
         let thread = file_thread("a1", false);
 
-        assert_eq!(place(&thread, &Screen::full("a2"), HEAD), Placement::File);
+        assert_eq!(place(&thread, &Screen::full("a2")), Placement::File);
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             Placement::File
         );
     }
@@ -445,15 +445,12 @@ mod tests {
     fn an_outdated_file_thread_shows_on_the_header_only_where_its_revision_is_on_screen() {
         let thread = file_thread("a1", true);
 
-        assert_eq!(place(&thread, &Screen::full("a1"), HEAD), Placement::File);
+        assert_eq!(place(&thread, &Screen::full("a1")), Placement::File);
         assert_eq!(
-            place(&thread, &Screen::between("a1", "a3"), HEAD),
+            place(&thread, &Screen::between("a1", "a3")),
             Placement::File
         );
-        assert_eq!(
-            place(&thread, &Screen::full("a3"), HEAD),
-            Placement::Outdated
-        );
+        assert_eq!(place(&thread, &Screen::full("a3")), Placement::Outdated);
     }
 
     #[test]
@@ -468,16 +465,58 @@ mod tests {
         };
 
         assert_eq!(
-            place(&current, &Screen::full("a3"), HEAD),
+            place(&current, &Screen::full("a3")),
             on(Lines::one(Line::right(14)))
         );
+        assert_eq!(place(&current, &Screen::full("a1")), Placement::NotOnScreen);
+        assert_eq!(place(&outdated, &Screen::full("a1")), Placement::Outdated);
+    }
+
+    #[test]
+    fn a_thread_github_has_on_an_older_commit_shows_on_that_commit_only() {
+        // Written on r2 at line 20 after r3 was pushed: GitHub keeps its `line` on r2, its first
+        // comment's `commit`, until the next push, and gives it no `startLine`. r3 added four
+        // lines above it, so r3's line 20 is other code.
+        let thread = Thread {
+            current_on: Some("a2".to_string()),
+            start_line: None,
+            ..thread("a2", 20, Some(20))
+        };
+
+        assert_eq!(place(&thread, &Screen::full("a3")), Placement::NotOnScreen);
         assert_eq!(
-            place(&current, &Screen::full("a1"), HEAD),
-            Placement::NotOnScreen
+            place(&thread, &Screen::full("a2")),
+            on(Lines::one(Line::right(20)))
         );
         assert_eq!(
-            place(&outdated, &Screen::full("a1"), HEAD),
-            Placement::Outdated
+            place(&thread, &Screen::between("a2", "a3")),
+            on(Lines::one(Line::left(20)))
+        );
+    }
+
+    #[test]
+    fn a_thread_is_placed_on_its_commit_not_on_a_newer_head() {
+        // Read while r3 was the latest; r4 has since been pushed, and GitHub hasn't moved it yet.
+        let thread = thread("a1", 10, Some(14));
+
+        assert_eq!(place(&thread, &Screen::full("a4")), Placement::NotOnScreen);
+        assert_eq!(
+            place(&thread, &Screen::between("a3", "a4")),
+            on(Lines::one(Line::left(14)))
+        );
+    }
+
+    #[test]
+    fn a_current_thread_whose_commit_github_lost_shows_only_where_it_was_written() {
+        let thread = Thread {
+            current_on: None,
+            ..thread("a1", 10, Some(14))
+        };
+
+        assert_eq!(place(&thread, &Screen::full("a3")), Placement::NotOnScreen);
+        assert_eq!(
+            place(&thread, &Screen::full("a1")),
+            on(Lines::one(Line::right(10)))
         );
     }
 }
