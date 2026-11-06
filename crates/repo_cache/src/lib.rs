@@ -47,7 +47,7 @@ mod progress;
 mod repo;
 
 pub use cache::RepoCache;
-pub use compare::{Comparison, Replay, Revision};
+pub use compare::{ComparedFile, Comparison, Replay, Revision};
 pub use diff::{Change, ChangedFile, FileMode, FileVersion, LineCounts};
 pub use error::{Error, FetchFailure};
 pub use git::{Git, GitVersion, Token};

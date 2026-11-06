@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use repo_cache::{
-    Change, ChangedFile, Comparison, Error, FetchFailure, Oid, PullRequestRefs, Replay, Repo,
-    RepoCache, Revision,
+    Change, ChangedFile, ComparedFile, Comparison, Error, FetchFailure, FileMode, Oid,
+    PullRequestRefs, Replay, Repo, RepoCache, Revision,
 };
 use tempfile::TempDir;
 
@@ -76,7 +76,7 @@ impl Fixture {
 
     /// What a plain comparison of the two heads shows: every path, base changes included.
     fn plain_paths(&self, old: &Oid, new: &Oid) -> Vec<String> {
-        paths(&self.repo.changed_files(old, new).unwrap())
+        changed_paths(&self.repo.changed_files(old, new).unwrap())
     }
 
     fn read(&self, rev: &Oid, path: &str) -> Option<String> {
@@ -109,10 +109,42 @@ fn replay_pins(repo: &Repo) -> Vec<(String, String)> {
     .collect()
 }
 
-fn paths(files: &[ChangedFile]) -> Vec<String> {
+fn paths(files: &[ComparedFile]) -> Vec<String> {
     files
         .iter()
         .map(|file| file.display_path().into_owned())
+        .collect()
+}
+
+/// How each file changed between the comparison's sides. Every file must have changed.
+fn changes(files: &[ComparedFile]) -> Vec<ChangedFile> {
+    files
+        .iter()
+        .map(|file| file.change.clone().expect("a change"))
+        .collect()
+}
+
+/// The files marked as conflicted in the replay.
+fn conflicted(files: &[ComparedFile]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|file| file.conflicted())
+        .map(|file| file.display_path().into_owned())
+        .collect()
+}
+
+fn changed_paths(files: &[ChangedFile]) -> Vec<String> {
+    files
+        .iter()
+        .map(|file| file.display_path().into_owned())
+        .collect()
+}
+
+/// The trees pinned in `repo`.
+fn pinned_trees(repo: &Repo) -> Vec<String> {
+    replay_pins(repo)
+        .into_iter()
+        .map(|(tree, _)| tree)
         .collect()
 }
 
@@ -197,7 +229,8 @@ fn a_rebase_onto_a_moved_base_shows_only_the_authors_new_change() {
 
     assert_eq!(comparison.replay, Replay::Clean);
     assert_eq!(paths(&comparison.files), ["c.txt"]);
-    let c = &comparison.files[0];
+    assert_eq!(conflicted(&comparison.files), Vec::<String>::new());
+    let c = comparison.files[0].change.as_ref().unwrap();
     assert_eq!(c.change, Change::Modified);
     // The old side is c.txt as r1 left it, which is trunk's, and the new side is r2's.
     let old = c.old.as_ref().unwrap();
@@ -232,7 +265,7 @@ fn a_rebase_onto_a_moved_base_shows_only_the_authors_new_change() {
 }
 
 #[test]
-fn a_conflicting_rebase_falls_back_to_the_plain_comparison_with_the_conflicted_paths() {
+fn a_conflicting_rebase_falls_back_to_the_plain_comparison_with_each_conflicted_file_marked() {
     let f = fixture();
     let remote = &f.remote;
     remote
@@ -274,19 +307,283 @@ fn a_conflicting_rebase_falls_back_to_the_plain_comparison_with_the_conflicted_p
         )
         .unwrap();
 
-    assert_eq!(
-        comparison.replay,
-        Replay::Conflicted {
-            paths: vec![b"a.txt".to_vec()]
-        }
-    );
-    // The plain comparison of the heads, trunk's e.txt included.
+    let Replay::Conflicted { tree } = &comparison.replay else {
+        panic!("{:?}", comparison.replay);
+    };
+    // The plain comparison of the heads, trunk's e.txt included, with a.txt marked.
     assert_eq!(paths(&comparison.files), ["a.txt", "e.txt"]);
-    assert_eq!(comparison.files, f.repo.changed_files(&r1, &r2).unwrap());
-    assert_eq!(comparison.old, r1);
-    assert_eq!(comparison.new, r2);
-    // Nothing replayed is shown, so nothing is pinned.
-    assert_eq!(f.replay_pins(), []);
+    assert_eq!(
+        changes(&comparison.files),
+        f.repo.changed_files(&r1, &r2).unwrap()
+    );
+    assert_eq!(conflicted(&comparison.files), ["a.txt"]);
+    assert_eq!((&comparison.old, &comparison.new), (&r1, &r2));
+    // How the author resolved it: from git's conflict markers to the line they wrote.
+    let resolution = comparison.files[0].resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), ["a.txt"]);
+    let markers = f.read(tree, "a.txt").unwrap();
+    for line in [
+        "<<<<<<<",
+        "a line 3, changed on trunk",
+        "a line 3, changed by the PR",
+        ">>>>>>>",
+    ] {
+        assert!(markers.contains(line), "{markers}");
+    }
+    let (old, new) = (
+        resolution[0].old.as_ref().unwrap(),
+        resolution[0].new.as_ref().unwrap(),
+    );
+    assert_eq!(
+        f.repo.read_blob(&old.oid).unwrap(),
+        Some(markers.into_bytes())
+    );
+    assert_eq!(new.oid.as_str(), blob_id(&f.remote.work, &r2, "a.txt"));
+    // The conflicted replay is pinned, as a clean one is.
+    assert_eq!(pinned_trees(&f.repo), [tree.to_string()]);
+}
+
+/// The base and the pull request change the same line, and the author resolves it by keeping
+/// their own, which drops the base's change. Comparing the heads shows nothing for that file.
+#[test]
+fn a_conflict_resolved_by_dropping_the_bases_change_shows() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote
+        .write("a.txt", text("a", &[]))
+        .write("u.txt", text("u", &[]));
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("feature")
+        .write("a.txt", text("a", &[(3, "a line 3, the PR's")]));
+    remote.commit("r1");
+    let r1 = f.push(1, "trunk");
+    remote
+        .switch("trunk")
+        .write("a.txt", text("a", &[(3, "a line 3, trunk's")]))
+        .write("u.txt", text("u", &[(9, "u line 9, trunk's")]));
+    let m2 = remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("feature-2")
+        .write("a.txt", text("a", &[(3, "a line 3, the PR's")]));
+    remote.commit("r2");
+    let r2 = f.push(1, "trunk");
+    assert_eq!(f.plain_paths(&r1, &r2), ["u.txt"]);
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision {
+                base: m2,
+                head: r2.clone(),
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(comparison.replay, Replay::Conflicted { .. }));
+    assert_eq!(paths(&comparison.files), ["a.txt", "u.txt"]);
+    assert_eq!(conflicted(&comparison.files), ["a.txt"]);
+    let a = &comparison.files[0];
+    // The same in both heads.
+    assert_eq!(a.change, None);
+    let resolution = a.resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), ["a.txt"]);
+    assert_eq!(resolution[0].change, Change::Modified);
+    let new = resolution[0].new.as_ref().unwrap();
+    assert_eq!(new.oid.as_str(), blob_id(&f.remote.work, &r2, "a.txt"));
+}
+
+/// The pull request turns a file into a symlink, which the base changes. git sets the base's file
+/// aside as `l.txt~<base>`, which is in neither revision: the conflict is l.txt's.
+#[test]
+fn a_file_set_aside_in_a_conflict_is_marked_as_the_file_it_came_from() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("l.txt", text("l", &[]));
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").symlink("l.txt", "target");
+    remote.commit("r1");
+    let r1 = f.push(1, "trunk");
+    remote
+        .switch("trunk")
+        .write("l.txt", text("l", &[(5, "l line 5, trunk's")]));
+    let m2 = remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").symlink("l.txt", "target");
+    remote.commit("r2");
+    let r2 = f.push(1, "trunk");
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision {
+                base: m2.clone(),
+                head: r2,
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(comparison.replay, Replay::Conflicted { .. }));
+    assert_eq!(paths(&comparison.files), ["l.txt"]);
+    assert_eq!(conflicted(&comparison.files), ["l.txt"]);
+    assert_eq!(comparison.files[0].change, None);
+    // The author dropped trunk's change, set aside under a name of its own.
+    let resolution = comparison.files[0].resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), [format!("l.txt~{m2}")]);
+    assert_eq!(resolution[0].change, Change::Deleted);
+    let set_aside = resolution[0].old.as_ref().unwrap();
+    assert_eq!(
+        set_aside.oid.as_str(),
+        blob_id(&f.remote.work, &m2, "l.txt")
+    );
+}
+
+#[test]
+fn a_binary_file_changed_on_both_sides_is_marked() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("b.bin", b"a\0b");
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").write("b.bin", b"a\0the PR's");
+    remote.commit("r1");
+    let r1 = f.push(1, "trunk");
+    remote.switch("trunk").write("b.bin", b"a\0trunk's");
+    let m2 = remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").write("b.bin", b"a\0both");
+    remote.commit("r2");
+    let r2 = f.push(1, "trunk");
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision {
+                base: m2.clone(),
+                head: r2.clone(),
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(comparison.replay, Replay::Conflicted { .. }));
+    assert_eq!(conflicted(&comparison.files), ["b.bin"]);
+    let b = &comparison.files[0];
+    assert!(b.change.as_ref().unwrap().binary);
+    // git keeps the new base's version of a binary file it can't merge.
+    let resolution = b.resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), ["b.bin"]);
+    assert!(resolution[0].binary);
+    let (old, new) = (
+        resolution[0].old.as_ref().unwrap(),
+        resolution[0].new.as_ref().unwrap(),
+    );
+    assert_eq!(old.oid.as_str(), blob_id(&f.remote.work, &m2, "b.bin"));
+    assert_eq!(new.oid.as_str(), blob_id(&f.remote.work, &r2, "b.bin"));
+}
+
+/// Both sides move a submodule, and the author keeps the pull request's commit, which moves it
+/// back from the base's. Its commits, which are in another repository, are never fetched.
+#[test]
+fn a_submodule_moved_on_both_sides_is_marked() {
+    let (s1, s2, s3) = (
+        "1111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222",
+        "4444444444444444444444444444444444444444",
+    );
+    let f = fixture();
+    let remote = &f.remote;
+    remote
+        .write(
+            ".gitmodules",
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = https://example.com/sub.git\n",
+        )
+        .gitlink("sub", s1);
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").gitlink("sub", s2);
+    remote.commit("r1");
+    let r1 = f.push(1, "trunk");
+    remote.switch("trunk").gitlink("sub", s3);
+    let m2 = remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").gitlink("sub", s2);
+    remote.commit("r2");
+    let r2 = f.push(1, "trunk");
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision { base: m2, head: r2 },
+        )
+        .unwrap();
+
+    assert!(matches!(comparison.replay, Replay::Conflicted { .. }));
+    assert_eq!(paths(&comparison.files), ["sub"]);
+    assert_eq!(comparison.files[0].change, None);
+    let resolution = comparison.files[0].resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), ["sub"]);
+    assert!(resolution[0].is_submodule());
+    let (old, new) = (
+        resolution[0].old.as_ref().unwrap(),
+        resolution[0].new.as_ref().unwrap(),
+    );
+    assert_eq!((old.oid.as_str(), new.oid.as_str()), (s3, s2));
+    assert_eq!(
+        (old.mode, new.mode),
+        (FileMode::Submodule, FileMode::Submodule)
+    );
+}
+
+/// The pull request deletes a file the base changes, and the author keeps it deleted, which drops
+/// the base's change.
+#[test]
+fn a_file_deleted_on_one_side_and_changed_on_the_other_is_marked() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote
+        .write("f.txt", text("f", &[]))
+        .write("g.txt", text("g", &[]));
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature").remove("f.txt");
+    remote.commit("r1");
+    let r1 = f.push(1, "trunk");
+    remote
+        .switch("trunk")
+        .write("f.txt", text("f", &[(10, "f line 10, trunk's")]));
+    let m2 = remote.commit("m2");
+    remote.publish("refs/heads/trunk");
+    remote.switch("feature-2").remove("f.txt");
+    remote.commit("r2");
+    let r2 = f.push(1, "trunk");
+    assert_eq!(f.plain_paths(&r1, &r2), Vec::<String>::new());
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision {
+                base: m2.clone(),
+                head: r2,
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(comparison.replay, Replay::Conflicted { .. }));
+    assert_eq!(paths(&comparison.files), ["f.txt"]);
+    assert_eq!(comparison.files[0].change, None);
+    let resolution = comparison.files[0].resolution.as_ref().unwrap();
+    assert_eq!(changed_paths(resolution), ["f.txt"]);
+    assert_eq!(resolution[0].change, Change::Deleted);
+    let dropped = resolution[0].old.as_ref().unwrap();
+    assert_eq!(dropped.oid.as_str(), blob_id(&f.remote.work, &m2, "f.txt"));
 }
 
 #[test]
@@ -329,7 +626,10 @@ fn revisions_on_the_same_base_get_the_plain_comparison() {
 
     assert_eq!(comparison.replay, Replay::SameBase);
     assert_eq!(paths(&comparison.files), ["c.txt"]);
-    assert_eq!(comparison.files, f.repo.changed_files(&r1, &r2).unwrap());
+    assert_eq!(
+        changes(&comparison.files),
+        f.repo.changed_files(&r1, &r2).unwrap()
+    );
     assert_eq!((&comparison.old, &comparison.new), (&r1, &r2));
     assert_eq!(f.replay_pins(), []);
 }
@@ -414,12 +714,8 @@ fn a_stacked_layer_compares_across_its_lower_layers_force_push() {
             },
         )
         .unwrap();
-    assert_eq!(
-        from_trunk.replay,
-        Replay::Conflicted {
-            paths: vec![b"lower.txt".to_vec()]
-        }
-    );
+    assert!(matches!(from_trunk.replay, Replay::Conflicted { .. }));
+    assert_eq!(conflicted(&from_trunk.files), ["lower.txt"]);
 
     remote.write(
         "upper.txt",
@@ -666,12 +962,10 @@ fn renames_across_a_rebase_show_only_what_the_author_renamed() {
 
     assert_eq!(comparison.replay, Replay::Clean);
     assert_eq!(paths(&comparison.files), ["extra.txt", "src/c.rs"]);
-    assert_eq!(comparison.files[0].change, Change::Added);
-    assert_eq!(
-        comparison.files[1].change,
-        Change::Renamed { similarity: 100 }
-    );
-    assert_eq!(comparison.files[1].old_path(), Some(&b"c.rs"[..]));
+    let files = changes(&comparison.files);
+    assert_eq!(files[0].change, Change::Added);
+    assert_eq!(files[1].change, Change::Renamed { similarity: 100 });
+    assert_eq!(files[1].old_path(), Some(&b"c.rs"[..]));
     // r1's rename, replayed: src/bee.rs with trunk's edit, and no b.rs.
     assert_eq!(f.read(&comparison.old, "b.rs"), None);
     assert_eq!(
