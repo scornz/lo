@@ -479,19 +479,21 @@ pub(crate) fn sync_side_by_side(
     cx: &mut App,
 ) {
     let lhs = diff.read(cx).lhs_editor().map(|lhs| lhs.entity_id());
-    let changed = update(diff, cx, |files, _| {
+    // This runs on every change to the diff, so it changes nothing unless the side changed.
+    let unchanged = read(diff, cx, |files| {
         files.split.store(lhs.is_some(), Ordering::Relaxed);
-        if files.lhs == lhs {
-            return None;
-        }
+        files.lhs == lhs
+    });
+    if unchanged != Some(false) {
+        return;
+    }
+    let paths = update(diff, cx, |files, _| {
         files.lhs = lhs;
-        Some(files.paths())
+        files.paths()
     })
-    .flatten();
-    if let Some(paths) = changed {
-        for path in paths {
-            show_images(diff, &path, window, cx);
-        }
+    .unwrap_or_default();
+    for path in paths {
+        show_images(diff, &path, window, cx);
     }
 }
 
