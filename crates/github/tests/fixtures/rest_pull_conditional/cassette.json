@@ -1,0 +1,5 @@
+{
+  "description": "GET /pulls/1, then the same request with its ETag, answered 304",
+  "recorded_at": "2026-11-06T09:31:57Z",
+  "repo": "rozed-dev/playground"
+}

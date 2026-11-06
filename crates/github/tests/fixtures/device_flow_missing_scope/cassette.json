@@ -1,0 +1,4 @@
+{
+  "description": "Sign-in: the token comes back without the workflow scope",
+  "synthetic": true
+}

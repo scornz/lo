@@ -1,5 +1,6 @@
 //! One repository's clone: fetching into it and reading from it.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::unix::ffi::OsStrExt as _;
@@ -29,6 +30,8 @@ use crate::{Error, FetchFailure};
 /// - `refs/rozed/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
 /// - `refs/rozed/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
 /// - `refs/rozed/commits/<oid>`: commits fetched by ID.
+/// - `refs/rozed/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
+///   while that process has the clone open (see [`crate::Comparison`]).
 #[derive(Clone)]
 pub struct Repo {
     shared: Arc<Shared>,
@@ -48,6 +51,8 @@ struct Shared {
     _in_use: RepoLock,
     token: Option<Token>,
     cat_file: Mutex<Option<CatFile>>,
+    /// The replayed trees this open clone has pinned, each once, never unpinned while it's open.
+    replays: Mutex<HashSet<Oid>>,
 }
 
 /// A pull request to fetch, as GitHub's API describes it.
@@ -127,6 +132,7 @@ impl Repo {
                 _in_use: in_use,
                 token,
                 cat_file: Mutex::new(None),
+                replays: Mutex::new(HashSet::new()),
             }),
             progress: None,
         }
@@ -137,8 +143,18 @@ impl Repo {
         &self.shared.git_dir
     }
 
+    /// `owner/repo`, for logs.
+    pub(crate) fn name(&self) -> &str {
+        &self.shared.name
+    }
+
     pub(crate) fn checkouts_dir(&self) -> &Path {
         &self.shared.checkouts_dir
+    }
+
+    /// The replayed trees this open clone has pinned (see [`crate::Comparison`]).
+    pub(crate) fn pinned_replays(&self) -> &Mutex<HashSet<Oid>> {
+        &self.shared.replays
     }
 
     /// This repository, reporting the progress of its fetches to `progress`. The first fetch
@@ -276,7 +292,7 @@ impl Repo {
     }
 
     /// Whether commit `oid` is in the clone. Never downloads anything.
-    fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
+    pub(crate) fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
         // `--missing` stops rev-list from fetching what's missing.
         let finished = self
             .git()
@@ -321,10 +337,10 @@ impl Repo {
         }
     }
 
-    /// What changed from `from` to `to`, in git's order (by path), with renames detected, binary
-    /// files marked, and each side's mode, blob and size. Downloads both sides of every changed
-    /// file in one batch, so reading them afterwards needs no network. Submodules are never
-    /// fetched.
+    /// What changed from `from` to `to`, commits or trees, in git's order (by path), with renames
+    /// detected, binary files marked, and each side's mode, blob and size. Downloads both sides of
+    /// every changed file in one batch, so reading them afterwards needs no network. Submodules
+    /// are never fetched.
     pub fn changed_files(&self, from: &Oid, to: &Oid) -> Result<Vec<ChangedFile>, Error> {
         let output = self.run(self.git().args([
             "diff",
