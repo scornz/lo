@@ -68,8 +68,9 @@ while it copies the pull request into a partial clone per repository under
 side-by-side diff, at the same file and line, both sides read from git, with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
-`docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Each pull request
-opens in its own tab; `cmd-o` opens another from its link, and without a link rozed starts there.
+`docs/spike.md`, "Trust risks"). Without `--trust`, no language server can start at all. Milestone
+10's trust prompt replaces the flag. Each pull request opens in its own tab; `cmd-o` opens another
+from its link, and without a link rozed starts there.
 
 In the diff, generated files, lockfiles and files over 5,000 changed lines or 1 MiB start collapsed,
 each header saying why. `alt-a` opens or loads the file at the cursor and switches it between its
@@ -79,7 +80,8 @@ whitespace alone, and `tab` moves the cursor to the other side.
 The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
 repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git
-in, and without signing in when none can, which works for public repositories.
+in, and without signing in when none can and GitHub gave no other reason, which works for public
+repositories.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
@@ -138,6 +140,11 @@ Zed").
 3. `project: let an app keep worktrees out of Recent Items`. Adds
    `WorktreeStore::keep_out_of_recent_documents`, so rozed's checkouts never reach macOS's Recent
    Items. Adding them there also kept rozed from quitting on some desktops.
+4. `editor: keep a split diff's expand buttons hidden when it splits again`. Adds
+   `SplittableEditor::disable_expand_excerpt_buttons`, which also hides them on the left editor
+   that `split()` makes when the diff widens or its style changes, and
+   `Editor::expand_excerpt_buttons_disabled`. GitHub's diff of a pull request shows hunks only,
+   and its excerpts must never expand.
 
 ### Cargo settings copied from Zed
 

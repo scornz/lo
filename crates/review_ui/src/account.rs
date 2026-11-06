@@ -1,6 +1,9 @@
 //! Which account a pull request opens with (design §3 "Which account").
 
+use std::fmt;
+
 use github::accounts::{AccountChoice, RepoAccount};
+use github::{GithubError, HelpLink};
 
 /// Who a tab acts as on GitHub.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,14 +29,33 @@ pub enum AccountDecision {
     Open(Acting),
     /// Several accounts can see the repository and none was chosen for its owner yet.
     Ask(Vec<String>),
-    /// The account remembered for the owner couldn't check the repository. rozed doesn't fall back
-    /// to another account, which would review as someone else; the message says why.
-    Refuse(String),
+    /// No account can open it, and GitHub said why.
+    Refuse(Refusal),
 }
+
+/// Why rozed won't open a pull request with any account: the account remembered for its owner
+/// can't check its repository, or no account could and GitHub said why. rozed doesn't fall back
+/// to another account, which would review as someone else, nor open it without signing in,
+/// which would hide what's wrong. GitHub's links say how to fix it, such as authorizing single
+/// sign-on (design §3 "Blocked by an org", §11 "Single sign-on").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub message: String,
+    pub links: Vec<HelpLink>,
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refusal {}
 
 /// Decides from what [`Accounts::account_for_repo`] found, or `None` when rozed has no accounts
 /// database. A pull request opens with the account that can see its repository, and without
-/// signing in when none can, which works for public repositories.
+/// signing in when none can and none ran into anything else, which works for public
+/// repositories.
 ///
 /// [`Accounts::account_for_repo`]: github::accounts::Accounts::account_for_repo
 pub fn decide(owner: &str, repo: &str, found: Option<&RepoAccount>) -> AccountDecision {
@@ -43,45 +65,65 @@ pub fn decide(owner: &str, repo: &str, found: Option<&RepoAccount>) -> AccountDe
     match &found.choice {
         AccountChoice::Account(login) => AccountDecision::Open(Acting::Account(login.clone())),
         AccountChoice::Ask(logins) => AccountDecision::Ask(logins.clone()),
-        AccountChoice::None => AccountDecision::Open(Acting::Anonymous),
+        AccountChoice::None => {
+            // GitHub refusing a token signs its account out, which then counts as not signed
+            // in, as it would had it been signed out before the check.
+            let problems: Vec<_> = found
+                .problems
+                .iter()
+                .filter(|(_, error)| !error.is_unauthorized())
+                .collect();
+            if problems.is_empty() {
+                return AccountDecision::Open(Acting::Anonymous);
+            }
+            let said: Vec<String> = problems
+                .iter()
+                .map(|(login, error)| format!("{login}: {}", describe(error)))
+                .collect();
+            AccountDecision::Refuse(Refusal {
+                message: format!(
+                    "No account rozed is signed in to could check {owner}/{repo}, so it didn't \
+                     open without signing in. {}",
+                    said.join("; ")
+                ),
+                links: problems
+                    .iter()
+                    .filter_map(|(_, error)| error.help_link())
+                    .collect(),
+            })
+        }
         AccountChoice::Unavailable(login) => {
-            let why = found
+            let problem = found
                 .problems
                 .iter()
                 .find(|(problem, _)| problem.eq_ignore_ascii_case(login))
-                .map_or_else(
-                    || "GitHub didn't say why".to_string(),
-                    |(_, error)| error.to_string(),
-                );
-            AccountDecision::Refuse(format!(
-                "{login}, the account rozed uses for {owner}, couldn't check {owner}/{repo}: {why}"
-            ))
+                .map(|(_, error)| error);
+            let why = problem.map_or_else(|| "GitHub didn't say why".to_string(), describe);
+            AccountDecision::Refuse(Refusal {
+                message: format!(
+                    "{login}, the account rozed uses for {owner}, couldn't check {owner}/{repo}: \
+                     {why}"
+                ),
+                links: problem
+                    .and_then(GithubError::help_link)
+                    .into_iter()
+                    .collect(),
+            })
         }
     }
 }
 
-/// What the accounts that couldn't check a repository ran into, one line each, to explain why a
-/// pull request didn't open.
-pub fn problems(found: Option<&RepoAccount>) -> Vec<String> {
-    found
-        .map(|found| {
-            found
-                .problems
-                .iter()
-                .map(|(login, error)| match error.help_link() {
-                    Some(link) => format!("{login}: {error} ({})", link.url()),
-                    None => format!("{login}: {error}"),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// GitHub's message, and its link to fix it, where there's one.
+fn describe(error: &GithubError) -> String {
+    match error.help_link() {
+        Some(link) => format!("{error} ({})", link.url()),
+        None => error.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use github::GithubError;
 
     fn found(choice: AccountChoice, problems: Vec<(&str, GithubError)>) -> RepoAccount {
         RepoAccount {
@@ -145,29 +187,119 @@ mod tests {
         );
         assert_eq!(
             decide("org", "repo", Some(&found)),
-            AccountDecision::Refuse(
-                "Work, the account rozed uses for org, couldn't check org/repo: GitHub answered \
-                 500: Server Error"
-                    .into()
-            )
+            AccountDecision::Refuse(Refusal {
+                message: "Work, the account rozed uses for org, couldn't check org/repo: GitHub \
+                          answered 500: Server Error"
+                    .into(),
+                links: Vec::new(),
+            })
+        );
+    }
+
+    fn sso() -> GithubError {
+        GithubError::SsoRequired {
+            message: "Resource protected by organization SAML enforcement.".into(),
+            url: Some("https://github.com/orgs/org/sso?authorization_request=abc".into()),
+        }
+    }
+
+    fn oauth_restricted() -> GithubError {
+        GithubError::OAuthAppRestricted {
+            message: "Although you appear to have the correct authorization credentials, the \
+                      `org` organization has enabled OAuth App access restrictions."
+                .into(),
+            org: Some("org".into()),
+            documentation_url: None,
+        }
+    }
+
+    fn refusal(decision: AccountDecision) -> Refusal {
+        match decision {
+            AccountDecision::Refuse(refusal) => refusal,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_remembered_account_that_needs_single_sign_on_refuses_with_githubs_link() {
+        let found = found(
+            AccountChoice::Unavailable("work".into()),
+            vec![("work", sso())],
+        );
+        let refusal = refusal(decide("org", "repo", Some(&found)));
+        assert_eq!(
+            refusal.message,
+            "work, the account rozed uses for org, couldn't check org/repo: Resource protected by \
+             organization SAML enforcement. (https://github.com/orgs/org/sso?authorization_request=abc)"
+        );
+        let links: Vec<_> = refusal.links.iter().map(HelpLink::url).collect();
+        assert_eq!(
+            links,
+            ["https://github.com/orgs/org/sso?authorization_request=abc"]
         );
     }
 
     #[test]
-    fn problems_name_each_account_and_githubs_link() {
-        let sso = GithubError::SsoRequired {
-            message: "Resource protected by organization SAML enforcement.".into(),
-            url: Some("https://github.com/orgs/org/sso?authorization_request=abc".into()),
-        };
-        let found = found(AccountChoice::None, vec![("work", sso)]);
-        assert_eq!(
-            problems(Some(&found)),
-            vec![
-                "work: Resource protected by organization SAML enforcement. \
-                 (https://github.com/orgs/org/sso?authorization_request=abc)"
-                    .to_string()
-            ]
+    fn a_remembered_account_an_organization_restricts_refuses_with_the_approval_link() {
+        let found = found(
+            AccountChoice::Unavailable("work".into()),
+            vec![("work", oauth_restricted())],
         );
-        assert_eq!(problems(None), Vec::<String>::new());
+        let refusal = refusal(decide("org", "repo", Some(&found)));
+        assert!(
+            refusal
+                .message
+                .ends_with(&format!("({})", github::approval_url())),
+            "{}",
+            refusal.message
+        );
+        assert_eq!(
+            refusal.links,
+            oauth_restricted()
+                .help_link()
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(refusal.links[0].label(), "Request approval on GitHub");
+    }
+
+    #[test]
+    fn when_no_account_can_check_it_and_github_said_why_it_refuses_rather_than_open_anonymously() {
+        let rate_limited = GithubError::RateLimited {
+            message: "API rate limit exceeded".into(),
+            secondary: false,
+            reset: None,
+            retry_after: None,
+            resource: Some("core".into()),
+        };
+        let found = found(
+            AccountChoice::None,
+            vec![("home", rate_limited), ("work", sso())],
+        );
+        let refusal = refusal(decide("org", "repo", Some(&found)));
+        assert_eq!(
+            refusal.message,
+            "No account rozed is signed in to could check org/repo, so it didn't open without \
+             signing in. home: GitHub's rate limit was hit: API rate limit exceeded; work: \
+             Resource protected by organization SAML enforcement. \
+             (https://github.com/orgs/org/sso?authorization_request=abc)"
+        );
+        assert_eq!(
+            refusal.links,
+            sso().help_link().into_iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_token_github_refused_during_the_check_doesnt_stop_opening_without_signing_in() {
+        // GitHub refusing a token signs its account out, which then counts as not signed in.
+        let refused = GithubError::Unauthorized {
+            message: "Bad credentials".into(),
+        };
+        let found = found(AccountChoice::None, vec![("old", refused)]);
+        assert_eq!(
+            decide("sharkdp", "fd", Some(&found)),
+            AccountDecision::Open(Acting::Anonymous)
+        );
     }
 }

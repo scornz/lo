@@ -65,6 +65,20 @@ pub fn init(cx: &mut App) {
 
 /// The cache, once [`init`]'s check is done, or why rozed can't use git.
 pub fn cache(cx: &App) -> impl Future<Output = anyhow::Result<Arc<RepoCache>>> + use<> {
-    let ready = cx.global::<LocalCopies>().ready.clone();
-    async move { ready.await.map_err(|error| anyhow::anyhow!("{error}")) }
+    let ready = cx
+        .try_global::<LocalCopies>()
+        .map(|copies| copies.ready.clone());
+    async move {
+        let Some(ready) = ready else {
+            anyhow::bail!("rozed's local copies aren't set up");
+        };
+        ready.await.map_err(|error| anyhow::anyhow!("{error}"))
+    }
+}
+
+/// Makes `cache` the local copies, as [`init`] does once git is checked.
+#[cfg(test)]
+pub(crate) fn init_with(cache: RepoCache, cx: &mut App) {
+    let ready = Task::ready(Ok(Arc::new(cache))).shared();
+    cx.set_global(LocalCopies { ready });
 }

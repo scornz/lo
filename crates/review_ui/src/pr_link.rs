@@ -91,7 +91,7 @@ impl FromStr for PrLink {
             .all(|byte| byte.is_ascii_digit())
             .then(|| number.parse::<u64>().ok())
             .flatten()
-            .filter(|number| *number > 0)
+            .filter(|number| (1..=i64::MAX as u64).contains(number))
             .ok_or(PrLinkError::InvalidNumber)?;
 
         Ok(Self {
@@ -274,6 +274,8 @@ mod tests {
             "1.5",
             " 1",
             "99999999999999999999999",
+            // Above what GitHub's API, and rozed's database, can hold.
+            "9223372036854775808",
         ] {
             rejects(
                 &format!("https://github.com/sharkdp/fd/pull/{number}"),

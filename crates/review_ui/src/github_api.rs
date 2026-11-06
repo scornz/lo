@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Utc};
-use futures::AsyncReadExt as _;
 use github::{GithubClient, GithubError};
+use gpui::{App, Global};
+use http_client::HttpClient;
 use http_client::http::{HeaderMap, StatusCode};
-use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request};
 use serde::Deserialize;
 
 use crate::pr_link::PrLink;
@@ -24,6 +24,9 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
     pub head: Head,
     pub base: Base,
+    /// How many files it changes. GitHub lists no more than 3,000 of them.
+    #[serde(default)]
+    pub changed_files: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -73,9 +76,10 @@ pub async fn fetch_as(
     link: &PrLink,
 ) -> anyhow::Result<PullRequest> {
     let path = format!("/repos/{}/{}/pulls/{}", link.owner, link.repo, link.number);
-    match client.get::<serde_json::Value>(&path).await {
-        Ok(body) => parse_pull_request(&body.to_string())
-            .with_context(|| format!("reading GitHub's answer for {link}")),
+    match client.get::<PullRequest>(&path).await {
+        Ok(pull_request) => {
+            checked(pull_request).with_context(|| format!("reading GitHub's answer for {link}"))
+        }
         Err(GithubError::NotFound { .. }) => {
             bail!("GitHub has no pull request {link}, or {login} can't see it")
         }
@@ -83,33 +87,54 @@ pub async fn fetch_as(
     }
 }
 
-/// `GET /repos/{owner}/{repo}/pulls/{number}` without signing in. It works for public
-/// repositories only and counts against GitHub's 60 requests an hour per IP address.
-pub async fn fetch_pull_request(
+/// Whether rozed can sign in to GitHub, which it can't when it couldn't read its accounts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanSignIn {
+    Yes,
+    No,
+}
+
+/// The app's one client without an account. GitHub allows 60 requests an hour per IP address
+/// without a token, and this client keeps what GitHub last said about that limit for every tab.
+struct Anonymous {
     http: Arc<dyn HttpClient>,
+    client: GithubClient,
+}
+
+impl Global for Anonymous {}
+
+/// The app's client without an account, made anew only if the app's HTTP client changed.
+pub(crate) fn anonymous_client(cx: &mut App) -> GithubClient {
+    let http = cx.http_client();
+    if let Some(anonymous) = cx.try_global::<Anonymous>()
+        && std::ptr::addr_eq(Arc::as_ptr(&anonymous.http), Arc::as_ptr(&http))
+    {
+        return anonymous.client.clone();
+    }
+    let client = GithubClient::anonymous(http.clone());
+    cx.set_global(Anonymous {
+        http,
+        client: client.clone(),
+    });
+    client
+}
+
+/// `GET /repos/{owner}/{repo}/pulls/{number}` with `client`, the app's client without an account
+/// ([`anonymous_client`]). It works for public repositories only and counts against GitHub's 60
+/// requests an hour per IP address.
+pub async fn fetch_pull_request(
+    client: &GithubClient,
     link: &PrLink,
+    can_sign_in: CanSignIn,
 ) -> anyhow::Result<PullRequest> {
-    let url = format!(
-        "https://api.github.com/repos/{}/{}/pulls/{}",
-        link.owner, link.repo, link.number
-    );
-    let request = Request::get(&url)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        // A renamed repository answers with a redirect to its new name.
-        .follow_redirects(RedirectPolicy::FollowAll)
-        .body(AsyncBody::empty())?;
-    let mut response = http
-        .send(request)
+    let path = format!("/repos/{}/{}/pulls/{}", link.owner, link.repo, link.number);
+    // A renamed repository answers with a redirect to its new name, which the client follows.
+    let response = client
+        .get_answer(&path)
         .await
         .with_context(|| format!("asking GitHub for {link}"))?;
-    let mut body = String::new();
-    response
-        .body_mut()
-        .read_to_string(&mut body)
-        .await
-        .with_context(|| format!("reading GitHub's answer for {link}"))?;
-    check_status(response.status(), response.headers(), &body, link)?;
+    let body = String::from_utf8_lossy(&response.body);
+    check_status(response.status, &response.headers, &body, link, can_sign_in)?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
@@ -119,6 +144,7 @@ fn check_status(
     headers: &HeaderMap,
     body: &str,
     link: &PrLink,
+    can_sign_in: CanSignIn,
 ) -> anyhow::Result<()> {
     if status.is_success() {
         return Ok(());
@@ -127,16 +153,28 @@ fn check_status(
         .get("x-ratelimit-remaining")
         .is_some_and(|remaining| remaining == "0");
     if rate_limited && matches!(status.as_u16(), 403 | 429) {
-        bail!(
-            "GitHub's limit of 60 requests an hour without signing in is used up; sign in from \
-             Accounts… in the rozed menu, or try again later"
-        );
+        match can_sign_in {
+            CanSignIn::Yes => bail!(
+                "GitHub's limit of 60 requests an hour without signing in is used up; sign in \
+                 from Accounts… in the rozed menu, or try again later"
+            ),
+            CanSignIn::No => bail!(
+                "GitHub's limit of 60 requests an hour without signing in is used up; try again \
+                 later"
+            ),
+        }
     }
     if status == StatusCode::NOT_FOUND {
-        bail!(
-            "GitHub has no public pull request {link}, and no account rozed is signed in to can \
-             see it. Sign in from Accounts… in the rozed menu"
-        );
+        match can_sign_in {
+            CanSignIn::Yes => bail!(
+                "GitHub has no public pull request {link}, and no account rozed is signed in to \
+                 can see it. Sign in from Accounts… in the rozed menu"
+            ),
+            CanSignIn::No => bail!(
+                "GitHub has no public pull request {link}, and rozed couldn't read its accounts \
+                 to sign in"
+            ),
+        }
     }
     let message = serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -146,7 +184,11 @@ fn check_status(
 }
 
 fn parse_pull_request(body: &str) -> anyhow::Result<PullRequest> {
-    let pull_request: PullRequest = serde_json::from_str(body)?;
+    checked(serde_json::from_str(body)?)
+}
+
+/// `pull_request`, if its repository is on github.com and named `owner/name`.
+fn checked(pull_request: PullRequest) -> anyhow::Result<PullRequest> {
     let clone_url = &pull_request.base.repo.clone_url;
     anyhow::ensure!(
         clone_url.starts_with("https://github.com/"),
@@ -164,7 +206,7 @@ mod tests {
 
     use futures::future::BoxFuture;
     use http_client::http::HeaderValue;
-    use http_client::{Response, Url};
+    use http_client::{AsyncBody, RedirectPolicy, Request, Response, Url};
 
     /// GitHub's answer for sharkdp/fd#2212, trimmed to the fields rozed reads and a few around
     /// them.
@@ -241,7 +283,8 @@ mod tests {
     }
 
     fn fetch(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212()))
+        let client = GithubClient::anonymous(http);
+        futures::executor::block_on(fetch_pull_request(&client, &fd_2212(), CanSignIn::Yes))
     }
 
     fn fetch_signed_in(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
@@ -272,6 +315,7 @@ mod tests {
                         clone_url: "https://github.com/sharkdp/fd.git".into()
                     },
                 },
+                changed_files: None,
             }
         );
 
@@ -283,10 +327,11 @@ mod tests {
         assert_eq!(request.method(), "GET");
         assert_eq!(request.headers()["Accept"], "application/vnd.github+json");
         assert!(request.headers().get("Authorization").is_none());
-        assert_eq!(
+        // A renamed repository's redirect is followed.
+        assert!(matches!(
             request.extensions().get::<RedirectPolicy>(),
-            Some(&RedirectPolicy::FollowAll)
-        );
+            Some(RedirectPolicy::FollowLimit(_))
+        ));
     }
 
     #[test]
@@ -337,6 +382,30 @@ mod tests {
         assert!(
             error.to_string().contains("Sign in from Accounts…"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn without_an_accounts_database_it_doesnt_say_to_sign_in() {
+        let fetch = |http| {
+            let client = GithubClient::anonymous(http);
+            futures::executor::block_on(fetch_pull_request(&client, &fd_2212(), CanSignIn::No))
+        };
+        let error = fetch(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "GitHub has no public pull request sharkdp/fd#2212, and rozed couldn't read its \
+             accounts to sign in"
+        );
+        let rate_limited = Canned::with_headers(
+            403,
+            &[("x-ratelimit-remaining", "0")],
+            r#"{"message":"API rate limit exceeded"}"#,
+        );
+        let error = fetch(rate_limited).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "GitHub's limit of 60 requests an hour without signing in is used up; try again later"
         );
     }
 

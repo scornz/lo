@@ -4,7 +4,10 @@
 //! Each tab keeps its pull request's banners in a [`Banners`] entity and shows them under its
 //! header, whichever diff it shows.
 
-use gpui::{Context, IntoElement};
+use std::fmt;
+use std::rc::Rc;
+
+use gpui::{App, Context, IntoElement, Window};
 use ui::{Banner, Label, prelude::*};
 
 /// What a banner is about. A pull request shows at most one banner of each kind.
@@ -21,16 +24,59 @@ pub enum BannerKind {
     LocalCopyFailed,
     /// GitHub's diff couldn't be read, so nothing shows until the local copy is ready.
     GithubDiffFailed,
+    /// GitHub's diff lists only some of the pull request's files.
+    GithubDiffCut,
+    /// The pull request moved on while it loaded, so its two diffs show different heads.
+    MovedOn,
+    /// The header shows what rozed saved about the pull request, not what GitHub says now.
+    Saved,
     /// A large file couldn't be loaded on its key.
     LoadFileFailed,
 }
 
-/// One banner: its kind, how serious it is, and what it says.
+/// One banner: its kind, how serious it is, what it says, and a button, if it has one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BannerMessage {
     pub kind: BannerKind,
     pub severity: Severity,
     pub text: SharedString,
+    pub action: Option<BannerAction>,
+}
+
+/// What a banner's button does.
+pub type OnClick = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// A banner's button: what it says and what it does.
+#[derive(Clone)]
+pub struct BannerAction {
+    pub label: SharedString,
+    pub on_click: OnClick,
+}
+
+impl BannerAction {
+    pub fn new(
+        label: impl Into<SharedString>,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            on_click: Rc::new(on_click),
+        }
+    }
+}
+
+impl PartialEq for BannerAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label && Rc::ptr_eq(&self.on_click, &other.on_click)
+    }
+}
+
+impl fmt::Debug for BannerAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BannerAction")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A pull request's banners, in the order they were shown.
@@ -48,10 +94,23 @@ impl Banners {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
+        self.show_with(kind, severity, text, None, cx);
+    }
+
+    /// [`Self::show`], with a button that does `action`.
+    pub fn show_with(
+        &mut self,
+        kind: BannerKind,
+        severity: Severity,
+        text: impl Into<SharedString>,
+        action: Option<BannerAction>,
+        cx: &mut Context<Self>,
+    ) {
         let message = BannerMessage {
             kind,
             severity,
             text: text.into(),
+            action,
         };
         match self.messages.iter_mut().find(|shown| shown.kind == kind) {
             Some(shown) => *shown = message,
@@ -79,11 +138,18 @@ pub fn render(messages: &[BannerMessage]) -> Option<impl IntoElement> {
             .px_2()
             .py_1()
             .gap_1()
-            .children(messages.iter().map(|message| {
+            .children(messages.iter().enumerate().map(|(index, message)| {
                 Banner::new()
                     .severity(message.severity)
                     .wrap_content(true)
                     .child(Label::new(message.text.clone()).size(LabelSize::Small))
+                    .when_some(message.action.clone(), |banner, action| {
+                        banner.action_slot(
+                            Button::new(("banner-action", index), action.label.clone())
+                                .label_size(LabelSize::Small)
+                                .on_click(move |_, window, cx| (action.on_click)(window, cx)),
+                        )
+                    })
             }))
     })
 }
