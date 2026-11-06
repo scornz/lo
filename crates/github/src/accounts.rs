@@ -863,6 +863,45 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn accounts_added_in_the_same_second_keep_their_order_after_a_restart(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, store, db) = setup("same_second", no_http(), cx).await;
+        // Two accounts added in the same second, whose logins differ in case.
+        for login in ["B", "a"] {
+            db.save_account(Account {
+                host: HOST.to_string(),
+                login: login.into(),
+                user_id: 1,
+                name: None,
+                avatar_url: None,
+                scopes: vec!["repo".into()],
+                source: AccountSource::DeviceFlow,
+                added_at: 1,
+            })
+            .await
+            .unwrap();
+        }
+        let load = |cx: &mut TestAppContext| {
+            cx.update(|cx| Accounts::load(db.clone(), store.clone(), no_http(), cx))
+                .unwrap()
+        };
+        let logins = |accounts: &Entity<Accounts>, cx: &mut TestAppContext| {
+            accounts.read_with(cx, |accounts, _| {
+                let logins = accounts.accounts().iter().map(|a| a.login.clone());
+                logins.collect::<Vec<_>>()
+            })
+        };
+
+        // Signing in to one again sorts the accounts in memory; a restart reads the database's
+        // order. Both ignore case.
+        let accounts = load(cx);
+        add(&accounts, "B", cx).await;
+        assert_eq!(logins(&accounts, cx), ["a", "B"]);
+        assert_eq!(logins(&load(cx), cx), ["a", "B"]);
+    }
+
+    #[gpui::test]
     async fn an_account_whose_token_is_gone_can_still_be_removed(cx: &mut TestAppContext) {
         let (accounts, store, db) = setup("removing_without_token", no_http(), cx).await;
         add(&accounts, "a", cx).await;
