@@ -70,7 +70,8 @@ impl Repo {
     ///
     /// When the bases differ, as after a rebase, the old revision's changes are replayed onto
     /// the new base in the clone (`git merge-tree --write-tree --merge-base=<old base> <new
-    /// base> <old head>`), and the tree that makes is compared with the new head. Changes that
+    /// base> <old head>`, following folders the base renamed), and the tree that makes is
+    /// compared with the new head. Changes that
     /// came with the new base then cancel out. When the bases match, it compares the heads. When
     /// the replay conflicts, it compares the heads too, and says which paths conflicted
     /// ([`Replay::Conflicted`]); any other failure is an error. Whether the heads match doesn't
@@ -146,6 +147,11 @@ impl Repo {
     /// Replays `old`'s changes onto `onto`, writing the tree but no ref.
     fn replay(&self, old: &Revision, onto: &Oid) -> Result<Replayed, Error> {
         let command = self.git().args([
+            // A file the old revision added to a folder the base renamed goes where a rebase puts
+            // it, into the renamed folder, rather than conflicting. If the author put it somewhere
+            // else, the comparison shows that as a rename.
+            "-c",
+            "merge.directoryRenames=true",
             "merge-tree",
             "--write-tree",
             "-z",

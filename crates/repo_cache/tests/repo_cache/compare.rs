@@ -685,6 +685,57 @@ fn renames_across_a_rebase_show_only_what_the_author_renamed() {
     );
 }
 
+/// The base renames a folder the old revision added a file to, and the rebased revision has the
+/// file in the renamed folder, where a rebase puts it.
+#[test]
+fn a_folder_the_base_renamed_takes_the_authors_new_file_along() {
+    let f = fixture();
+    let remote = &f.remote;
+    for name in ["x", "y", "z"] {
+        remote.write(&format!("lib/{name}.rs"), source(name, &[]));
+    }
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("feature")
+        .write("lib/new.rs", source("new", &[]));
+    remote.commit("add lib/new.rs");
+    let r1 = f.push(1, "trunk");
+    remote.switch("trunk");
+    for name in ["x", "y", "z"] {
+        remote
+            .remove(&format!("lib/{name}.rs"))
+            .write(&format!("src/{name}.rs"), source(name, &[]));
+    }
+    let m2 = remote.commit("move lib to src");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("feature-2")
+        .write("src/new.rs", source("new", &[]));
+    remote.commit("add src/new.rs");
+    let r2 = f.push(1, "trunk");
+    assert_eq!(
+        f.plain_paths(&r1, &r2),
+        ["src/new.rs", "src/x.rs", "src/y.rs", "src/z.rs"]
+    );
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision { base: m2, head: r2 },
+        )
+        .unwrap();
+
+    assert_eq!(comparison.replay, Replay::Clean);
+    assert_eq!(comparison.files, []);
+    assert_eq!(f.read(&comparison.old, "lib/new.rs"), None);
+    assert_eq!(
+        f.read(&comparison.old, "src/new.rs"),
+        Some(source("new", &[]))
+    );
+}
+
 #[test]
 fn a_replayed_tree_is_pinned_only_while_its_comparison_is_kept() {
     let Rebased { f, m1, m2, r1, r2 } = rebased();
