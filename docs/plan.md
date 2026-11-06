@@ -193,3 +193,166 @@ docs this PR commits). **PR title:** `chore: bootstrap the repository`.
 3. Wait for CI. Fix failures with new commits (never force-push).
 
 **Done when:** every check is green and the PR description says how each piece was verified.
+
+---
+
+## Milestone 2: Spike
+
+Design §2 "First milestone". Research: [`research/zed-crates.md`](research/zed-crates.md) (Zed's
+startup, split diff, `paths`, Cargo, crate list, traps — read it before starting),
+[`research/github-api.md`](research/github-api.md) and
+[`research/github-checks.md`](research/github-checks.md) (attachments and stacks, already
+answered: rozed's OAuth token uploads attachments; stacks need no opt-in).
+
+Two PRs, stacked:
+
+- **2a** `build: build rozed on Zed's crates` — branch `build/zed-workspace`, base
+  `chore/bootstrap`. Tasks 2.1–2.5.
+- **2b** `feat: open a pull request in Zed's side-by-side diff` — branch `feat/spike`, base
+  `build/zed-workspace`. Tasks 2.6–2.10.
+
+### Task 2.1: Zed patch branch
+
+**Depends on:** None
+
+- In a worktree of `~/src/zed` (don't move `~/src/zed`'s own checkout), create branch
+  `rozed/v1.27.0` from tag `v1.27.0`.
+- One commit: `paths: use rozed's folders` setting `APP_NAME` to `"rozed"` in
+  `crates/paths/src/paths.rs` (research §4).
+- Push the branch to `scornz/zed`. A later Zed bump makes a new `rozed/v<version>` branch, so old
+  submodule pointers stay reachable.
+
+**Done when:** `git ls-remote https://github.com/scornz/zed refs/heads/rozed/v1.27.0` shows the
+patch commit, whose parent is `v1.27.0`.
+
+### Task 2.2: The submodule
+
+**Depends on:** 2.1
+
+- `third_party/zed` as a submodule of `https://github.com/scornz/zed.git`, branch
+  `rozed/v1.27.0`, at the patch commit. Clone it without downloading Zed's whole history (blobless
+  or shallow, e.g. clone `--filter=blob:none` into place before `git submodule add`, or
+  `git submodule update --init --depth 1`).
+- `Cargo.toml`: `exclude = ["third_party/zed"]` (research §5; keep `third_party` excluded).
+- CLAUDE.md "Zed submodule": how to initialise it quickly in a new clone or worktree, the patch
+  list, and how to bump Zed (new `rozed/v<version>` branch, rebase the patches, run the sync, fix
+  breakages).
+- `.gitignore`: add `.build/` (a SwiftPM cache some tool drops in the clone).
+
+### Task 2.3: Cargo settings copied from Zed, kept in sync
+
+**Depends on:** 2.2
+
+- A `crates/xtask` binary (`cargo xtask sync-zed` via an alias in `.cargo/config.toml`, using
+  `toml_edit`) that copies from `third_party/zed` into rozed's root: the `[patch.*]` sections (paths
+  rewritten to `third_party/zed/...`), the `[profile.*]` sections, and the parts of Zed's
+  `.cargo/config.toml` that apply on macOS (rustflags `-C symbol-mangling-version=v0` and
+  `--cfg tokio_unstable`, `MACOSX_DEPLOYMENT_TARGET = "12.0"`). Copied content sits between clear
+  "generated from Zed; run `cargo xtask sync-zed`" markers. `--check` exits non-zero, naming what
+  differs, when the copies are stale.
+- `cargo xtask sync-zed --seed-lock` copies `third_party/zed/Cargo.lock` to the root, for the first
+  build and each Zed bump (research §5 "Cargo.lock").
+- Unit tests for the copy (feed it small TOML fixtures).
+- CI: a step in the `rust` job runs `cargo xtask sync-zed --check`.
+
+### Task 2.4: A window built from Zed's crates
+
+**Depends on:** 2.3
+
+- `crates/rozed` depends by path on the Zed crates the spike needs (research §6), with features
+  `gpui_platform/font-kit`, `languages/load-grammars` and `util/debug-embed` (research §5 "Required
+  features"). A `build.rs` as in research §5 "Binary build.rs". Don't depend on `git_ui`,
+  `git_ui_core` or `extension_host`.
+- Startup modelled on `crates/component_preview/examples/component_preview.rs` (research §1
+  "Minimal init sketch"): `Client::new` without `client::init` or authentication, settings with the
+  forced overlay (telemetry and the rest off, research §1 "Forced settings overlay"), theme, assets,
+  default keymap loaded with partial failure allowed.
+- **The HTTP client refuses Zed's hosts.** Wrap the one shared HTTP client so any request to
+  `zed.dev` or a subdomain fails with an error and is logged at `warn`. Every request's host is
+  logged at `debug`, for the network check in 2.9. Unit-test the host matching.
+- `cargo run -p rozed` opens one window showing a read-only Zed `Editor` with some Rust text,
+  highlighted, in Zed's default theme.
+- Check on screen and take a screenshot. Check that `~/.config/rozed`,
+  `~/Library/Application Support/rozed` and `~/Library/Logs/rozed` are used, and that nothing
+  under Zed's own folders changed.
+
+### Task 2.5: CI builds it
+
+**Depends on:** 2.4
+
+- The `rust` job checks out the submodule and passes fmt, `sync-zed --check`, clippy and test on
+  `macos-latest`. If the hosted runner runs out of disk or time, fix it (e.g. no debuginfo and no
+  incremental in CI, freeing runner disk, caching) and record what was needed in `docs/spike.md`.
+- Record clean and cached CI times.
+- Open PR 2a. **Done when:** checks are green and the screenshot shows the window.
+
+### Task 2.6: PR links
+
+**Depends on:** 2a
+
+- `crates/rozed/src/pr_link.rs`: parse `https://github.com/<owner>/<repo>/pull/<n>` (with or without
+  scheme, trailing slash, `/files`, `/commits`, `/checks`) into `{ owner, repo, number }`. TDD: tests
+  first, including rejects (issues links, other hosts, non-numeric numbers).
+
+### Task 2.7: A local copy, spike version
+
+**Depends on:** 2a
+
+Milestone 4 replaces this with the `repo_cache` crate; keep it small and tested.
+
+- Bare partial clone (`--filter=blob:none`) at `<cache dir>/repos/github.com/<owner>/<repo>.git`.
+- Fetch `refs/pull/<n>/head` and the base branch into rozed's own refs
+  (`refs/rozed/pull/<n>/head`, `refs/rozed/base/<branch>`). The base branch name comes from
+  unauthenticated `GET /repos/{owner}/{repo}/pulls/{n}` through the app's HTTP client (public
+  repos only, for now).
+- Base commit = merge-base of head and base. Changed files from
+  `git diff --name-status -M <base> <head>`.
+- A detached checkout of the head at `<cache dir>/checkouts/github.com/<owner>/<repo>/pull-<n>` (a
+  `git worktree` of the bare clone).
+- Tests on real temp repos: a bare "remote" with a `refs/pull/1/head`, a rename, an added and a
+  deleted file.
+
+### Task 2.8: The PR diff with a language server
+
+**Depends on:** 2.6, 2.7
+
+- `cargo run -p rozed -- <pr-url>`: prepares the local copy, creates a local `Project` on the
+  checkout, and shows every changed file in one `SplittableEditor`, side by side. Right side: project
+  buffers opened from the checkout. Left side: base text from `git show <base>:<path>`. Follow
+  `git_ui_core/src/file_diff_view.rs` (research §2 "Sketch"), including its late-language-load fix.
+  Added files have an empty left side; deleted and binary files must not crash (a placeholder is
+  fine).
+- rust-analyzer starts on the right side (it's downloaded from GitHub releases on first run).
+- **Trust:** there's no trust gate yet (milestone 10). Only run the spike on PRs you choose. Note
+  research §9's trust risks in `docs/spike.md`.
+
+**Done when:** `sharkdp/fd#2212` opens side by side, and hovering a symbol on the right side shows
+rust-analyzer's type hover. Screenshots of both.
+
+### Task 2.9: Network check
+
+**Depends on:** 2.8
+
+- Run the app on the PR from a clean state (rust-analyzer not yet downloaded, empty rozed folders)
+  for at least two minutes, scrolling and hovering. Collect every HTTP host from the debug log, and
+  sample `lsof -i -n -P -a -p <pid>` every second for the rozed process's sockets.
+- **Done when:** no Zed-owned host appears, every host is GitHub or a language-server download
+  source, and the refused-host warning never fired (or, if it fired, the code path is found and
+  disabled).
+
+### Task 2.10: `docs/spike.md` and PR 2b
+
+**Depends on:** 2.9
+
+`docs/spike.md` records:
+
+- The Zed crates compiled in, generated from `cargo metadata`, grouped, with the unwanted ones
+  (AI, collab, telemetry, terminal, debugger, extensions, auto-update) flagged and why they come
+  along.
+- The network check: method, hosts seen, verdict.
+- GitHub findings: attachments and stacks (summarised from `research/github-checks.md`).
+- Numbers: clean and incremental local build times, `target/` size, binary size, launch to first
+  diff on `fd#2212`, CI times.
+- Risks and follow-ups for later milestones.
+
+**Done when:** PR 2b's checks are green and its description links the screenshots and the numbers.
