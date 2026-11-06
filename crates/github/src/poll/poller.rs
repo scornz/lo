@@ -344,6 +344,8 @@ pub struct Poller {
     cooldown: Option<Cooldown>,
     secondary_attempts: u32,
     offline: Option<OfflineState>,
+    /// The error each target's polls keep failing with, so it's logged once.
+    failures: BTreeMap<Target, String>,
     signed_out: bool,
     status: PollStatus,
     wake: mpsc::UnboundedSender<()>,
@@ -395,6 +397,7 @@ impl Poller {
             cooldown: None,
             secondary_attempts: 0,
             offline: None,
+            failures: BTreeMap::new(),
             signed_out: false,
             status: PollStatus::default(),
             wake,
@@ -470,12 +473,14 @@ impl Poller {
         if self.pulls.remove(pull).is_none() {
             return;
         }
+        self.failures.remove(&Target::Pull(pull.clone()));
         if self.open.as_ref() == Some(pull) {
             self.open = None;
             self.opened_at = None;
         }
         if !self.pulls.keys().any(|other| other.repo == pull.repo) {
             self.repos.remove(&pull.repo);
+            self.failures.remove(&Target::Repo(pull.repo.clone()));
         }
         self.wake();
         cx.notify();
@@ -796,6 +801,7 @@ impl Poller {
         match result {
             Ok(outcome) => {
                 self.secondary_attempts = 0;
+                self.failures.remove(&target);
                 self.schedule(&target, |schedule| schedule.polled(now, ticket));
                 writes = self.apply(outcome, &target, wall, cx);
             }
@@ -821,12 +827,21 @@ impl Poller {
                 self.signed_out = true;
             }
             Err(error) => {
-                log::info!("polling {target:?}: {error:#}");
-                self.schedule(&target, |schedule| schedule.polled(now, ticket));
-                cx.emit(PollEvent::Failed {
-                    target,
-                    error: Arc::new(error),
-                });
+                // Logged once while it keeps failing the same way.
+                let message = format!("{error:#}");
+                if self.failures.get(&target) == Some(&message) {
+                    log::debug!("polling {target:?}: {message}");
+                } else {
+                    log::info!("polling {target:?}: {message}");
+                    self.failures.insert(target.clone(), message);
+                }
+                if self.is_watched(&target) {
+                    self.schedule(&target, |schedule| schedule.polled(now, ticket));
+                    cx.emit(PollEvent::Failed {
+                        target,
+                        error: Arc::new(error),
+                    });
+                }
             }
         }
         self.refresh_status(cx);
@@ -885,6 +900,13 @@ impl Poller {
                 }
             }
         });
+    }
+
+    fn is_watched(&self, target: &Target) -> bool {
+        match target {
+            Target::Pull(pull) => self.pulls.contains_key(pull),
+            Target::Repo(repo) => self.repos.contains_key(repo),
+        }
     }
 
     /// Updates a pull request's or a repository's schedule, if it's still watched.

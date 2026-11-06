@@ -1737,6 +1737,30 @@ async fn a_failed_poll_is_reported_and_tried_again_at_its_interval(cx: &mut Test
 }
 
 #[gpui::test]
+async fn a_poll_that_fails_after_its_pr_is_unwatched_isnt_reported(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut missing = answer(&r[3], 404, &[], r#"{"message":"Not Found"}"#);
+    missing.request.url = "https://api.github.com/repos/rozed-dev/playground/pulls/99".into();
+    let mut t = Polling::with(
+        "failed_unwatched",
+        vec![missing],
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| {
+        poller.watch(pr(99), cx);
+        // Its repository isn't polled in this test.
+        poller.set_open(None, cx);
+    });
+    assert_eq!(t.requests(), log(&[(0, "GET /pulls/99")]));
+    t.update(|poller, cx| poller.unwatch(&pr(99), cx));
+    t.run_until(5);
+    assert_eq!(t.events(), Vec::<String>::new());
+}
+
+#[gpui::test]
 async fn unwatching_stops_polling(cx: &mut TestAppContext) {
     let mut t = Polling::new("unwatching", recorded(), cx).await;
     t.update(|poller, cx| poller.watch(pr(2), cx));
