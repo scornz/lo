@@ -8043,6 +8043,7 @@ name = "rozed"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "askpass",
  "assets",
  "client",
  "clock",
@@ -8067,6 +8068,7 @@ dependencies = [
  "serde_json",
  "session",
  "settings",
+ "tempfile",
  "theme",
  "theme_settings",
  "util",

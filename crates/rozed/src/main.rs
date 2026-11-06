@@ -39,7 +39,8 @@ use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
 
 fn main() {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         Some("--version") => {
             println!("rozed {}", version());
             return;
@@ -49,6 +50,26 @@ fn main() {
         Some("--printenv") => {
             util::shell_env::print_env();
             return;
+        }
+        // Zed's askpass crate makes this executable the program git and ssh run to ask for a
+        // password, through a script that runs `rozed --askpass=<socket>` with the prompt on
+        // stdin. rozed passes the prompt to the running rozed over the socket and prints the
+        // answer, as Zed does.
+        Some(flag) if flag == "--askpass" || flag.starts_with("--askpass=") => {
+            let socket = flag
+                .strip_prefix("--askpass=")
+                .or(args.get(1).map(String::as_str))
+                .filter(|socket| !socket.is_empty());
+            let Some(socket) = socket else {
+                eprintln!("rozed: --askpass needs a socket: --askpass=<socket>");
+                std::process::exit(2);
+            };
+            askpass::main(socket);
+            return;
+        }
+        Some(flag) if flag.starts_with("--") => {
+            eprintln!("rozed: unknown option `{flag}`");
+            std::process::exit(2);
         }
         _ => {}
     }
