@@ -26,7 +26,7 @@ use editor::{
     Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
     SplittableEditor, multibuffer_context_lines,
 };
-use futures::StreamExt as _;
+use futures::FutureExt as _;
 use futures::channel::mpsc;
 use git::status::{FileStatus, StatusCode, TrackedStatus};
 use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
@@ -123,15 +123,21 @@ async fn copy_with_retries(
             );
             async move { copy(&cache, &link, &pull_request, token, progress) }
         });
-        // The channel closes when the copy finishes, one way or the other.
-        while let Some(mut update) = updates.next().await {
-            // Of a burst of updates, only the latest is worth showing.
-            while let Ok(next) = updates.try_recv() {
-                update = next;
+        // git reports progress from a thread of its own, so the updates are read on a timer:
+        // awaiting them would wake this task from that thread.
+        let mut copying = copying.fuse();
+        let copied = loop {
+            let mut tick = cx.background_executor().timer(PROGRESS_EVERY).fuse();
+            futures::select_biased! {
+                copied = copying => break copied,
+                _ = tick => {
+                    if let Some(update) = latest(&mut updates) {
+                        tab.update(cx, |tab, cx| tab.copy_progress(&update, cx))?;
+                    }
+                }
             }
-            tab.update(cx, |tab, cx| tab.copy_progress(&update, cx))?;
-        }
-        let error = match copying.await {
+        };
+        let error = match copied {
             Ok(local) => {
                 log::info!(
                     "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
@@ -161,6 +167,19 @@ async fn copy_with_retries(
         tab.update(cx, |tab, cx| tab.copy_retried(Some((&why, None)), cx))?;
         wait = (wait * 2).min(LAST_RETRY);
     }
+}
+
+/// How often the tab shows how far a copy has got.
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+
+/// The latest of the updates `updates` has waiting, if any: of a burst, only the latest is worth
+/// showing.
+fn latest(updates: &mut mpsc::UnboundedReceiver<CopyProgress>) -> Option<CopyProgress> {
+    let mut latest = None;
+    while let Ok(update) = updates.try_recv() {
+        latest = Some(update);
+    }
+    latest
 }
 
 /// Whether a failed copy may work if tried again: a fetch that failed on the network or for a
