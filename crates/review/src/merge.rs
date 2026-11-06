@@ -89,11 +89,12 @@ mod reviews;
 mod ship;
 mod status;
 
+pub use crate::UnknownValue;
 pub use action::{MergeAction, NotPossible, merge_action};
 pub use blockers::{Blocker, blockers, may_not_see_every_rule};
 pub use github::{
     CheckConclusion, CheckStatus, MergeMethod, MergeStateStatus, MergeableState, PullRequestState,
-    ReviewDecision, ReviewState, StatusState, UnknownValue,
+    ReviewDecision, ReviewState, StatusState,
 };
 pub use reviews::MissingApprovals;
 pub use ship::{
