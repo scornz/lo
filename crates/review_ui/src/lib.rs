@@ -8,4 +8,5 @@ pub mod local_copies;
 pub mod local_project;
 pub mod pr_diff;
 pub mod pr_link;
+pub mod tabs;
 pub mod trust;
