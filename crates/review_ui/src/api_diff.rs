@@ -244,10 +244,25 @@ pub(crate) fn check_hunks(
     Ok(())
 }
 
+/// The most rows GitHub's diff lays a file out over: a small change far down a long file would
+/// otherwise fill both sides with that many rows. The local copy doesn't load files over 1 MiB,
+/// which few files this long are under.
+pub(crate) const MAX_ROWS: u32 = 50_000;
+
 /// Lays `patch`'s hunks out at their rows. `added` says the pull request adds the file, so it has
-/// no base. Fails, saying why, when the hunks can't be laid out so: when they don't line up, or a
-/// line holds a carriage return, which the buffer would split it at.
+/// no base. Fails, saying why, when the hunks can't be laid out so: when they don't line up, reach
+/// past [`MAX_ROWS`], or a line holds a carriage return, which the buffer would split it at.
 pub(crate) fn sides(patch: &Patch, added: bool) -> Result<Sides, String> {
+    if let Some(last) = patch.hunks.last() {
+        let reach = last.old.end.max(last.new.end);
+        if reach > MAX_ROWS {
+            return Err(format!(
+                "its hunks reach line {}, past the {} lines GitHub's diff lays out",
+                thousands(reach),
+                thousands(MAX_ROWS)
+            ));
+        }
+    }
     let mut old = String::new();
     let mut new = String::new();
     let (mut old_rows, mut new_rows) = (0, 0);
@@ -320,6 +335,19 @@ fn filler(index: u32) -> String {
     format!("\u{E000}{index}")
 }
 
+/// `n` with a comma between each group of three digits.
+pub(crate) fn thousands(n: impl Into<u64>) -> String {
+    let digits = n.into().to_string();
+    let mut text = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
+}
+
 fn push_line(text: &mut String, rows: &mut u32, line: &str) {
     text.push_str(line);
     text.push('\n');
@@ -382,10 +410,13 @@ pub(crate) fn plan(file: &PullFile) -> FilePlan {
             deleted,
             format!("rozed couldn't read GitHub's diff of this file ({error})"),
         ),
-        // GitHub gives no patch for a rename or a change of mode alone.
-        _ if file.changes == 0 && file.status == FileStatus::Renamed => {
-            FilePlan::placeholder("(renamed without changes)", deleted, false)
-        }
+        // GitHub gives no patch for a rename alone, nor for a binary file renamed and changed.
+        _ if file.changes == 0 && file.status == FileStatus::Renamed => FilePlan::placeholder(
+            "(Renamed. GitHub shows no diff of its contents, which are unchanged or binary. The \
+             local copy's diff shows which once it's ready.)",
+            deleted,
+            false,
+        ),
         _ if file.changes == 0 => left_out(
             deleted,
             "GitHub shows no diff of this file: it's binary, or no lines changed".to_string(),
@@ -440,7 +471,9 @@ pub(crate) fn file_entry(file: &PullFile) -> FileEntry {
             previous_path: file.previous_filename.clone().filter(|_| renamed),
             additions: file.additions,
             deletions: file.deletions,
-            binary: false,
+            // Without a patch or a changed line, GitHub doesn't say how many lines changed: a
+            // binary file, or a rename or mode change alone.
+            binary: file.patch.is_none() && file.changes == 0,
             linguist_generated: None,
         },
         change: change(file.status),
@@ -811,12 +844,40 @@ mod tests {
         renamed.previous_filename = Some("src/old.rs".into());
         (renamed.additions, renamed.deletions, renamed.changes) = (0, 0, 0);
         let plan = plan(&renamed);
-        assert_eq!(placeholder(&plan), "(renamed without changes)");
+        // GitHub says the same of a binary file renamed and changed, so it doesn't say "without
+        // changes".
+        assert_eq!(
+            placeholder(&plan),
+            "(Renamed. GitHub shows no diff of its contents, which are unchanged or binary. The \
+             local copy's diff shows which once it's ready.)"
+        );
         assert_eq!(plan.warning, None);
         assert_eq!(plan.badge.as_deref(), Some("renamed from src/old.rs"));
 
         let entry = file_entry(&renamed);
         assert_eq!(entry.change, FileChange::Renamed);
         assert_eq!(entry.file.previous_path.as_deref(), Some("src/old.rs"));
+        // Its line counts aren't known, rather than none.
+        assert!(entry.file.binary);
+        assert!(
+            !file_entry(&file(FileStatus::Modified, Some("@@ -1 +1 @@\n-a\n+b")))
+                .file
+                .binary
+        );
+    }
+
+    #[test]
+    fn hunks_far_down_a_long_file_show_as_githubs_patch() {
+        // Laying the hunk out at its row would fill 60,000 rows on each side.
+        let patch = "@@ -60000 +60000 @@\n-a\n+b";
+        let error = super::sides(&parse_patch(patch).unwrap(), false).unwrap_err();
+        assert!(error.contains("line 60,000"), "{error}");
+        let plan = plan_of(FileStatus::Modified, Some(patch));
+        assert_eq!(placeholder(&plan), patch);
+        assert_eq!(plan.warning.unwrap().label, GITHUBS_PATCH);
+
+        // Up to the limit, it's laid out.
+        let patch = format!("@@ -{MAX_ROWS} +{MAX_ROWS} @@\n-a\n+b");
+        assert!(super::sides(&parse_patch(&patch).unwrap(), false).is_ok());
     }
 }

@@ -30,7 +30,7 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 use workspace::{ItemNavHistory, Workspace};
 
 use crate::account::{self, AccountDecision, Acting, Refusal};
-use crate::api_diff::{self, FilesReader, GithubDiff};
+use crate::api_diff::{self, FilesReader, GithubDiff, thousands};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
@@ -1499,10 +1499,10 @@ fn cut_text(listed: usize, changed: Option<u32>, cut_short: Option<CutShort>) ->
     let of = match changed {
         Some(changed) => format!(
             "{} of this pull request's {} files",
-            thousands(listed),
-            thousands(changed)
+            thousands(listed as u64),
+            thousands(changed as u64)
         ),
-        None => format!("{} of this pull request's files", thousands(listed)),
+        None => format!("{} of this pull request's files", thousands(listed as u64)),
     };
     let text = match cut_short {
         Some(CutShort::Pages) => format!(
@@ -1523,19 +1523,6 @@ fn cut_text(listed: usize, changed: Option<u32>, cut_short: Option<CutShort>) ->
 /// A commit ID's first seven characters, as GitHub shows it.
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
-}
-
-/// `n` with a comma between each group of three digits.
-fn thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let mut text = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            text.push(',');
-        }
-        text.push(digit);
-    }
-    text
 }
 
 /// GitHub's viewed mark as rozed's review model has it.
