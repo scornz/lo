@@ -15,9 +15,9 @@ use github::queries::{FileViewedState, PullRequestData};
 use github::viewed::ViewedRecords;
 use github::{GithubClient, GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncApp, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle,
-    WeakEntity, Window, actions, uniform_list,
+    AnyElement, App, AsyncApp, AsyncWindowContext, Context, ElementId, Entity, EntityId,
+    EventEmitter, FocusHandle, Focusable, KeyBinding, Render, SharedString, Subscription, Task,
+    UniformListScrollHandle, WeakEntity, Window, actions, uniform_list,
 };
 use language::{Capability, Point};
 use project::WorktreeId;
@@ -572,6 +572,9 @@ impl PrTab {
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
         self.node_id = Some(details.id.clone());
+        // Details from before a write finished, such as the ones a tab switch hands back, don't
+        // undo it.
+        let viewed = self.marks.without_stale(viewed, fetched_at);
         self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
         let listed_changed = self.marks.set_listed(listed_paths(details));
         let marks_changed = self.marks.set_github(viewed) || listed_changed;
@@ -1035,6 +1038,28 @@ impl PrTab {
             );
             return;
         };
+        // Every write would fail; marking ahead of GitHub would move past files whose marks then
+        // go back.
+        if self.poll.status.offline.is_some() {
+            self.toast(
+                format!(
+                    "rozed can't reach GitHub, so it can't mark {path} viewed until it's back."
+                ),
+                cx,
+            );
+            return;
+        }
+        if self.poll.status.signed_out {
+            let login = poller.read(cx).login().to_string();
+            self.toast(
+                format!(
+                    "{login} is signed out, so rozed can't mark {path} viewed. Sign in again \
+                     from Accounts… in the rozed menu."
+                ),
+                cx,
+            );
+            return;
+        }
         let Some(node_id) = self.node_id.clone() else {
             self.toast(
                 format!(
@@ -1046,7 +1071,8 @@ impl PrTab {
             return;
         };
         let Some(github_path) = self.github_path(&path) else {
-            self.toast(
+            self.file_toast(
+                &path,
                 format!(
                     "GitHub doesn't list {path} in this pull request, so rozed can't mark it \
                      viewed. GitHub and the local copy see this file's change differently."
@@ -1106,6 +1132,7 @@ impl PrTab {
             login: poller.read(cx).login().to_string(),
             pull: pull.clone(),
             workspace: self.workspace.clone(),
+            toast: toast_id(cx.entity_id(), Some(&path)),
         };
         let write = poller.update(cx, |poller, cx| {
             poller.write(
@@ -1136,7 +1163,8 @@ impl PrTab {
     /// A toggle's write finished: the file shows the new mark, or GitHub's again if the write
     /// failed, and on success the tab knows where this Mac records the file was viewed.
     fn viewed_written(&mut self, written: &ViewedWrite, succeeded: bool, cx: &mut Context<Self>) {
-        self.marks.finish(&written.toggle, succeeded);
+        self.marks
+            .finish(&written.toggle, succeeded, SystemTime::now());
         self.files.set_viewed(&self.marks.shown());
         if succeeded {
             let path = written.toggle.path.clone();
@@ -1153,14 +1181,16 @@ impl PrTab {
         cx.notify();
     }
 
+    /// Shows a toast about the tab, which replaces the tab's last one.
     fn toast(&self, message: String, cx: &mut Context<Self>) {
-        show_toast(
-            &self.workspace,
-            NotificationId::unique::<ViewedMarkToast>(),
-            message,
-            None,
-            cx,
-        );
+        let id = toast_id(cx.entity_id(), None);
+        show_toast(&self.workspace, id, message, None, cx);
+    }
+
+    /// Shows a toast about `path`, which replaces only the last one about it.
+    fn file_toast(&self, path: &str, message: String, cx: &mut Context<Self>) {
+        let id = toast_id(cx.entity_id(), Some(path));
+        show_toast(&self.workspace, id, message, None, cx);
     }
 
     /// Says `e` didn't mark `path` because GitHub has a newer push, and offers to load it.
@@ -1174,7 +1204,7 @@ impl PrTab {
         };
         show_toast(
             &self.workspace,
-            NotificationId::unique::<ViewedMarkToast>(),
+            toast_id(cx.entity_id(), None),
             format!(
                 "There's a newer push to this pull request than the one on screen, so rozed \
                  didn't mark {path} viewed: GitHub would mark it as of that push. Load it to mark \
@@ -1521,6 +1551,16 @@ impl PrTab {
 /// The toast that says why a viewed mark couldn't be set or cleared.
 struct ViewedMarkToast;
 
+/// The ID of a viewed-mark toast from the tab `tab`, about the file at `path` or about the tab.
+/// Each file and each tab has its own, so one toast doesn't replace another's.
+fn toast_id(tab: EntityId, path: Option<&str>) -> NotificationId {
+    let id = match path {
+        Some(path) => format!("{}:{path}", tab.as_u64()),
+        None => tab.as_u64().to_string(),
+    };
+    NotificationId::composite::<ViewedMarkToast>(ElementId::Name(id.into()))
+}
+
 /// A toggle's write to GitHub, with what's needed once it finishes, whether or not its tab is
 /// still open.
 struct ViewedWrite {
@@ -1533,6 +1573,8 @@ struct ViewedWrite {
     login: String,
     pull: PullRef,
     workspace: WeakEntity<Workspace>,
+    /// The toast that says why the write failed, the file's own.
+    toast: NotificationId,
 }
 
 /// How a successful write changes this Mac's record of where a file was viewed.
@@ -1557,19 +1599,12 @@ impl ViewedWrite {
             login,
             pull,
             workspace,
+            toast,
         } = self;
         if let Err(error) = result {
             log::warn!("{pull}: {}: {error}", toggle.path);
             let message = write_failed(&toggle, &login, &error);
-            cx.update(|cx| {
-                show_toast(
-                    &workspace,
-                    NotificationId::unique::<ViewedMarkToast>(),
-                    message,
-                    None,
-                    cx,
-                )
-            });
+            cx.update(|cx| show_toast(&workspace, toast, message, None, cx));
             return;
         }
         let Some(records) = records else {
@@ -2771,7 +2806,8 @@ mod tests {
     }
 
     /// GitHub as these tests need it: the viewed-mark mutations answer as each test says, and every
-    /// other request fails as if offline, so the poller's polls change nothing.
+    /// other request fails as if GitHub were down, so the poller's polls change nothing and it
+    /// doesn't think it's offline.
     #[derive(Default)]
     struct WriteGithub {
         answers: std::sync::Mutex<std::collections::VecDeque<WriteAnswer>>,
@@ -2814,7 +2850,11 @@ mod tests {
                 .unwrap_or_default()
                 .to_string();
             if !operation.ends_with("FileAsViewed") {
-                return Box::pin(async { Err(anyhow::anyhow!("the network is down")) });
+                let unavailable = http_client::Response::builder()
+                    .status(503)
+                    .body(http_client::AsyncBody::from(b"{}".to_vec()))
+                    .unwrap();
+                return Box::pin(async { Ok(unavailable) });
             }
             self.mutations
                 .lock()
@@ -3021,10 +3061,12 @@ mod tests {
         (workspace, tab, signed_in, editor, cx)
     }
 
+    /// Whether the workspace shows the last viewed-mark toast a tab showed.
     fn has_viewed_toast(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
-        workspace.read_with(cx, |workspace, _| {
-            workspace.has_notification(&NotificationId::unique::<ViewedMarkToast>())
-        })
+        let Some((id, _, _)) = toast_log(cx).pop() else {
+            return false;
+        };
+        workspace.read_with(cx, |workspace, _| workspace.has_notification(&id))
     }
 
     /// Selects `path` in the list, which moves the diff there.
@@ -3500,6 +3542,123 @@ mod tests {
         ]);
         assert_eq!(github.recorded(), at_head);
         assert_eq!(viewed_at(cx), at_head);
+    }
+
+    #[gpui::test]
+    async fn each_failed_write_has_its_own_toast_and_the_selection_stays(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_fails_twice",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Forbidden);
+        github.github.answer(WriteAnswer::Forbidden);
+
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+
+        // Both say what failed, one toast a file.
+        let log = toast_log(cx);
+        assert_eq!(log.len(), 2);
+        assert!(
+            log[0].1.starts_with("Couldn't mark a.rs viewed"),
+            "{}",
+            log[0].1
+        );
+        assert!(
+            log[1].1.starts_with("Couldn't mark b.rs viewed"),
+            "{}",
+            log[1].1
+        );
+        assert_ne!(log[0].0, log[1].0);
+        for (id, _, _) in &log {
+            assert!(workspace.read_with(cx, |workspace, _| workspace.has_notification(id)));
+        }
+        // Only the marks went back: the failures don't move the selection.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(ViewedState::Unviewed)),
+                mark("b.rs", Some(ViewedState::Unviewed)),
+                mark("c.rs", Some(ViewedState::Unviewed))
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn while_github_cant_be_reached_e_marks_nothing_and_stays(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files("e_offline", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        tab.update(cx, |tab, _| {
+            tab.poll.status.offline = Some(github::poll::Offline {
+                since: SystemTime::now(),
+                retry_at: SystemTime::now() + Duration::from_secs(30),
+                error: "the network is down".into(),
+            })
+        });
+
+        cx.simulate_keystrokes("e");
+
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(
+            marks(&tab, cx)[0],
+            mark("a.rs", Some(ViewedState::Unviewed))
+        );
+        assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
+        assert_eq!(
+            toasts(cx),
+            ["rozed can't reach GitHub, so it can't mark a.rs viewed until it's back."]
+        );
+    }
+
+    #[gpui::test]
+    async fn marks_github_read_before_a_write_finished_dont_bring_the_old_mark_back(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, tab, github, cx) = three_files(
+            "e_then_switch_tabs",
+            &[],
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let before_the_write = SystemTime::now() - Duration::from_millis(1);
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx)[0], mark("a.rs", Some(ViewedState::Viewed)));
+
+        // Switching back to the tab hands over the details the poller held from before.
+        let stale = details_with(&[("a.rs", "UNVIEWED"), ("b.rs", "VIEWED")]);
+        tab.update(cx, |tab, cx| tab.take_details(&stale, before_the_write, cx));
+        assert_eq!(
+            marks(&tab, cx)[..2],
+            [
+                mark("a.rs", Some(ViewedState::Viewed)),
+                mark("b.rs", Some(ViewedState::Viewed))
+            ]
+        );
+        // And its record stays.
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
+
+        // Details fetched after the write stand.
+        tab.update(cx, |tab, cx| tab.set_details(&stale, cx));
+        assert_eq!(
+            marks(&tab, cx)[0],
+            mark("a.rs", Some(ViewedState::Unviewed))
+        );
     }
 
     #[gpui::test]

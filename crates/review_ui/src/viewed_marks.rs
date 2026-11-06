@@ -5,6 +5,7 @@
 //! shows at once. If the write fails, the file shows GitHub's mark again and a toast says why.
 
 use std::collections::{HashMap, HashSet};
+use std::time::SystemTime;
 
 use github::GithubError;
 use review::revisions::{FileComparison, Revisions, ViewedState, viewed_file_comparison};
@@ -22,6 +23,8 @@ pub struct ViewedMarks {
     /// Counts the toggles, so a write that finishes after a later toggle of the same file doesn't
     /// undo it.
     toggles: u64,
+    /// When GitHub last took a write for each path, so marks it gave before then don't undo it.
+    written: HashMap<String, SystemTime>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +117,25 @@ impl ViewedMarks {
         self.listed.is_none().then(|| path.to_string())
     }
 
+    /// `marks`, as GitHub gave them at `fetched_at`, less what's out of date: a file GitHub took
+    /// a write for after then keeps the mark it has now.
+    pub fn without_stale(
+        &self,
+        mut marks: HashMap<String, ViewedState>,
+        fetched_at: SystemTime,
+    ) -> HashMap<String, ViewedState> {
+        for (path, written_at) in &self.written {
+            if fetched_at >= *written_at {
+                continue;
+            }
+            match self.github.get(path) {
+                Some(state) => marks.insert(path.clone(), *state),
+                None => marks.remove(path),
+            };
+        }
+        marks
+    }
+
     /// Whether a write for `path` hasn't finished.
     pub fn is_pending(&self, path: &str) -> bool {
         self.pending.contains_key(path)
@@ -139,12 +161,13 @@ impl ViewedMarks {
         toggle
     }
 
-    /// A toggle's write finished. If it succeeded, GitHub's mark is the new one until GitHub says
-    /// otherwise; if it failed, the file shows GitHub's mark again. Either way a later toggle of
-    /// the same file still shows until its own write finishes.
-    pub fn finish(&mut self, toggle: &Toggle, succeeded: bool) {
+    /// A toggle's write finished, at `at`. If it succeeded, GitHub's mark is the new one until
+    /// GitHub says otherwise; if it failed, the file shows GitHub's mark again. Either way a later
+    /// toggle of the same file still shows until its own write finishes.
+    pub fn finish(&mut self, toggle: &Toggle, succeeded: bool, at: SystemTime) {
         if succeeded {
             self.github.insert(toggle.path.clone(), toggle.state());
+            self.written.insert(toggle.path.clone(), at);
         }
         if self
             .pending
@@ -285,7 +308,7 @@ mod tests {
         let mut viewed = github(&[("a", Unviewed)]);
         let toggle = viewed.toggle("a");
 
-        viewed.finish(&toggle, true);
+        viewed.finish(&toggle, true, at(0));
 
         assert!(!viewed.is_pending("a"));
         assert_eq!(viewed.state("a"), Some(Viewed));
@@ -300,8 +323,8 @@ mod tests {
         let mark = viewed.toggle("a");
         let clear = viewed.toggle("b");
 
-        viewed.finish(&mark, false);
-        viewed.finish(&clear, false);
+        viewed.finish(&mark, false, at(0));
+        viewed.finish(&clear, false, at(0));
 
         assert_eq!(viewed.shown(), marks(&[("a", Unviewed), ("b", Viewed)]));
         assert!(!viewed.is_pending("a"));
@@ -315,7 +338,7 @@ mod tests {
         viewed.set_github(marks(&[("a", Dismissed)]));
         assert_eq!(viewed.state("a"), Some(Viewed));
 
-        viewed.finish(&toggle, false);
+        viewed.finish(&toggle, false, at(0));
 
         assert_eq!(viewed.state("a"), Some(Dismissed));
     }
@@ -329,14 +352,43 @@ mod tests {
         assert_eq!(viewed.state("a"), Some(Unviewed));
 
         // The mark went through, then the clear failed: GitHub has the file viewed.
-        viewed.finish(&mark, true);
+        viewed.finish(&mark, true, at(0));
         assert_eq!(
             viewed.state("a"),
             Some(Unviewed),
             "the clear is still in flight"
         );
-        viewed.finish(&clear, false);
+        viewed.finish(&clear, false, at(0));
         assert_eq!(viewed.state("a"), Some(Viewed));
+    }
+
+    #[test]
+    fn marks_github_read_before_a_write_finished_dont_undo_it() {
+        let mut viewed = github(&[("a", Unviewed), ("b", Unviewed)]);
+        let toggle = viewed.toggle("a");
+        viewed.finish(&toggle, true, at(10));
+
+        // Read before the write finished, as a tab switch hands back: a's mark there is stale.
+        let stale = viewed.without_stale(marks(&[("a", Unviewed), ("b", Viewed)]), at(9));
+        assert_eq!(stale, marks(&[("a", Viewed), ("b", Viewed)]));
+        assert!(viewed.set_github(stale));
+        assert_eq!(viewed.state("a"), Some(Viewed));
+
+        // Read after it, GitHub's answer stands.
+        let fresh = viewed.without_stale(marks(&[("a", Dismissed), ("b", Viewed)]), at(11));
+        assert_eq!(fresh, marks(&[("a", Dismissed), ("b", Viewed)]));
+    }
+
+    #[test]
+    fn a_failed_write_doesnt_make_githubs_marks_stale() {
+        let mut viewed = github(&[("a", Unviewed)]);
+        let toggle = viewed.toggle("a");
+        viewed.finish(&toggle, false, at(10));
+
+        assert_eq!(
+            viewed.without_stale(marks(&[("a", Dismissed)]), at(9)),
+            marks(&[("a", Dismissed)])
+        );
     }
 
     #[test]
