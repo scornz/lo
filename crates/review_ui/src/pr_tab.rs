@@ -155,6 +155,52 @@ pub(crate) fn sync_active(workspace: &Workspace, cx: &mut App) {
     }
 }
 
+/// Closes `tab` and opens its pull request again in its place, at its latest push.
+pub(crate) fn reopen(
+    workspace: &mut Workspace,
+    tab: &Entity<PrTab>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> Option<Entity<PrTab>> {
+    reopen_with(workspace, tab, window, cx, PrTab::load)
+}
+
+/// [`reopen`], with `start` run on the new tab instead of loading it.
+fn reopen_with(
+    workspace: &mut Workspace,
+    tab: &Entity<PrTab>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+    start: impl FnOnce(&mut PrTab, &mut Window, &mut Context<PrTab>),
+) -> Option<Entity<PrTab>> {
+    let pane = workspace.pane_for(tab)?;
+    let index = pane.read(cx).index_for_item(tab)?;
+    let (link, trust) = {
+        let tab = tab.read(cx);
+        (tab.link().clone(), tab.trust)
+    };
+    log::info!("{link}: opening it again at its latest push");
+    pane.update(cx, |pane, cx| {
+        pane.remove_item(tab.entity_id(), false, false, window, cx)
+    });
+    let weak_workspace = workspace.weak_handle();
+    let reopened = cx.new(|cx| {
+        let mut reopened = PrTab::new(link, trust, weak_workspace, window, cx);
+        start(&mut reopened, window, cx);
+        reopened
+    });
+    workspace.add_item(
+        pane,
+        Box::new(reopened.clone()),
+        Some(index),
+        true,
+        true,
+        window,
+        cx,
+    );
+    Some(reopened)
+}
+
 /// What the header shows about the pull request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Header {
@@ -200,6 +246,12 @@ pub struct PrTab {
     node_id: Option<String>,
     /// The head on screen: GitHub's at first, then the one the local copy fetched.
     head: Option<String>,
+    /// When rozed learned the head on screen. What GitHub said about its head before then is
+    /// older news.
+    head_at: Option<SystemTime>,
+    /// GitHub's latest head for the pull request, from its details or its summary, and when GitHub
+    /// gave it. `e` marks files only while it's the head on screen.
+    github_head: Option<(String, SystemTime)>,
     /// Where this Mac's records say each file was marked viewed, by path.
     viewed_at: HashMap<String, String>,
     /// This Mac's records of where files were marked viewed, once signed in.
@@ -276,6 +328,8 @@ impl PrTab {
             marks: ViewedMarks::default(),
             node_id: None,
             head: None,
+            head_at: None,
+            github_head: None,
             viewed_at: HashMap::new(),
             records: None,
             revisions: None,
@@ -445,7 +499,7 @@ impl PrTab {
     /// Shows what rozed saved about the pull request, at once and online or not, until GitHub
     /// answers.
     pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
-        self.set_details(&saved.details, cx);
+        self.take_details(&saved.details, saved.fetched_at, cx);
         self.saved = Some((saved.login.clone(), saved.fetched_at));
         self.show_saved_banner(true, cx);
     }
@@ -481,7 +535,7 @@ impl PrTab {
             self.key.canonical = Some((owner.to_string(), name.to_string()));
         }
         self.created_at = Some(pull_request.created_at.into());
-        self.head = Some(pull_request.head.sha.clone());
+        self.set_head(&pull_request.head.sha);
         self.status = Status::Loading("Copying it locally…".into());
         // GitHub answered, and the account's poller brings its details up to date.
         if self.saved.take().is_some() {
@@ -491,9 +545,21 @@ impl PrTab {
         self.changed(cx);
     }
 
-    /// Takes the pull request's details from its account's poller: its title, author and the
-    /// account's viewed marks.
+    /// Takes the pull request's details, just fetched by its account's poller: its title, author,
+    /// head and the account's viewed marks.
     pub fn set_details(&mut self, details: &PullRequestData, cx: &mut Context<Self>) {
+        self.take_details(details, SystemTime::now(), cx);
+    }
+
+    /// Takes the pull request's details as GitHub gave them at `fetched_at`, from the poller or
+    /// from what rozed saved.
+    fn take_details(
+        &mut self,
+        details: &PullRequestData,
+        fetched_at: SystemTime,
+        cx: &mut Context<Self>,
+    ) {
+        self.note_github_head(&details.head_ref_oid, fetched_at);
         let mut header = self.header.clone();
         header.title = Some(details.title.clone());
         if let Some(author) = &details.author {
@@ -530,7 +596,7 @@ impl PrTab {
         list.set_order(self.files.order());
         list.set_viewed(&self.marks.shown());
         self.files = list;
-        self.head = Some(head.as_str().to_string());
+        self.set_head(head.as_str());
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let now = SystemTime::now();
@@ -635,6 +701,7 @@ impl PrTab {
                 self.set_details(details, cx);
             }
             PollEvent::Summary { pull, summary } if pull == watched => {
+                self.note_github_head(&summary.head.sha, SystemTime::now());
                 self.poll_succeeded(cx);
                 if self.header.title.as_ref() != Some(&summary.title) {
                     self.header.title = Some(summary.title.clone());
@@ -658,6 +725,35 @@ impl PrTab {
         if self.poll.failure.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// GitHub said at `at` that the pull request's head is `head`. Something it said earlier
+    /// doesn't replace something it said later.
+    fn note_github_head(&mut self, head: &str, at: SystemTime) {
+        if self
+            .github_head
+            .as_ref()
+            .is_none_or(|(_, seen_at)| at >= *seen_at)
+        {
+            self.github_head = Some((head.to_string(), at));
+        }
+    }
+
+    /// The diff shows the pull request at `head`.
+    fn set_head(&mut self, head: &str) {
+        if self.head.as_deref() != Some(head) {
+            self.head = Some(head.to_string());
+            self.head_at = Some(SystemTime::now());
+        }
+    }
+
+    /// GitHub's latest head, when GitHub gave it after rozed learned the head on screen and it
+    /// isn't that head.
+    fn newer_head(&self) -> Option<&str> {
+        let (latest, at) = self.github_head.as_ref()?;
+        let newer =
+            Some(latest) != self.head.as_ref() && self.head_at.is_none_or(|head_at| *at >= head_at);
+        newer.then_some(latest.as_str())
     }
 
     /// The header's title: the pull request's, once known.
@@ -699,7 +795,7 @@ impl PrTab {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
                 self.poll.details_at = Some(answer.fetched_at);
-                self.set_details(&answer.details, cx);
+                self.take_details(&answer.details, answer.fetched_at, cx);
             }
         } else if !active && is_open {
             poller.update(cx, |poller, cx| poller.set_open(None, cx));
@@ -884,6 +980,14 @@ impl PrTab {
             );
             return;
         };
+        // GitHub marks a file as of the pull request's latest head (`markFileAsViewed` takes no
+        // commit), so a file is marked only while that's the head on screen. A push inside the
+        // poll interval can still slip through.
+        let marks = self.marks.state(&path) != Some(ViewedState::Viewed);
+        if marks && self.newer_head().is_some() {
+            self.newer_push_toast(&path, cx);
+            return;
+        }
         let toggle = self.marks.toggle(&path);
         self.files.set_viewed(&self.marks.shown());
         if toggle.mark {
@@ -987,6 +1091,29 @@ impl PrTab {
             &self.workspace,
             NotificationId::unique::<ViewedMarkToast>(),
             message,
+            None,
+            cx,
+        );
+    }
+
+    /// Says `e` didn't mark `path` because GitHub has a newer push, and offers to load it.
+    fn newer_push_toast(&self, path: &str, cx: &mut Context<Self>) {
+        let (workspace, tab) = (self.workspace.clone(), cx.entity().downgrade());
+        let load = move |window: &mut Window, cx: &mut App| {
+            let (Some(workspace), Some(tab)) = (workspace.upgrade(), tab.upgrade()) else {
+                return;
+            };
+            workspace.update(cx, |workspace, cx| reopen(workspace, &tab, window, cx));
+        };
+        show_toast(
+            &self.workspace,
+            NotificationId::unique::<ViewedMarkToast>(),
+            format!(
+                "There's a newer push to this pull request than the one on screen, so rozed \
+                 didn't mark {path} viewed: GitHub would mark it as of that push. Load it to mark \
+                 files viewed."
+            ),
+            Some(("Load the newer push", Box::new(load))),
             cx,
         );
     }
@@ -1327,28 +1454,36 @@ impl PrTab {
 /// The toast that says why a viewed mark couldn't be set or cleared.
 struct ViewedMarkToast;
 
-/// Shows a toast in `workspace` about a viewed mark.
+/// A toast's button: its label and what it does.
+type ToastButton = (&'static str, Box<dyn Fn(&mut Window, &mut App)>);
+
+/// Shows a toast in `workspace` about a viewed mark, with `button` if there's one.
 fn show_toast(
     workspace: &WeakEntity<Workspace>,
     id: NotificationId,
     message: String,
+    button: Option<ToastButton>,
     cx: &mut App,
 ) {
     #[cfg(test)]
-    cx.default_global::<ToastLog>()
-        .0
-        .push((id.clone(), message.clone()));
+    cx.default_global::<ToastLog>().0.push((
+        id.clone(),
+        message.clone(),
+        button.as_ref().map(|(label, _)| label.to_string()),
+    ));
+    let mut toast = Toast::new(id, message);
+    if let Some((label, on_click)) = button {
+        toast = toast.on_click(label, on_click);
+    }
     workspace
-        .update(cx, |workspace, cx| {
-            workspace.show_toast(Toast::new(id, message), cx)
-        })
+        .update(cx, |workspace, cx| workspace.show_toast(toast, cx))
         .ok();
 }
 
-/// The toasts the tabs showed, for tests.
+/// The toasts the tabs showed, for tests: each one's ID, text and button.
 #[cfg(test)]
 #[derive(Default)]
-struct ToastLog(Vec<(NotificationId, String)>);
+struct ToastLog(Vec<(NotificationId, String, Option<String>)>);
 
 #[cfg(test)]
 impl gpui::Global for ToastLog {}
@@ -2751,13 +2886,25 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// The toasts the tab showed, oldest first.
-    fn toasts(cx: &mut VisualTestContext) -> Vec<String> {
+    /// The toasts the tabs showed, oldest first: each one's ID, text and button.
+    fn toast_log(cx: &mut VisualTestContext) -> Vec<(NotificationId, String, Option<String>)> {
         cx.update(|_, cx| {
             cx.try_global::<ToastLog>()
-                .map(|log| log.0.iter().map(|(_, text)| text.clone()).collect())
+                .map(|log| log.0.clone())
                 .unwrap_or_default()
         })
+    }
+
+    /// The text of the toasts the tabs showed, oldest first.
+    fn toasts(cx: &mut VisualTestContext) -> Vec<String> {
+        toast_log(cx).into_iter().map(|(_, text, _)| text).collect()
+    }
+
+    /// The file the diff's cursor is in.
+    fn cursor_file(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<String> {
+        let diff = tab.read_with(cx, |tab, _| tab.diff().cloned())?;
+        cx.update(|_, cx| crate::diff_cursor::file_at_cursor(&diff, cx))
+            .map(|(_, path)| path)
     }
 
     #[gpui::test]
@@ -2887,7 +3034,7 @@ mod tests {
         .await;
         github.github.answer(WriteAnswer::Done);
 
-        // With nothing selected, the current file is the first in review order.
+        // GitHub's head is the head on screen, and the diff's cursor starts in the first file.
         cx.simulate_keystrokes("e");
 
         use ViewedState::*;
@@ -2914,6 +3061,132 @@ mod tests {
             HashMap::from([("a.rs".to_string(), HEAD.to_string())])
         );
         assert!(!has_viewed_toast(&workspace, cx));
+    }
+
+    const NEWER: &str = "3333333333333333333333333333333333333333";
+
+    /// GitHub's REST view of PR #2 with its head at `head`, as the poller's summary carries it.
+    fn summary_at(head: &str) -> github::PullSummary {
+        serde_json::from_value(serde_json::json!({
+            "number": 2,
+            "title": "Add b",
+            "state": "open",
+            "updated_at": "2026-11-06T09:00:00Z",
+            "head": { "ref": "stack-b", "sha": head },
+            "base": { "ref": "stack-a", "sha": "b046244d9569964088e952243e5e557312322488" },
+        }))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    async fn after_a_newer_push_e_wont_mark_a_file_but_still_clears_one(cx: &mut TestAppContext) {
+        let marks_now = [
+            ("a.rs", "UNVIEWED"),
+            ("b.rs", "VIEWED"),
+            ("c.rs", "UNVIEWED"),
+        ];
+        let (_, tab, github, cx) = three_files("e_after_a_push", &[], &marks_now, cx).await;
+        // GitHub's details say the pull request moved on from the head on screen.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details_at(NEWER, &marks_now), cx)
+        });
+        let before = marks(&tab, cx);
+
+        // markFileAsViewed takes no commit, so GitHub would mark a.rs as of the newer push.
+        cx.simulate_keystrokes("e");
+        assert_eq!(marks(&tab, cx), before);
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
+        let toast = toast_log(cx).pop().unwrap();
+        assert_eq!(
+            toast.1,
+            "There's a newer push to this pull request than the one on screen, so rozed didn't \
+             mark a.rs viewed: GitHub would mark it as of that push. Load it to mark files viewed."
+        );
+        assert_eq!(toast.2.as_deref(), Some("Load the newer push"));
+
+        // Clearing a mark is always allowed.
+        go_to(&tab, "b.rs", cx);
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+    }
+
+    #[gpui::test]
+    async fn a_newer_push_in_githubs_summary_also_stops_e_marking(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) =
+            three_files("e_after_a_summary", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        let pull = github.pull.clone();
+        tab.update(cx, |tab, cx| {
+            tab.poll_event(
+                &PollEvent::Summary {
+                    pull,
+                    summary: std::sync::Arc::new(summary_at(NEWER)),
+                },
+                cx,
+            )
+        });
+
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations(), []);
+        assert!(toasts(cx)[0].starts_with("There's a newer push"));
+
+        // Older details, from before the summary, don't bring the old head back.
+        let older = SystemTime::now() - Duration::from_secs(60);
+        tab.update(cx, |tab, cx| {
+            tab.take_details(&details_with(&[("a.rs", "UNVIEWED")]), older, cx)
+        });
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn an_older_head_from_before_the_diff_loaded_doesnt_stop_e(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) =
+            three_files("e_after_saved", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        // What rozed saved, from before this diff's head was pushed.
+        let saved_at = SystemTime::now() - Duration::from_secs(3600);
+        tab.update(cx, |tab, cx| {
+            tab.github_head = None;
+            tab.take_details(
+                &details_at(
+                    "1111111111111111111111111111111111111111",
+                    &[("a.rs", "UNVIEWED")],
+                ),
+                saved_at,
+                cx,
+            )
+        });
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].0, "MarkFileAsViewed");
+    }
+
+    #[gpui::test]
+    async fn loading_the_newer_push_reopens_the_tab_in_its_place(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let first = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/1", cx);
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/3", cx);
+
+        let reopened = workspace
+            .update_in(cx, |workspace, window, cx| {
+                reopen_with(workspace, &tab, window, cx, |_, _, _| {})
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let tabs = tabs(&workspace, cx);
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0], first);
+        assert_eq!(tabs[1], reopened);
+        assert_ne!(reopened, tab);
+        assert_eq!(
+            reopened.read_with(cx, |tab, _| tab.link().to_string()),
+            "sharkdp/fd#2212"
+        );
+        assert_eq!(active_tab(&workspace, cx), Some(reopened));
     }
 
     #[gpui::test]
