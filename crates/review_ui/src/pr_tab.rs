@@ -681,8 +681,7 @@ impl PrTab {
         self.files.review_positions()
     }
 
-    /// Shows `editor` as the tab's diff. Its cursor goes where it was in the diff it replaces, if
-    /// it was moved there, or else to its start.
+    /// Shows `editor` as the tab's diff, with its cursor at its start until it's moved.
     pub(crate) fn show_diff(
         &mut self,
         editor: Entity<SplittableEditor>,
@@ -690,10 +689,6 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
-        let carried = match (&self.diff, self.cursor_moved) {
-            (Some(diff), true) => diff_cursor::cursor_position(diff, cx),
-            _ => None,
-        };
         let rhs = editor.read(cx).rhs_editor().clone();
         if let Some(history) = self.nav_history.clone() {
             rhs.update(cx, |editor, _| editor.set_nav_history(Some(history)));
@@ -710,14 +705,10 @@ impl PrTab {
         ));
         self.parked_cursor = None;
         self.diff = Some(editor.clone());
-        let carried = carried
-            .is_some_and(|position| diff_cursor::move_cursor_to(&editor, &position, window, cx));
-        // A diff with its files in already sends no event as they arrive, so its cursor would
-        // stay at its end.
-        if !carried {
-            self.cursor_moved = false;
-            self.park_cursor(window, cx);
-        }
+        // A diff with its files in already, as when the local copy's replaces GitHub's, sends no
+        // event as they arrive, so its cursor would stay at its end, in the last file.
+        self.cursor_moved = false;
+        self.park_cursor(window, cx);
         if focused && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
         }
@@ -4305,14 +4296,6 @@ mod tests {
         editor
     }
 
-    fn cursor_position(
-        editor: &Entity<SplittableEditor>,
-        cx: &mut VisualTestContext,
-    ) -> Option<(String, u32)> {
-        cx.update(|_, cx| crate::diff_cursor::cursor_position(editor, cx))
-            .map(|position| (position.path, position.point.row))
-    }
-
     #[gpui::test]
     async fn a_diff_shown_with_its_files_in_starts_in_its_first_file(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
@@ -4334,35 +4317,6 @@ mod tests {
             cursor(&tab, &editor, cx),
             (Some("src/main.rs".into()), 0, None)
         );
-    }
-
-    #[gpui::test]
-    async fn a_diff_that_replaces_another_keeps_the_cursors_file_and_line(cx: &mut TestAppContext) {
-        let (workspace, cx) = workspace(cx).await;
-        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
-        let files = [
-            ("src/a.rs", lines(30, &[]), lines(30, &[2, 25])),
-            ("src/b.rs", lines(5, &[]), lines(5, &[3])),
-        ];
-        let first = show_test_diff(&tab, &workspace, &files, cx).await;
-
-        // A cursor that wasn't moved starts at the new diff's start.
-        let second = show_built_diff(&tab, &workspace, &files, cx).await;
-        assert_eq!(
-            cursor(&tab, &second, cx),
-            (Some("src/a.rs".into()), 0, None)
-        );
-        drop(first);
-
-        // A moved one stays on its file and line.
-        cx.simulate_keystrokes("] c ] c");
-        assert_eq!(cursor_position(&second, cx), Some(("src/a.rs".into(), 24)));
-        let third = show_built_diff(&tab, &workspace, &files, cx).await;
-        assert_eq!(cursor_position(&third, cx), Some(("src/a.rs".into(), 24)));
-        assert_eq!(selected(&tab, cx).as_deref(), Some("src/a.rs"));
-        // And it was moved, so files arriving leave it there.
-        cx.simulate_keystrokes("] c");
-        assert_eq!(cursor_position(&third, cx), Some(("src/b.rs".into(), 2)));
     }
 
     #[gpui::test]
