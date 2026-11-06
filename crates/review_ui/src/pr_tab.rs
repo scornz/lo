@@ -226,8 +226,8 @@ pub struct PrTab {
     hide_whitespace: bool,
     /// Brings the diff's files in line with `hide_whitespace`.
     _whitespace: Option<Task<()>>,
-    /// Loads a large file on a key.
-    _load_file: Option<Task<()>>,
+    /// Loads large files on a key, one task a path, each until it's done.
+    loading: HashMap<String, Task<()>>,
     /// Keeps the diff's images right as it goes side by side and back, and decodes a file's
     /// images when it opens.
     _diff_watch: Vec<Subscription>,
@@ -315,7 +315,7 @@ impl PrTab {
             setting_style: style,
             hide_whitespace: false,
             _whitespace: None,
-            _load_file: None,
+            loading: HashMap::new(),
             _diff_watch: Vec::new(),
             show_file_list: true,
             show_threads: true,
@@ -1022,7 +1022,7 @@ impl PrTab {
                 window,
                 |_, diff, event: &EditorEvent, window, cx| {
                     if let EditorEvent::BufferFoldToggled { ids, folded: false } = event {
-                        shown_files::decode_shown(diff, ids, window, cx);
+                        shown_files::opened(diff, ids, window, cx);
                     }
                 },
             ),
@@ -1293,7 +1293,9 @@ impl PrTab {
         let Some(path) = shown_files::file_at_cursor(&diff, cx) else {
             return;
         };
-        if shown_files::expand(&diff, &path, window, cx) != Expanded::Load {
+        if shown_files::expand(&diff, &path, window, cx) != Expanded::Load
+            || self.loading.contains_key(&path)
+        {
             return;
         }
         let Some(project) = self
@@ -1304,23 +1306,30 @@ impl PrTab {
             return;
         };
         let hide = self.hide_whitespace;
-        self._load_file = Some(cx.spawn_in(window, async move |this, cx| {
-            let loaded = pr_diff::load_large_file(diff, project, path.clone(), hide, cx).await;
-            if let Err(error) = loaded {
-                log::error!("can't load {path}: {error:#}");
-                this.update(cx, |this, cx| {
-                    this.banners.update(cx, |banners, cx| {
-                        banners.show(
-                            BannerKind::LoadFileFailed,
-                            Severity::Warning,
-                            format!("rozed couldn't load {path}: {error:#}"),
-                            cx,
-                        )
-                    })
+        let task = cx.spawn_in(window, {
+            let path = path.clone();
+            async move |this, cx| {
+                let loaded = pr_diff::load_large_file(diff, project, path.clone(), hide, cx).await;
+                this.update_in(cx, |this, window, cx| {
+                    this.loading.remove(&path);
+                    if let Err(error) = loaded {
+                        log::error!("can't load {path}: {error:#}");
+                        this.banners.update(cx, |banners, cx| {
+                            banners.show(
+                                BannerKind::LoadFileFailed,
+                                Severity::Warning,
+                                format!("rozed couldn't load {path}: {error:#}"),
+                                cx,
+                            )
+                        });
+                    }
+                    // Whitespace changes may have been hidden, or shown again, while it loaded.
+                    this.sync_whitespace(window, cx);
                 })
                 .ok();
             }
-        }));
+        });
+        self.loading.insert(path, task);
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {

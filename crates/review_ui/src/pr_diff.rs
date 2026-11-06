@@ -55,7 +55,8 @@ use repo_cache::{
 
 use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
 use crate::file_display::{
-    Collapsed, ImageSide, Images, binary_text, initial_collapse, without_whitespace_changes,
+    Collapsed, ImageSide, Images, binary_text, initial_collapse, too_large_to_show,
+    without_whitespace_changes,
 };
 use crate::file_list::FileEntry;
 use crate::github_api::PullRequest;
@@ -467,6 +468,14 @@ pub(crate) async fn show_local_copy(
             return Ok(());
         }
     };
+    // A large file loaded on a key from now on shows from the checkout too.
+    editor.update(cx, |editor, cx| {
+        editor.rhs_editor().update(cx, |editor, _| {
+            if let Some(files) = editor.addon_mut::<ShownFiles>() {
+                files.checkout = Some(checkout.clone());
+            }
+        })
+    });
     let mut target = Target {
         checkout: Some(&checkout),
         ..target
@@ -521,7 +530,8 @@ pub(crate) async fn show_local_copy(
 }
 
 /// Loads `path`, a file too large to have been loaded with the others, into `diff` in place of
-/// its placeholder, and opens it. Does nothing in GitHub's diff, which has nothing to load.
+/// its placeholder, from the trusted checkout once there is one, and opens it, unless it's too
+/// large to show at all. Does nothing in GitHub's diff, which has nothing to load.
 pub(crate) async fn load_large_file(
     diff: Entity<SplittableEditor>,
     project: Entity<Project>,
@@ -537,11 +547,11 @@ pub(crate) async fn load_large_file(
                 .iter()
                 .position(|file| file.display_path() == path)?;
             let position = usize::try_from(files.get(&path)?.key.sort_prefix?).ok()?;
-            Some((local, index, position))
+            Some((local, files.checkout.clone(), index, position))
         })
         .flatten()
     })?;
-    let Some((local, index, position)) = found else {
+    let Some((local, checkout, index, position)) = found else {
         return Ok(());
     };
     let file = local.files[index].clone();
@@ -550,14 +560,17 @@ pub(crate) async fn load_large_file(
     let plan = cx
         .background_spawn({
             let (repo, file) = (local.repo.clone(), file.clone());
-            async move { plan_file(&repo, &file, generated, None, true) }
+            let dir = checkout.as_ref().map(|checkout| checkout.dir.clone());
+            async move { plan_file(&repo, &file, generated, dir.as_deref(), true) }
         })
         .await;
+    // Too large even to load: it stays collapsed, saying so.
+    let opens = !matches!(plan.collapsed, Some(Collapsed::TooLarge { .. }));
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let target = Target {
         repo_name: &local.name,
         project: &project,
-        checkout: None,
+        checkout: checkout.as_ref(),
         languages: &languages,
         editor: &diff,
         hide_whitespace,
@@ -572,10 +585,12 @@ pub(crate) async fn load_large_file(
             cx,
         )
         .await?;
-    diff.update(cx, |diff, cx| {
-        diff.rhs_editor()
-            .update(cx, |rhs, cx| rhs.unfold_buffer(shown.buffer_id, cx))
-    });
+    if opens {
+        diff.update(cx, |diff, cx| {
+            diff.rhs_editor()
+                .update(cx, |rhs, cx| rhs.unfold_buffer(shown.buffer_id, cx))
+        });
+    }
     log::info!("{path}: loaded on request in {:?}", started.elapsed());
     Ok(())
 }
@@ -1038,9 +1053,10 @@ pub fn path_key(position: usize, path: Arc<RelPath>) -> PathKey {
 }
 
 /// The trusted checkout a pull request's project buffers come from.
+#[derive(Clone)]
 pub(crate) struct Checkout {
-    dir: PathBuf,
-    worktree_id: WorktreeId,
+    pub(crate) dir: PathBuf,
+    pub(crate) worktree_id: WorktreeId,
 }
 
 /// What one changed file shows, worked out before anything goes on screen: from git, or from
@@ -1207,6 +1223,16 @@ fn try_plan_file(
         Some(Collapsed::Large { generated, .. }) => generated.map(Collapsed::Generated),
         collapsed => collapsed,
     };
+    // Even on request, nothing past the limits is read.
+    let too_large = |why: String| {
+        Ok(FilePlan {
+            collapsed: Some(Collapsed::TooLarge { why: why.clone() }),
+            ..FilePlan::placeholder(format!("(too large to show: {why})"), deleted)
+        })
+    };
+    if loads && let Some(why) = too_large_to_show(file.size(), &[]) {
+        return too_large(why);
+    }
 
     if file.binary {
         if image && let Some(plan) = image_plan(repo, file)? {
@@ -1225,6 +1251,9 @@ fn try_plan_file(
         .map(|old| read_side(repo, old))
         .transpose()
         .context("reading the base's version")?;
+    if let Some(why) = too_large_to_show(None, &[old_bytes.as_deref().unwrap_or_default()]) {
+        return too_large(why);
+    }
     let Some(new) = &file.new else {
         let images = image
             .then(|| images_of(file, old_bytes.as_deref(), None))
@@ -1236,6 +1265,9 @@ fn try_plan_file(
         });
     };
     let new_bytes = read_side(repo, new).context("reading the head's version")?;
+    if let Some(why) = too_large_to_show(None, &[&new_bytes]) {
+        return too_large(why);
+    }
     // An SVG file is text, compared as text, and shows as images too.
     let images = image
         .then(|| images_of(file, old_bytes.as_deref(), Some(&new_bytes)))
@@ -1436,7 +1468,7 @@ impl Target<'_> {
             collapsed,
             images,
         } = plan;
-        let (buffer, base) = match content {
+        let (buffer, base, head) = match content {
             Content::Diff {
                 old_text,
                 new: NewSide::Checkout,
@@ -1457,30 +1489,40 @@ impl Target<'_> {
                         )
                     })
                     .await?;
-                (buffer, Some(old_text))
+                let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+                let head = cx
+                    .background_spawn(async move { Arc::<str>::from(snapshot.text()) })
+                    .await;
+                (buffer, Some(old_text), head)
             }
             Content::Diff {
                 old_text,
                 new: NewSide::Git(text),
-            } => (
-                self.memory_buffer(&text, &path, false, cx).await?,
-                Some(old_text),
-            ),
+            } => {
+                // The head's text is kept, not copied out of the buffer again.
+                let head: Arc<str> = cx.background_spawn(async move { text.into() }).await;
+                let buffer = self.memory_buffer(head.clone(), &path, false, cx).await?;
+                (buffer, Some(old_text), head)
+            }
             Content::Diff {
                 old_text,
                 new: NewSide::Deleted,
             } => (
-                self.memory_buffer("", &path, true, cx).await?,
+                self.memory_buffer("".into(), &path, true, cx).await?,
                 Some(old_text),
+                "".into(),
             ),
-            Content::Placeholder { text, .. } => {
-                (self.memory_buffer(&text, &path, deleted, cx).await?, None)
-            }
+            Content::Placeholder { text, .. } => (
+                self.memory_buffer(text.into(), &path, deleted, cx).await?,
+                None,
+                "".into(),
+            ),
         };
 
         let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
-        let base: Option<Option<Arc<str>>> = base.map(|old| old.map(Arc::from));
-        let head = snapshot.text();
+        let base: Option<Option<Arc<str>>> = cx
+            .background_spawn(async move { base.map(|old| old.map(Arc::from)) })
+            .await;
         let mut collapsed = collapsed;
         // What the head is compared with: the base, or the base as `git diff -w` compares it.
         let compared = match &base {
@@ -1621,7 +1663,7 @@ impl Target<'_> {
     /// servers never see it.
     async fn memory_buffer(
         &self,
-        text: &str,
+        text: Arc<str>,
         path: &Arc<RelPath>,
         deleted: bool,
         cx: &mut AsyncWindowContext,
@@ -1634,7 +1676,8 @@ impl Target<'_> {
                 .map_or_else(GitFile::no_worktree, |checkout| checkout.worktree_id),
             deleted,
         });
-        let text = Rope::from(text);
+        // A loaded file can be tens of megabytes: its rope is built off the main thread.
+        let text = cx.background_spawn(async move { Rope::from(&*text) }).await;
         let language =
             cx.update(|_, cx| self.languages.language_for_file(&file, Some(&text), cx))?;
         let language = match language {
@@ -2339,8 +2382,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_file_larger_than_a_mebibyte_isnt_loaded_until_asked() {
-        // One line, so the line count alone wouldn't stop it.
-        let minified = "x".repeat(2 * 1024 * 1024);
+        // Few lines, so the line count alone wouldn't stop it.
+        let minified = format!("{}\n", "x".repeat(999)).repeat(2_100);
         let copied = copy(
             &[Entry::File("bundle.min.js", b"x")],
             &[Entry::File("bundle.min.js", minified.as_bytes())],

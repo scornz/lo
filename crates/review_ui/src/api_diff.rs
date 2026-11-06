@@ -22,7 +22,7 @@ use gpui::{AppContext as _, AsyncWindowContext, WeakEntity};
 use language::{BufferSnapshot, Point};
 use ui::SharedString;
 
-use crate::file_display::initial_collapse;
+use crate::file_display::{Collapsed, initial_collapse};
 use crate::file_list::{FileChange, FileEntry};
 use crate::pr_diff::{self, FileHeader, FilePlan, NewSide, Target, Warning};
 use crate::pr_link::PrLink;
@@ -453,7 +453,12 @@ pub(crate) fn patch_text_plan(file: &PullFile, why: &str) -> FilePlan {
 /// collapsed. GitHub's list says nothing of `.gitattributes` or sizes, so lockfiles count by name
 /// and large files by their changed lines.
 fn with_header(file: &PullFile, plan: FilePlan) -> FilePlan {
-    let collapsed = initial_collapse(&file_entry(file).file, true);
+    // GitHub's diff has nothing more to load: a large file's key opens GitHub's patch of it.
+    let collapsed =
+        initial_collapse(&file_entry(file).file, true).map(|collapsed| match collapsed {
+            Collapsed::Large { generated, why } => Collapsed::LargePatch { generated, why },
+            other => other,
+        });
     FilePlan {
         badge: badge(file),
         collapsed: collapsed.or(plan.collapsed),

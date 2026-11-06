@@ -29,7 +29,7 @@ use ui::{Label, LabelSize, prelude::*};
 
 use crate::file_display::{Collapsed, ImageSide, Images, without_whitespace_changes};
 use crate::image_preview;
-use crate::pr_diff::{FileHeaders, LocalPullRequest};
+use crate::pr_diff::{Checkout, FileHeaders, LocalPullRequest};
 
 /// One file in the diff.
 pub(crate) struct ShownFile {
@@ -151,20 +151,29 @@ fn start_decode(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window
     });
 }
 
-/// Starts decoding the images of the files among `buffers` that now show.
-pub(crate) fn decode_shown(
+/// The files among `buffers` now show: their images start decoding, and a large file from
+/// GitHub's diff, now open, no longer says how to open it.
+pub(crate) fn opened(
     diff: &Entity<SplittableEditor>,
     buffers: &[BufferId],
     window: &mut Window,
     cx: &mut App,
 ) {
-    let paths = read(diff, cx, |files| {
-        files
-            .files
-            .iter()
-            .filter(|(_, file)| file.images.is_some() && buffers.contains(&file.buffer_id))
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>()
+    let paths = update(diff, cx, |files, headers| {
+        let mut images = Vec::new();
+        for (path, file) in &mut files.files {
+            if !buffers.contains(&file.buffer_id) {
+                continue;
+            }
+            if let Some(Collapsed::LargePatch { generated, .. }) = &file.collapsed {
+                file.collapsed = generated.map(Collapsed::Generated);
+                headers.set_collapsed(file.buffer_id, file.collapsed.clone());
+            }
+            if file.images.is_some() {
+                images.push(path.clone());
+            }
+        }
+        images
     })
     .unwrap_or_default();
     for path in paths {
@@ -200,6 +209,9 @@ pub(crate) struct ShownFiles {
     /// The local copy the files come from, which loads a large file on a key and keeps the clone
     /// open while the diff shows. `None` for GitHub's diff.
     pub(crate) local: Option<Arc<LocalPullRequest>>,
+    /// The trusted checkout the local copy's files show from, once it's ready, which a large
+    /// file loaded on a key shows from too.
+    pub(crate) checkout: Option<Checkout>,
     /// Whether the diff shows side by side, for the image blocks, which show both images when it
     /// doesn't and one each side when it does.
     split: Arc<AtomicBool>,
@@ -486,9 +498,7 @@ pub(crate) fn expand(
 ) -> Expanded {
     let Some((buffer_id, large, fixed)) = read(diff, cx, |files| {
         let file = files.get(path)?;
-        // GitHub's diff has nothing more to load: its large files only open.
-        let large =
-            files.local.is_some() && file.collapsed.as_ref().is_some_and(Collapsed::is_large);
+        let large = file.collapsed.as_ref().is_some_and(Collapsed::is_large);
         Some((file.buffer_id, large, file.rows.is_some()))
     })
     .flatten() else {
@@ -919,7 +929,8 @@ mod tests {
 
     use editor::SelectionEffects;
     use gpui::{TestAppContext, VisualTestContext};
-    use project::{FakeFs, Project};
+    use project::{FakeFs, Project, ProjectPath};
+    use util::rel_path::RelPath;
     use workspace::{MultiWorkspace, Workspace};
 
     use crate::file_display::tests::png;
@@ -975,12 +986,21 @@ mod tests {
         head: &[Entry],
         cx: &mut VisualTestContext,
     ) -> (Entity<SplittableEditor>, (Fixture, tempfile::TempDir)) {
+        show_copy(tab, pr_diff::tests::copy(base, head, false), cx)
+    }
+
+    /// [`show`], from `copied`.
+    fn show_copy(
+        tab: &Entity<PrTab>,
+        copied: pr_diff::tests::Copied,
+        cx: &mut VisualTestContext,
+    ) -> (Entity<SplittableEditor>, (Fixture, tempfile::TempDir)) {
         let pr_diff::tests::Copied {
             _fixture: fixture,
             _cache: cache,
             local,
             ..
-        } = pr_diff::tests::copy(base, head, false);
+        } = copied;
         let local = Arc::new(local);
         tab.update_in(cx, |tab, window, cx| {
             let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
@@ -1060,23 +1080,40 @@ mod tests {
 
     /// Puts the diff's cursor at the start of `path`, as choosing it in the file list does.
     fn select(diff: &Entity<SplittableEditor>, path: &str, cx: &mut VisualTestContext) {
-        let key = file(diff, path, cx, |file, _| file.key.clone());
-        cx.update(|window, cx| {
-            let rhs = diff.read(cx).rhs_editor().clone();
-            let location = rhs
-                .read(cx)
-                .buffer()
-                .read(cx)
-                .location_for_path(&key, cx)
-                .unwrap();
-            rhs.update(cx, |rhs, cx| {
-                rhs.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
-                    selections.select_ranges([location..location])
-                })
-            });
-            window.focus(&rhs.focus_handle(cx), cx);
-        });
+        cx.update(|window, cx| put_cursor(diff, path, window, cx));
         cx.run_until_parked();
+    }
+
+    /// [`select`], leaving whatever it starts to run later.
+    fn put_cursor(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window, cx: &mut App) {
+        let key = read(diff, cx, |files| files.get(path).unwrap().key.clone()).unwrap();
+        let rhs = diff.read(cx).rhs_editor().clone();
+        let location = rhs
+            .read(cx)
+            .buffer()
+            .read(cx)
+            .location_for_path(&key, cx)
+            .unwrap();
+        rhs.update(cx, |rhs, cx| {
+            rhs.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+                selections.select_ranges([location..location])
+            })
+        });
+        window.focus(&rhs.focus_handle(cx), cx);
+    }
+
+    /// Presses `action`'s key in `diff` with the cursor in `path`, leaving what it starts to run
+    /// later, as a second key pressed before the first one's work is done would.
+    fn press_in(
+        diff: &Entity<SplittableEditor>,
+        path: &str,
+        action: impl gpui::Action,
+        cx: &mut VisualTestContext,
+    ) {
+        cx.update(|window, cx| {
+            put_cursor(diff, path, window, cx);
+            window.dispatch_action(Box::new(action), cx);
+        });
     }
 
     fn text(diff: &Entity<SplittableEditor>, cx: &mut VisualTestContext) -> String {
@@ -1170,6 +1207,172 @@ mod tests {
             text.contains("big 1\n") && text.contains("big 5001"),
             "loaded"
         );
+    }
+
+    #[gpui::test]
+    async fn alt_a_loads_each_large_file_it_is_pressed_on(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let (big, huge) = (lines("big", 5_001), lines("huge", 5_001));
+        let (diff, _copy) = show(
+            &tab,
+            &[],
+            &[
+                Entry::File("big.txt", big.as_bytes()),
+                Entry::File("huge.txt", huge.as_bytes()),
+            ],
+            cx,
+        );
+        // The second key comes before the first file has loaded.
+        press_in(&diff, "big.txt", pr_tab::ExpandFile, cx);
+        press_in(&diff, "huge.txt", pr_tab::ExpandFile, cx);
+        cx.run_until_parked();
+        for path in ["big.txt", "huge.txt"] {
+            assert!(!is_folded(&diff, path, cx), "{path}");
+            assert_eq!(collapsed_label(&diff, path, cx), None, "{path}");
+        }
+        let text = text(&diff, cx);
+        assert!(text.contains("big 5001") && text.contains("huge 5001"));
+    }
+
+    #[gpui::test]
+    async fn whitespace_hidden_while_a_large_file_loads_is_hidden_in_it(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let base = lines("big", 5_001);
+        let head = base.replace('\n', " \n");
+        let (diff, _copy) = show(
+            &tab,
+            &[Entry::File("big.txt", base.as_bytes())],
+            &[Entry::File("big.txt", head.as_bytes())],
+            cx,
+        );
+        press_in(&diff, "big.txt", pr_tab::ExpandFile, cx);
+        press_in(&diff, "big.txt", pr_tab::ToggleWhitespace, cx);
+        cx.run_until_parked();
+        assert!(file(&diff, "big.txt", cx, |file, _| file.whitespace_hidden));
+        assert_eq!(
+            collapsed_label(&diff, "big.txt", cx).as_deref(),
+            Some("whitespace only")
+        );
+    }
+
+    #[gpui::test]
+    async fn a_file_with_a_line_over_a_mebibyte_is_too_large_to_show(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let long = format!("{}\n", "x".repeat(crate::file_display::MAX_LINE_BYTES + 1));
+        let (diff, _copy) = show(&tab, &[], &[Entry::File("data.txt", long.as_bytes())], cx);
+        assert_eq!(
+            collapsed_label(&diff, "data.txt", cx).as_deref(),
+            Some("large: load with ⌥A")
+        );
+
+        select(&diff, "data.txt", cx);
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        assert_eq!(
+            collapsed_label(&diff, "data.txt", cx).as_deref(),
+            Some("too large to show")
+        );
+        assert!(is_folded(&diff, "data.txt", cx));
+        // Opened, it says why, and the key does nothing more.
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        let text = text(&diff, cx);
+        assert!(
+            text.contains("(too large to show: it has a line over 1 MiB long)")
+                && !text.contains("xxx"),
+            "{}",
+            &text[..text.len().min(200)]
+        );
+    }
+
+    #[gpui::test]
+    async fn a_large_file_loaded_on_a_key_shows_from_the_trusted_checkout(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let big = lines("big", 5_001);
+        let copied = pr_diff::tests::copy(&[], &[Entry::File("big.txt", big.as_bytes())], true);
+        let dir = copied.checkout.clone().unwrap();
+        let (diff, _copy) = show_copy(&tab, copied, cx);
+        // The checkout, opened in the project as a trusted pull request's is.
+        let project = tab.read_with(cx, |tab, cx| {
+            tab.workspace()
+                .upgrade()
+                .unwrap()
+                .read(cx)
+                .project()
+                .clone()
+        });
+        let fs = project.read_with(cx, |project, _| project.fs().as_fake());
+        fs.insert_tree(&dir, serde_json::json!({ "big.txt": big }))
+            .await;
+        let (worktree, _) = project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree(&dir, true, cx)
+            })
+            .await
+            .unwrap();
+        let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+        cx.update(|_, cx| {
+            let rhs = diff.read(cx).rhs_editor().clone();
+            rhs.update(cx, |rhs, _| {
+                rhs.addon_mut::<ShownFiles>().unwrap().checkout =
+                    Some(pr_diff::Checkout { dir, worktree_id });
+            })
+        });
+
+        select(&diff, "big.txt", cx);
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        let shown = file(&diff, "big.txt", cx, |file, _| file.buffer.clone());
+        let opened = project.read_with(cx, |project, cx| {
+            project.get_open_buffer(
+                &ProjectPath {
+                    worktree_id,
+                    path: RelPath::from_unix_str("big.txt").unwrap().into_arc(),
+                },
+                cx,
+            )
+        });
+        assert_eq!(opened, Some(shown), "not the checkout's buffer");
+    }
+
+    #[gpui::test]
+    async fn a_large_file_in_githubs_diff_says_its_key_opens_it_until_it_does(
+        cx: &mut TestAppContext,
+    ) {
+        let (tab, cx) = tab(cx).await;
+        let large = |path, name| github::files::PullFile {
+            additions: 6_000,
+            changes: 6_001,
+            ..github_file(path, name, 20)
+        };
+        let diff = show_github(
+            &tab,
+            vec![large("Cargo.lock", "lock"), large("big.txt", "big")],
+            cx,
+        );
+        assert_eq!(
+            collapsed_label(&diff, "Cargo.lock", cx).as_deref(),
+            Some("lockfile, large: open with ⌥A")
+        );
+        assert_eq!(
+            collapsed_label(&diff, "big.txt", cx).as_deref(),
+            Some("large: open with ⌥A")
+        );
+
+        for path in ["Cargo.lock", "big.txt"] {
+            assert!(is_folded(&diff, path, cx), "{path}");
+            select(&diff, path, cx);
+            cx.simulate_keystrokes("alt-a");
+            cx.run_until_parked();
+            assert!(!is_folded(&diff, path, cx), "{path}");
+        }
+        assert_eq!(
+            collapsed_label(&diff, "Cargo.lock", cx).as_deref(),
+            Some("lockfile")
+        );
+        assert_eq!(collapsed_label(&diff, "big.txt", cx), None);
     }
 
     #[gpui::test]

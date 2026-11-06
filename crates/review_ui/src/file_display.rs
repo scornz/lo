@@ -20,6 +20,14 @@ pub(crate) enum Collapsed {
         generated: Option<Generated>,
         why: String,
     },
+    /// Too large for GitHub's diff to show in full: its key opens GitHub's patch of it, and the
+    /// local copy's diff loads it.
+    LargePatch {
+        generated: Option<Generated>,
+        why: String,
+    },
+    /// Too large to show at all, even on request. `why` says how large.
+    TooLarge { why: String },
     /// Every change in it is to whitespace, and whitespace changes are hidden.
     WhitespaceOnly,
     /// Its text didn't change: it was renamed, or only its mode or line endings changed.
@@ -41,6 +49,17 @@ impl Collapsed {
                 "{}, large: load with {load_key}",
                 generated_label(*generated)
             ),
+            Self::LargePatch {
+                generated: None, ..
+            } => format!("large: open with {load_key}"),
+            Self::LargePatch {
+                generated: Some(generated),
+                ..
+            } => format!(
+                "{}, large: open with {load_key}",
+                generated_label(*generated)
+            ),
+            Self::TooLarge { .. } => "too large to show".to_string(),
             Self::WhitespaceOnly => "whitespace only".to_string(),
             Self::NoChanges => "no changes".to_string(),
         }
@@ -58,6 +77,11 @@ impl Collapsed {
             Self::Large { why, .. } => {
                 format!("This file isn't loaded: {why}. {load_key} loads it.")
             }
+            Self::LargePatch { why, .. } => format!(
+                "This file is collapsed: {why}. {load_key} opens GitHub's patch of it; the local \
+                 copy's diff loads it in full once it's ready."
+            ),
+            Self::TooLarge { why } => format!("rozed doesn't show this file: {why}."),
             Self::WhitespaceOnly => {
                 "Every change to this file is to whitespace, and whitespace changes are hidden."
                     .to_string()
@@ -93,6 +117,32 @@ pub(crate) fn initial_collapse(file: &ChangedFile, loads: bool) -> Option<Collap
         });
     }
     state.generated.map(Collapsed::Generated)
+}
+
+/// The most a file rozed shows can hold, on either side, even loaded on request.
+pub(crate) const MAX_SHOWN_BYTES: u64 = 50 * 1024 * 1024;
+
+/// The longest line a file rozed shows can have: a minified bundle on one line is as slow to lay
+/// out as it is large.
+pub(crate) const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// Why a file is too large to show at all, from its larger side's size and its two sides' bytes
+/// when they've been read; `None` when it can show.
+pub(crate) fn too_large_to_show(size: Option<u64>, sides: &[&[u8]]) -> Option<String> {
+    if let Some(size) = size.filter(|size| *size > MAX_SHOWN_BYTES) {
+        return Some(format!(
+            "{}, more than the 50 MiB rozed shows",
+            size_text(size)
+        ));
+    }
+    sides
+        .iter()
+        .any(|bytes| {
+            bytes
+                .split(|byte| *byte == b'\n')
+                .any(|line| line.len() > MAX_LINE_BYTES)
+        })
+        .then(|| "it has a line over 1 MiB long".to_string())
 }
 
 /// How large a file is, for [`Collapsed::Large`]: its changed lines when there are too many,
@@ -282,6 +332,22 @@ pub(crate) fn without_whitespace_changes(old: &str, new: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn past_fifty_mebibytes_or_with_a_mebibyte_long_line_a_file_is_too_large_to_show() {
+        assert_eq!(too_large_to_show(Some(MAX_SHOWN_BYTES), &[]), None);
+        assert_eq!(
+            too_large_to_show(Some(MAX_SHOWN_BYTES + 1024 * 1024), &[]).as_deref(),
+            Some("51.0 MiB, more than the 50 MiB rozed shows")
+        );
+        let line = vec![b'x'; MAX_LINE_BYTES];
+        assert_eq!(too_large_to_show(None, &[&line, b"short\n"]), None);
+        let longer = [line.as_slice(), b"x\nshort\n"].concat();
+        assert_eq!(
+            too_large_to_show(None, &[b"short\n", &longer]).as_deref(),
+            Some("it has a line over 1 MiB long")
+        );
+    }
 
     fn file(path: &str, changed_lines: u32, size: Option<u64>) -> ChangedFile {
         ChangedFile {
