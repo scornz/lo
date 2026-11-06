@@ -734,9 +734,20 @@ mod tests {
     /// Every version, as of the last change to what the cache stores. When this fails, a stored
     /// shape changed: rows written in the old one will read as missing and be fetched again.
     /// Check that's what the change means, then update the versions here. A read the poller keeps
-    /// ([`crate::poll::CachedRead`]) is stored stamped.
+    /// ([`crate::poll::CachedRead`]) is stored stamped. No two share a name, which would make
+    /// one read the other's rows as missing.
     #[test]
     fn versions_follow_the_stored_shapes() {
+        let names = [
+            PullSummary::NAME,
+            ListedPulls::NAME,
+            PullRequestData::NAME,
+            PullRequestCheckData::NAME,
+            OpenPullRequestList::NAME,
+            Stamped::<PushHistory>::NAME,
+        ];
+        let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+        assert_eq!(unique.len(), names.len(), "{names:?}");
         assert_eq!(
             [
                 (PullSummary::NAME, PullSummary::version()),
@@ -755,7 +766,7 @@ mod tests {
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
                 ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
-                ("PushHistory", "72388c5a64f800c5".to_string()),
+                ("PushHistory", "52e3eeae88f23980".to_string()),
             ]
         );
     }

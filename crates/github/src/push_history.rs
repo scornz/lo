@@ -16,7 +16,7 @@ use review::revisions::{BaseHistory, BaseRecord, Merge, PushRecord, Retarget};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::activity::{BranchActivity, Direction};
+use crate::activity::{ActivityEntry, BranchActivity, Direction};
 use crate::cache::{CacheEntry, schema_shape};
 use crate::client::{API_VERSION, GithubClient};
 use crate::error::GithubError;
@@ -161,6 +161,12 @@ impl CacheEntry for PushHistory {
 impl CachedRead for PushHistory {
     /// A push changes the head, and every other event it reads is a timeline item.
     const WATCHED: &'static [&'static str] = &["/headRefOid", "/timelineItems/updatedAt"];
+
+    /// Whether every branch's pushes were read, or GitHub has none to show.
+    fn is_complete(&self) -> bool {
+        (std::iter::once(&self.head_activity).chain(&self.base_activity))
+            .all(|activity| activity.failed.is_none())
+    }
 }
 
 impl PushHistory {
@@ -445,10 +451,9 @@ impl GithubClient {
         history.head_activity = match &history.head_repo {
             Some(repo) => {
                 let known = known.map(|known| &known.head_activity);
-                (self.branch_activity(
+                (self.read_branch(
                     &repo.into(),
                     &history.head_branch,
-                    Direction::Desc,
                     known,
                     MAX_HEAD_PAGES,
                     |entry| entry.timestamp <= opened,
@@ -469,19 +474,51 @@ impl GithubClient {
                 (known.base_activity.iter()).find(|activity| activity.branch == branch)
             });
             let activity = self
-                .branch_activity(
-                    &pull.repo,
-                    &branch,
-                    Direction::Desc,
-                    known,
-                    MAX_BASE_PAGES,
-                    |entry| entry.timestamp <= since,
-                )
+                .read_branch(&pull.repo, &branch, known, MAX_BASE_PAGES, |entry| {
+                    entry.timestamp <= since
+                })
                 .await?;
             history.base_activity.push(activity);
         }
         Ok(history)
     }
+}
+
+impl GithubClient {
+    /// [`GithubClient::branch_activity`], newest first. An error that isn't the network's, the
+    /// rate limit's or the token's fails only this branch's read: it keeps what `known` read
+    /// before, flagged `failed`, so the rest of the push history still shows and is kept, and
+    /// the whole is read again after a wait ([`CachedRead::is_complete`]).
+    async fn read_branch(
+        &self,
+        repo: &RepoRef,
+        branch: &str,
+        known: Option<&BranchActivity>,
+        max_pages: usize,
+        enough: impl Fn(&ActivityEntry) -> bool,
+    ) -> Result<BranchActivity, GithubError> {
+        let direction = Direction::Desc;
+        match (self.branch_activity(repo, branch, direction, known, max_pages, enough)).await {
+            Err(error) if !stops_the_read(&error) => {
+                log::warn!("reading the pushes to {repo} {branch}: {error:#}");
+                let reason = error.to_string();
+                Ok(BranchActivity::failed(known, branch, direction, reason))
+            }
+            result => result,
+        }
+    }
+}
+
+/// Whether an error fails a whole push history: the network, the rate limit and the token stop
+/// every request after it too, and the poller waits them out.
+fn stops_the_read(error: &GithubError) -> bool {
+    matches!(
+        error,
+        GithubError::Network(_)
+            | GithubError::RateLimited { .. }
+            | GithubError::Unauthorized { .. }
+            | GithubError::TokenUnavailable(_)
+    )
 }
 
 /// [`GithubClient::push_history`] as [`crate::poll::Poller::read_cached`] runs it.

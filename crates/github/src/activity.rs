@@ -8,12 +8,12 @@
 //! with its URL, its ETag and the next page's URL.
 
 use chrono::{DateTime, Utc};
-use http_client::Method;
 use http_client::http::StatusCode;
+use http_client::{Method, Url};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::client::{GithubClient, RestResponse};
+use crate::client::{API_URL, GithubClient, RestResponse};
 use crate::error::GithubError;
 use crate::pulls::RepoRef;
 use crate::queries::PAGE_SIZE;
@@ -94,6 +94,14 @@ pub struct BranchActivity {
     /// Why GitHub showed none: the repository is gone, as a deleted fork is, or the account can't
     /// read it.
     pub unavailable: Option<String>,
+    /// The page on github.com that fixes why it's unavailable, such as authorizing the account's
+    /// single sign-on for an organization.
+    #[serde(default)]
+    pub help_url: Option<String>,
+    /// Why the latest read failed, for a reason that may pass, such as an error on GitHub's side.
+    /// The pages are an earlier read's, if there was one.
+    #[serde(default)]
+    pub failed: Option<String>,
 }
 
 impl BranchActivity {
@@ -115,6 +123,8 @@ impl BranchActivity {
             pages: Vec::new(),
             truncated: false,
             unavailable: None,
+            help_url: None,
+            failed: None,
         }
     }
 
@@ -125,17 +135,41 @@ impl BranchActivity {
             ..Self::none(branch, direction)
         }
     }
+
+    /// `known`'s pushes, if it read the same branch the same way, or none, after a read that
+    /// failed for `reason`.
+    pub(crate) fn failed(
+        known: Option<&BranchActivity>,
+        branch: &str,
+        direction: Direction,
+        reason: String,
+    ) -> Self {
+        let known = known.filter(|known| {
+            known.branch == branch && known.direction == direction && known.unavailable.is_none()
+        });
+        Self {
+            failed: Some(reason),
+            ..known
+                .cloned()
+                .unwrap_or_else(|| Self::none(branch, direction))
+        }
+    }
 }
 
 /// The REST path of the first page of `branch`'s pushes in `repo`.
 pub fn activity_path(repo: &RepoRef, branch: &str, direction: Direction) -> String {
+    let mut url = Url::parse(API_URL).expect("the API's URL parses");
+    url.path_segments_mut()
+        .expect("the API's URL has a path")
+        .clear()
+        .extend(["repos", &repo.owner, &repo.name, "activity"]);
     let query = serde_urlencoded::to_string([
         ("ref", format!("refs/heads/{branch}").as_str()),
         ("direction", direction.as_str()),
         ("per_page", &PAGE_SIZE.to_string()),
     ])
     .expect("strings encode");
-    format!("/repos/{}/{}/activity?{query}", repo.owner, repo.name)
+    format!("{}?{query}", url.path())
 }
 
 /// The URL a `Link` header gives for `rel="next"`.
@@ -210,14 +244,21 @@ impl GithubClient {
                 Err(error) => match unavailable_reason(&error) {
                     Some(reason) => {
                         log::info!("no pushes to show for {repo} {branch}: {reason}");
-                        return Ok(BranchActivity::unavailable(branch, direction, reason));
+                        return Ok(BranchActivity {
+                            help_url: error.help_link().map(|link| link.url().to_string()),
+                            ..BranchActivity::unavailable(branch, direction, reason)
+                        });
                     }
                     None => return Err(error),
                 },
             };
             let page = match page_from(response, current, known_page)? {
                 Page::Unchanged(_) if index == 0 && direction == Direction::Desc => {
-                    return Ok(known.expect("an unchanged page is a known one").clone());
+                    let known = known.expect("an unchanged page is a known one");
+                    return Ok(BranchActivity {
+                        failed: None,
+                        ..known.clone()
+                    });
                 }
                 Page::Unchanged(page) | Page::Changed(page) => page,
             };
@@ -279,6 +320,47 @@ mod tests {
             None
         );
         assert_eq!(next_link(""), None);
+    }
+
+    #[test]
+    fn a_repository_gone_or_closed_to_the_account_is_unavailable_and_a_failure_is_not() {
+        let api = |status: u16| GithubError::Api {
+            status,
+            message: format!("HTTP {status}"),
+            documentation_url: None,
+            errors: Vec::new(),
+        };
+        let unavailable = [
+            GithubError::NotFound {
+                message: "Not Found".into(),
+                documentation_url: None,
+            },
+            GithubError::SsoRequired {
+                message: "SAML".into(),
+                url: None,
+            },
+            GithubError::OAuthAppRestricted {
+                message: "restricted".into(),
+                org: None,
+                documentation_url: None,
+            },
+            api(403),
+            api(409),
+            api(410),
+            api(451),
+        ];
+        for error in &unavailable {
+            assert!(unavailable_reason(error).is_some(), "{error:?}");
+        }
+        for error in [
+            api(500),
+            api(502),
+            api(422),
+            GithubError::Decode("no".into()),
+            GithubError::Network(anyhow::anyhow!("down")),
+        ] {
+            assert_eq!(unavailable_reason(&error), None, "{error:?}");
+        }
     }
 
     #[test]

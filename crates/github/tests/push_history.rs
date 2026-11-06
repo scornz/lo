@@ -791,3 +791,117 @@ fn a_squash_or_rebase_merge_takes_master_before_the_merge_and_a_fast_forward_wit
     let uncertain = (sha(9)[..7].to_string(), BaseTipSource::Uncertain);
     assert_eq!(bases(&fast_forwarded), [uncertain.clone(), uncertain]);
 }
+
+/// e2e#14's recorded answers, with `main`'s pushes answered by `answers` in turn: for the read
+/// without an ETag, then for the one with it.
+fn with_main_answers(first: Interaction, again: Option<Interaction>) -> Vec<Interaction> {
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    let mut interactions = Vec::new();
+    for (_, interaction) in recorded {
+        let main = interaction.request.url.contains("heads%2Fmain");
+        match (main, interaction.request.if_none_match.is_some()) {
+            (true, false) => interactions.push(first.clone()),
+            (true, true) => interactions.extend(again.clone()),
+            (false, _) => interactions.push(interaction),
+        }
+    }
+    interactions
+}
+
+/// The recorded first read of `main`'s pushes, answered `status` with `body` instead.
+fn main_answered(status: u16, headers: &[(&str, &str)], body: serde_json::Value) -> Interaction {
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    let mut interaction = (recorded.into_iter().map(|(_, interaction)| interaction))
+        .find(|interaction| interaction.request.url.contains("heads%2Fmain"))
+        .unwrap();
+    interaction.response = RecordedResponse {
+        status,
+        headers: (headers.iter())
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+        body: Some(body),
+        body_text: None,
+    };
+    interaction
+}
+
+#[test]
+fn a_branch_whose_pushes_fail_is_read_again_and_the_rest_is_kept() {
+    use github::poll::CachedRead as _;
+
+    let bad_gateway = main_answered(502, &[], serde_json::json!({"message": "Bad Gateway"}));
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    let main = (recorded.into_iter().map(|(_, interaction)| interaction))
+        .find(|interaction| interaction.request.url.contains("heads%2Fmain"))
+        .unwrap();
+    let mut interactions = with_main_answers(bad_gateway.clone(), None);
+    // Read again, `main` answers.
+    interactions.push(main.clone());
+    let http = Arc::new(ReplayHttpClient::from_interactions("failed", interactions).unwrap());
+    let client = client(http);
+
+    let failed = block_on(client.push_history(&e2e(14), BOT, None)).unwrap();
+
+    // GraphQL's answer and the head branch's pushes are all there, so are the revisions.
+    assert!(!failed.is_complete());
+    let main_activity = &failed.base_activity[0];
+    assert_eq!(
+        main_activity.failed.as_deref(),
+        Some("GitHub answered 502: Bad Gateway")
+    );
+    assert!(main_activity.entries().is_empty() && main_activity.unavailable.is_none());
+    assert_eq!(revisions(&failed, &[]).len(), 6);
+    assert!(failed.last_review().is_some());
+
+    let again = block_on(client.push_history(&e2e(14), BOT, Some(&failed))).unwrap();
+    assert!(again.is_complete());
+    assert_eq!(again.base_activity[0].entries().len(), 5);
+
+    // A read that fails after one that worked keeps the pushes it read.
+    let interactions = with_main_answers(main, Some(bad_gateway_for_etag(&again)));
+    let http = Arc::new(ReplayHttpClient::from_interactions("failed_later", interactions).unwrap());
+    let client = self::client(http);
+    let first = block_on(client.push_history(&e2e(14), BOT, None)).unwrap();
+    let later = block_on(client.push_history(&e2e(14), BOT, Some(&first))).unwrap();
+    assert!(!later.is_complete());
+    assert_eq!(later.base_activity[0].entries().len(), 5);
+    assert!(later.base_activity[0].failed.is_some());
+}
+
+/// A 502 for the conditional read of `main`'s first page, as `known` read it.
+fn bad_gateway_for_etag(known: &PushHistory) -> Interaction {
+    let page = &known.base_activity[0].pages[0];
+    let mut interaction = main_answered(502, &[], serde_json::json!({"message": "Bad Gateway"}));
+    interaction.request.if_none_match = page.etag.clone();
+    interaction
+}
+
+#[test]
+fn a_base_branch_behind_single_sign_on_is_unavailable_with_its_link() {
+    let sso = main_answered(
+        403,
+        &[(
+            "x-github-sso",
+            "required; url=https://github.com/orgs/acme/sso?authorization_request=REDACTED",
+        )],
+        serde_json::json!({"message": "Resource protected by organization SAML enforcement."}),
+    );
+    let http =
+        Arc::new(ReplayHttpClient::from_interactions("sso", with_main_answers(sso, None)).unwrap());
+
+    let history = block_on(client(http).push_history(&e2e(14), BOT, None)).unwrap();
+
+    let main = &history.base_activity[0];
+    assert_eq!(
+        main.unavailable.as_deref(),
+        Some("Resource protected by organization SAML enforcement.")
+    );
+    assert_eq!(
+        main.help_url.as_deref(),
+        Some("https://github.com/orgs/acme/sso?authorization_request=REDACTED")
+    );
+    assert!(main.failed.is_none());
+}

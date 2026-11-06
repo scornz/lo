@@ -1894,6 +1894,11 @@ impl github::cache::CacheEntry for Counted {
 
 impl CachedRead for Counted {
     const WATCHED: &'static [&'static str] = &["/headRefOid", "/timelineItems/updatedAt"];
+
+    /// Zero stands for a value one of whose parts couldn't be read.
+    fn is_complete(&self) -> bool {
+        self.0 != 0
+    }
 }
 
 /// How many times the read ran, and what it answers next: a value, or an error.
@@ -2114,6 +2119,39 @@ async fn a_cached_read_whose_refresh_keeps_failing_waits_longer_each_time(cx: &m
     assert_eq!(cached_count(&t), Some(5));
     t.run_until(2690);
     assert_eq!(answers.runs(), 12);
+}
+
+#[gpui::test]
+async fn a_cached_read_that_isnt_complete_is_kept_and_read_again_after_a_wait(
+    cx: &mut TestAppContext,
+) {
+    let mut t = Polling::new("cached_read_incomplete", recorded(), cx).await;
+    let answers = Answers::default();
+    answers.answer(Ok(0));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(cached_count(&t), Some(0));
+    assert!(t.events().contains(&"read Counted #1".to_string()));
+
+    // Nothing it watches changed, but it's read again after the open PR's interval, then
+    // waiting longer each time, as a read that failed is.
+    t.run_until(19);
+    assert_eq!(answers.runs(), 1);
+    t.run_until(20);
+    assert_eq!(answers.runs(), 2);
+    t.run_until(59);
+    assert_eq!(answers.runs(), 2);
+    answers.answer(Ok(4));
+    t.run_until(60);
+    assert_eq!(answers.runs(), 3);
+    assert_eq!(cached_count(&t), Some(4));
+    // Complete, it waits for its watched fields or the 5-minute refresh.
+    t.run_until(359);
+    assert_eq!(answers.runs(), 3);
 }
 
 #[gpui::test]
