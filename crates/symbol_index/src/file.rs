@@ -18,6 +18,10 @@ pub struct FileSymbols {
     definitions: Vec<Definition>,
     /// In the order of their names in the file.
     references: Vec<Reference>,
+    /// Every definition's name once, sorted, to tell quickly whether the file defines a name.
+    definition_names: Box<[Arc<str>]>,
+    /// Every reference's name once, sorted.
+    reference_names: Box<[Arc<str>]>,
 }
 
 /// A definition of a name: a function, type, method, constant and so on.
@@ -113,6 +117,8 @@ impl FileSymbols {
         link(&mut definitions, &mut references);
 
         Self {
+            definition_names: sorted_names(&definitions, |definition| &definition.name),
+            reference_names: sorted_names(&references, |reference| &reference.name),
             definitions,
             references,
         }
@@ -136,6 +142,20 @@ impl FileSymbols {
     /// The definition that contains `reference`, one of this file's.
     pub fn enclosing(&self, reference: &Reference) -> Option<&Definition> {
         reference.enclosing.map(|index| &self.definitions[index])
+    }
+
+    /// Whether the file defines `name`.
+    pub(crate) fn defines(&self, name: &str) -> bool {
+        self.definition_names
+            .binary_search_by(|probe| (**probe).cmp(name))
+            .is_ok()
+    }
+
+    /// Whether the file refers to `name`.
+    pub(crate) fn refers_to(&self, name: &str) -> bool {
+        self.reference_names
+            .binary_search_by(|probe| (**probe).cmp(name))
+            .is_ok()
     }
 }
 
@@ -190,6 +210,14 @@ fn innermost(
         .rev()
         .copied()
         .find(|&index| definitions[index].range != *range)
+}
+
+/// Each name in `symbols` once, sorted.
+fn sorted_names<T>(symbols: &[T], name: impl Fn(&T) -> &Arc<str>) -> Box<[Arc<str>]> {
+    let mut names: Vec<Arc<str>> = symbols.iter().map(|symbol| name(symbol).clone()).collect();
+    names.sort_unstable();
+    names.dedup();
+    names.into()
 }
 
 /// Shares one allocation between every use of a name, or a kind, in a file.

@@ -7,7 +7,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use symbol_index::{BlobId, File, FileSymbols, Grammar, Index, queries};
+use symbol_index::{BlobId, File, FileSymbols, Grammar, Index, Store, queries};
 
 pub static RUST: LazyLock<Grammar> =
     LazyLock::new(|| Grammar::new(tree_sitter_rust::LANGUAGE.into(), queries::RUST).unwrap());
@@ -132,6 +132,15 @@ impl Blobs {
         reads.sort();
         reads
     }
+}
+
+/// Indexes `files` with a fresh store.
+pub fn index(files: &[(&str, &str)]) -> Index {
+    let blobs = Blobs::default();
+    let files = blobs.commit(files);
+    Store::default()
+        .index(&files, |file| blobs.read(file))
+        .unwrap()
 }
 
 /// The names a file defines, in order.

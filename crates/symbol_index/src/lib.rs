@@ -9,5 +9,5 @@ mod store;
 
 pub use file::{Definition, FileSymbols, Position, Reference};
 pub use grammar::{Grammar, GrammarError};
-pub use index::Index;
+pub use index::{Found, Index, Rank};
 pub use store::{BlobId, File, Limits, Skip, Store};
