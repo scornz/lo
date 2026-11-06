@@ -70,7 +70,7 @@ rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed
 Run these before every push. CI runs the same on macOS.
 
 ```sh
-cargo fmt --all --check
+cargo fmt --check  # not --all, which formats Zed's crates too
 cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

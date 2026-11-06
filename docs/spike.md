@@ -52,7 +52,7 @@ Local, on an 18-core Apple silicon Mac with 64 GB:
 | Release build (thin LTO, one codegen unit) | 6 min |
 | Release binary | 139 MB, 106 MB stripped |
 
-CI, `rust` job on `macos-latest` (`macos-26-arm64`):
+CI, `rust` job on `macos-26` (arm64):
 
 | | |
 |---|---|

@@ -85,7 +85,8 @@ jobs:
     name: rust
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: macos-latest
+    # Pinned, so a new macOS or Xcode arrives in a PR of its own.
+    runs-on: macos-26
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
@@ -114,8 +115,9 @@ jobs:
       # repository, so those build on every run.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Not --all, which also formats path dependencies: Zed's crates.
       - name: Format
-        run: cargo fmt --all --check
+        run: cargo fmt --check
 
       # xtask (crates/xtask) is its own workspace, so the steps for rozed's workspace skip it.
       - name: Check xtask
