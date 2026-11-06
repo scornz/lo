@@ -127,9 +127,12 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
             println!("sync-zed: copied Zed's Cargo.lock.");
             // Against Zed's lockfile nothing is pruned yet. Let cargo resolve with every patch in
             // place, which drops what rozed doesn't use from the lockfile, then prune against it.
+            // Pruning changes no package, so a last resolve only clears the pruned patches from
+            // the lockfile's `[[patch.unused]]` list.
             write(root, &compute(root)?)?;
             resolve(root)?;
             write(root, &compute(root)?)?;
+            resolve(root)?;
             Ok(true)
         }
     }
