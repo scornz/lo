@@ -930,6 +930,37 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn a_row_whose_account_lost_access_opens_with_one_that_has_it(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("acme/app", 1, &[], &[("a.rs", "a\n")]);
+        github.add_pull(pull);
+        // home opened it once, but only work can see it now.
+        github.let_see("gho_WORK", "acme/app");
+        let (_, cache) = sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+        cache
+            .record_recent(recent(("acme", "app", 1), Some("Change 1"), "home", 600))
+            .await
+            .unwrap();
+        workspace.update_in(cx, show);
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        let tab = tabs(&workspace, cx).pop().unwrap();
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.status().clone()),
+            pr_tab::Status::Ready
+        );
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.acting().cloned()),
+            Some(Acting::Account("work".into()))
+        );
+    }
+
+    #[gpui::test]
     async fn a_renamed_repository_is_listed_once_by_its_name_now(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();

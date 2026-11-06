@@ -143,6 +143,12 @@ pub fn open_with(
         start(&mut tab, window, cx);
         tab
     });
+    // The window may be titled after it while it isn't the active item, as with an empty pane
+    // active.
+    cx.subscribe_in(&tab, window, |workspace, _, _: &PrTabEvent, window, cx| {
+        window_title::update(workspace, window, cx)
+    })
+    .detach();
     workspace.add_item_to_active_pane(Box::new(tab.clone()), None, true, window, cx);
     tab
 }
@@ -175,7 +181,8 @@ pub enum Status {
     Loading(SharedString),
     /// Every file is in the diff.
     Ready,
-    /// GitHub couldn't be reached, and the diff is the local copy's, read-only. Says so, and why.
+    /// GitHub's view didn't load, and the diff is the local copy's, read-only, while rozed keeps
+    /// trying. Says so, and why.
     Offline(SharedString),
     Failed(SharedString),
 }
@@ -205,9 +212,11 @@ pub struct PrTab {
     file_list_focus: FocusHandle,
     file_list_scroll: UniformListScrollHandle,
     acting: Option<Acting>,
-    /// The account to open the pull request with while it's signed in, whatever account the
-    /// repository's choice is.
+    /// The account to open the pull request with, while it can see the repository, whatever
+    /// account the repository's choice is: a recent row's, for the load that row started.
     preferred: Option<String>,
+    /// Whether the diff shown is the local copy's, because GitHub's didn't load.
+    showing_copy: bool,
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
@@ -272,6 +281,7 @@ impl PrTab {
             file_list_scroll: UniformListScrollHandle::new(),
             acting: None,
             preferred: None,
+            showing_copy: false,
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
@@ -298,24 +308,46 @@ impl PrTab {
     pub fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (link, trust, opened) = (self.key.opened_as.clone(), self.trust, self.opened);
         self._load = Some(cx.spawn_in(window, async move |this, cx| {
+            // How many times GitHub was checked since a load last worked, so the waits keep
+            // growing across loads that fail again.
+            let mut checks = 0;
             loop {
                 let saved = saved_details(&link, cx).await;
                 let error = match load(this.clone(), link.clone(), trust, opened, &saved, cx).await
                 {
-                    Ok(()) => return,
+                    Ok(()) => {
+                        this.update(cx, |this, _| this.showing_copy = false).ok();
+                        return;
+                    }
                     Err(error) => error,
                 };
-                if !is_offline(&error) {
-                    failed(&this, &link, error, cx);
+                match this.read_with(cx, |this, _| this.showing_copy) {
+                    Err(_) => return,
+                    // The local copy stays, whatever kept GitHub's from loading, with why.
+                    Ok(true) => {
+                        log::warn!("{link}: {error:#}; still showing the local copy");
+                        let shown =
+                            this.update(cx, |this, cx| this.showing_copy_because(&error, cx));
+                        if shown.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(false) if is_retryable(&error) => {
+                        if let Err(error) =
+                            show_offline(this.clone(), link.clone(), opened, saved, error, cx).await
+                        {
+                            failed(&this, &link, error, cx);
+                        }
+                    }
+                    Ok(false) => {
+                        failed(&this, &link, error, cx);
+                        return;
+                    }
+                }
+                // It keeps checking, and loads again once GitHub answers.
+                if !wait_for_github(&mut checks, cx).await {
                     return;
                 }
-                if let Err(error) =
-                    show_offline(this.clone(), link.clone(), opened, saved, error, cx).await
-                {
-                    failed(&this, &link, error, cx);
-                }
-                // An offline tab keeps checking, and loads again once GitHub answers.
-                wait_for_github(cx).await;
                 log::info!("{link}: GitHub answers again, so loading it again");
                 if this.update(cx, |this, cx| this.start_again(cx)).is_err() {
                     return;
@@ -364,6 +396,8 @@ impl PrTab {
     /// Forgets why the tab failed, before it loads again.
     fn start_again(&mut self, cx: &mut Context<Self>) {
         self.acting = None;
+        // A recent row's account is for the load it started.
+        self.preferred = None;
         self.help_links.clear();
         self.set_status(
             Status::Loading("Finding an account that can see it…".into()),
@@ -456,14 +490,43 @@ impl PrTab {
         self.show_saved_banner(true, cx);
     }
 
-    /// GitHub couldn't be reached, so the tab shows the local copy's diff with what rozed saved.
-    fn showing_offline(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
+    /// The tab shows the local copy's diff with what rozed saved, because loading from GitHub
+    /// failed with `why`.
+    fn showing_copy_because(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
+        self.showing_copy = true;
         self.show_saved_banner(false, cx);
-        let text = format!(
-            "Offline: {why:#}. This is the local copy's diff, read-only, until GitHub answers \
-             again; rozed keeps trying."
-        );
+        let text = if is_offline(why) {
+            format!(
+                "Offline: {why:#}. This is the local copy's diff, read-only, until GitHub \
+                 answers again; rozed keeps trying."
+            )
+        } else if is_retryable(why) {
+            format!(
+                "GitHub didn't answer: {why:#}. This is the local copy's diff, read-only, until \
+                 it does; rozed keeps trying."
+            )
+        } else {
+            format!(
+                "GitHub answered, but rozed couldn't load the pull request: {why:#}. This is the \
+                 local copy's diff, read-only; rozed keeps trying."
+            )
+        };
         self.set_status(Status::Offline(text.into()), cx);
+    }
+
+    /// The tab waits for the account picker to ask about `subject`, or the picker asks now.
+    pub(crate) fn waiting_for_account(
+        &mut self,
+        subject: &str,
+        asking: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let text = if asking {
+            format!("Choose the account rozed uses for {subject}…")
+        } else {
+            format!("Waiting to ask which account rozed uses for {subject}…")
+        };
+        self.set_status(Status::Loading(text.into()), cx);
     }
 
     /// Says how old the saved details the tab shows are, if it shows them.
@@ -1175,7 +1238,7 @@ fn failed(
         .map(|refusal| refusal.links.clone())
         .unwrap_or_default();
     let mut text = format!("{error:#}");
-    if is_offline(&error) {
+    if is_retryable(&error) {
         text.push_str(". rozed keeps trying GitHub.");
     }
     this.update(cx, |this, cx| {
@@ -1191,20 +1254,37 @@ fn failed(
 const OFFLINE_FIRST_WAIT: Duration = Duration::from_secs(5);
 const OFFLINE_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 
-/// Waits until GitHub answers again, checking less often the longer it doesn't.
-async fn wait_for_github(cx: &mut AsyncWindowContext) {
-    let mut attempt = 0;
+/// Waits until GitHub answers again, checking less often the longer it doesn't: `checks` counts
+/// the checks so far, kept by the caller across loads. Each wait is up to a fifth shorter at
+/// random, so tabs offline together don't all load at once. Returns false once the window's gone.
+async fn wait_for_github(checks: &mut u32, cx: &mut AsyncWindowContext) -> bool {
     loop {
-        attempt += 1;
-        let wait = github::poll::backoff(attempt, OFFLINE_FIRST_WAIT, OFFLINE_MAX_WAIT, 0., 0.);
+        *checks += 1;
+        let wait = github::poll::backoff(
+            *checks,
+            OFFLINE_FIRST_WAIT,
+            OFFLINE_MAX_WAIT,
+            0.2,
+            jitter_sample(),
+        );
         cx.background_executor().timer(wait).await;
         let Ok(http) = cx.update(|_, cx| cx.http_client()) else {
-            return;
+            return false;
         };
-        if github_api::github_answers(http).await {
-            return;
+        let executor = cx.background_executor().clone();
+        if github_api::github_answers(http, executor).await {
+            return true;
         }
     }
+}
+
+/// A number in `0..1` to jitter a wait with; the clock's nanoseconds will do.
+fn jitter_sample() -> f64 {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    f64::from(nanos % 1_000_000) / 1_000_000.0
 }
 
 /// Loads `link`'s pull request into `this`: picks the account, reads the pull request, copies it
@@ -1224,27 +1304,27 @@ async fn load(
         this.update(cx, |this, cx| this.show_saved(saved, cx))?;
     }
 
-    // The account it was asked to open with, while it's signed in.
-    let preferred = this.read_with(cx, |this, _| this.preferred.clone())?;
-    let preferred = match (&layer, preferred) {
-        (Some(layer), Some(login)) => cx.update(|_, cx| {
-            let accounts = layer.read(cx).accounts().read(cx);
-            (accounts.account(&login).is_some() && !accounts.is_signed_out(&login)).then_some(login)
-        })?,
-        _ => None,
-    };
-
-    // Else the account that can see the repository, or none for a public one.
-    let found = match (&layer, &preferred) {
-        (_, Some(_)) | (None, _) => None,
-        (Some(layer), None) => Some(
+    // The account that can see the repository, or none for a public one.
+    let found = match &layer {
+        Some(layer) => Some(
             layer
                 .update(cx, |layer, cx| {
                     layer.account_for_repo(&link.owner, &link.repo, cx)
                 })
                 .await?,
         ),
+        None => None,
     };
+    // A recent row's account, if it can still see the repository.
+    let preferred = this.read_with(cx, |this, _| this.preferred.clone())?;
+    let preferred = preferred.and_then(|login| {
+        found
+            .as_ref()?
+            .visible
+            .iter()
+            .find(|visible| visible.eq_ignore_ascii_case(&login))
+            .cloned()
+    });
     let acting = match (preferred, account::decide(found.as_ref()), &found) {
         (Some(login), _, _) => Acting::Account(login),
         (None, AccountDecision::Open(acting), _) => acting,
@@ -1347,6 +1427,16 @@ fn is_offline(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `error` says GitHub may answer if asked again soon: it couldn't be reached, or a
+/// request got no answer in time (see [`GithubError::is_retryable`]).
+fn is_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<GithubError>()
+            .is_some_and(GithubError::is_retryable)
+    })
+}
+
 /// When GitHub couldn't be reached (`offline`), shows the pull request's diff from the local
 /// copy, if it has the head rozed `saved`, with the saved details and their age (design §11
 /// "Offline"). Without a copy, it's `offline` again, and the tab shows the saved details alone.
@@ -1366,7 +1456,7 @@ async fn show_offline(
         pr_diff::open_offline(this.clone(), workspace, link.clone(), &saved, opened, cx).await;
     match shown {
         Ok(true) => {
-            this.update(cx, |this, cx| this.showing_offline(&offline, cx))?;
+            this.update(cx, |this, cx| this.showing_copy_because(&offline, cx))?;
             Ok(())
         }
         Ok(false) => Err(offline),
@@ -1397,14 +1487,11 @@ async fn ask_for_account(
         None => found.owner.clone(),
     };
     let workspace = this.update(cx, |this, cx| {
-        this.set_status(
-            Status::Loading(format!("Choose the account rozed uses for {subject}…").into()),
-            cx,
-        );
+        this.waiting_for_account(&subject, false, cx);
         this.workspace.clone()
     })?;
     let window = cx.window_handle();
-    let tab = this.entity_id();
+    let tab = this.clone();
     let answer = cx.update(|_, cx| {
         account_picker::ask(
             tab,
@@ -1418,7 +1505,11 @@ async fn ask_for_account(
     })?;
     match answer.await {
         Ok(Ok(login)) => Ok(login),
-        Ok(Err(NotChosen { subject })) => anyhow::bail!(
+        Ok(Err(NotChosen::NoneLeft { subject })) => anyhow::bail!(
+            "No account that can see {subject} is signed in any more. Sign in from Accounts… in \
+             the rozed menu, then open the pull request again."
+        ),
+        Ok(Err(NotChosen::Dismissed { subject })) => anyhow::bail!(
             "No account was chosen for {subject}. Open the pull request again to choose one."
         ),
         Err(_) => anyhow::bail!(
@@ -1844,6 +1935,14 @@ mod tests {
         }
     }
 
+    /// Makes `tab` the active tab, as clicking it does.
+    fn activate(workspace: &Entity<Workspace>, tab: &Entity<PrTab>, cx: &mut VisualTestContext) {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.activate_item(tab, true, true, window, cx)
+        });
+        cx.run_until_parked();
+    }
+
     fn acting(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<Acting> {
         tab.read_with(cx, |tab, _| tab.acting().cloned())
     }
@@ -2011,22 +2110,30 @@ mod tests {
         assert_eq!(picker(&workspace, cx), None);
     }
 
-    #[gpui::test]
-    async fn an_account_removed_while_the_picker_lists_it_isnt_used(cx: &mut TestAppContext) {
+    /// With the picker listing `home` and `work`, `work` is removed, or signed out: it drops out,
+    /// and the picker asks again with `home` alone, rather than open as an account that can't.
+    async fn an_account_dropping_out_of_the_picker(signed_out: bool, cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
         let accounts = two_accounts_see_acme(&github, &git, cx).await;
         let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
-        accounts
-            .update(cx, |accounts, cx| accounts.remove("work", cx))
-            .await
-            .unwrap();
-
-        cx.simulate_keystrokes("j enter");
+        assert_eq!(
+            picker(&workspace, cx),
+            Some(("acme".to_string(), logins(&["home", "work"])))
+        );
+        if signed_out {
+            accounts.update(cx, |accounts, cx| {
+                accounts.mark_signed_out("work", github::accounts::SignedOut::Refused, cx)
+            });
+        } else {
+            accounts
+                .update(cx, |accounts, cx| accounts.remove("work", cx))
+                .await
+                .unwrap();
+        }
         cx.run_until_parked();
 
-        // It asks again, with the accounts left, rather than open as another one.
         assert_eq!(
             picker(&workspace, cx),
             Some(("acme".to_string(), logins(&["home"])))
@@ -2041,6 +2148,16 @@ mod tests {
                 .unwrap()),
             Some("home".to_string())
         );
+    }
+
+    #[gpui::test]
+    async fn an_account_removed_while_the_picker_lists_it_drops_out(cx: &mut TestAppContext) {
+        an_account_dropping_out_of_the_picker(false, cx).await;
+    }
+
+    #[gpui::test]
+    async fn an_account_signed_out_while_the_picker_lists_it_drops_out(cx: &mut TestAppContext) {
+        an_account_dropping_out_of_the_picker(true, cx).await;
     }
 
     #[gpui::test]
@@ -2066,9 +2183,11 @@ mod tests {
         .await;
         let app = open_unloaded(&workspace, "github.com/acme/app/pull/1", cx);
         let secret = open_unloaded(&workspace, "github.com/acme/secret/pull/2", cx);
+        activate(&workspace, &app, cx);
         load(&[&app, &secret], cx);
 
-        // Both checks are done before the answer, and the picker lists acme/app's accounts.
+        // Both checks are done before the answer, and the picker lists the active tab's
+        // accounts, acme/app's.
         let requests = github.requests();
         assert!(
             requests.contains(&"GET /repos/acme/secret as gho_PERSONAL".to_string()),
@@ -2087,9 +2206,15 @@ mod tests {
         cx.run_until_parked();
 
         // acme/app opens as work. work can't see acme/secret, so it's asked about with its own
-        // accounts, for itself alone, and isn't opened as work.
+        // accounts, for itself alone, once it's the active tab, and isn't opened as work.
         assert_eq!(status(&app, cx), Status::Ready);
         assert_eq!(acting(&app, cx), Some(Acting::Account("work".into())));
+        assert_eq!(picker(&workspace, cx), None);
+        assert_eq!(
+            status(&secret, cx),
+            Status::Loading("Waiting to ask which account rozed uses for acme/secret…".into())
+        );
+        activate(&workspace, &secret, cx);
         assert_eq!(
             picker(&workspace, cx),
             Some(("acme/secret".to_string(), logins(&["home", "personal"])))
@@ -2308,7 +2433,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn questions_about_two_owners_take_turns(cx: &mut TestAppContext) {
+    async fn a_question_waits_until_its_tab_is_active(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -2323,31 +2448,41 @@ mod tests {
         .await;
         let acme = open_unloaded(&workspace, "github.com/acme/app/pull/1", cx);
         let beta = open_unloaded(&workspace, "github.com/beta/x/pull/2", cx);
+        // beta is the active tab, and acme loads in the background, as a tab coming back online
+        // does.
         load(&[&acme, &beta], cx);
 
-        // beta's question waits its turn; its tab doesn't fail.
-        assert_eq!(
-            picker(&workspace, cx)
-                .map(|(subject, _)| subject)
-                .as_deref(),
-            Some("acme")
-        );
-        assert!(matches!(status(&beta, cx), Status::Loading(_)));
-
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        assert_eq!(status(&acme, cx), Status::Ready);
+        // The picker asks about the active tab's owner. acme's question waits, without the
+        // picker over beta, and its tab doesn't fail.
         assert_eq!(
             picker(&workspace, cx)
                 .map(|(subject, _)| subject)
                 .as_deref(),
             Some("beta")
         );
-        cx.simulate_keystrokes("j enter");
+        assert_eq!(
+            status(&acme, cx),
+            Status::Loading("Waiting to ask which account rozed uses for acme…".into())
+        );
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(status(&beta, cx), Status::Ready);
-        assert_eq!(acting(&beta, cx), Some(Acting::Account("work".into())));
-        assert_eq!(acting(&acme, cx), Some(Acting::Account("home".into())));
+        assert_eq!(picker(&workspace, cx), None);
+        assert!(matches!(status(&acme, cx), Status::Loading(_)));
+
+        // Once acme's tab is active, the picker asks about acme.
+        activate(&workspace, &acme, cx);
+        assert_eq!(
+            picker(&workspace, cx)
+                .map(|(subject, _)| subject)
+                .as_deref(),
+            Some("acme")
+        );
+        cx.simulate_keystrokes("j enter");
+        cx.run_until_parked();
+        assert_eq!(status(&acme, cx), Status::Ready);
+        assert_eq!(acting(&acme, cx), Some(Acting::Account("work".into())));
+        assert_eq!(acting(&beta, cx), Some(Acting::Account("home".into())));
     }
 
     #[gpui::test]
@@ -2358,6 +2493,7 @@ mod tests {
         let accounts = two_accounts_see_acme(&github, &git, cx).await;
         let app = open_unloaded(&workspace, "github.com/acme/app/pull/1", cx);
         let api = open_unloaded(&workspace, "github.com/acme/api/pull/2", cx);
+        activate(&workspace, &app, cx);
         // acme/api's check waits in the accounts' queues until after the answer.
         github.hold("/repos/acme/api");
         load(&[&app, &api], cx);
@@ -2859,27 +2995,40 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn a_slow_answer_isnt_offline(cx: &mut TestAppContext) {
+    async fn a_slow_answer_shows_the_copy_and_keeps_trying_without_saying_offline(
+        cx: &mut TestAppContext,
+    ) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
         playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
-        // GitHub can be reached, but answers too slowly.
+        // GitHub can be reached, but nothing answers in time, as on a connection that died while
+        // the Mac slept.
         github.set_offline(false);
         github.set_timing_out(true);
 
         let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
 
-        let Status::Failed(message) = status(&tab, cx) else {
-            panic!("expected the tab to fail: {:?}", status(&tab, cx));
+        let Status::Offline(message) = status(&tab, cx) else {
+            panic!("expected the local copy: {:?}", status(&tab, cx));
         };
+        assert!(message.starts_with("GitHub didn't answer: "), "{message}");
         assert!(message.contains("operation timed out"), "{message}");
-        assert!(!message.contains("keeps trying"), "{message}");
-        tab.read_with(cx, |tab, _| assert!(tab.diff().is_none()));
+        assert!(message.ends_with("rozed keeps trying."), "{message}");
+        tab.read_with(cx, |tab, _| assert!(tab.diff().is_some()));
+
+        // Once it answers in time, the tab loads by itself.
+        github.set_timing_out(false);
+        git.restore("rozed-dev/playground");
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(status(&tab, cx), Status::Ready);
     }
 
     #[gpui::test]
-    async fn one_accounts_failed_connection_isnt_offline(cx: &mut TestAppContext) {
+    async fn one_accounts_failed_connection_is_waited_for_rather_than_opening_as_another(
+        cx: &mut TestAppContext,
+    ) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -2892,11 +3041,30 @@ mod tests {
             cx,
         )
         .await;
-        // home's requests can't connect, as through a VPN that's down.
+        // home's requests can't connect, and home might see the repository too.
         github.cut_off("gho_HOME");
 
         let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
 
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.starts_with("home's check got no answer"),
+            "{message}"
+        );
+        assert!(message.ends_with("rozed keeps trying GitHub."), "{message}");
+        assert_eq!(acting(&tab, cx), None);
+        let requests = github.requests();
+        assert!(
+            !requests.iter().any(|request| request.contains("/pulls/")),
+            "{requests:#?}"
+        );
+
+        // Once home gets an answer, which is that it can't see it, the tab opens as rozed-bot.
+        github.reconnect("gho_HOME");
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
         assert_eq!(status(&tab, cx), Status::Ready);
         assert_eq!(acting(&tab, cx), Some(Acting::Account("rozed-bot".into())));
     }
@@ -3178,6 +3346,192 @@ mod tests {
 
         assert_eq!(worktrees(&workspace, cx), 1);
         assert_eq!(cx.window_title().as_deref(), titled);
+    }
+
+    fn paths(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Vec<String> {
+        tab.read_with(cx, |tab, _| {
+            tab.files()
+                .rows()
+                .map(|entry| entry.path().to_string())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    async fn offline_the_saved_base_is_used_though_the_copy_fetched_another_since(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        // The pull request's head sits on a stack's lower layer, stack-a, and merges into main.
+        let (mut pull, lower) = git.stacked_pull_request(
+            "rozed-dev/playground",
+            2,
+            &[("a.rs", "a\n")],
+            &[("a.rs", "a\n"), ("lower.rs", "lower\n")],
+            &[("a.rs", "a2\n"), ("lower.rs", "lower\n")],
+        );
+        pull.title = "Add b".into();
+        github.add_pull(pull.clone());
+        github.let_see("gho_BOT", "rozed-dev/playground");
+        let (_, cache) = sign_in(&github, &[("rozed-bot", "gho_BOT")], cx).await;
+        let link = "github.com/rozed-dev/playground/pull/2";
+
+        // Copied against main, which shows the lower layer's file too.
+        let tab = open_loaded(&workspace, link, cx);
+        assert_eq!(paths(&tab, cx), ["a.rs", "lower.rs"]);
+        close(&workspace, tab, cx);
+        // Then against stack-a, after a retarget, which doesn't.
+        github.retarget("rozed-dev/playground", 2, "stack-a", &lower);
+        let tab = open_loaded(&workspace, link, cx);
+        assert_eq!(paths(&tab, cx), ["a.rs"]);
+        close(&workspace, tab, cx);
+
+        // What rozed saved says main, at the tip the copy fetched first.
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3_600 + 30);
+        cache
+            .put(
+                "rozed-bot",
+                &Target::Pull(PullRef::new("rozed-dev", "playground", 2)),
+                &details_with("Add b", "VIEWED", &pull.head, "main", &pull.base),
+                None,
+                two_hours_ago,
+            )
+            .await
+            .unwrap();
+        github.set_offline(true);
+        git.hide("rozed-dev/playground");
+
+        let tab = open_loaded(&workspace, link, cx);
+
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+        assert_eq!(paths(&tab, cx), ["a.rs", "lower.rs"]);
+    }
+
+    #[gpui::test]
+    async fn when_github_answers_but_loading_fails_the_copy_stays_and_it_keeps_trying(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+
+        // GitHub answers again, but with an error for the repository.
+        github.set_offline(false);
+        github.answer(
+            "gho_BOT",
+            "/repos/rozed-dev/playground",
+            Answer::new(502, "Bad gateway"),
+        );
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+
+        let Status::Offline(message) = status(&tab, cx) else {
+            panic!("expected the local copy: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.starts_with("GitHub answered, but rozed couldn't load the pull request: "),
+            "{message}"
+        );
+        assert!(message.contains("502"), "{message}");
+        tab.read_with(cx, |tab, _| assert!(tab.diff().is_some()));
+        assert_eq!(old_texts(&tab, cx), ["a\n", "b\n"]);
+
+        // It keeps checking, and the waits keep growing: not again within 5 seconds.
+        github.requests();
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(github.requests(), Vec::<String>::new());
+
+        // Once it can, it loads.
+        github.forget_answer("gho_BOT", "/repos/rozed-dev/playground");
+        git.restore("rozed-dev/playground");
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(status(&tab, cx), Status::Ready);
+    }
+
+    #[gpui::test]
+    async fn a_tab_opening_while_the_picker_asks_doesnt_take_its_keys(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        two_accounts_see_acme(&github, &git, cx).await;
+        let app = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        assert!(picker(&workspace, cx).is_some());
+
+        // A link opens another tab, which becomes the active one.
+        open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+
+        let focused = workspace.read_with(cx, |workspace, cx| {
+            let picker = workspace
+                .active_modal::<account_picker::AccountPicker>(cx)
+                .unwrap();
+            picker.read(cx).focus_handle(cx)
+        });
+        assert!(cx.update(|window, cx| focused.contains_focused(window, cx)));
+        cx.simulate_keystrokes("j enter");
+        cx.run_until_parked();
+        assert_eq!(acting(&app, cx), Some(Acting::Account("work".into())));
+    }
+
+    #[gpui::test]
+    async fn the_picker_set_aside_for_another_dialog_asks_again_once_it_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        two_accounts_see_acme(&github, &git, cx).await;
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        assert!(picker(&workspace, cx).is_some());
+
+        // As Accounts… does before it opens its dialog.
+        workspace.update_in(cx, |workspace, window, cx| {
+            assert!(account_picker::set_aside(workspace, cx));
+            crate::OpenBox::toggle(workspace, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(picker(&workspace, cx), None);
+        assert!(workspace.read_with(cx, |workspace, cx| {
+            workspace.active_modal::<crate::OpenBox>(cx).is_some()
+        }));
+        assert_eq!(
+            status(&tab, cx),
+            Status::Loading("Waiting to ask which account rozed uses for acme…".into())
+        );
+
+        cx.simulate_keystrokes("escape");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            picker(&workspace, cx),
+            Some(("acme".to_string(), logins(&["home", "work"])))
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(acting(&tab, cx), Some(Acting::Account("home".into())));
+    }
+
+    #[gpui::test]
+    async fn the_check_that_github_answers_gives_up_after_a_while(cx: &mut TestAppContext) {
+        let github = FakeGithub::default();
+        github.hold("/rate_limit");
+        let http: std::sync::Arc<dyn http_client::HttpClient> = std::sync::Arc::new(github.clone());
+        let answered = cx
+            .executor()
+            .spawn(github_api::github_answers(http, cx.executor()));
+        cx.run_until_parked();
+
+        cx.executor()
+            .advance_clock(github_api::ANSWER_TIMEOUT + Duration::from_secs(1));
+        cx.run_until_parked();
+
+        assert!(!answered.await);
     }
 
     /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.

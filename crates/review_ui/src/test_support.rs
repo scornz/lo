@@ -160,6 +160,24 @@ impl FakeGithub {
         self.0.lock().cut_off.push(token.to_string());
     }
 
+    /// Makes pull request `number` of `repo` merge into `branch`, whose tip is `base`, as
+    /// changing its base on GitHub does.
+    pub fn retarget(&self, repo: &str, number: u64, branch: &str, base: &str) {
+        let mut state = self.0.lock();
+        let pull = state
+            .pulls
+            .iter_mut()
+            .find(|pull| pull.repo.eq_ignore_ascii_case(repo) && pull.number == number)
+            .expect("no such pull request");
+        pull.base_branch = branch.to_string();
+        pull.base = base.to_string();
+    }
+
+    /// Undoes [`Self::cut_off`].
+    pub fn reconnect(&self, token: &str) {
+        self.0.lock().cut_off.retain(|cut_off| cut_off != token);
+    }
+
     /// Makes requests to `path`, with any token, wait until [`Self::let_go`].
     pub fn hold(&self, path: &str) {
         self.0.lock().held.entry(path.to_string()).or_default();
@@ -408,6 +426,40 @@ impl GitServer {
     pub fn restore(&self, repo: &str) {
         let git_dir = self.dir.path().join(format!("{repo}.git"));
         std::fs::rename(git_dir.with_extension("hidden"), &git_dir).unwrap();
+    }
+
+    /// Pull request `number` of `repo` on top of a stack's lower layer: `base`, a new commit on
+    /// `main`; `lower`, a commit on top of it, as branch `stack-a`; and `head`, a commit on top of
+    /// that, as `refs/pull/<number>/head`. It merges into `main` to start with. Each is a list of
+    /// files and their text. Returns the pull request and the lower layer's commit.
+    pub fn stacked_pull_request(
+        &self,
+        repo: &str,
+        number: u64,
+        base: &[(&str, &str)],
+        lower: &[(&str, &str)],
+        head: &[(&str, &str)],
+    ) -> (FakePull, String) {
+        let mut pull = self.pull_request(repo, number, base, lower);
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        let index = self.dir.path().join("index");
+        let lower_commit = pull.head.clone();
+        let head_commit = commit(&git_dir, &index, head, Some(&lower_commit));
+        git(
+            &git_dir,
+            &["update-ref", "refs/heads/stack-a", &lower_commit],
+            None,
+            None,
+        );
+        let pull_ref = format!("refs/pull/{number}/head");
+        git(
+            &git_dir,
+            &["update-ref", &pull_ref, &head_commit],
+            None,
+            None,
+        );
+        pull.head = head_commit;
+        (pull, lower_commit)
     }
 
     /// Pull request `number` of `repo`, an `owner/name`: `base`, a new commit on `main`, and

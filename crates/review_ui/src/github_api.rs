@@ -3,11 +3,13 @@
 //! without an account, anonymously, which works for public repositories only.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Utc};
-use futures::AsyncReadExt as _;
+use futures::{AsyncReadExt as _, FutureExt as _};
 use github::{GithubClient, GithubError};
+use gpui::BackgroundExecutor;
 use http_client::http::{HeaderMap, StatusCode};
 use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request};
 use serde::Deserialize;
@@ -107,6 +109,8 @@ pub async fn fetch_pull_request(
         .header("X-GitHub-Api-Version", "2022-11-28")
         // A renamed repository answers with a redirect to its new name.
         .follow_redirects(RedirectPolicy::FollowAll)
+        // As an account's client waits, so a connection that never answers ends.
+        .timeout(Duration::from_secs(30))
         .body(AsyncBody::empty())?;
     // No answer is a network error, as with an account's client, so offline is told apart.
     let mut response = http
@@ -131,16 +135,28 @@ pub async fn fetch_pull_request(
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
-/// Whether GitHub's API answers at all, with any status: `GET /rate_limit` without signing in,
-/// which doesn't count against any rate limit. For telling when GitHub can be reached again.
-pub async fn github_answers(http: Arc<dyn HttpClient>) -> bool {
+/// How long the check that GitHub answers waits for an answer.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Whether GitHub's API answers at all, with any status, within [`ANSWER_TIMEOUT`]: `GET
+/// /rate_limit` without signing in, which doesn't count against any rate limit. For telling when
+/// GitHub can be reached again. `executor`'s clock bounds the wait too, whatever the client does
+/// with the request's own timeout.
+pub async fn github_answers(http: Arc<dyn HttpClient>, executor: BackgroundExecutor) -> bool {
     let request = Request::get("https://api.github.com/rate_limit")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(ANSWER_TIMEOUT)
         .body(AsyncBody::empty());
-    match request {
-        Ok(request) => http.send(request).await.is_ok(),
-        Err(_) => false,
+    let Ok(request) = request else {
+        return false;
+    };
+    let send = http.send(request).fuse();
+    let timer = executor.timer(ANSWER_TIMEOUT).fuse();
+    futures::pin_mut!(send, timer);
+    futures::select_biased! {
+        answer = send => answer.is_ok(),
+        _ = timer => false,
     }
 }
 

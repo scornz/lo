@@ -87,17 +87,13 @@ fn workspace_event(
         workspace::Event::ActiveItemChanged => {
             pr_tab::sync_active(workspace, cx);
             window_title::update(workspace, window, cx);
+            // A tab's question about its account waits until it's the active tab.
+            account_picker::active_item_changed(cx);
         }
         workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
         workspace::Event::ItemAdded { item } => {
             read_only::item_added(item.as_ref(), cx);
-            if let Some(tab) = item.downcast::<PrTab>() {
-                // The window may be titled after it while it isn't the active item, as with an
-                // empty pane active.
-                cx.subscribe_in(&tab, window, |workspace, _, _: &PrTabEvent, window, cx| {
-                    window_title::update(workspace, window, cx)
-                })
-                .detach();
+            if item.downcast::<PrTab>().is_some() {
                 recent_prs::pull_request_opened(workspace, window, cx);
             }
         }

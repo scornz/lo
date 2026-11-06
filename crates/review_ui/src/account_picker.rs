@@ -1,12 +1,16 @@
 //! Asking which account to open pull requests with, when several accounts can see a repository and
 //! none of them was chosen for it (design §3 "Which account").
 //!
-//! Tabs' questions wait in one queue, and the picker shows one question at a time: which account
-//! rozed should use for an owner, or for one repository whose owner's account can't see it. The
-//! answer is remembered for that owner or that repository alone, and goes to every tab waiting
-//! on the same question whose accounts include it; any other tab is asked again with its own.
-//! The picker closes only when it's answered or escape dismisses it: another dialog or a click
-//! elsewhere leaves it open, and a question waits while another dialog is open.
+//! Tabs' questions wait in one queue, and the picker shows one question at a time, for the active
+//! tab: which account rozed should use for an owner, or for one repository whose owner's account
+//! can't see it. A question from another tab waits until that tab is active, so a tab loading in
+//! the background never puts the picker over other work. The answer is remembered for that owner
+//! or that repository alone, and goes to every tab waiting on the same question whose accounts
+//! include it; any other tab is asked again with its own. The picker closes only when it's
+//! answered or escape dismisses it: another dialog or a click elsewhere leaves it open, a new tab
+//! doesn't take its keyboard focus, and a question waits while another dialog is open. Accounts…
+//! sets the picker aside, to show again once the accounts dialog closes, and an account removed or
+//! signed out meanwhile drops out of it.
 
 use std::time::Duration;
 
@@ -14,12 +18,13 @@ use futures::channel::oneshot;
 use github::accounts::Accounts;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, DismissEvent, Entity, EntityId, EventEmitter,
-    FocusHandle, Focusable, Global, KeyBinding, Render, Task, WeakEntity, Window,
+    FocusHandle, Focusable, Global, KeyBinding, Render, Subscription, Task, WeakEntity, Window,
 };
 use ui::{ListItem, ListItemSpacing, prelude::*};
 use workspace::{DismissDecision, ModalView, Workspace};
 
 use crate::github_layer;
+use crate::pr_tab::PrTab;
 
 const KEY_CONTEXT: &str = "AccountPicker";
 
@@ -55,10 +60,7 @@ pub struct Question {
 impl Question {
     /// What the answer is for: the owner, or the repository alone.
     pub fn subject(&self) -> String {
-        match self.owners_account {
-            Some(_) => format!("{}/{}", self.owner, self.repo),
-            None => self.owner.clone(),
-        }
+        subject(&self.owner, &self.repo, self.owners_account.is_some())
     }
 
     /// Whether this question's answer is for `owner/repo` too.
@@ -68,22 +70,35 @@ impl Question {
     }
 }
 
-/// No account was chosen for `subject`: the picker was dismissed, or no account that can see
-/// the repository is left.
+/// What a question about `owner/repo` is for: the owner, or the repository alone when it's
+/// `for_repo`.
+fn subject(owner: &str, repo: &str, for_repo: bool) -> String {
+    if for_repo {
+        format!("{owner}/{repo}")
+    } else {
+        owner.to_string()
+    }
+}
+
+/// Why no account was chosen for `subject`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NotChosen {
-    pub subject: String,
+pub enum NotChosen {
+    /// Escape dismissed the picker.
+    Dismissed { subject: String },
+    /// None of the accounts that can see the repository is signed in any more.
+    NoneLeft { subject: String },
 }
 
 /// The login chosen for a tab, or why there's none.
 pub type Answer = oneshot::Receiver<Result<String, NotChosen>>;
 
-/// Asks which of `logins`, the accounts that can see `owner/repo`, to open it with, in the
-/// workspace in `window`. The answer comes at once when an account among `logins` is
+/// Asks which of `logins`, the accounts that can see `owner/repo`, to open it with in `tab`, in
+/// the workspace in `window`. The answer comes at once when an account among `logins` is
 /// remembered for the repository by then, as when another tab's question was just answered;
-/// otherwise once the picker asking it, or the same question for another tab, is answered.
+/// otherwise once the picker asking it, or the same question for another tab, is answered. The
+/// picker asks only while `tab` is the active tab.
 pub fn ask(
-    tab: EntityId,
+    tab: WeakEntity<PrTab>,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
     owner: &str,
@@ -93,7 +108,8 @@ pub fn ask(
 ) -> Answer {
     let (reply, answer) = oneshot::channel();
     let questions = Questions::global(cx);
-    questions.update(cx, |questions, _| {
+    questions.update(cx, |questions, cx| {
+        questions.watch_accounts(cx);
         questions.waiting.push(Waiter {
             tab,
             window,
@@ -104,8 +120,7 @@ pub fn ask(
             reply,
         });
     });
-    // Once the caller lets go of the window, where the picker shows.
-    cx.defer(move |cx| questions.update(cx, |questions, cx| questions.settle(cx)));
+    settle_soon(cx);
     answer
 }
 
@@ -117,16 +132,45 @@ pub(crate) fn tab_closed(tab: EntityId, cx: &mut App) {
     {
         cx.defer(move |cx| {
             questions.update(cx, |questions, cx| {
-                questions.waiting.retain(|waiter| waiter.tab != tab);
+                questions
+                    .waiting
+                    .retain(|waiter| waiter.tab.entity_id() != tab);
                 questions.settle(cx);
             })
         });
     }
 }
 
+/// The active tab changed, so its question can be asked.
+pub(crate) fn active_item_changed(cx: &mut App) {
+    settle_soon(cx);
+}
+
+/// Sets the open picker aside, keeping its question for once the dialog about to open closes,
+/// as Accounts… does: an account signed in there can then be chosen. Returns whether there was a
+/// picker to set aside.
+pub fn set_aside(workspace: &mut Workspace, cx: &mut App) -> bool {
+    let Some(picker) = workspace.active_modal::<AccountPicker>(cx) else {
+        return false;
+    };
+    picker.update(cx, |picker, cx| picker.reply(Reply::SetAside, cx));
+    true
+}
+
+/// Looks at the questions once whatever's being updated now is done, as the window where the
+/// picker shows may be.
+fn settle_soon(cx: &mut App) {
+    if let Some(questions) = cx
+        .try_global::<GlobalQuestions>()
+        .map(|global| global.0.clone())
+    {
+        cx.defer(move |cx| questions.update(cx, |questions, cx| questions.settle(cx)));
+    }
+}
+
 /// A tab waiting for an account.
 struct Waiter {
-    tab: EntityId,
+    tab: WeakEntity<PrTab>,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
     owner: String,
@@ -138,6 +182,24 @@ struct Waiter {
 impl Waiter {
     fn answer(self, answer: Result<String, NotChosen>) {
         self.reply.send(answer).ok();
+    }
+
+    /// Whether the waiting tab is its workspace's active item, where the picker may ask.
+    fn is_active(&self, cx: &App) -> bool {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return false;
+        };
+        workspace
+            .read(cx)
+            .active_item(cx)
+            .is_some_and(|item| item.item_id() == self.tab.entity_id())
+    }
+
+    /// Tells the tab whether the picker asks its question now, or it waits.
+    fn show_status(&self, subject: &str, asking: bool, cx: &mut App) {
+        self.tab
+            .update(cx, |tab, cx| tab.waiting_for_account(subject, asking, cx))
+            .ok();
     }
 }
 
@@ -156,6 +218,8 @@ pub struct Questions {
     shown: Option<Shown>,
     /// Looking again once another dialog may have closed.
     retry: Option<Task<()>>,
+    /// Accounts removed or signed out drop out of the questions.
+    accounts: Option<Subscription>,
 }
 
 struct GlobalQuestions(Entity<Questions>);
@@ -171,13 +235,25 @@ impl Questions {
             waiting: Vec::new(),
             shown: None,
             retry: None,
+            accounts: None,
         });
         cx.set_global(GlobalQuestions(questions.clone()));
         questions
     }
 
+    /// Looks at the questions again whenever an account is added, removed or signed out.
+    fn watch_accounts(&mut self, cx: &mut Context<Self>) {
+        if self.accounts.is_some() {
+            return;
+        }
+        if let Some(layer) = github_layer::loaded(cx) {
+            let accounts = layer.read(cx).accounts().clone();
+            self.accounts = Some(cx.observe(&accounts, |this, _, cx| this.settle(cx)));
+        }
+    }
+
     /// Answers the tabs that can be answered without asking, drops the ones that closed, and
-    /// shows the oldest question left when the picker is free.
+    /// shows the oldest question of an active tab left when the picker is free.
     fn settle(&mut self, cx: &mut Context<Self>) {
         let accounts = github_layer::loaded(cx).map(|layer| layer.read(cx).accounts().clone());
         for waiter in std::mem::take(&mut self.waiting) {
@@ -190,32 +266,72 @@ impl Questions {
             };
             match known(waiter, accounts, cx) {
                 Known::Answer(waiter, login) => waiter.answer(Ok(login)),
-                Known::NoneLeft(waiter) => {
-                    let subject = waiter.owner.clone();
-                    waiter.answer(Err(NotChosen { subject }));
+                Known::NoneLeft(waiter, subject) => {
+                    waiter.answer(Err(NotChosen::NoneLeft { subject }))
                 }
                 Known::Ask(waiter) => self.waiting.push(waiter),
             }
         }
+        // Each waiting tab says which question it waits on, as asked now.
+        for waiter in &self.waiting {
+            let shown = self.shown.as_ref().filter(|shown| {
+                !shown.answered && shown.question.covers(&waiter.owner, &waiter.repo)
+            });
+            match shown {
+                Some(shown) => waiter.show_status(&shown.question.subject(), true, cx),
+                None => {
+                    let for_repo = accounts.as_ref().is_some_and(|accounts| {
+                        accounts
+                            .read(cx)
+                            .remembered(&waiter.owner, &waiter.repo)
+                            .is_ok_and(|remembered| remembered.owner.is_some())
+                    });
+                    waiter.show_status(&subject(&waiter.owner, &waiter.repo, for_repo), false, cx);
+                }
+            }
+        }
         if let Some(shown) = &self.shown {
-            // Every tab that asked closed, so nobody needs the answer.
+            if shown.answered {
+                return;
+            }
             let wanted = self
                 .waiting
                 .iter()
                 .any(|waiter| shown.question.covers(&waiter.owner, &waiter.repo));
-            if !wanted
-                && !shown.answered
-                && let Some(picker) = shown.picker.upgrade()
-            {
-                picker.update(cx, |picker, cx| picker.close(cx));
+            // An account it lists was removed or signed out: asked again without it.
+            let gone =
+                accounts.as_ref().is_some_and(|accounts| {
+                    let accounts = accounts.read(cx);
+                    shown.question.logins.iter().any(|login| {
+                        accounts.account(login).is_none() || accounts.is_signed_out(login)
+                    })
+                });
+            if let Some(picker) = shown.picker.upgrade() {
+                if !wanted {
+                    // Every tab that asked closed, so nobody needs the answer.
+                    picker.update(cx, |picker, cx| picker.reply(Reply::Moot, cx));
+                } else if gone {
+                    picker.update(cx, |picker, cx| picker.reply(Reply::SetAside, cx));
+                }
             }
             return;
         }
         let Some(accounts) = accounts else {
             return;
         };
-        while !self.waiting.is_empty() {
-            let waiter = &self.waiting[0];
+        let mut index = 0;
+        while index < self.waiting.len() {
+            let waiter = &self.waiting[index];
+            if waiter.workspace.upgrade().is_none() {
+                let waiter = self.waiting.remove(index);
+                let subject = waiter.owner.clone();
+                waiter.answer(Err(NotChosen::Dismissed { subject }));
+                continue;
+            }
+            if !waiter.is_active(cx) {
+                index += 1;
+                continue;
+            }
             let owners_account = accounts
                 .read(cx)
                 .remembered(&waiter.owner, &waiter.repo)
@@ -233,6 +349,12 @@ impl Questions {
             let (window, workspace) = (waiter.window, waiter.workspace.clone());
             match self.show(question, window, workspace, cx) {
                 Showing::Shown(shown) => {
+                    let subject = shown.question.subject();
+                    for waiter in &self.waiting {
+                        if shown.question.covers(&waiter.owner, &waiter.repo) {
+                            waiter.show_status(&subject, true, cx);
+                        }
+                    }
                     self.shown = Some(shown);
                     return;
                 }
@@ -241,9 +363,9 @@ impl Questions {
                     return;
                 }
                 Showing::Gone => {
-                    let waiter = self.waiting.remove(0);
+                    let waiter = self.waiting.remove(index);
                     let subject = waiter.owner.clone();
-                    waiter.answer(Err(NotChosen { subject }));
+                    waiter.answer(Err(NotChosen::Dismissed { subject }));
                 }
             }
         }
@@ -268,15 +390,14 @@ impl Questions {
                 }
                 workspace.toggle_modal(window, cx, {
                     let question = question.clone();
-                    move |_, cx| AccountPicker::new(question, reply, cx)
+                    move |window, cx| AccountPicker::new(question, reply, window, cx)
                 });
                 workspace.active_modal::<AccountPicker>(cx)
             })
         });
-        let picker = match shown {
-            Ok(Some(picker)) => picker,
-            Ok(None) => return Showing::Busy,
-            Err(_) => return Showing::Gone,
+        // A window that can't be updated just now is tried again too.
+        let Ok(Some(picker)) = shown else {
+            return Showing::Busy;
         };
         log::info!(
             "asking which account to use for {} ({})",
@@ -290,9 +411,16 @@ impl Questions {
                 this.update(cx, |this, cx| match reply {
                     Ok(Reply::Chose(login)) => this.answered(question, login, cx),
                     Ok(Reply::Dismissed) => this.dismissed(&question, cx),
-                    // The picker went without an answer, as when its window closed.
-                    Err(_) => {
+                    // Set aside, or nobody needs the answer, or the picker went without one,
+                    // as when its window closed: the question waits again.
+                    Ok(Reply::SetAside | Reply::Moot) | Err(_) => {
                         this.shown = None;
+                        let subject = question.subject();
+                        for waiter in &this.waiting {
+                            if question.covers(&waiter.owner, &waiter.repo) {
+                                waiter.show_status(&subject, false, cx);
+                            }
+                        }
                         this.settle(cx);
                     }
                 })
@@ -316,10 +444,11 @@ impl Questions {
             self.shown = None;
             return;
         };
-        // An account removed while the picker listed it is asked about again, without it.
-        if accounts.read(cx).account(&login).is_none() {
+        // An account removed or signed out while the picker listed it is asked about again,
+        // without it.
+        if !is_usable(&accounts, &login, cx) {
             log::info!(
-                "{login} was chosen for {}, but it's gone",
+                "{login} was chosen for {}, but it's gone or signed out",
                 question.subject()
             );
             self.shown = None;
@@ -340,15 +469,18 @@ impl Questions {
             }
             this.update(cx, |this, cx| {
                 this.shown = None;
-                for waiter in std::mem::take(&mut this.waiting) {
-                    let can_use = waiter
-                        .logins
-                        .iter()
-                        .any(|other| other.eq_ignore_ascii_case(&login));
-                    if can_use && question.covers(&waiter.owner, &waiter.repo) {
-                        waiter.answer(Ok(login.clone()));
-                    } else {
-                        this.waiting.push(waiter);
+                // It may have gone while its answer was written down.
+                if is_usable(&accounts, &login, cx) {
+                    for waiter in std::mem::take(&mut this.waiting) {
+                        let can_use = waiter
+                            .logins
+                            .iter()
+                            .any(|other| other.eq_ignore_ascii_case(&login));
+                        if can_use && question.covers(&waiter.owner, &waiter.repo) {
+                            waiter.answer(Ok(login.clone()));
+                        } else {
+                            this.waiting.push(waiter);
+                        }
                     }
                 }
                 this.settle(cx);
@@ -367,7 +499,7 @@ impl Questions {
         self.shown = None;
         for waiter in std::mem::take(&mut self.waiting) {
             if question.covers(&waiter.owner, &waiter.repo) {
-                waiter.answer(Err(NotChosen {
+                waiter.answer(Err(NotChosen::Dismissed {
                     subject: question.subject(),
                 }));
             } else {
@@ -392,6 +524,12 @@ impl Questions {
     }
 }
 
+/// Whether `login` is an account that's still signed in.
+fn is_usable(accounts: &Entity<Accounts>, login: &str, cx: &App) -> bool {
+    let accounts = accounts.read(cx);
+    accounts.account(login).is_some() && !accounts.is_signed_out(login)
+}
+
 enum Showing {
     Shown(Shown),
     /// Another dialog is open.
@@ -404,19 +542,17 @@ enum Showing {
 enum Known {
     /// An account remembered for its repository by now is among its accounts.
     Answer(Waiter, String),
-    /// None of its accounts is signed in any more.
-    NoneLeft(Waiter),
+    /// None of its accounts is signed in any more, so nothing can be chosen for the subject.
+    NoneLeft(Waiter, String),
     Ask(Waiter),
 }
 
 /// What can be said for `waiter` from what's remembered now, without asking. Its accounts that
 /// were removed or signed out since are dropped.
 fn known(mut waiter: Waiter, accounts: &Entity<Accounts>, cx: &App) -> Known {
-    let accounts = accounts.read(cx);
-    waiter
-        .logins
-        .retain(|login| accounts.account(login).is_some() && !accounts.is_signed_out(login));
+    waiter.logins.retain(|login| is_usable(accounts, login, cx));
     let remembered = accounts
+        .read(cx)
         .remembered(&waiter.owner, &waiter.repo)
         .inspect_err(|error| log::warn!("reading the account for {}: {error:#}", waiter.owner))
         .unwrap_or_default();
@@ -426,7 +562,8 @@ fn known(mut waiter: Waiter, accounts: &Entity<Accounts>, cx: &App) -> Known {
     // Even with one account left, it's asked rather than taken: the tab never quietly opens as
     // another account than the one chosen.
     if waiter.logins.is_empty() {
-        Known::NoneLeft(waiter)
+        let subject = subject(&waiter.owner, &waiter.repo, remembered.owner.is_some());
+        Known::NoneLeft(waiter, subject)
     } else {
         Known::Ask(waiter)
     }
@@ -436,6 +573,10 @@ fn known(mut waiter: Waiter, accounts: &Entity<Accounts>, cx: &App) -> Known {
 enum Reply {
     Chose(String),
     Dismissed,
+    /// Accounts… or an account dropping out of it set it aside, to ask again later.
+    SetAside,
+    /// No tab needs the answer any more.
+    Moot,
 }
 
 /// The picker: which of several accounts to use for an owner's repositories, or for one
@@ -446,15 +587,34 @@ pub struct AccountPicker {
     focus_handle: FocusHandle,
     /// Where the answer goes, until it's given.
     reply: Option<oneshot::Sender<Reply>>,
+    _keep_focus: Subscription,
 }
 
 impl AccountPicker {
-    fn new(question: Question, reply: oneshot::Sender<Reply>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        question: Question,
+        reply: oneshot::Sender<Reply>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        // A tab opening while it waits for an answer, as from a link, takes the keyboard back
+        // from nothing: the picker keeps it until it's answered.
+        let keep_focus = cx.on_focus_out(&focus_handle, window, |this, _, window, cx| {
+            if this.reply.is_some() {
+                cx.defer_in(window, |this, window, cx| {
+                    if this.reply.is_some() {
+                        window.focus(&this.focus_handle, cx);
+                    }
+                });
+            }
+        });
         Self {
             question,
             selected: 0,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             reply: Some(reply),
+            _keep_focus: keep_focus,
         }
     }
 
@@ -472,6 +632,14 @@ impl AccountPicker {
 
     pub fn selected(&self) -> Option<&str> {
         self.question.logins.get(self.selected).map(String::as_str)
+    }
+
+    /// Sends `reply`, unless one was sent, and closes.
+    fn reply(&mut self, reply: Reply, cx: &mut Context<Self>) {
+        if let Some(sender) = self.reply.take() {
+            sender.send(reply).ok();
+        }
+        cx.emit(DismissEvent);
     }
 
     fn select_next(&mut self, _: &menu::SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -494,31 +662,22 @@ impl AccountPicker {
     }
 
     fn confirm(&mut self, _: &menu::Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        if let (Some(reply), Some(login)) = (self.reply.take(), self.selected()) {
-            reply.send(Reply::Chose(login.to_string())).ok();
+        match self.selected().map(str::to_string) {
+            Some(login) => self.reply(Reply::Chose(login), cx),
+            None => self.reply(Reply::SetAside, cx),
         }
-        cx.emit(DismissEvent);
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(reply) = self.reply.take() {
-            reply.send(Reply::Dismissed).ok();
-        }
-        cx.emit(DismissEvent);
-    }
-
-    /// Closes the picker without an answer, when no tab needs one any more.
-    fn close(&mut self, cx: &mut Context<Self>) {
-        self.reply = None;
-        cx.emit(DismissEvent);
+        self.reply(Reply::Dismissed, cx);
     }
 }
 
 impl EventEmitter<DismissEvent> for AccountPicker {}
 
 impl ModalView for AccountPicker {
-    /// Only an answer or escape closes the picker: the tabs waiting on it keep waiting while
-    /// another dialog tries to open or a click lands elsewhere.
+    /// Only an answer, escape or being set aside closes the picker: the tabs waiting on it keep
+    /// waiting while another dialog tries to open or a click lands elsewhere.
     fn on_before_dismiss(&mut self, _: &mut Window, _: &mut Context<Self>) -> DismissDecision {
         DismissDecision::Dismiss(self.reply.is_none())
     }
