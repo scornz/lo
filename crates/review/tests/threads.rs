@@ -89,7 +89,9 @@ fn thread(node: Node) -> Thread {
     }
 }
 
-/// Bob's pull request's threads, after three pushes.
+/// Bob's pull request's threads, after three pushes. As GitHub gives them, a one-line thread that
+/// isn't outdated has `startLine` equal to `line` and no `startDiffSide`, and a file-level thread is
+/// on line 1.
 fn threads() -> [Thread; 5] {
     let line = Node {
         id: "",
@@ -111,6 +113,7 @@ fn threads() -> [Thread; 5] {
         thread(Node {
             id: "PRRT_current",
             line: Some(14),
+            start_line: Some(14),
             original_line: Some(10),
             original_commit: Some(R1),
             ..line
@@ -142,6 +145,7 @@ fn threads() -> [Thread; 5] {
             id: "PRRT_base",
             diff_side: "LEFT",
             line: Some(5),
+            start_line: Some(5),
             original_line: Some(5),
             is_resolved: true,
             original_commit: Some(R2),
@@ -152,6 +156,8 @@ fn threads() -> [Thread; 5] {
             id: "PRRT_file",
             path: "README.md",
             subject_type: "FILE",
+            line: Some(1),
+            original_line: Some(1),
             original_commit: Some(R2),
             ..line
         }),

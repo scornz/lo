@@ -165,12 +165,14 @@ mod tests {
     }
 
     /// A thread on one line of the right side, written on `written_on` at `original_line`, and on
-    /// `line` of the latest head while it isn't outdated.
+    /// `line` of the latest head while it isn't outdated. Like GitHub, it gives its `startLine` as
+    /// its `line`.
     fn thread(written_on: &str, original_line: u32, line: Option<u32>) -> Thread {
         Thread {
             id: "PRRT_1".to_string(),
             path: "src/parse.rs".to_string(),
             line,
+            start_line: line,
             original_line: Some(original_line),
             outdated: line.is_none(),
             written_on: Some(written_on.to_string()),
@@ -274,12 +276,27 @@ mod tests {
     }
 
     #[test]
-    fn no_thread_shows_on_a_replayed_revision() {
+    fn an_outdated_thread_does_not_show_on_a_replayed_revision() {
         let thread = thread("a1", 10, None);
 
         assert_eq!(
             place(&thread, &Screen::replayed("a1", "a3"), HEAD),
             Placement::Outdated
+        );
+    }
+
+    #[test]
+    fn a_current_thread_shows_in_the_right_column_with_a_replayed_revision() {
+        // The left column's lines are no commit's, but the right column is r3.
+        let thread = thread("a1", 10, Some(14));
+
+        assert_eq!(
+            place(&thread, &Screen::replayed("a1", "a3"), HEAD),
+            on(Lines::one(Line::right(14)))
+        );
+        assert_eq!(
+            place(&thread, &Screen::replayed("a1", "a2"), HEAD),
+            Placement::NotOnScreen
         );
     }
 
@@ -404,18 +421,18 @@ mod tests {
         );
     }
 
+    /// A file-level thread written on `written_on`, as GitHub gives it: on line 1.
+    fn file_thread(written_on: &str, outdated: bool) -> Thread {
+        Thread {
+            subject: Subject::File,
+            outdated,
+            ..thread(written_on, 1, Some(1))
+        }
+    }
+
     #[test]
     fn a_file_thread_shows_on_the_files_header() {
-        let thread = Thread {
-            subject: Subject::File,
-            line: None,
-            original_line: None,
-            ..thread("a1", 1, None)
-        };
-        let thread = Thread {
-            outdated: false,
-            ..thread
-        };
+        let thread = file_thread("a1", false);
 
         assert_eq!(place(&thread, &Screen::full("a2"), HEAD), Placement::File);
         assert_eq!(
@@ -426,12 +443,7 @@ mod tests {
 
     #[test]
     fn an_outdated_file_thread_shows_on_the_header_only_where_its_revision_is_on_screen() {
-        let thread = Thread {
-            subject: Subject::File,
-            line: None,
-            original_line: None,
-            ..thread("a1", 1, None)
-        };
+        let thread = file_thread("a1", true);
 
         assert_eq!(place(&thread, &Screen::full("a1"), HEAD), Placement::File);
         assert_eq!(

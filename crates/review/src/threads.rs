@@ -286,25 +286,45 @@ mod tests {
     }
 
     #[test]
-    fn a_range_without_a_start_side_starts_on_its_side() {
+    fn a_one_line_thread_whose_start_line_github_gives_as_its_line_is_one_line() {
+        // GitHub's shape: `startLine` equal to `line`, with no `startDiffSide`.
+        for side in [DiffSide::Right, DiffSide::Left] {
+            let thread = Thread {
+                side,
+                line: Some(9),
+                start_line: Some(9),
+                original_line: Some(9),
+                ..Default::default()
+            };
+
+            assert_eq!(thread.current_lines(), Some(Lines::one(Line::new(side, 9))));
+            assert!(!thread.current_lines().unwrap().is_range());
+        }
+    }
+
+    #[test]
+    fn a_range_from_a_removed_line_to_the_line_that_replaced_it_keeps_both_sides() {
+        // `startLine` equals `line`, but `startDiffSide` differs from `diffSide`.
         let thread = Thread {
-            side: DiffSide::Left,
-            line: Some(9),
-            start_line: Some(7),
+            side: DiffSide::Right,
+            start_side: Some(DiffSide::Left),
+            line: Some(10),
+            start_line: Some(10),
             ..Default::default()
         };
 
         assert_eq!(
             thread.current_lines(),
-            Some(Lines::range(Line::left(7), Line::left(9)))
+            Some(Lines::range(Line::left(10), Line::right(10)))
         );
     }
 
     #[test]
     fn an_outdated_thread_has_no_current_lines() {
+        // GitHub's shape: `line` and `startLine` null.
         let thread = Thread {
             line: None,
-            start_line: Some(7),
+            start_line: None,
             original_line: Some(9),
             outdated: true,
             ..Default::default()
@@ -316,8 +336,11 @@ mod tests {
 
     #[test]
     fn a_file_thread_has_no_lines() {
+        // GitHub gives a file-level thread `line: 1` and `originalLine: 1`.
         let thread = Thread {
             subject: Subject::File,
+            line: Some(1),
+            original_line: Some(1),
             ..Default::default()
         };
 
