@@ -66,6 +66,7 @@ struct State {
     public: Vec<String>,
     /// Answers that win over the rest, by token (`""` for none) and path.
     answers: HashMap<(String, String), Answer>,
+    offline: bool,
     /// Each request, as `GET /path as token`.
     requests: Vec<String>,
 }
@@ -101,6 +102,11 @@ impl FakeGithub {
             .insert((token.to_string(), path.to_string()), answer);
     }
 
+    /// Whether every request fails as if the network were down.
+    pub fn set_offline(&self, offline: bool) {
+        self.0.lock().offline = offline;
+    }
+
     /// Stops answering `path` asked with `token` as [`Self::answer`] said.
     pub fn forget_answer(&self, token: &str, path: &str) {
         self.0
@@ -118,6 +124,9 @@ impl FakeGithub {
         let mut state = self.0.lock();
         let who = if token.is_empty() { "nobody" } else { token };
         state.requests.push(format!("{method} {path} as {who}"));
+        if state.offline {
+            anyhow::bail!("the network is down");
+        }
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
         }
@@ -299,9 +308,9 @@ impl GitServer {
         }
     }
 
-    /// Pull request `number` of `repo`, an `owner/name`: `base` on `base_branch`, and `head`, a
-    /// commit on top of it, as `refs/pull/<number>/head`. Each is a list of files and their
-    /// text.
+    /// Pull request `number` of `repo`, an `owner/name`: `base`, a new commit on `main`, and
+    /// `head`, a commit on top of it, as `refs/pull/<number>/head`. Each is a list of files and
+    /// their text.
     pub fn pull_request(
         &self,
         repo: &str,
@@ -327,7 +336,12 @@ impl GitServer {
             );
         }
         let index = self.dir.path().join("index");
-        let base_commit = commit(&git_dir, &index, base, None);
+        // Each pull request's base goes on top of the branch, so every pull request shares its
+        // history.
+        let main = std::fs::read_to_string(git_dir.join("refs/heads/main"))
+            .ok()
+            .map(|main| main.trim().to_string());
+        let base_commit = commit(&git_dir, &index, base, main.as_deref());
         let head_commit = commit(&git_dir, &index, head, Some(&base_commit));
         git(
             &git_dir,

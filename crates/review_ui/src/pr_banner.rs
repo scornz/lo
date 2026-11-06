@@ -16,6 +16,8 @@ pub enum BannerKind {
     CheckingOut,
     /// The trusted checkout failed, so everything shows from git.
     CheckoutFailed,
+    /// The header shows what rozed saved about the pull request, not what GitHub says now.
+    Saved,
 }
 
 /// One banner: its kind, how serious it is, and what it says.

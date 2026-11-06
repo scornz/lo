@@ -2,14 +2,27 @@
 //! and one poller per account.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use futures::FutureExt as _;
 use futures::future::Shared;
 use github::accounts::{Accounts, RepoAccount};
-use github::cache::PrCache;
+use github::cache::{PrCache, RECENT_PRS};
 use github::db::RozedDb;
 use github::poll::{PollConfig, Poller, RequestQueue};
+use github::queries::PullRequestData;
+use github::{PullRef, Target};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
+
+/// A pull request's details as rozed saved them.
+#[derive(Clone, Debug)]
+pub struct Saved {
+    /// The account they were fetched with, whose viewed marks they hold.
+    pub login: String,
+    pub details: PullRequestData,
+    /// When GitHub gave them.
+    pub fetched_at: SystemTime,
+}
 
 /// The accounts, the cache and the pollers, once rozed's database is open.
 pub struct GithubLayer {
@@ -74,6 +87,54 @@ impl GithubLayer {
                 cx.new(|cx| Poller::new(accounts, login, cache, PollConfig::default(), cx))
             })
             .clone()
+    }
+
+    /// What rozed saved about `pull` the last time an account fetched it: the account remembered
+    /// for its owner's, else the account it was last opened with's, else any account's that has
+    /// it. It's read from rozed's database, so it's there at once, online or not.
+    pub fn saved_details(&self, pull: &PullRef, cx: &App) -> Option<Saved> {
+        let accounts = self.accounts.read(cx);
+        let remembered = accounts
+            .remembered_account(&pull.repo.owner)
+            .inspect_err(|error| log::warn!("reading the account for {}: {error:#}", pull.repo))
+            .ok()
+            .flatten();
+        let last_opened_with = self
+            .cache
+            .recent(RECENT_PRS)
+            .inspect_err(|error| log::warn!("reading recent pull requests: {error:#}"))
+            .unwrap_or_default()
+            .into_iter()
+            .find(|recent| &recent.pull == pull)
+            .map(|recent| recent.account);
+        let mut logins: Vec<String> = remembered.into_iter().chain(last_opened_with).collect();
+        logins.extend(
+            accounts
+                .accounts()
+                .iter()
+                .map(|account| account.login.clone()),
+        );
+        let target = Target::Pull(pull.clone());
+        let mut tried = Vec::new();
+        for login in logins {
+            let key = login.to_ascii_lowercase();
+            if tried.contains(&key) {
+                continue;
+            }
+            tried.push(key);
+            match self.cache.get::<PullRequestData>(&login, &target) {
+                Ok(Some(saved)) => {
+                    return Some(Saved {
+                        login,
+                        details: saved.value,
+                        fetched_at: saved.fetched_at,
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => log::warn!("reading what rozed saved about {pull}: {error:#}"),
+            }
+        }
+        None
     }
 
     /// Which account to open `owner/repo` with ([`Accounts::account_for_repo`]). Each account's

@@ -475,11 +475,8 @@ impl Accounts {
         if let Err(error) = check_repo_name(owner, repo) {
             return Task::ready(Err(error));
         }
-        let remembered = match self.db.owner_account(HOST, owner) {
-            // An account that's since been removed isn't remembered any more.
-            Ok(remembered) => remembered
-                .and_then(|login| self.account(&login))
-                .map(|account| account.login.clone()),
+        let remembered = match self.remembered_account(owner) {
+            Ok(remembered) => remembered,
             Err(error) => return Task::ready(Err(error)),
         };
         if let Some(login) = &remembered
@@ -534,7 +531,7 @@ impl Accounts {
                 match answer {
                     Ok(_) => visible.push(login),
                     Err(GithubError::NotFound { .. }) => {}
-                    Err(GithubError::Network(error)) => return Err(error),
+                    Err(error @ GithubError::Network(_)) => return Err(error.into()),
                     // A missing token signed the account out, as signing out before the check
                     // would have, so it isn't checked; unless it's the one for the owner.
                     Err(GithubError::TokenUnavailable(_))
@@ -557,6 +554,16 @@ impl Accounts {
             };
             Ok(RepoAccount { choice, problems })
         })
+    }
+
+    /// The account remembered for `owner`'s repos, by its login. An account that's since been
+    /// removed isn't remembered any more.
+    pub fn remembered_account(&self, owner: &str) -> Result<Option<String>> {
+        Ok(self
+            .db
+            .owner_account(HOST, owner)?
+            .and_then(|login| self.account(&login))
+            .map(|account| account.login.clone()))
     }
 
     /// Remembers the account to use for an owner's repos.

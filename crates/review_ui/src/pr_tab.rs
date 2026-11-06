@@ -27,8 +27,8 @@ use workspace::{ItemNavHistory, Workspace};
 use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
-use crate::github_layer;
-use crate::pr_banner::{self, Banners};
+use crate::github_layer::{self, Saved};
+use crate::pr_banner::{self, BannerKind, Banners};
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
@@ -168,6 +168,9 @@ pub struct PrTab {
     status: Status,
     /// GitHub's links for fixing why the tab failed, such as authorizing single sign-on.
     help_links: Vec<HelpLink>,
+    /// The account and the time of the details rozed saved, while the tab shows them instead of
+    /// GitHub's answer.
+    saved: Option<(String, SystemTime)>,
     /// What the tab should tell about what its diff shows, under its header.
     banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
@@ -215,6 +218,7 @@ impl PrTab {
             revisions: None,
             status: Status::Loading("Finding an account that can see it…".into()),
             help_links: Vec::new(),
+            saved: None,
             banners,
             diff: None,
             show_file_list: true,
@@ -238,6 +242,7 @@ impl PrTab {
                     .unwrap_or_default();
                 this.update(cx, |this, cx| {
                     this.help_links = links;
+                    this.show_saved_banner(false, cx);
                     this.set_status(Status::Failed(format!("{error:#}").into()), cx)
                 })
                 .ok();
@@ -319,8 +324,44 @@ impl PrTab {
     }
 
     pub fn set_acting(&mut self, acting: Acting, cx: &mut Context<Self>) {
+        // Viewed marks are the account's own, so another account's saved ones don't show.
+        if let Some((saved_for, _)) = &self.saved
+            && acting
+                .login()
+                .is_none_or(|login| !login.eq_ignore_ascii_case(saved_for))
+        {
+            self.viewed.clear();
+            self.files.set_viewed(&self.viewed);
+        }
         self.acting = Some(acting);
         self.set_status(Status::Loading("Asking GitHub for it…".into()), cx);
+    }
+
+    /// Shows what rozed saved about the pull request, at once and online or not, until GitHub
+    /// answers.
+    pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
+        self.set_details(&saved.details, cx);
+        self.saved = Some((saved.login.clone(), saved.fetched_at));
+        self.show_saved_banner(true, cx);
+    }
+
+    /// Says how old the saved details the tab shows are, if it shows them.
+    fn show_saved_banner(&self, asking: bool, cx: &mut Context<Self>) {
+        let Some((login, fetched_at)) = &self.saved else {
+            return;
+        };
+        let mut text = format!(
+            "Showing what rozed saved for {login} {}",
+            ago(*fetched_at, SystemTime::now())
+        );
+        text.push_str(if asking {
+            ", until GitHub answers."
+        } else {
+            "."
+        });
+        self.banners.update(cx, |banners, cx| {
+            banners.show(BannerKind::Saved, Severity::Info, text, cx)
+        });
     }
 
     /// Takes GitHub's REST view of the pull request.
@@ -336,6 +377,11 @@ impl PrTab {
         }
         self.created_at = Some(pull_request.created_at.into());
         self.status = Status::Loading("Copying it locally…".into());
+        // GitHub answered, and the account's poller brings its details up to date.
+        if self.saved.take().is_some() {
+            self.banners
+                .update(cx, |banners, cx| banners.hide(BannerKind::Saved, cx));
+        }
         self.changed(cx);
     }
 
@@ -410,13 +456,10 @@ impl PrTab {
         cx.notify();
     }
 
-    /// Watches the pull request with its account's poller, which shows what's cached at once and
-    /// keeps it up to date.
+    /// Watches the pull request with its account's poller, once GitHub confirmed it exists. It
+    /// becomes the poller's open pull request only while it's the active tab ([`sync_active`]).
     fn watch(&mut self, poller: Entity<Poller>, pull: PullRef, cx: &mut Context<Self>) {
-        let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull.clone()), cx));
-        if let Some(answer) = answer {
-            self.set_details(&answer.details, cx);
-        }
+        poller.update(cx, |poller, cx| poller.watch(pull.clone(), cx));
         self._subscriptions
             .push(cx.subscribe(&poller, |this, _, event, cx| this.poll_event(event, cx)));
         self.watched = Some((poller, pull));
@@ -870,6 +913,21 @@ pub fn tab_title(repo: &str, number: u64, title: Option<&str>) -> String {
     text
 }
 
+/// How long before `now` `then` was, in words: "just now", "5 minutes ago", "2 hours ago".
+pub fn ago(then: SystemTime, now: SystemTime) -> String {
+    let seconds = now.duration_since(then).unwrap_or_default().as_secs();
+    let (count, unit) = match seconds {
+        0..60 => return "just now".to_string(),
+        60..3_600 => (seconds / 60, "minute"),
+        3_600..86_400 => (seconds / 3_600, "hour"),
+        _ => (seconds / 86_400, "day"),
+    };
+    match count {
+        1 => format!("a{} {unit} ago", if unit == "hour" { "n" } else { "" }),
+        count => format!("{count} {unit}s ago"),
+    }
+}
+
 /// Loads `link`'s pull request into `this`: picks the account, reads the pull request, copies it
 /// locally and shows its diff.
 async fn load(
@@ -879,8 +937,17 @@ async fn load(
     opened: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
-    // The account that can see the repository, or none for a public one.
     let layer = cx.update(|_, cx| github_layer::ready(cx))?.await;
+    let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number)?);
+    // What rozed saved shows at once, and offline.
+    if let Some(layer) = &layer {
+        let saved = cx.update(|_, cx| layer.read(cx).saved_details(&pull, cx))?;
+        if let Some(saved) = saved {
+            this.update(cx, |this, cx| this.show_saved(&saved, cx))?;
+        }
+    }
+
+    // The account that can see the repository, or none for a public one.
     let found = match &layer {
         Some(layer) => Some(
             layer
@@ -913,14 +980,11 @@ async fn load(
     );
     this.update(cx, |this, cx| this.set_acting(acting.clone(), cx))?;
 
-    // Signed in, the account's poller shows what's cached at once and keeps it up to date, and
-    // its client and token read the pull request and copy it.
-    let (pull_request, token) = match (&acting, &layer) {
+    // Signed in, the account's client reads the pull request in the account's queue, and its
+    // token copies it.
+    let (pull_request, token, poller) = match (&acting, &layer) {
         (Acting::Account(login), Some(layer)) => {
-            let number = i64::try_from(link.number)?;
-            let pull = PullRef::new(&link.owner, &link.repo, number);
             let poller = layer.update(cx, |layer, cx| layer.poller(login, cx));
-            this.update(cx, |this, cx| this.watch(poller.clone(), pull, cx))?;
             let accounts = layer.read_with(cx, |layer, _| layer.accounts().clone());
             let client = accounts
                 .update(cx, |accounts, cx| accounts.client(login, cx))
@@ -930,16 +994,27 @@ async fn load(
                 .read(|| github_api::fetch_as(&client, login, &link))
                 .await?;
             let token = repo_cache::Token::new(client.token().expose());
-            (pull_request, Some(token))
+            (pull_request, Some(token), Some(poller))
         }
         _ => {
             let http = cx.update(|_, cx| cx.http_client())?;
-            (github_api::fetch_pull_request(http, &link).await?, None)
+            (
+                github_api::fetch_pull_request(http, &link).await?,
+                None,
+                None,
+            )
         }
     };
     this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
 
+    // GitHub confirmed the pull request exists, so the account's poller watches it, and keeps
+    // the active tab's up to date most often.
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
+    if let Some(poller) = poller {
+        this.update(cx, |this, cx| this.watch(poller, pull, cx))?;
+        workspace.update(cx, |workspace, cx| sync_active(workspace, cx))?;
+    }
+
     pr_diff::open(
         this.clone(),
         workspace,
@@ -1124,6 +1199,9 @@ impl Item for PrTab {
 mod tests {
     use super::*;
 
+    use std::time::Duration;
+
+    use github::cache::PrCache;
     use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
     use repo_cache::{Change, FileMode, FileVersion, LineCounts};
@@ -1131,6 +1209,22 @@ mod tests {
 
     use crate::github_api::{Base, BaseRepo, Head, User};
     use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
+
+    #[test]
+    fn ages_read_in_words() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let ago = |seconds| super::ago(now - Duration::from_secs(seconds), now);
+        assert_eq!(ago(0), "just now");
+        assert_eq!(ago(59), "just now");
+        assert_eq!(ago(60), "a minute ago");
+        assert_eq!(ago(150), "2 minutes ago");
+        assert_eq!(ago(3_600), "an hour ago");
+        assert_eq!(ago(7_300), "2 hours ago");
+        assert_eq!(ago(86_400), "a day ago");
+        assert_eq!(ago(3 * 86_400 + 5), "3 days ago");
+        // A clock that went back.
+        assert_eq!(super::ago(now + Duration::from_secs(5), now), "just now");
+    }
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -1467,53 +1561,174 @@ mod tests {
         assert_eq!(help_links(&tab, cx), Vec::<String>::new());
     }
 
+    /// `rozed-dev/playground#2` on the fake GitHub, which `rozed-bot` can see, with what rozed
+    /// saved about it for `rozed-bot` two hours ago.
+    async fn playground_seen_two_hours_ago(
+        github: &FakeGithub,
+        git: &GitServer,
+        cx: &mut TestAppContext,
+    ) -> PrCache {
+        let mut pull = git.pull_request(
+            "rozed-dev/playground",
+            2,
+            &[("a.rs", "a\n"), ("b.rs", "b\n")],
+            &[("a.rs", "a2\n"), ("b.rs", "b2\n")],
+        );
+        pull.title = "Add b".into();
+        github.add_pull(pull);
+        github.let_see("gho_BOT", "rozed-dev/playground");
+        let (_, cache) = sign_in(github, &[("rozed-bot", "gho_BOT")], cx).await;
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3_600 + 30);
+        cache
+            .put(
+                "rozed-bot",
+                &Target::Pull(PullRef::new("rozed-dev", "playground", 2)),
+                &details("Add b", "VIEWED"),
+                None,
+                two_hours_ago,
+            )
+            .await
+            .unwrap();
+        cache
+    }
+
+    fn banners(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Vec<String> {
+        tab.read_with(cx, |tab, cx| {
+            tab.banners()
+                .read(cx)
+                .messages()
+                .iter()
+                .map(|message| message.text.to_string())
+                .collect()
+        })
+    }
+
     #[gpui::test]
-    async fn a_pull_request_opens_in_a_tab_that_fills_in_as_it_loads(cx: &mut TestAppContext) {
+    async fn offline_what_rozed_saved_shows_with_its_age(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let cache = playground_seen_two_hours_ago(&github, &git, cx).await;
+        github.set_offline(true);
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("expected the tab to fail offline: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("couldn't reach GitHub"), "{message}");
+        assert_eq!(
+            tab.read_with(cx, |tab, cx| tab.tab_content_text(0, cx)),
+            "playground#2 Add b"
+        );
+        assert_eq!(
+            banners(&tab, cx),
+            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+        );
+        // Offline, GitHub can't confirm the pull request, so nothing records it as opened.
+        assert_eq!(cache.recent(10).unwrap(), Vec::new());
+
+        // Back online, opening it again loads it, and the banner goes.
+        github.set_offline(false);
+        open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(banners(&tab, cx), Vec::<String>::new());
+        let recent: Vec<_> = cache
+            .recent(10)
+            .unwrap()
+            .into_iter()
+            .map(|recent| (recent.pull.to_string(), recent.account))
+            .collect();
+        assert_eq!(
+            recent,
+            [(
+                "rozed-dev/playground#2".to_string(),
+                "rozed-bot".to_string()
+            )]
+        );
+    }
+
+    #[gpui::test]
+    async fn a_pull_request_github_doesnt_have_is_neither_polled_nor_recent(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let cache = playground_seen_two_hours_ago(&github, &git, cx).await;
+
+        // A typo: there's no #999.
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/999", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("GitHub has no pull request"), "{message}");
+        github.requests();
+        cx.executor().advance_clock(Duration::from_secs(10 * 60));
+        cx.run_until_parked();
+        assert_eq!(github.requests(), Vec::<String>::new());
+        assert_eq!(cache.recent(10).unwrap(), Vec::new());
+    }
+
+    #[gpui::test]
+    async fn a_tab_loading_in_another_pane_doesnt_take_the_open_pull_request(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_seen_two_hours_ago(&github, &git, cx).await;
+        let other = git.pull_request("rozed-dev/playground", 3, &[], &[("c.rs", "c\n")]);
+        github.add_pull(other);
+
+        // #2 is active in the left pane, and #3 waits in a split to its right.
+        let left = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let two = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let three = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/3", cx);
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.split_and_move(left.clone(), workspace::SplitDirection::Right, window, cx);
+        });
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.activate_item(&two, true, true, window, cx);
+        });
+        cx.run_until_parked();
+        let poller = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.update(cx, |layer, cx| layer.poller("rozed-bot", cx))
+        });
+        let open = |cx: &mut VisualTestContext| {
+            poller.read_with(cx, |poller, _| poller.open().map(|pull| pull.number))
+        };
+        assert_eq!(open(cx), Some(2));
+
+        // #3 loads in the background.
+        assert_eq!(status(&two, cx), Status::Ready);
+        three.update_in(cx, |tab, window, cx| tab.load(window, cx));
+        cx.run_until_parked();
+
+        assert_eq!(status(&three, cx), Status::Ready);
+        assert_eq!(open(cx), Some(2));
+        // Switching to it makes it the open one.
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.activate_item(&three, true, true, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(open(cx), Some(3));
+    }
+
+    #[gpui::test]
+    async fn a_new_tab_shows_its_link_until_github_answers(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
 
         assert_eq!(tabs(&workspace, cx), vec![tab.clone()]);
         assert_eq!(active_tab(&workspace, cx), Some(tab.clone()));
-        let title = |cx: &mut VisualTestContext| {
-            tab.read_with(cx, |tab, cx| tab.tab_content_text(0, cx).to_string())
-        };
-        assert_eq!(title(cx), "fd#2212");
-        tab.read_with(cx, |tab, _| {
+        tab.read_with(cx, |tab, cx| {
+            assert_eq!(tab.tab_content_text(0, cx), "fd#2212");
             assert!(matches!(tab.status(), Status::Loading(_)));
             assert!(tab.is_file_list_shown());
             assert!(tab.is_threads_panel_shown());
-        });
-
-        tab.update(cx, |tab, cx| {
-            tab.set_acting(Acting::Anonymous, cx);
-            tab.set_pull_request(&fd_2212(), cx);
-        });
-        let files = [
-            changed("Cargo.lock", Change::Modified),
-            changed("src/main.rs", Change::Modified),
-            changed("tests/main.rs", Change::Added),
-        ];
-        let head: Oid = "2".repeat(40).parse().unwrap();
-        let positions = tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
-        cx.run_until_parked();
-
-        assert_eq!(title(cx), "fd#2212 Honor explicit use-jemalloc req…");
-        assert_eq!(positions, [2, 0, 1]);
-        tab.read_with(cx, |tab, _| {
-            assert_eq!(tab.acting(), Some(&Acting::Anonymous));
-            assert_eq!(
-                tab.header(),
-                &Header {
-                    title: Some("Honor explicit use-jemalloc requests".into()),
-                    author: Some("voidsipp".into()),
-                    repo: Some("sharkdp/fd".into()),
-                }
-            );
-            let paths: Vec<_> = tab.files().rows().map(FileEntry::path).collect();
-            assert_eq!(paths, ["src/main.rs", "tests/main.rs", "Cargo.lock"]);
-            let revisions = tab.revisions().unwrap();
-            assert_eq!(revisions.len(), 1);
-            assert_eq!(revisions.label(head.as_str()).as_deref(), Some("r1"));
         });
     }
 
@@ -1553,15 +1768,13 @@ mod tests {
     #[gpui::test]
     async fn the_pollers_details_fill_the_header_and_viewed_marks_once(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
-        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
-        let head: Oid = "2".repeat(40).parse().unwrap();
-        let files = [
-            changed("a.rs", Change::Modified),
-            changed("b.rs", Change::Modified),
-        ];
-        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_seen_two_hours_ago(&github, &git, cx).await;
+        let other = git.pull_request("rozed-dev/playground", 3, &[], &[("c.rs", "c\n")]);
+        github.add_pull(other);
         // A changed title makes the workspace report the active item changed, which comes back
-        // to the tab; the same details again must not, or the two would loop.
+        // to the tabs; the same details again must not, or the two would loop.
         let active_item_changes = std::rc::Rc::new(std::cell::Cell::new(0));
         let _subscription = cx.update(|_, cx| {
             let changes = active_item_changes.clone();
@@ -1571,47 +1784,65 @@ mod tests {
                 }
             })
         });
+        let marks = |tab: &Entity<PrTab>, cx: &mut VisualTestContext| {
+            tab.read_with(cx, |tab, _| {
+                tab.files()
+                    .rows()
+                    .map(|entry| (entry.path().to_string(), entry.viewed))
+                    .collect::<Vec<_>>()
+            })
+        };
 
-        tab.update(cx, |tab, cx| {
-            tab.set_details(&details("Add b", "VIEWED"), cx)
+        let two = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let poller = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.update(cx, |layer, cx| layer.poller("rozed-bot", cx))
+        });
+        let open = |cx: &mut VisualTestContext| {
+            poller.read_with(cx, |poller, _| poller.open().map(|pull| pull.number))
+        };
+
+        // The poller's details: the title and the account's viewed marks.
+        assert_eq!(status(&two, cx), Status::Ready);
+        assert_eq!(open(cx), Some(2));
+        assert_eq!(
+            two.read_with(cx, |tab, cx| tab.tab_content_text(0, cx)),
+            "playground#2 Add b"
+        );
+        assert_eq!(
+            marks(&two, cx),
+            [
+                ("a.rs".to_string(), Some(ViewedState::Viewed)),
+                ("b.rs".to_string(), Some(ViewedState::Unviewed))
+            ]
+        );
+
+        // The open pull request follows the active tab.
+        let three = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/3", cx);
+        assert_eq!(status(&three, cx), Status::Ready);
+        assert_eq!(open(cx), Some(3));
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.activate_item(&two, true, true, window, cx);
         });
         cx.run_until_parked();
-        let after_first = active_item_changes.get();
-        assert!(after_first > 0);
-        tab.update(cx, |tab, cx| {
-            tab.set_details(&details("Add b", "VIEWED"), cx)
-        });
-        cx.run_until_parked();
-        assert_eq!(active_item_changes.get(), after_first);
+        assert_eq!(open(cx), Some(2));
 
-        tab.read_with(cx, |tab, cx| {
-            assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
-            assert_eq!(tab.header().author.as_deref(), Some("rozed-bot"));
-            let marks: Vec<_> = tab
-                .files()
-                .rows()
-                .map(|entry| (entry.path(), entry.viewed))
-                .collect();
-            assert_eq!(
-                marks,
-                [
-                    ("a.rs", Some(ViewedState::Viewed)),
-                    ("b.rs", Some(ViewedState::Unviewed))
-                ]
-            );
-        });
+        // Once settled, the tabs hearing again which is active changes nothing.
+        let settled = active_item_changes.get();
+        workspace.update(cx, |workspace, cx| sync_active(workspace, cx));
+        cx.run_until_parked();
+        assert_eq!(active_item_changes.get(), settled);
+        assert_eq!(open(cx), Some(2));
 
         // A file marked viewed elsewhere changes the marks, and only them.
-        tab.update(cx, |tab, cx| {
+        two.update(cx, |tab, cx| {
             tab.set_details(&details("Add b", "DISMISSED"), cx)
         });
         cx.run_until_parked();
-        tab.read_with(cx, |tab, _| {
-            assert_eq!(
-                tab.files().row(0).and_then(|entry| entry.viewed),
-                Some(ViewedState::Dismissed)
-            );
-        });
+        assert_eq!(
+            marks(&two, cx)[0],
+            ("a.rs".to_string(), Some(ViewedState::Dismissed))
+        );
     }
 
     #[gpui::test]
