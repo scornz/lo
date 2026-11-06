@@ -10,17 +10,20 @@
 //! - [`status`] sums them up for the one-line status in the pull request's header.
 //! - [`merge_action`] is what the merge button does: merge with a method, add to the merge queue,
 //!   or neither.
-//! - [`approve_and_ship`] is the plan `⌘⇧⏎` confirms: approve, then merge, join the queue, turn on
-//!   auto-merge, or stop and say why.
+//! - [`approve_and_ship`] and [`after_approving`] are approve and ship, `⌘⇧⏎`: the first refuses
+//!   or plans the approval, and words the confirmation with what's likely next; the second, from
+//!   the pull request read again once approved, merges, joins the queue, turns on auto-merge, or
+//!   stops and says why.
 //!
 //! ```
 //! use review::merge::{
 //!     AllowedMethods, Approval, ApproveAndShip, Blocker, CheckState, MergeMethod, MergeSnapshot,
-//!     MergeStatus, MissingApprovals, Plan, RequiredCheck, ReviewRules, Ship, Viewer,
-//!     approve_and_ship, blockers, status,
+//!     MergeStatus, MissingApprovals, RequiredCheck, Review, ReviewRules, Ship, Viewer,
+//!     after_approving, approve_and_ship, blockers, status,
 //! };
 //!
 //! // Someone else's pull request: one approval required, and its tests still running.
+//! let head = "c0ffee1c0ffee1c0ffee1c0ffee1c0ffee1c0ffe";
 //! let snapshot = MergeSnapshot {
 //!     mergeable: "MERGEABLE".parse().unwrap(),
 //!     merge_state: "BLOCKED".parse().unwrap(),
@@ -40,8 +43,8 @@
 //!         can_enable_auto_merge: true,
 //!         ..Default::default()
 //!     },
-//!     head: "c0ffee1".into(),
-//!     head_on_screen: "c0ffee1".into(),
+//!     head: head.into(),
+//!     head_on_screen: head.into(),
 //!     ..Default::default()
 //! };
 //!
@@ -53,15 +56,25 @@
 //! assert!(blockers.iter().all(Blocker::waiting));
 //! assert!(matches!(status(&snapshot), MergeStatus::Waiting { auto_merge: false, .. }));
 //!
-//! // Your approval is the one missing, and the tests will finish: approve, then auto-merge.
-//! assert_eq!(
-//!     approve_and_ship(&snapshot),
-//!     ApproveAndShip::Plan(Plan {
-//!         head: "c0ffee1".into(),
-//!         approval: Approval::Approve,
-//!         then: Ship::AutoMerge(MergeMethod::Squash),
-//!     }),
-//! );
+//! // Your approval is the one missing, and the tests will finish: approve, and likely auto-merge.
+//! let ApproveAndShip::Plan(plan) = approve_and_ship(&snapshot) else { unreachable!() };
+//! assert_eq!(plan.approval, Approval::Approve);
+//! assert_eq!(plan.wording(), "will likely wait for checks, with auto-merge on");
+//!
+//! // Once the approval lands, GitHub's verdict decides: still blocked by the running tests.
+//! let mut after = snapshot.clone();
+//! after.reviews.push(Review {
+//!     author: "alice".into(),
+//!     state: "APPROVED".parse().unwrap(),
+//!     commit: Some(head.into()),
+//!     counts: true,
+//!     on_behalf_of: vec![],
+//! });
+//! after.review_decision = "APPROVED".parse().ok();
+//! assert!(matches!(
+//!     after_approving(&after, &plan),
+//!     Ship::AutoMerge { method: MergeMethod::Squash, .. },
+//! ));
 //! ```
 
 mod action;
@@ -78,7 +91,7 @@ pub use github::{
     ReviewDecision, ReviewState, StatusState, UnknownValue,
 };
 pub use reviews::MissingApprovals;
-pub use ship::{Approval, ApproveAndShip, Plan, Ship, Stop, approve_and_ship};
+pub use ship::{Approval, ApproveAndShip, Plan, Ship, Stop, after_approving, approve_and_ship};
 pub use status::{MergeStatus, status};
 
 /// What GitHub says about a pull request's merge, and the head on screen. The GitHub layer fills
@@ -328,8 +341,8 @@ pub struct Viewer {
     /// base's push restrictions don't keep it out.
     pub can_merge: bool,
     /// Whether it can merge without meeting the base branch's rules (`viewerCanMergeAsAdmin`), for
-    /// the merge panel's admin override. Nothing here plans one: approve and ship never bypasses
-    /// rules.
+    /// the merge panel's admin override. Approve and ship never relies on it: [`after_approving`]
+    /// merges only when GitHub reports the rules are met.
     pub can_merge_as_admin: bool,
     /// Whether it can turn on auto-merge (`viewerCanEnableAutoMerge`): write access, and the
     /// repository allows auto-merge.

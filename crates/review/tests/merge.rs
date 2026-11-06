@@ -6,7 +6,7 @@ use review::merge::{
     AllowedMethods, Approval, ApproveAndShip, AutoMerge, Blocker, CheckState, MergeAction,
     MergeMethod, MergeQueue, MergeSnapshot, MergeStatus, MissingApprovals, NotPossible, Plan,
     RequiredCheck, Review, ReviewRequest, ReviewRules, Reviewer, Ship, Stop, UnmetRule, Viewer,
-    approve_and_ship, blockers, merge_action, status,
+    after_approving, approve_and_ship, blockers, merge_action, status,
 };
 
 const HEAD: &str = "4e1d2c9";
@@ -85,11 +85,35 @@ fn you() -> Viewer {
     }
 }
 
-fn plan(approval: Approval, then: Ship) -> ApproveAndShip {
+fn plan(approval: Approval, likely: Ship) -> ApproveAndShip {
     ApproveAndShip::Plan(Plan {
         head: HEAD.to_string(),
         approval,
-        then,
+        likely,
+    })
+}
+
+/// The plan for a snapshot that gets one.
+fn the_plan(snapshot: &MergeSnapshot) -> Plan {
+    match approve_and_ship(snapshot) {
+        ApproveAndShip::Plan(plan) => plan,
+        other => panic!("expected a plan, got {other:?}"),
+    }
+}
+
+/// The pull request as GitHub reports it once your approval of the head has landed.
+fn approved_by_you(snapshot: &MergeSnapshot, decision: &str, merge_state: &str) -> MergeSnapshot {
+    let mut after = snapshot.clone();
+    (after.reviews).push(review(&after.viewer.login.clone(), "APPROVED", HEAD, &[]));
+    after.review_decision = decision.parse().ok();
+    after.merge_state = merge_state.parse().unwrap();
+    after
+}
+
+fn blocked(blockers: Vec<Blocker>) -> Ship {
+    Ship::Stop(Stop::Blocked {
+        blockers,
+        auto_merge: false,
     })
 }
 
@@ -155,19 +179,32 @@ fn a_dependency_bump_waits_on_ci_and_an_approval() {
     );
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(Approval::Approve, Ship::AutoMerge(MergeMethod::Squash))
+        plan(
+            Approval::Approve,
+            Ship::AutoMerge {
+                method: MergeMethod::Squash,
+                waiting_on: vec![
+                    Blocker::Check(check_run("test (ubuntu)", "IN_PROGRESS", None)),
+                    Blocker::Check(check_run("test (macos)", "QUEUED", None)),
+                ],
+            }
+        )
     );
 }
 
 #[test]
-fn a_dependency_bump_with_ci_done_merges_once_you_approve() {
+fn a_dependency_bump_with_ci_done_merges_once_github_agrees_after_you_approve() {
     let mut snapshot = dependency_bump();
     snapshot.required_checks[1] = check_run("test (ubuntu)", "COMPLETED", Some("SUCCESS"));
     snapshot.required_checks[2] = check_run("test (macos)", "COMPLETED", Some("SKIPPED"));
+    let plan = the_plan(&snapshot);
 
+    assert_eq!(plan.approval, Approval::Approve);
+    assert_eq!(plan.likely, Ship::Merge(MergeMethod::Squash));
+    assert_eq!(plan.wording(), "will likely merge");
     assert_eq!(
-        approve_and_ship(&snapshot),
-        plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        after_approving(&approved_by_you(&snapshot, "APPROVED", "CLEAN"), &plan),
+        Ship::Merge(MergeMethod::Squash)
     );
 }
 
@@ -177,17 +214,17 @@ fn a_dependency_bump_whose_tests_failed_stops_after_approving() {
     snapshot.required_checks[1] = check_run("test (ubuntu)", "COMPLETED", Some("FAILURE"));
     snapshot.required_checks[4] = commit_status("license/cla", "EXPECTED");
 
-    let ApproveAndShip::Plan(plan) = approve_and_ship(&snapshot) else {
-        panic!("expected a plan");
-    };
+    let plan = the_plan(&snapshot);
+    let expected = vec![
+        Blocker::Check(check_run("test (ubuntu)", "COMPLETED", Some("FAILURE"))),
+        Blocker::Check(check_run("test (macos)", "QUEUED", None)),
+        Blocker::Check(commit_status("license/cla", "EXPECTED")),
+    ];
     assert_eq!(plan.approval, Approval::Approve);
+    assert_eq!(plan.likely, blocked(expected.clone()));
     assert_eq!(
-        plan.then,
-        Ship::Stop(Stop::Blocked(vec![
-            Blocker::Check(check_run("test (ubuntu)", "COMPLETED", Some("FAILURE"))),
-            Blocker::Check(check_run("test (macos)", "QUEUED", None)),
-            Blocker::Check(commit_status("license/cla", "EXPECTED")),
-        ]))
+        after_approving(&approved_by_you(&snapshot, "APPROVED", "BLOCKED"), &plan),
+        blocked(expected)
     );
 }
 
@@ -259,9 +296,33 @@ fn a_change_across_code_owned_areas_names_the_owners_missing() {
 
 #[test]
 fn your_approval_covers_your_team_and_auto_merge_waits_for_the_other() {
+    let snapshot = checkout_change();
+    let other_team = Blocker::Approvals(MissingApprovals {
+        more: 0,
+        code_owners: vec![Reviewer::Team("acme/platform".to_string())],
+    });
+    let plan = the_plan(&snapshot);
+
     assert_eq!(
-        approve_and_ship(&checkout_change()),
-        plan(Approval::Approve, Ship::AutoMerge(MergeMethod::Squash))
+        plan.likely,
+        Ship::AutoMerge {
+            method: MergeMethod::Squash,
+            waiting_on: vec![other_team.clone()],
+        }
+    );
+    assert_eq!(
+        plan.wording(),
+        "will likely wait for approvals, with auto-merge on"
+    );
+    let mut after = approved_by_you(&snapshot, "REVIEW_REQUIRED", "BLOCKED");
+    after.reviews.last_mut().unwrap().on_behalf_of = vec!["acme/payments".to_string()];
+    after.review_requests.remove(0);
+    assert_eq!(
+        after_approving(&after, &plan),
+        Ship::AutoMerge {
+            method: MergeMethod::Squash,
+            waiting_on: vec![other_team],
+        }
     );
 }
 
@@ -289,13 +350,13 @@ fn unresolved_conversations_stop_it_after_approving() {
         approve_and_ship(&snapshot),
         plan(
             Approval::Approve,
-            Ship::Stop(Stop::Blocked(vec![
+            blocked(vec![
                 Blocker::Conversations { unresolved: 2 },
                 Blocker::Approvals(MissingApprovals {
                     more: 0,
                     code_owners: vec![Reviewer::Team("acme/platform".to_string())],
                 }),
-            ]))
+            ])
         )
     );
 }
@@ -332,9 +393,21 @@ fn queued_repository() -> MergeSnapshot {
 
 #[test]
 fn a_queue_branch_joins_the_queue_once_you_approve() {
+    let snapshot = queued_repository();
+    let plan = the_plan(&snapshot);
+
     assert_eq!(
-        approve_and_ship(&queued_repository()),
-        plan(Approval::Approve, Ship::Enqueue)
+        approve_and_ship(&snapshot),
+        ApproveAndShip::Plan(Plan {
+            head: HEAD.to_string(),
+            approval: Approval::Approve,
+            likely: Ship::Enqueue,
+        })
+    );
+    assert_eq!(plan.wording(), "will likely join the merge queue");
+    assert_eq!(
+        after_approving(&approved_by_you(&snapshot, "APPROVED", "CLEAN"), &plan),
+        Ship::Enqueue
     );
 }
 
@@ -384,7 +457,15 @@ fn a_queue_branch_with_another_approval_missing_joins_when_ready() {
 
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(Approval::Approve, Ship::EnqueueWhenReady)
+        plan(
+            Approval::Approve,
+            Ship::EnqueueWhenReady {
+                waiting_on: vec![Blocker::Approvals(MissingApprovals {
+                    more: 1,
+                    code_owners: vec![],
+                })],
+            }
+        )
     );
 }
 
@@ -431,7 +512,12 @@ fn your_pull_request_with_auto_merge_on_waits_for_ci() {
     );
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(Approval::OwnPullRequest, Ship::AutoMergeAlreadyOn)
+        plan(
+            Approval::OwnPullRequest,
+            Ship::AutoMergeAlreadyOn {
+                waiting_on: vec![Blocker::Check(commit_status("ci/build", "pending"))],
+            }
+        )
     );
 }
 
@@ -538,10 +624,7 @@ fn a_block_github_reports_without_a_reason_links_to_the_pull_request() {
     assert_eq!(blockers(&snapshot), std::slice::from_ref(&unexplained));
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(
-            Approval::Approve,
-            Ship::Stop(Stop::Blocked(vec![unexplained]))
-        )
+        plan(Approval::Approve, blocked(vec![unexplained]))
     );
 }
 
