@@ -10,3 +10,42 @@ resolver = "2"
 edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
+
+# BEGIN generated from Zed's Cargo.toml. Run `cargo xtask sync-zed`; don't edit by hand.
+[profile.dev]
+split-debuginfo = "unpacked"
+incremental = true
+codegen-units = 16
+debug = "limited"
+
+# mirror configuration for crates compiled for the build platform
+# (without this cargo will compile ~400 crates twice)
+[profile.dev.build-override]
+codegen-units = 16
+split-debuginfo = "unpacked"
+debug = "limited"
+
+# "debug" is a reserved profile name.
+[profile.dbg]
+inherits = "dev"
+debug = "full"
+
+[profile.dbg.build-override]
+debug = "full"
+
+[profile.dev.package]
+quote = { opt-level = 3 }
+syn = { opt-level = 3 }
+proc-macro2 = { opt-level = 3 }
+
+[profile.release]
+debug = "limited"
+lto = "thin"
+codegen-units = 1
+
+[profile.release-fast]
+inherits = "release"
+debug = "full"
+lto = false
+codegen-units = 16
+# END generated from Zed's Cargo.toml.

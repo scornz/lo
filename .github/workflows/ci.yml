@@ -99,6 +99,9 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      - name: Check the Cargo settings copied from Zed
+        run: cargo xtask sync-zed --check
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

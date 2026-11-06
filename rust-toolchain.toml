@@ -1,4 +1,4 @@
-# Zed's pinned toolchain. Keep it equal to third_party/zed/rust-toolchain.toml.
+# Zed's pinned toolchain. `cargo xtask sync-zed` keeps the channel equal to Zed's.
 [toolchain]
 channel = "1.98.1"
 profile = "minimal"

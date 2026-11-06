@@ -58,6 +58,7 @@ Run these before every push. CI runs the same on macOS.
 
 ```sh
 cargo fmt --all --check
+cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 script/check-symlinks.sh
@@ -81,6 +82,23 @@ On top of `v1.27.0`, in order:
    rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
    and `~/Library/Logs/rozed`, never Zed's folders.
 
+### Cargo settings copied from Zed
+
+Cargo ignores a dependency's `[patch]` sections, profiles and `.cargo/config.toml`, so rozed keeps
+copies of Zed's. `cargo xtask sync-zed` (`crates/xtask`) writes them between `BEGIN generated` and
+`END generated` markers; don't edit inside the markers.
+
+- `Cargo.toml`: Zed's `[patch.*]` sections, with `path` entries pointed into `third_party/zed`, and
+  its `[profile.*]` sections. Patches and per-package profile settings for crates that aren't in
+  rozed's `Cargo.lock` are left out, because cargo warns about each one on every build.
+- `.cargo/config.toml`: the macOS parts of Zed's, its `rustflags` and `MACOSX_DEPLOYMENT_TARGET`.
+- `rust-toolchain.toml`: Zed's toolchain channel.
+
+`cargo xtask sync-zed --check` changes nothing and fails, naming each stale section; CI runs it.
+`cargo xtask sync-zed --seed-lock` first replaces `Cargo.lock` with Zed's, so third-party crates
+resolve to the versions Zed tested, then lets cargo prune it and syncs. Run it after updating Zed
+or adding a dependency on another Zed crate, and review the `Cargo.lock` diff.
+
 ### Updating Zed
 
 Each Zed release gets its own branch, `rozed/v<version>`. Old branches stay, so old submodule
@@ -96,7 +114,7 @@ pointers keep resolving.
    git -C third_party/zed checkout FETCH_HEAD
    ```
 
-3. Set `rust-toolchain.toml`'s channel to the one in `third_party/zed/rust-toolchain.toml`.
+3. Run `cargo xtask sync-zed --seed-lock`.
 4. Build, fix what breaks, and update the patch list here.
 
 ## Agent rules
