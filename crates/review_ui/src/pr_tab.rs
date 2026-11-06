@@ -8,7 +8,7 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::anyhow;
 use editor::scroll::Autoscroll;
-use editor::{Editor, SelectionEffects, SplittableEditor};
+use editor::{Anchor, Direction, Editor, EditorEvent, SelectionEffects, SplittableEditor};
 use futures::FutureExt as _;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
@@ -19,7 +19,7 @@ use gpui::{
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
     Window, actions, uniform_list,
 };
-use language::Capability;
+use language::{Capability, Point};
 use repo_cache::{ChangedFile, Oid};
 use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
@@ -29,6 +29,7 @@ use workspace::notifications::NotificationId;
 use workspace::{ItemNavHistory, Toast, Workspace};
 
 use crate::account::{self, AccountDecision, Acting};
+use crate::diff_cursor;
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer;
@@ -49,6 +50,14 @@ actions!(
         /// Marks the current file viewed and moves to the next unviewed file, or clears the mark
         /// of a viewed file.
         ToggleViewed,
+        /// Moves to the next file in the diff.
+        NextFile,
+        /// Moves to the previous file in the diff.
+        PreviousFile,
+        /// Moves to the next change, in whichever file it is.
+        NextChange,
+        /// Moves to the previous change, in whichever file it is.
+        PreviousChange,
     ]
 );
 
@@ -63,6 +72,10 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-o", ToggleFileOrder, Some(KEY_CONTEXT)),
         KeyBinding::new("e", ToggleViewed, Some(KEY_CONTEXT)),
+        KeyBinding::new("] f", NextFile, Some(KEY_CONTEXT)),
+        KeyBinding::new("[ f", PreviousFile, Some(KEY_CONTEXT)),
+        KeyBinding::new("] c", NextChange, Some(KEY_CONTEXT)),
+        KeyBinding::new("[ c", PreviousChange, Some(KEY_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // The workspace binds escape to stop following a collaborator.
         KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
@@ -180,6 +193,11 @@ pub struct PrTab {
     /// The account's poller and the pull request it watches for this tab.
     watched: Option<(Entity<Poller>, PullRef)>,
     opened: Instant,
+    /// Where the tab put the diff's cursor while files arrive, until it's moved.
+    parked_cursor: Option<Anchor>,
+    /// Keeps the file list's selection on the file the diff's cursor is in, and the cursor at the
+    /// start until it's moved.
+    _diff_cursor: Option<Subscription>,
     _load: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -225,6 +243,8 @@ impl PrTab {
             show_threads: true,
             watched: None,
             opened: Instant::now(),
+            parked_cursor: None,
+            _diff_cursor: None,
             _load: None,
             _subscriptions: vec![on_focus],
         }
@@ -386,6 +406,17 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
+        let rhs = editor.read(cx).rhs_editor().clone();
+        self._diff_cursor = Some(cx.subscribe_in(
+            &rhs,
+            window,
+            |this, _, event: &EditorEvent, window, cx| match event {
+                EditorEvent::SelectionsChanged { .. } => this.diff_cursor_moved(cx),
+                EditorEvent::BufferRangesUpdated { .. } => this.park_cursor(window, cx),
+                _ => {}
+            },
+        ));
+        self.parked_cursor = None;
         self.diff = Some(editor.clone());
         if focused && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
@@ -485,19 +516,116 @@ impl PrTab {
         cx.notify();
     }
 
-    /// The file `e` and the movement keys act on: the one selected in the list, or the first in
-    /// review order.
-    fn current_path(&self) -> Option<String> {
-        self.files
+    /// The file `e` and the movement keys act on, by its position in review order: the one
+    /// selected in the list, which follows the diff's cursor, or the one the cursor is in, or the
+    /// first.
+    fn current_position(&self, cx: &App) -> Option<usize> {
+        if self.files.is_empty() {
+            return None;
+        }
+        let selected = self
+            .files
             .selected()
-            .or_else(|| self.files.at_review_position(0))
-            .map(|entry| entry.path().to_string())
+            .and_then(|entry| self.files.review_position(entry.path()));
+        let at_cursor = || {
+            let (_, path) = diff_cursor::file_at_cursor(self.diff.as_ref()?, cx)?;
+            self.files.review_position(&path)
+        };
+        Some(selected.or_else(at_cursor).unwrap_or(0))
+    }
+
+    fn current_path(&self, cx: &App) -> Option<String> {
+        let position = self.current_position(cx)?;
+        Some(self.files.at_review_position(position)?.path().to_string())
+    }
+
+    /// The diff's cursor head, on its right side.
+    fn diff_cursor(&self, cx: &App) -> Option<Anchor> {
+        let diff = self.diff.as_ref()?.read(cx);
+        Some(diff.rhs_editor().read(cx).selections.newest_anchor().head())
+    }
+
+    /// Files arrived in the diff. Until the cursor is moved, it stays at the diff's start, in the
+    /// first file in review order whichever file arrived first. An empty editor's cursor sits at
+    /// its end, which would otherwise leave it in the last file.
+    fn park_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(diff), Some(head)) = (&self.diff, self.diff_cursor(cx)) else {
+            return;
+        };
+        if head != Anchor::Max && Some(head) != self.parked_cursor {
+            return;
+        }
+        let rhs = diff.read(cx).rhs_editor().clone();
+        self.parked_cursor = Some(rhs.update(cx, |editor, cx| {
+            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+                selections.select_ranges([Point::zero()..Point::zero()])
+            });
+            editor.selections.newest_anchor().head()
+        }));
+    }
+
+    /// The diff's cursor moved: the list selects the file it's in. Where the tab parked it isn't
+    /// a move.
+    fn diff_cursor_moved(&mut self, cx: &mut Context<Self>) {
+        if self.diff_cursor(cx) == self.parked_cursor {
+            return;
+        }
+        let Some((_, path)) = self
+            .diff
+            .as_ref()
+            .and_then(|diff| diff_cursor::file_at_cursor(diff, cx))
+        else {
+            return;
+        };
+        if self.files.selected().map(FileEntry::path) != Some(path.as_str()) {
+            self.files.select_path(&path);
+            self.scroll_to_selected();
+            cx.notify();
+        }
+    }
+
+    /// `]f` and `[f`: the next or previous file in review order, which is the diff's order. They
+    /// stop at the ends.
+    fn move_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(current) = self.current_position(cx) else {
+            return;
+        };
+        let position = match forward {
+            true => (current + 1).min(self.files.len() - 1),
+            false => current.saturating_sub(1),
+        };
+        if let Some(entry) = self.files.at_review_position(position) {
+            let path = entry.path().to_string();
+            self.files.select_path(&path);
+            self.selection_moved(window, cx);
+        }
+    }
+
+    fn next_file(&mut self, _: &NextFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_file(true, window, cx);
+    }
+
+    fn previous_file(&mut self, _: &PreviousFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_file(false, window, cx);
+    }
+
+    /// `]c` and `[c`: the next or previous change, across files. The list follows the cursor.
+    fn next_change(&mut self, _: &NextChange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            diff_cursor::go_to_change(diff, Direction::Next, window, cx);
+        }
+    }
+
+    fn previous_change(&mut self, _: &PreviousChange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            diff_cursor::go_to_change(diff, Direction::Prev, window, cx);
+        }
     }
 
     /// `e`: marks the current file viewed and moves to the next unviewed file, or clears a viewed
     /// file's mark. The new mark shows at once, and goes back to GitHub's if the write fails.
     fn toggle_viewed(&mut self, _: &ToggleViewed, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.current_path() else {
+        let Some(path) = self.current_path(cx) else {
             return;
         };
         let Some((poller, pull)) = self.watched.clone() else {
@@ -1119,6 +1247,10 @@ impl Render for PrTab {
             .on_action(cx.listener(Self::toggle_threads))
             .on_action(cx.listener(Self::toggle_file_order))
             .on_action(cx.listener(Self::toggle_viewed))
+            .on_action(cx.listener(Self::next_file))
+            .on_action(cx.listener(Self::previous_file))
+            .on_action(cx.listener(Self::next_change))
+            .on_action(cx.listener(Self::previous_change))
             .size_full()
             .bg(colors.editor_background)
             .child(self.render_header(cx))
@@ -1939,6 +2071,225 @@ mod tests {
         assert!(has_viewed_toast(&workspace, cx));
         assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
         assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn the_file_keys_move_between_files_in_review_order(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let files = [
+            changed("Cargo.lock", Change::Modified),
+            changed("src/main.rs", Change::Modified),
+            changed("tests/main.rs", Change::Modified),
+        ];
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        // The list shows path order; the keys still follow the diff's order, review order.
+        cx.simulate_keystrokes("alt-o");
+
+        // Until something is selected, the first file in review order is the current one.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("tests/main.rs"));
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("Cargo.lock"));
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("Cargo.lock"));
+        cx.simulate_keystrokes("[ f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("tests/main.rs"));
+        cx.simulate_keystrokes("[ f [ f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("src/main.rs"));
+    }
+
+    /// `count` numbered lines, with the lines at `changed` (from 1) edited.
+    fn lines(count: usize, changed: &[usize]) -> String {
+        (1..=count)
+            .map(|line| match changed.contains(&line) {
+                true => format!("line {line} changed\n"),
+                false => format!("line {line}\n"),
+            })
+            .collect()
+    }
+
+    /// Shows a diff of `files`, (path, old text, new text), in `tab`, each file at its place in
+    /// review order. As with the local copy's diff, the tab shows the editor first and the files
+    /// arrive one by one.
+    async fn show_test_diff(
+        tab: &Entity<PrTab>,
+        workspace: &Entity<Workspace>,
+        files: &[(&str, String, String)],
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
+        let changed: Vec<_> = files
+            .iter()
+            .map(|(path, _, _)| changed(path, Change::Modified))
+            .collect();
+        let head: Oid = HEAD.parse().unwrap();
+        let positions = tab.update(cx, |tab, cx| tab.copied(&changed, &head, cx));
+        let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        let multi_buffer = cx.new(|cx| {
+            let mut multi_buffer = multi_buffer::MultiBuffer::new(Capability::ReadOnly);
+            multi_buffer.set_all_diff_hunks_expanded(cx);
+            multi_buffer
+        });
+        let editor = workspace.update_in(cx, |_, window, cx| {
+            let workspace = cx.entity();
+            cx.new(|cx| {
+                SplittableEditor::new(
+                    settings::DiffViewStyle::Split,
+                    multi_buffer,
+                    project,
+                    workspace,
+                    window,
+                    cx,
+                )
+            })
+        });
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), window, cx)
+        });
+        for ((path, old, new), position) in files.iter().zip(positions) {
+            let buffer = cx.new(|cx| language::Buffer::local(new.as_str(), cx));
+            let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+            let diff = cx.new(|cx| buffer_diff::BufferDiff::new(&snapshot.text, None, None, cx));
+            diff.update(cx, |diff, cx| {
+                diff.set_base_text(Some(old.as_str().into()), snapshot.text.clone(), cx)
+            })
+            .await;
+            let ranges: Vec<_> = diff.read_with(cx, |diff, cx| {
+                use language::OffsetRangeExt as _;
+                diff.snapshot(cx)
+                    .hunks(&snapshot)
+                    .map(|hunk| hunk.buffer_range.to_point(&snapshot))
+                    .collect()
+            });
+            let key = pr_diff::path_key(position, RelPath::from_unix_str(path).unwrap().into_arc());
+            editor.update_in(cx, |editor, window, cx| {
+                editor.update_excerpts_for_path(key, buffer, ranges, 3, diff, cx);
+                editor.split(window, cx);
+            });
+        }
+        cx.run_until_parked();
+        editor
+    }
+
+    /// The file the diff's cursor is in, the cursor's row, and the file the list selects.
+    fn cursor(
+        tab: &Entity<PrTab>,
+        editor: &Entity<SplittableEditor>,
+        cx: &mut VisualTestContext,
+    ) -> (Option<String>, u32, Option<String>) {
+        let file = cx.update(|_, cx| crate::diff_cursor::file_at_cursor(editor, cx));
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        let row = rhs.update(cx, |editor, cx| {
+            editor
+                .selections
+                .newest::<language::Point>(&editor.display_snapshot(cx))
+                .head()
+                .row
+        });
+        (file.map(|(_, path)| path), row, selected(tab, cx))
+    }
+
+    #[gpui::test]
+    async fn the_change_keys_move_between_changes_across_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(30, &[]), lines(30, &[2, 25])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+        let file = |cx: &mut VisualTestContext| cursor(&tab, &editor, cx).0;
+        assert_eq!(file(cx).as_deref(), Some("src/a.rs"));
+
+        // Both of a.rs's changes, then on into b.rs, which the list follows.
+        cx.simulate_keystrokes("] c");
+        let (in_file, first, _) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] c");
+        let (in_file, second, _) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/a.rs"));
+        assert!(second > first, "{first} then {second}");
+        cx.simulate_keystrokes("] c");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/b.rs"));
+        assert_eq!(listed.as_deref(), Some("src/b.rs"));
+
+        // The last change stays put.
+        cx.simulate_keystrokes("] c");
+        let last = cursor(&tab, &editor, cx);
+        assert_eq!(last.0.as_deref(), Some("src/c.rs"));
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx), last);
+
+        // And back, across files.
+        cx.simulate_keystrokes("[ c [ c");
+        let (in_file, row, listed) = cursor(&tab, &editor, cx);
+        assert_eq!((in_file.as_deref(), row), (Some("src/a.rs"), second));
+        assert_eq!(listed.as_deref(), Some("src/a.rs"));
+    }
+
+    #[gpui::test]
+    async fn the_diffs_cursor_starts_in_the_first_file_in_review_order(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        // Files arrive in git's order; the diff shows them in review order.
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("Cargo.lock", lines(5, &[]), lines(5, &[2])),
+                ("src/main.rs", lines(5, &[]), lines(5, &[3])),
+                ("tests/main.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+
+        let (in_file, row, listed) = cursor(&tab, &editor, cx);
+        assert_eq!((in_file.as_deref(), row), (Some("src/main.rs"), 0));
+        // Where the tab put the cursor isn't a move, so the list still selects nothing.
+        assert_eq!(listed, None);
+        cx.simulate_keystrokes("] f");
+        assert_eq!(
+            cursor(&tab, &editor, cx).0.as_deref(),
+            Some("tests/main.rs")
+        );
+    }
+
+    #[gpui::test]
+    async fn the_file_keys_move_the_diffs_cursor_to_each_file(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(30, &[]), lines(30, &[2, 25])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+
+        // From the cursor's file, even before the list selected anything.
+        cx.simulate_keystrokes("] f");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/b.rs"));
+        assert_eq!(listed.as_deref(), Some("src/b.rs"));
+
+        // From a change deep in a file, the previous file is the one before it.
+        cx.simulate_keystrokes("] c [ f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] f ] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/c.rs"));
     }
 
     #[gpui::test]
