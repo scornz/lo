@@ -8,8 +8,8 @@
 //! `git_ui/src/commit_view.rs` (many files in one view), without depending on either crate.
 //!
 //! The local copy is `repo_cache`'s. No changed file is left out: one rozed can't show as text
-//! (binary, more than 5,000 changed lines, or failing to load) gets a placeholder saying why, and
-//! the title counts the ones not shown. A submodule shows "Subproject commit a" against
+//! (binary, more than 5,000 changed lines or 1 MiB, or failing to load) gets a placeholder saying
+//! why, and the title counts the ones not shown. A submodule shows "Subproject commit a" against
 //! "Subproject commit b", and a badge in the header marks renames, type and mode changes, names
 //! that aren't UTF-8 (shown with U+FFFD), and changes to line endings alone.
 
@@ -325,6 +325,10 @@ fn copy(
 /// Files with more changed lines than this get a placeholder instead of loading (design §5).
 const LARGE_FILE_LINES: u32 = 5_000;
 
+/// Files larger than this, on either side, get a placeholder too: a minified bundle or generated
+/// data can be megabytes in a few lines.
+const LARGE_FILE_BYTES: u64 = 1024 * 1024;
+
 /// The trusted checkout a pull request's project buffers come from.
 struct Checkout {
     dir: PathBuf,
@@ -469,6 +473,26 @@ fn try_plan_file(
         });
     }
 
+    if let Some(size) = file.size()
+        && size > LARGE_FILE_BYTES
+    {
+        let summary = format!(
+            "{}, more than the 1 MiB rozed loads at once",
+            mebibytes(size)
+        );
+        return Ok(FilePlan {
+            warning: Some(Warning {
+                label: NOT_LOADED.into(),
+                detail: format!("This file isn't loaded: {summary}.").into(),
+            }),
+            ..FilePlan::placeholder(
+                format!("(large file not loaded: {summary})"),
+                deleted,
+                false,
+            )
+        });
+    }
+
     let old_bytes = file
         .old
         .as_ref()
@@ -521,6 +545,11 @@ fn try_plan_file(
             .into(),
         })),
     })
+}
+
+/// `bytes` in mebibytes, as "2.5 MiB".
+fn mebibytes(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 /// One side's bytes: a blob's from git, or for a submodule the line GitHub shows, since its
@@ -982,6 +1011,7 @@ mod tests {
             path: path.into(),
             oid: oid.to_string().repeat(40).parse().unwrap(),
             mode,
+            size: Some(10),
         })
     }
 
@@ -1187,6 +1217,30 @@ mod tests {
                 deleted: false,
                 folded: false,
             }
+        );
+        assert_eq!(plan.warning.as_ref().unwrap().label, NOT_LOADED);
+    }
+
+    #[test]
+    fn a_file_larger_than_a_mebibyte_isnt_loaded() {
+        // One line, so the line count alone wouldn't stop it.
+        let minified = "x".repeat(2 * LARGE_FILE_BYTES as usize);
+        let copied = copy(
+            &[Entry::File("bundle.min.js", b"x")],
+            &[Entry::File("bundle.min.js", minified.as_bytes())],
+            false,
+        );
+
+        let [(_, plan)] = &copied.plans()[..] else {
+            panic!("expected one file");
+        };
+
+        let Content::Placeholder { text, .. } = &plan.content else {
+            panic!("{plan:?}");
+        };
+        assert_eq!(
+            text,
+            "(large file not loaded: 2.0 MiB, more than the 1 MiB rozed loads at once)"
         );
         assert_eq!(plan.warning.as_ref().unwrap().label, NOT_LOADED);
     }

@@ -43,6 +43,8 @@ pub struct FileVersion {
     /// at, which is in another repository: never read it.
     pub oid: Oid,
     pub mode: FileMode,
+    /// The blob's size in bytes. `None` for a submodule, whose commit is in another repository.
+    pub size: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +74,16 @@ impl ChangedFile {
             .into_iter()
             .flatten()
             .any(|version| version.mode == FileMode::Submodule)
+    }
+
+    /// The larger side's size in bytes, which caps what's worth loading, since a file of few lines
+    /// can still be huge. `None` for a submodule.
+    pub fn size(&self) -> Option<u64> {
+        [&self.old, &self.new]
+            .into_iter()
+            .flatten()
+            .filter_map(|version| version.size)
+            .max()
     }
 
     /// The path to show: the new path, or the old one for a deleted file.
@@ -129,6 +141,7 @@ pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
                 path: path?.to_vec(),
                 oid: oid.clone(),
                 mode: mode?,
+                size: None,
             })
         };
         let change = match raw.status {
@@ -294,6 +307,7 @@ mod tests {
             path: path.into(),
             oid: oid.parse().unwrap(),
             mode,
+            size: None,
         })
     }
 

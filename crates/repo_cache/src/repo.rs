@@ -315,8 +315,9 @@ impl Repo {
     }
 
     /// What changed from `from` to `to`, in git's order (by path), with renames detected, binary
-    /// files marked, and each side's mode and blob. Downloads both sides of every changed file in
-    /// one batch, so reading them afterwards needs no network. Submodules are never fetched.
+    /// files marked, and each side's mode, blob and size. Downloads both sides of every changed
+    /// file in one batch, so reading them afterwards needs no network. Submodules are never
+    /// fetched.
     pub fn changed_files(&self, from: &Oid, to: &Oid) -> Result<Vec<ChangedFile>, Error> {
         let output = self.run(self.git().args([
             "diff",
@@ -332,7 +333,41 @@ impl Repo {
             to.as_str(),
             "--",
         ]))?;
-        diff::parse(&output)
+        let mut files = diff::parse(&output)?;
+        self.fill_in_sizes(&mut files)?;
+        Ok(files)
+    }
+
+    /// Sets the size of each side of `files` but submodules', from one `git cat-file
+    /// --batch-check`. The diff downloaded them already, so this reads only what's on disk.
+    fn fill_in_sizes(&self, files: &mut [ChangedFile]) -> Result<(), Error> {
+        let mut versions: Vec<_> = files
+            .iter_mut()
+            .flat_map(|file| [file.old.as_mut(), file.new.as_mut()])
+            .flatten()
+            .filter(|version| version.mode != diff::FileMode::Submodule)
+            .collect();
+        if versions.is_empty() {
+            return Ok(());
+        }
+        let input: String = versions
+            .iter()
+            .map(|version| format!("{}\n", version.oid))
+            .collect();
+        let output = self
+            .git()
+            .args(["cat-file", "--batch-check=%(objectname) %(objectsize)"]);
+        let output = output.run_with_input(Some(input.as_bytes()))?;
+        let output = String::from_utf8_lossy(&output);
+        let mut lines = output.lines();
+        for version in &mut versions {
+            let line = lines.next().unwrap_or_default();
+            // "<oid> <size>", or "<oid> missing" for a blob the server no longer has.
+            version.size = line
+                .strip_prefix(version.oid.as_str())
+                .and_then(|rest| rest.trim().parse().ok());
+        }
+        Ok(())
     }
 
     /// The contents of blob `oid`, such as a [`crate::FileVersion::oid`], downloading it if

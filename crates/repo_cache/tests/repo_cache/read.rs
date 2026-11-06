@@ -105,10 +105,13 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn version(&self, rev: &Oid, path: &str, mode: FileMode) -> Option<FileVersion> {
+        let oid = blob_id(&self.remote.work, rev, path);
+        let size = git(&self.remote.work, &["cat-file", "-s", &oid]);
         Some(FileVersion {
             path: path.into(),
-            oid: blob_id(&self.remote.work, rev, path).parse().unwrap(),
+            oid: oid.parse().unwrap(),
             mode,
+            size: Some(size.parse().unwrap()),
         })
     }
 }
@@ -134,6 +137,8 @@ fn lists_what_changed_with_renames_binary_files_modes_and_submodules() {
             path: "vendor/lib".into(),
             oid: oid.parse().unwrap(),
             mode: FileMode::Submodule,
+            // A commit in another repository, which rozed never reads.
+            size: None,
         })
     };
     let expected = vec![
@@ -206,6 +211,10 @@ fn lists_what_changed_with_renames_binary_files_modes_and_submodules() {
     assert_eq!(files[7].path(), b"src/new_name.rs");
     assert_eq!(files[7].old_path(), Some(&b"old_name.rs"[..]));
     assert!(files[6].is_mode_change_only());
+    // The larger side's size, in bytes.
+    assert_eq!(files[4].size(), Some("keep, changed\n".len() as u64));
+    assert_eq!(files[0].size(), Some("added\n".len() as u64));
+    assert_eq!(files[8].size(), None);
     assert!(!files[4].is_mode_change_only());
     assert!(files[8].is_submodule());
 }
