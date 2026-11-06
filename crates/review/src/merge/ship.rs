@@ -174,8 +174,9 @@ pub enum Ship {
         waiting_on: Vec<Blocker>,
     },
     /// Turn on auto-merge on a branch with a merge queue (GitHub's "Merge when ready"), so GitHub
-    /// adds it to the queue once `waiting_on` clears. Refusals are handled as for
-    /// [`Ship::AutoMerge`].
+    /// adds it to the queue once `waiting_on` clears. It needs permission to add to the queue, as
+    /// [`Ship::Enqueue`] does, but not the repository's auto-merge setting, which doesn't apply
+    /// there. Refusals are handled as for [`Ship::AutoMerge`].
     EnqueueWhenReady { waiting_on: Vec<Blocker> },
     /// Nothing: auto-merge is on already, so GitHub merges it, or adds it to the queue, once
     /// `waiting_on` clears, or straight away when it's empty.
@@ -202,7 +203,8 @@ pub enum Stop {
         auto_merge: bool,
     },
     /// Only things waiting will fix block it, but you can't turn on auto-merge: the repository
-    /// doesn't allow it, or you lack write access. These are the blockers.
+    /// doesn't allow it, or you lack write access, or on a branch with a merge queue, you can't add
+    /// to it. These are the blockers.
     NoAutoMerge(Vec<Blocker>),
     /// GitHub lets it merge, but you can't merge into the base branch.
     NoPermission,
@@ -379,7 +381,7 @@ fn ship(snapshot: &MergeSnapshot) -> Ship {
         } else {
             method.map_or(Ship::Stop(Stop::NoMethod), Ship::Merge)
         }
-    } else if snapshot.queue.required && (viewer.can_merge || viewer.can_enable_auto_merge) {
+    } else if snapshot.queue.required && viewer.can_merge {
         Ship::EnqueueWhenReady {
             waiting_on: blockers,
         }
@@ -1143,6 +1145,26 @@ mod tests {
                     waiting_on: vec![approvals(1)]
                 }
             )
+        );
+    }
+
+    #[test]
+    fn joining_a_queue_now_or_when_ready_both_need_permission_to_merge() {
+        let mut waiting = with_queue(needing_another_approval());
+        waiting.viewer.can_merge = false;
+        let mut ready = with_queue(reviewing());
+        ready.viewer.can_merge = false;
+
+        assert_eq!(
+            approve_and_ship(&waiting),
+            plan(
+                Approval::Approve,
+                Ship::Stop(Stop::NoAutoMerge(vec![approvals(1)]))
+            )
+        );
+        assert_eq!(
+            approve_and_ship(&ready),
+            plan(Approval::Approve, Ship::Stop(Stop::NoPermission))
         );
     }
 
