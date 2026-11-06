@@ -340,7 +340,13 @@ fn splice(text: &str, (begin, end): &(String, String), block: &str) -> Result<St
         (None, None) => {
             let head = text.trim_end();
             let separator = if head.is_empty() { "" } else { "\n\n" };
-            Ok(format!("{head}{separator}{begin}\n{block}\n{end}\n"))
+            // An empty block leaves no line between the markers, as replacing one does.
+            let block = if block.is_empty() {
+                String::new()
+            } else {
+                format!("{block}\n")
+            };
+            Ok(format!("{head}{separator}{begin}\n{block}{end}\n"))
         }
         _ => bail!("the generated-section markers are broken; expected `{begin}` then `{end}`"),
     }
@@ -409,7 +415,8 @@ fn manifest_block(zed_manifest: &str, packages: &BTreeSet<String>) -> Result<Str
                 continue;
             };
             if let Some(per_package) = settings.get_mut("package").and_then(Item::as_table_mut) {
-                per_package.retain(|spec, _| packages.contains(spec_name(spec)));
+                // `"*"` covers every dependency, so it always applies.
+                per_package.retain(|spec, _| spec == "*" || packages.contains(spec_name(spec)));
                 if per_package.is_empty() {
                     settings.remove("package");
                 }
@@ -568,6 +575,26 @@ lto = "thin"
     }
 
     #[test]
+    fn manifest_block_keeps_settings_for_every_package() {
+        let zed = r#"[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release.package]
+"*" = { codegen-units = 1 }
+livekit = { opt-level = 3 }
+"#;
+        assert_eq!(
+            manifest_block(zed, &packages(&[])).unwrap(),
+            r#"[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release.package]
+"*" = { codegen-units = 1 }
+"#
+        );
+    }
+
+    #[test]
     fn manifest_block_drops_a_patch_section_left_empty() {
         let block = manifest_block(ZED_MANIFEST, &packages(&[])).unwrap();
         assert!(!block.contains("[patch"), "{block}");
@@ -672,6 +699,15 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
             "[workspace]\n\n# BEGIN\n[new]\n# END\n\n[after]\nx = 1\n"
         );
         assert_eq!(splice(&out, &test_markers(), "[new]").unwrap(), out);
+    }
+
+    #[test]
+    fn splice_is_idempotent_for_an_empty_block() {
+        for text in ["", "[workspace]\nmembers = []\n"] {
+            let once = splice(text, &test_markers(), "").unwrap();
+            assert!(once.ends_with("# BEGIN\n# END\n"), "{once:?}");
+            assert_eq!(splice(&once, &test_markers(), "").unwrap(), once);
+        }
     }
 
     #[test]
