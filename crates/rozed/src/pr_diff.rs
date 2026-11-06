@@ -33,6 +33,7 @@ use workspace::Workspace;
 use crate::github_api;
 use crate::local_copy::{ChangedFile, LocalPullRequest, PullRequestSource, RepoCache};
 use crate::pr_link::PrLink;
+use crate::trust;
 
 /// Fetches the pull request, copies it locally and shows it in a new tab of `workspace`.
 /// `launched` is when rozed started, for timing.
@@ -86,6 +87,9 @@ pub async fn open(
     }
 
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
+    // Trust the checkout rozed just made, and nothing else, so rust-analyzer starts there. There's
+    // no trust prompt yet (design §7), so this trusts whatever pull request rozed was given.
+    cx.update(|_, cx| trust::trust_path(&project, &local.checkout, cx))?;
     let (worktree, _) = project
         .update(cx, |project, cx| {
             project.find_or_create_worktree(&local.checkout, true, cx)

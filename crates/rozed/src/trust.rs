@@ -20,10 +20,6 @@ pub fn init(cx: &mut App) {
 
 /// Trusts `path` and every folder under it in `project`, now and for worktrees added later, so
 /// their language servers start and their `.zed/settings.json` applies.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the pull request view calls it for its checkout")
-)]
 pub fn trust_path(project: &Entity<Project>, path: &Path, cx: &mut App) {
     let Some(trusted_worktrees) = TrustedWorktrees::try_get_global(cx) else {
         log::error!(
