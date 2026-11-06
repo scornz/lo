@@ -8,6 +8,7 @@
 //! shows where it was written whenever the diff on screen shows that revision. [`panel`] lists the
 //! threads the threads panel shows, by [`PanelFilter`].
 
+mod commentable;
 mod panel;
 mod place;
 
@@ -15,6 +16,7 @@ use std::time::SystemTime;
 
 use crate::github::github_enum;
 
+pub use commentable::{CommentableLines, Hunk, HunkLine, PatchError, RangeError};
 pub use panel::{PanelFilter, panel};
 pub use place::{Left, Placement, Screen, place};
 
