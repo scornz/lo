@@ -255,7 +255,7 @@ pub struct PrTab {
     head_at: Option<SystemTime>,
     /// GitHub's latest head for the pull request, from its details or its summary, and when GitHub
     /// gave it. `e` marks files only while it's the head on screen.
-    github_head: Option<(String, SystemTime)>,
+    latest_head: Option<(String, SystemTime)>,
     /// Where this Mac's records say each file was marked viewed, by path.
     viewed_at: HashMap<String, String>,
     /// This Mac's records of where files were marked viewed, once signed in.
@@ -333,7 +333,7 @@ impl PrTab {
             node_id: None,
             head: None,
             head_at: None,
-            github_head: None,
+            latest_head: None,
             viewed_at: HashMap::new(),
             records: None,
             revisions: None,
@@ -563,7 +563,7 @@ impl PrTab {
         fetched_at: SystemTime,
         cx: &mut Context<Self>,
     ) {
-        self.note_github_head(&details.head_ref_oid, fetched_at);
+        self.note_latest_head(&details.head_ref_oid, fetched_at);
         let mut header = self.header.clone();
         header.title = Some(details.title.clone());
         if let Some(author) = &details.author {
@@ -758,7 +758,7 @@ impl PrTab {
                 self.set_details(details, cx);
             }
             PollEvent::Summary { pull, summary } if pull == watched => {
-                self.note_github_head(&summary.head.sha, SystemTime::now());
+                self.note_latest_head(&summary.head.sha, SystemTime::now());
                 self.poll_succeeded(cx);
                 if self.header.title.as_ref() != Some(&summary.title) {
                     self.header.title = Some(summary.title.clone());
@@ -786,13 +786,13 @@ impl PrTab {
 
     /// GitHub said at `at` that the pull request's head is `head`. Something it said earlier
     /// doesn't replace something it said later.
-    fn note_github_head(&mut self, head: &str, at: SystemTime) {
+    fn note_latest_head(&mut self, head: &str, at: SystemTime) {
         if self
-            .github_head
+            .latest_head
             .as_ref()
             .is_none_or(|(_, seen_at)| at >= *seen_at)
         {
-            self.github_head = Some((head.to_string(), at));
+            self.latest_head = Some((head.to_string(), at));
         }
     }
 
@@ -807,7 +807,7 @@ impl PrTab {
     /// GitHub's latest head, when GitHub gave it after rozed learned the head on screen and it
     /// isn't that head.
     fn newer_head(&self) -> Option<&str> {
-        let (latest, at) = self.github_head.as_ref()?;
+        let (latest, at) = self.latest_head.as_ref()?;
         let newer =
             Some(latest) != self.head.as_ref() && self.head_at.is_none_or(|head_at| *at >= head_at);
         newer.then_some(latest.as_str())
@@ -3335,7 +3335,7 @@ mod tests {
         // What rozed saved, from before this diff's head was pushed.
         let saved_at = SystemTime::now() - Duration::from_secs(3600);
         tab.update(cx, |tab, cx| {
-            tab.github_head = None;
+            tab.latest_head = None;
             tab.take_details(
                 &details_at(
                     "1111111111111111111111111111111111111111",
