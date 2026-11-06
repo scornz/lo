@@ -21,9 +21,6 @@ pub enum Comparison {
 /// - The more recent marker's revision is compared with the latest.
 /// - With neither marker, it's the full diff. A marker no revision has ([`Revisions::find`]) counts
 ///   as none.
-/// - A review the API made on a commit that was never a head compares from the revision before
-///   the one containing it, which the review saw all of. With no revision before, it's the full
-///   diff.
 /// - With the more recent marker on the latest revision, nothing is new: it's the full diff, with
 ///   "Nothing new since rN".
 /// - When the marker's revision is no longer available, the comparison starts from the nearest
@@ -43,7 +40,7 @@ pub fn default_comparison(
     let marker = [last_review, last_seen]
         .into_iter()
         .flatten()
-        .filter_map(|commit| revisions.covered(commit))
+        .filter_map(|commit| revisions.position(commit))
         .max();
     let Some(marker) = marker else {
         return full;
@@ -89,6 +86,8 @@ mod tests {
                 pushed(Some("a3"), "a4", 40),
             ],
             &commits,
+            "a4",
+            SystemTime::UNIX_EPOCH,
         )
     }
 
@@ -171,43 +170,39 @@ mod tests {
     }
 
     #[test]
-    fn a_review_on_a_commit_that_was_never_a_head_compares_from_the_revision_before_it() {
-        // a2 added commits after c2 that the review never saw.
-        assert_eq!(
-            default_comparison(&revisions(), Some("c2"), None),
-            between("a1", "a4")
-        );
-    }
-
-    #[test]
-    fn a_review_inside_the_latest_revision_is_not_nothing_new() {
-        let commits = ["a1", "c2", "a2"].map(String::from);
+    fn your_last_review_on_a_commit_between_pushes_compares_from_that_commit() {
+        // a2's push brought in c2 too; the API made a review on c2.
+        let commits = ["a1", "c2", "a2", "a3", "a4"].map(String::from);
         let revisions = build_revisions(
-            &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
+            &[
+                pushed(None, "a1", 10),
+                pushed(Some("a1"), "a2", 20),
+                pushed(Some("a2"), "a3", 30),
+                pushed(Some("a3"), "a4", 40),
+                PushRecord::Review {
+                    commit: "c2".to_string(),
+                    at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + 35 * 60),
+                },
+            ],
             &commits,
+            "a4",
+            SystemTime::UNIX_EPOCH,
         );
 
         assert_eq!(
             default_comparison(&revisions, Some("c2"), None),
-            between("a1", "a2")
+            between("c2", "a4")
         );
     }
 
     #[test]
-    fn a_review_on_a_commit_before_the_first_revision_shows_the_full_diff() {
-        let commits = ["c0", "a1", "a2"].map(String::from);
-        let revisions = build_revisions(
-            &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
-            &commits,
-        );
+    fn a_review_whose_record_was_not_passed_counts_as_no_marker() {
+        // c2 is a current commit, but no revision's head.
+        let revisions = revisions();
 
-        assert_eq!(default_comparison(&revisions, Some("c0"), None), full());
-    }
-
-    #[test]
-    fn a_marker_on_a_head_is_more_recent_than_a_review_inside_that_revision() {
+        assert_eq!(default_comparison(&revisions, Some("c2"), None), full());
         assert_eq!(
-            default_comparison(&revisions(), Some("c2"), Some("a2")),
+            default_comparison(&revisions, Some("c2"), Some("a2")),
             between("a2", "a4")
         );
     }

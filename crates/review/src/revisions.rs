@@ -20,7 +20,7 @@
 //!     PushRecord::Review { commit: "a2".into(), at: at(25) },
 //!     PushRecord::ForcePush { before: Some("a2".into()), after: "b1".into(), at: at(30) },
 //! ];
-//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()]);
+//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()], "b1", at(0));
 //!
 //! let heads: Vec<_> = revisions.iter().map(|revision| revision.head.as_str()).collect();
 //! assert_eq!(heads, ["a1", "a2", "b1"]);
@@ -52,9 +52,9 @@ pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
 pub enum PushRecord {
     /// A push in the repository activity API for the head branch
     /// (`GET /repos/{owner}/{repo}/activity?ref=refs/heads/{branch}`): `before`, `after`,
-    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller passes the
-    /// entries from the one that was the head when the pull request opened onwards, without
-    /// `branch_deletion` entries.
+    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. A `branch_creation`
+    /// entry's `before` is the all-zero SHA, and its `forced` is ignored. The caller drops
+    /// `branch_deletion` entries; entries from before the pull request opened are dropped here.
     Activity {
         before: Option<String>,
         after: String,
@@ -68,12 +68,16 @@ pub enum PushRecord {
         after: String,
         at: SystemTime,
     },
-    /// A review's commit (`PullRequestReview.commit`) and `submittedAt`. Reviews made in GitHub's
-    /// web UI or in rozed are on the head, so the commit was pushed by then. A review the API made
-    /// on an older commit adds that commit as a revision.
+    /// A submitted review's commit (`PullRequestReview.commit`) and `submittedAt`. The commit is
+    /// always a revision, since it was the head when the reviewer looked; a review the API made on
+    /// an older commit makes that commit one. Pending reviews have no `submittedAt` and don't
+    /// count.
     Review { commit: String, at: SystemTime },
     /// The push that started a check suite (`CheckSuite.push`): `previousSha`, `nextSha`, and the
-    /// suite's `createdAt`, up to a minute after the push.
+    /// suite's `createdAt`, up to a minute after the push. The caller drops suites whose `branch`
+    /// is set and isn't the head branch; it's null once the branch is deleted. A suite whose
+    /// previous SHA isn't a head another record names or a current commit, such as one for the same
+    /// commit pushed to a backport branch, never names the previous head.
     CheckSuite {
         previous: Option<String>,
         next: String,
@@ -109,8 +113,8 @@ pub enum Source {
     CheckSuite,
     /// rozed's poller.
     Poller,
-    /// git: the pull request's head in rozed's local copy, the last of its current commits.
-    Git,
+    /// The pull request's current head (`headRefOid`), which is always the latest revision.
+    Head,
 }
 
 /// When a revision was pushed.
@@ -133,6 +137,8 @@ pub struct Revision {
     /// The branch's head just before this push. A source's `before` or `previousSha` when one
     /// names it, else the revision before this one. `None` for the first revision unless a source
     /// names the head it replaced, which can be a commit pushed before the pull request opened.
+    /// It can name a later revision: when a head was pushed again (`a` → `b` → `a`), `b`'s
+    /// previous head is `a`, which sits after it at its latest push.
     pub previous: Option<String>,
     /// Whether the push was forced: `Some(true)` for a force-push, `Some(false)` for a normal push,
     /// `None` when no source says and the current commits can't tell.
@@ -151,11 +157,18 @@ pub struct Revision {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Revisions {
     list: Vec<Revision>,
-    /// The pull request's current commits and their positions, oldest first.
-    commits: HashMap<String, usize>,
+    /// Each revision's position in `list`, by head.
+    positions: HashMap<String, usize>,
 }
 
 impl Revisions {
+    fn new(list: Vec<Revision>) -> Self {
+        let positions = (list.iter().enumerate())
+            .map(|(position, revision)| (revision.head.clone(), position))
+            .collect();
+        Self { list, positions }
+    }
+
     /// The revisions, oldest first.
     pub fn as_slice(&self) -> &[Revision] {
         &self.list
@@ -174,7 +187,7 @@ impl Revisions {
         self.list.is_empty()
     }
 
-    /// The newest revision: the pull request's head.
+    /// The newest revision, which is always the pull request's head passed to [`build_revisions`].
     pub fn latest(&self) -> Option<&Revision> {
         self.list.last()
     }
@@ -195,11 +208,11 @@ impl Revisions {
         self.number(head).map(|number| format!("r{number}"))
     }
 
-    /// The revision a marker commit points at, such as the commit of your last review: the
-    /// revision with that head, or else the first whose head contains it, as far as the current
-    /// commits tell. The second is for a review the API made on a commit that was never a head.
+    /// The revision a marker points at: your last review's commit, the head last seen here, or the
+    /// head a file was marked viewed at. Each is a revision's head when the records that saw it
+    /// were passed to [`build_revisions`], as a review's always is; any other commit finds nothing.
     pub fn find(&self, commit: &str) -> Option<&Revision> {
-        self.locate(commit).map(|index| &self.list[index])
+        self.get(commit)
     }
 
     /// Flags the revision with this head as one GitHub no longer has. Returns whether there was
@@ -213,7 +226,7 @@ impl Revisions {
     }
 
     fn position(&self, head: &str) -> Option<usize> {
-        self.list.iter().position(|revision| revision.head == head)
+        self.positions.get(head).copied()
     }
 
     /// The nearest revision at or before `index` that rozed can still get.
@@ -222,26 +235,6 @@ impl Revisions {
             .iter()
             .rev()
             .find(|revision| revision.available)
-    }
-
-    /// The position of the newest revision a marker commit covers, for comparing from it: the
-    /// revision with that head, or else the one before the first revision containing it. Comparing
-    /// from the revision containing it would hide what that revision added after the commit.
-    fn covered(&self, commit: &str) -> Option<usize> {
-        match self.position(commit) {
-            Some(index) => Some(index),
-            None => self.locate(commit)?.checked_sub(1),
-        }
-    }
-
-    /// The position of the revision a marker commit points at. See [`Revisions::find`].
-    fn locate(&self, commit: &str) -> Option<usize> {
-        self.position(commit).or_else(|| {
-            let commit = *self.commits.get(commit)?;
-            self.list.iter().position(|revision| {
-                (self.commits.get(&revision.head)).is_some_and(|&head| head >= commit)
-            })
-        })
     }
 }
 
@@ -269,6 +262,8 @@ mod tests {
         build_revisions(
             &[polled("x1", 1), polled("a1", 10), polled("a2", 20)],
             &commits,
+            "a2",
+            SystemTime::UNIX_EPOCH,
         )
     }
 
@@ -302,15 +297,11 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_on_an_older_commit_finds_the_first_revision_containing_it() {
+    fn a_marker_on_a_commit_no_revision_has_finds_nothing() {
         let revisions = revisions();
 
-        assert_eq!(found(&revisions, "c1"), Some("a1"));
-        assert_eq!(found(&revisions, "c3"), Some("a2"));
-    }
-
-    #[test]
-    fn a_marker_on_a_commit_neither_a_head_nor_current_finds_nothing() {
-        assert_eq!(found(&revisions(), "ffff"), None);
+        assert_eq!(found(&revisions, "c1"), None);
+        assert_eq!(found(&revisions, "c3"), None);
+        assert_eq!(found(&revisions, "ffff"), None);
     }
 }
