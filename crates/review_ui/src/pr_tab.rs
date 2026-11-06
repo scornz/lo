@@ -487,7 +487,7 @@ impl PrTab {
 
     /// Takes GitHub's REST view of the pull request.
     pub fn set_pull_request(&mut self, pull_request: &PullRequest, cx: &mut Context<Self>) {
-        self.header.title = Some(pull_request.title.clone());
+        self.header.title = Some(window_title::without_bidi(&pull_request.title));
         if let Some(user) = &pull_request.user {
             self.header.author = Some(user.login.clone());
         }
@@ -510,7 +510,7 @@ impl PrTab {
     /// account's viewed marks.
     pub fn set_details(&mut self, details: &PullRequestData, cx: &mut Context<Self>) {
         let mut header = self.header.clone();
-        header.title = Some(details.title.clone());
+        header.title = Some(window_title::without_bidi(&details.title));
         if let Some(author) = &details.author {
             header.author = Some(author.login.clone());
         }
@@ -612,8 +612,9 @@ impl PrTab {
             }
             PollEvent::Summary { pull, summary } if pull == watched => {
                 self.poll_succeeded(cx);
-                if self.header.title.as_ref() != Some(&summary.title) {
-                    self.header.title = Some(summary.title.clone());
+                let title = window_title::without_bidi(&summary.title);
+                if self.header.title.as_ref() != Some(&title) {
+                    self.header.title = Some(title);
                     self.changed(cx);
                 }
             }
@@ -3034,6 +3035,78 @@ mod tests {
         close(&workspace, fd, cx);
         close(&workspace, bat, cx);
         assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+    }
+
+    #[gpui::test]
+    async fn with_an_empty_pane_active_the_window_keeps_the_last_pull_requests_title(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        public_pull(&github, &git, "sharkdp/fd", 2212);
+        anonymous(&github, cx);
+        let fd = open_loaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let titled = Some("sharkdp/fd#2212 — Pull request 2212");
+        assert_eq!(cx.window_title().as_deref(), titled);
+
+        // A split leaves an empty pane active.
+        workspace.update_in(cx, |workspace, window, cx| {
+            let pane = workspace.active_pane().clone();
+            workspace.split_pane(pane, workspace::SplitDirection::Right, window, cx);
+        });
+        cx.run_until_parked();
+        assert!(workspace.read_with(cx, |workspace, cx| workspace.active_item(cx).is_none()));
+        assert_eq!(cx.window_title().as_deref(), titled);
+
+        // It follows that pull request's title, without the characters that turn text around.
+        fd.update(cx, |tab, cx| {
+            tab.set_details(&details("Fix \u{202E}gpj.exe", "VIEWED"), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("sharkdp/fd#2212 — Fix gpj.exe")
+        );
+        assert_eq!(
+            fd.read_with(cx, |tab, cx| tab.tab_content_text(0, cx)),
+            "fd#2212 Fix gpj.exe"
+        );
+    }
+
+    #[gpui::test]
+    async fn with_rozeds_title_format_a_new_folder_doesnt_retitle_the_window(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        // As rozed's forced settings have it.
+        cx.update(|_, cx| {
+            cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+                let format =
+                    serde_json::json!({ "window_title_format": window_title::NO_PULL_REQUEST });
+                store.set_server_settings(&format.to_string(), cx).unwrap();
+            })
+        });
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        public_pull(&github, &git, "sharkdp/fd", 2212);
+        anonymous(&github, cx);
+        open_loaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let titled = Some("sharkdp/fd#2212 — Pull request 2212");
+        assert_eq!(cx.window_title().as_deref(), titled);
+
+        // A trusted checkout adds a folder to the project.
+        let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree("/elsewhere", true, cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(worktrees(&workspace, cx), 1);
+        assert_eq!(cx.window_title().as_deref(), titled);
     }
 
     /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.

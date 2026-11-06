@@ -110,7 +110,10 @@ impl Row {
     pub fn new(recent: &RecentPr, signed_out: bool, now: SystemTime) -> Self {
         Self {
             pull: recent.pull.to_string(),
-            title: recent.title.clone(),
+            title: recent
+                .title
+                .as_deref()
+                .map(crate::window_title::without_bidi),
             account: recent.account.clone(),
             signed_out,
             opened: poll_state::ago(recent.opened_at, now),

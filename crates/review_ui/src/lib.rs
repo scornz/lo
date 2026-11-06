@@ -31,7 +31,7 @@ use workspace::Workspace;
 pub use open_box::{OpenBox, OpenPullRequest};
 pub use pr_diff::Trust;
 pub use pr_link::PrLink;
-pub use pr_tab::{PrTab, open};
+pub use pr_tab::{PrTab, PrTabEvent, open};
 
 /// Sets up the PR tab: its keys, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
 /// their database, or `None` without one), and rozed's changes to every workspace.
@@ -91,7 +91,13 @@ fn workspace_event(
         workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
         workspace::Event::ItemAdded { item } => {
             read_only::item_added(item.as_ref(), cx);
-            if item.downcast::<PrTab>().is_some() {
+            if let Some(tab) = item.downcast::<PrTab>() {
+                // The window may be titled after it while it isn't the active item, as with an
+                // empty pane active.
+                cx.subscribe_in(&tab, window, |workspace, _, _: &PrTabEvent, window, cx| {
+                    window_title::update(workspace, window, cx)
+                })
+                .detach();
                 recent_prs::pull_request_opened(workspace, window, cx);
             }
         }
