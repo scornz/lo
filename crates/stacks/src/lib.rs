@@ -20,7 +20,7 @@
 //!     created_at: SystemTime::UNIX_EPOCH,
 //!     native_stack: None,
 //! };
-//! let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "a", "b")]);
+//! let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "a", "b")], &["main"]);
 //!
 //! let layer = stacks.layer(2).unwrap();
 //! assert_eq!(layer.parent, Parent::Pr(1));
@@ -198,8 +198,13 @@ impl Stacks {
     /// Finds the stacks among `prs`. Every open PR becomes a layer; merged PRs only link the
     /// layers above them, and closed PRs are ignored. When a number repeats, the first PR with it
     /// is used.
-    pub fn find(prs: &[PullRequest]) -> Self {
-        let graph = Graph::new(prs);
+    ///
+    /// `trunks` are the repo's long-lived branches: its default branch plus protected or
+    /// ruleset-covered ones. They're always roots: a PR from a trunk, such as a deploy PR
+    /// `production <- main` or a back-merge `develop <- main`, is never below another PR. A fork's
+    /// branch is never a trunk, whatever its name.
+    pub fn find(prs: &[PullRequest], trunks: &[&str]) -> Self {
+        let graph = Graph::new(prs, trunks);
         let mut links = graph.links();
         let cycles = graph.break_cycles(&mut links);
         let placed = (0..graph.prs.len())
@@ -208,11 +213,12 @@ impl Stacks {
             .collect();
         Self {
             cycles,
-            ..Self::build(placed)
+            ..Self::build(placed, trunks)
         }
     }
 
-    /// The root branches, sorted by name.
+    /// The root branches: the trunks passed to [`Stacks::find`], in that order, then the rest
+    /// sorted by name. Only branches with a layer on them are listed.
     pub fn roots(&self) -> &[Root] {
         &self.roots
     }
@@ -234,7 +240,7 @@ impl Stacks {
     }
 
     /// Lays out the open PRs, each with what it sits on, as trees.
-    fn build(open: Vec<Placed>) -> Self {
+    fn build(open: Vec<Placed>, trunks: &[&str]) -> Self {
         let order: HashMap<u64, (SystemTime, u64)> = open
             .iter()
             .map(|placed| (placed.pr.number, (placed.pr.created_at, placed.pr.number)))
@@ -280,7 +286,12 @@ impl Stacks {
             stack_index: HashMap::new(),
             cycles: Vec::new(),
         };
-        for (branch, mut bottoms) in bottoms {
+        let mut others = bottoms;
+        let trunks: Vec<_> = trunks
+            .iter()
+            .filter_map(|&trunk| others.remove_entry(trunk))
+            .collect();
+        for (branch, mut bottoms) in trunks.into_iter().chain(others) {
             by_creation(&mut bottoms);
             let root = stacks.roots.len();
             let mut root_stacks = Vec::with_capacity(bottoms.len());
@@ -329,6 +340,7 @@ struct Placed<'a> {
 /// The PRs the rules link: the first open or merged PR with each number.
 struct Graph<'a> {
     prs: Vec<&'a PullRequest>,
+    trunks: HashSet<&'a str>,
 }
 
 /// Each rule's lookup from what it matches to the PR below, as indexes into [`Graph::prs`].
@@ -346,13 +358,14 @@ struct Edge {
 }
 
 impl<'a> Graph<'a> {
-    fn new(prs: &'a [PullRequest]) -> Self {
+    fn new(prs: &'a [PullRequest], trunks: &[&'a str]) -> Self {
         let mut seen = HashSet::new();
         let prs = prs
             .iter()
             .filter(|pr| seen.insert(pr.number) && pr.state != State::Closed)
             .collect();
-        Self { prs }
+        let trunks = trunks.iter().copied().collect();
+        Self { prs, trunks }
     }
 
     /// Each PR's link to the PR below it.
@@ -494,11 +507,15 @@ impl<'a> Graph<'a> {
         cycles
     }
 
-    /// Indexes the PRs by `key`. Where several PRs share a key, keeps the one a rule links to: an
-    /// open PR before a merged one, then the newest.
+    /// Indexes the PRs that can be below another by `key`. Where several PRs share a key, keeps
+    /// the one a rule links to: an open PR before a merged one, then the newest.
     fn index<K: Eq + Hash>(&self, key: impl Fn(&'a PullRequest) -> Option<K>) -> HashMap<K, usize> {
         let mut index = HashMap::with_capacity(self.prs.len());
         for (i, &pr) in self.prs.iter().enumerate() {
+            let from_trunk = pr.head_in_base_repo && self.trunks.contains(pr.head_ref.as_str());
+            if from_trunk {
+                continue;
+            }
             if let Some(key) = key(pr) {
                 index
                     .entry(key)

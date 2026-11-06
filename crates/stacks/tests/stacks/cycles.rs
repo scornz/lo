@@ -59,12 +59,15 @@ fn layers_above_a_cycle_are_kept() {
 
 #[test]
 fn separate_cycles_are_each_reported() {
-    let stacks = Stacks::find(&[
-        pr(1, "b", "a"),
-        pr(2, "a", "b"),
-        pr(3, "d", "c"),
-        pr(4, "c", "d"),
-    ]);
+    let stacks = Stacks::find(
+        &[
+            pr(1, "b", "a"),
+            pr(2, "a", "b"),
+            pr(3, "d", "c"),
+            pr(4, "c", "d"),
+        ],
+        &[],
+    );
     assert_eq!(
         stacks.cycles(),
         [Cycle { prs: vec![1, 2] }, Cycle { prs: vec![3, 4] }]
@@ -73,6 +76,6 @@ fn separate_cycles_are_each_reported() {
 
 #[test]
 fn a_forest_without_cycles_reports_none() {
-    let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "a", "b")]);
+    let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "a", "b")], &[]);
     assert!(stacks.cycles().is_empty());
 }

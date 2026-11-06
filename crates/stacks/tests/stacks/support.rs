@@ -112,10 +112,17 @@ pub fn render(stacks: &Stacks) -> String {
     lines.join("\n")
 }
 
-/// Finds the stacks among `prs` and checks the rendered forest against `expected`, one line each.
+/// Finds the stacks among `prs`, with no trunk branches, and checks the rendered forest against
+/// `expected`, one line each.
 #[track_caller]
 pub fn assert_forest(prs: &[PullRequest], expected: &[&str]) -> Stacks {
-    let stacks = Stacks::find(prs);
+    assert_trunk_forest(prs, &[], expected)
+}
+
+/// Like [`assert_forest`], with trunk branches.
+#[track_caller]
+pub fn assert_trunk_forest(prs: &[PullRequest], trunks: &[&str], expected: &[&str]) -> Stacks {
+    let stacks = Stacks::find(prs, trunks);
     assert_eq!(render(&stacks), expected.join("\n"));
     stacks
 }

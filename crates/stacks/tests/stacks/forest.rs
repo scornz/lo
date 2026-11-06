@@ -22,7 +22,7 @@ fn unlinked_prs_sit_on_their_base_branch() {
 
 #[test]
 fn each_unlinked_pr_is_its_own_stack() {
-    let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "main", "b")]);
+    let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "main", "b")], &[]);
     let one = stacks.stack_of(1).unwrap();
     assert_eq!(one.root, "main");
     assert_eq!(one.layers, [1]);
@@ -59,14 +59,14 @@ fn closed_and_merged_prs_are_not_layers() {
 
 #[test]
 fn unknown_prs_have_no_stack() {
-    let stacks = Stacks::find(&[pr(1, "main", "a")]);
+    let stacks = Stacks::find(&[pr(1, "main", "a")], &[]);
     assert!(stacks.layer(9).is_none());
     assert!(stacks.stack_of(9).is_none());
 }
 
 #[test]
 fn no_prs_make_an_empty_forest() {
-    let stacks = Stacks::find(&[]);
+    let stacks = Stacks::find(&[], &[]);
     assert!(stacks.roots().is_empty());
 }
 

@@ -64,7 +64,7 @@ fn finds_stacks_among_1000_prs_within_50_ms() {
     assert_eq!(merged, 10);
 
     let start = Instant::now();
-    let stacks = Stacks::find(&prs);
+    let stacks = Stacks::find(&prs, &[]);
     let elapsed = start.elapsed();
 
     // Every open PR is placed, and the stacks are the ones built.

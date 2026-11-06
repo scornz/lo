@@ -67,12 +67,15 @@ fn children_are_oldest_first_and_the_walk_finishes_each_branch_first() {
 
 #[test]
 fn next_and_previous_step_through_the_walk() {
-    let stacks = Stacks::find(&[
-        pr(1, "main", "a"),
-        pr(2, "a", "b"),
-        pr(3, "b", "c"),
-        pr(4, "a", "d"),
-    ]);
+    let stacks = Stacks::find(
+        &[
+            pr(1, "main", "a"),
+            pr(2, "a", "b"),
+            pr(3, "b", "c"),
+            pr(4, "a", "d"),
+        ],
+        &[],
+    );
     let stack = stacks.stack_of(1).unwrap();
     assert_eq!(stack.layers, [1, 2, 3, 4]);
     assert_eq!(stack.next(1), Some(2));
