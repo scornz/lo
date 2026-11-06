@@ -1,5 +1,87 @@
 //! Finds blocks of code that a pull request moves: deleted in one place and added in another, in
 //! the same file or another file of the PR.
+//!
+//! [`Moves::find`] takes every file's changed lines, as a line diff produces them, and returns the
+//! moves. Each [`Move`] says where its block came from and where it landed, for the "moved from
+//! `api/user.ts:40`" link at each end, and lists the lines edited on the way, so the diff view
+//! highlights only those. [`Moves::of_deleted`] and [`Moves::of_added`] find the move a line
+//! belongs to as the view draws it.
+//!
+//! ```
+//! use diff_extras::moved::{EditedLine, FileChanges, Moves};
+//!
+//! let files = [
+//!     FileChanges::new("api/user.ts").delete(40, [
+//!         "function fullName(user: User): string {",
+//!         "  const first = user.first.trim();",
+//!         "  const middle = user.middle?.trim();",
+//!         "  const last = user.last.trim();",
+//!         "  return [first, middle, last].filter(Boolean).join(\" \");",
+//!         "}",
+//!     ]),
+//!     // Moved into a class, so one level deeper, with its return edited.
+//!     FileChanges::new("api/names.ts").add(12, [
+//!         "  fullName(user: User): string {",
+//!         "    const first = user.first.trim();",
+//!         "    const middle = user.middle?.trim();",
+//!         "    const last = user.last.trim();",
+//!         "    return [first, middle, last].filter((name) => name).join(\" \");",
+//!         "  }",
+//!     ]),
+//! ];
+//! let moves = Moves::find(&files);
+//!
+//! let moved = moves.of_added(1, 14).unwrap();
+//! assert_eq!(moved.from.path, "api/user.ts");
+//! assert_eq!(moved.from.lines, 41..=45);
+//! assert_eq!(moved.to.lines, 13..=17);
+//! assert_eq!(moved.edits, [EditedLine { old: 44, new: 16 }]);
+//! assert_eq!(moved.edit_of_new(16), Some(EditedLine { old: 44, new: 16 }));
+//! assert_eq!(moves.of_deleted(0, 42), Some(moved));
+//! ```
+//!
+//! The function's first line changed too, so the move starts at the line after it: a move starts
+//! and ends with lines that match.
+//!
+//! # What counts as a move
+//!
+//! Lines are compared with their leading and trailing whitespace trimmed, so re-indented code still
+//! matches. Blank lines are left out: they can sit inside a block, in any number on either side,
+//! but never count toward one.
+//!
+//! Consecutive deleted lines of a file form a run, and so do consecutive added lines. A lineup
+//! pairs the lines of a deleted run with the lines of an added run, one for one from some offset,
+//! skipping blank lines. Each pair matches or is an edited line. A block of a lineup is a move
+//! when:
+//!
+//! 1. it starts and ends with matching lines;
+//! 2. at least 3 of its matching lines have a letter or digit, so lines of only punctuation, such
+//!    as `}` or `});`, can sit inside a move but can't make one;
+//! 3. at least two thirds of its lines match; and
+//! 4. no more than 2 edited lines come in a row.
+//!
+//! Going down a lineup, a block starts at each matching line not already in a block and runs to the
+//! furthest matching line that keeps two thirds of its lines matching.
+//!
+//! Unlike git's `--color-moved`, which only matches lines exactly, a move can carry small edits.
+//! Edits pair lines one for one, though: a line added or removed inside a moved block shifts the
+//! lineup, so the block becomes a move on each side of it, each held to the rule on its own.
+//!
+//! A deleted run and an added run between the same two unchanged lines of a file are never lined
+//! up. That code was changed in place, say re-indented or wrapped in a new block, not moved.
+//!
+//! # Competing moves
+//!
+//! Each line belongs to at most one move, and longer moves win. Candidates are taken by how many of
+//! their matching lines have a letter or digit, then by how many lines match, then by fewest edits,
+//! then by where they land and where they came from, earliest first. A candidate that overlaps one
+//! already taken loses the overlap, and what's left is held to the rule again. A block added in two
+//! places is one move, to the first.
+//!
+//! A line repeated all over a PR, such as `return Ok(());`, doesn't start a lineup: a text deleted
+//! D times and added A times starts one only when D × A is at most 64. It still matches inside a
+//! lineup another line started, so a block made only of such lines isn't found, but a long run of
+//! them moves with the distinct lines around it.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
@@ -40,6 +122,9 @@ pub struct Line {
 }
 
 impl FileChanges {
+    /// A file at `path` with no changed lines yet. Add them with [`Self::delete`] and
+    /// [`Self::add`], or push to [`Self::deleted`] and [`Self::added`]. Lines can come in any
+    /// order.
     pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -107,7 +192,8 @@ pub struct Move {
 pub struct Place {
     /// The file's index in the changes passed to [`Moves::find`].
     pub file: usize,
-    /// The file's path on this side: its old path for [`Move::from`], its new path for [`Move::to`].
+    /// The file's path on this side: its old path for [`Move::from`], its new path for
+    /// [`Move::to`].
     pub path: String,
     /// The block's first and last lines. Both are lines that aren't blank.
     pub lines: RangeInclusive<u32>,
@@ -123,7 +209,8 @@ pub struct EditedLine {
 }
 
 impl Moves {
-    /// Finds the moves among `files`, the changes of every file in the PR.
+    /// Finds the moves among `files`, the changes of every file in the PR. [`Place::file`] in the
+    /// result is an index into `files`.
     pub fn find(files: &[FileChanges]) -> Self {
         let mut texts = Texts::default();
         let old = Side::new(files, |file| &file.deleted, &mut texts);
