@@ -594,8 +594,12 @@ fn paged_revisions() -> Vec<Interaction> {
         "beforeCommit": {"oid": sha(1)},
         "afterCommit": {"oid": sha(2)},
     }]);
-    // After its last cursor, the reviews come back empty; anything else would be ignored.
-    second_pull["reviews"]["nodes"] = serde_json::json!([]);
+    // The reviews were all read on the first page: what comes back for them now is ignored.
+    second_pull["reviews"]["nodes"] = serde_json::json!([{
+        "submittedAt": "2026-11-06T19:31:00Z",
+        "commit": {"oid": sha(2)},
+        "author": {"__typename": "User", "login": "someone"},
+    }]);
     second_pull["reviews"]["pageInfo"] =
         serde_json::json!({"hasNextPage": false, "endCursor": null});
     second.response.body.as_mut().unwrap()["data"]["repository"]["pullRequest"] = second_pull;
