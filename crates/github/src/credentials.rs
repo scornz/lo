@@ -46,9 +46,10 @@ impl Build {
     }
 }
 
-/// The server string an account's token is stored under in this build.
+/// The server string an account's token is stored under in this build. Logins are lowercased:
+/// GitHub's ignore case, and so does rozed's database, so a case-only rename keeps one item.
 pub fn server_for(login: &str) -> String {
-    server(Build::current(), login)
+    server(Build::current(), &login.to_ascii_lowercase())
 }
 
 fn server(build: Build, login: &str) -> String {
@@ -278,6 +279,8 @@ mod tests {
         );
         // Tests are debug builds.
         assert_eq!(server_for("rozed-bot"), "rozed-dev://github.com/rozed-bot");
+        // GitHub's logins ignore case, so a case-only rename keeps the same item.
+        assert_eq!(server_for("Rozed-Bot"), server_for("rozed-bot"));
     }
 
     #[test]

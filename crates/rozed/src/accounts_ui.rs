@@ -522,13 +522,17 @@ impl AccountsModal {
         let Some(accounts) = self.accounts.clone() else {
             return;
         };
+        let source = accounts
+            .read(cx)
+            .account(login)
+            .map(|account| account.source);
         let task = accounts.update(cx, |accounts, cx| accounts.remove(login, cx));
         let login = login.to_string();
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match result {
-                    Ok(()) => Notice::info(format!("Removed {login}.")),
+                    Ok(()) => removed_notice(&login, source),
                     Err(error) => Notice::error(&error),
                 });
                 cx.notify();
@@ -635,6 +639,31 @@ impl AccountsModal {
 
     pub fn is_listing(&self) -> bool {
         matches!(self.mode, Mode::List)
+    }
+}
+
+/// Where the user revokes an OAuth app's access to their account.
+const AUTHORIZED_APPS_URL: &str = "https://github.com/settings/applications";
+
+/// What removing an account did and didn't do. Removing deletes rozed's copy of the token, but
+/// rozed has no client secret, so only GitHub's settings can revoke the grant behind it. An
+/// imported token is gh's, and revoking it would sign gh out too.
+fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
+    match source {
+        Some(AccountSource::Gh) => Notice::info(format!(
+            "Removed {login}. Its token is gh's, so gh stays signed in."
+        )),
+        _ => Notice {
+            message: format!(
+                "Removed {login}. rozed stays authorized on GitHub until you revoke it there.",
+            )
+            .into(),
+            is_error: false,
+            link: Some(HelpLink {
+                label: "Revoke on GitHub",
+                url: AUTHORIZED_APPS_URL.to_string(),
+            }),
+        },
     }
 }
 
@@ -1121,6 +1150,62 @@ esac
         // Removing it from the list forgets it.
         modal.update(cx, |modal, cx| modal.remove("rozed-bot", cx));
         cx.run_until_parked();
+        accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
+    }
+
+    #[gpui::test]
+    async fn removing_says_revoking_happens_on_github(cx: &mut TestAppContext) {
+        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
+        let accounts = accounts("ui_remove", http.clone(), cx).await;
+        for (login, source) in [
+            ("signed-in", AccountSource::DeviceFlow),
+            ("from-gh", AccountSource::Gh),
+        ] {
+            let user = github::AuthenticatedUser {
+                user: github::User {
+                    login: login.into(),
+                    id: 1,
+                    name: None,
+                    avatar_url: None,
+                },
+                scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+            };
+            accounts
+                .update(cx, |accounts, cx| {
+                    accounts.add(user, github::Token::new("gho_FAKE"), source, cx)
+                })
+                .await
+                .unwrap();
+        }
+        let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
+
+        // rozed has no client secret, so it can't revoke its own grant: GitHub's settings can.
+        modal.update(cx, |modal, cx| modal.remove("signed-in", cx));
+        cx.run_until_parked();
+        modal.read_with(cx, |modal, _| {
+            let notice = modal.notice().unwrap();
+            assert!(!notice.is_error);
+            assert_eq!(
+                notice.message.as_ref(),
+                "Removed signed-in. rozed stays authorized on GitHub until you revoke it there."
+            );
+            assert_eq!(
+                notice.link.as_ref().map(|link| link.url.as_str()),
+                Some("https://github.com/settings/applications")
+            );
+        });
+
+        // An imported token is gh's: revoking it would sign gh out too.
+        modal.update(cx, |modal, cx| modal.remove("from-gh", cx));
+        cx.run_until_parked();
+        modal.read_with(cx, |modal, _| {
+            let notice = modal.notice().unwrap();
+            assert_eq!(
+                notice.message.as_ref(),
+                "Removed from-gh. Its token is gh's, so gh stays signed in."
+            );
+            assert_eq!(notice.link, None);
+        });
         accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
     }
 

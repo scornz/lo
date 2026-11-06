@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, anyhow};
 use credentials_provider::CredentialsProvider;
+use futures::channel::oneshot;
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use http_client::HttpClient;
 
@@ -116,6 +117,9 @@ impl Accounts {
     }
 
     /// Stores the token and adds the account, replacing any account with the same login.
+    ///
+    /// Dropping the returned task doesn't stop it: the token and the row are always both written
+    /// or, when the row can't be written for a new account, neither.
     pub fn add(
         &mut self,
         user: AuthenticatedUser,
@@ -126,8 +130,9 @@ impl Accounts {
         let store = self.store.clone();
         let db = self.db.clone();
         let http = self.http.clone();
-        let added_at = self
-            .account(&user.user.login)
+        let existing = self.account(&user.user.login).cloned();
+        let added_at = existing
+            .as_ref()
             .map(|existing| existing.added_at)
             .unwrap_or_else(now);
         let account = Account {
@@ -140,30 +145,47 @@ impl Accounts {
             source,
             added_at,
         };
+        let (done, result) = oneshot::channel();
         cx.spawn(async move |this, cx| {
-            store
-                .write_credentials(
-                    &server_for(&account.login),
-                    &account.login,
-                    token.expose().as_bytes(),
-                    cx,
-                )
+            let added = async {
+                let server = server_for(&account.login);
+                store
+                    .write_credentials(&server, &account.login, token.expose().as_bytes(), cx)
+                    .await
+                    .context("storing the token")?;
+                if let Err(error) = db.save_account(account.clone()).await {
+                    // A login rozed already had keeps its row, which the new token still fits.
+                    if existing.is_none()
+                        && let Err(delete_error) = store.delete_credentials(&server, cx).await
+                    {
+                        log::warn!(
+                            "couldn't delete {}'s token after failing to save the account: \
+                             {delete_error:#}",
+                            account.login
+                        );
+                    }
+                    return Err(error.context("saving the account"));
+                }
+                this.update(cx, |this, cx| {
+                    let login = key(&account.login);
+                    this.accounts
+                        .retain(|existing| key(&existing.login) != login);
+                    this.accounts.push(account.clone());
+                    this.accounts.sort_by_key(|a| (a.added_at, key(&a.login)));
+                    this.signed_out.remove(&login);
+                    this.clients.insert(login, GithubClient::new(http, token));
+                    cx.notify();
+                })?;
+                Ok(account)
+            }
+            .await;
+            done.send(added).ok();
+        })
+        .detach();
+        cx.background_spawn(async move {
+            result
                 .await
-                .context("storing the token")?;
-            db.save_account(account.clone())
-                .await
-                .context("saving the account")?;
-            this.update(cx, |this, cx| {
-                let login = key(&account.login);
-                this.accounts
-                    .retain(|existing| key(&existing.login) != login);
-                this.accounts.push(account.clone());
-                this.accounts.sort_by_key(|a| (a.added_at, key(&a.login)));
-                this.signed_out.remove(&login);
-                this.clients.insert(login, GithubClient::new(http, token));
-                cx.notify();
-            })?;
-            Ok(account)
+                .unwrap_or_else(|_| Err(anyhow!("rozed quit while adding the account")))
         })
     }
 
@@ -552,6 +574,65 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_failed_row_write_leaves_no_token_behind(cx: &mut TestAppContext) {
+        let (accounts, store, db) = setup("row_write_fails", no_http(), cx).await;
+        // GitHub's ids fit in an i64; this one doesn't, so the database refuses the row.
+        let error = accounts
+            .update(cx, |accounts, cx| {
+                accounts.add(
+                    user("a", u64::MAX),
+                    Token::new("gho_FAKE"),
+                    AccountSource::DeviceFlow,
+                    cx,
+                )
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("saving the account"),
+            "{error:#}"
+        );
+        assert_eq!(store.keys(), Vec::<String>::new());
+        assert_eq!(db.accounts().unwrap(), []);
+    }
+
+    #[gpui::test]
+    async fn dropping_the_add_still_finishes_it(cx: &mut TestAppContext) {
+        let (accounts, store, db) = setup("add_dropped", no_http(), cx).await;
+        // Hold the token write, then drop the task, as the modal does when escape cancels it.
+        let release = store.fake.defer_next_mutation();
+        let task = accounts.update(cx, |accounts, cx| {
+            accounts.add(
+                user("a", 1),
+                Token::new("gho_FAKE"),
+                AccountSource::DeviceFlow,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        drop(task);
+        release.send(()).unwrap();
+        cx.run_until_parked();
+        // Both the token and the row are there, never just one of them.
+        assert_eq!(store.keys(), [server_for("a")]);
+        assert_eq!(db.accounts().unwrap().len(), 1);
+        accounts.read_with(cx, |accounts, _| assert_eq!(accounts.accounts().len(), 1));
+    }
+
+    #[gpui::test]
+    async fn a_case_only_rename_keeps_one_token(cx: &mut TestAppContext) {
+        let (accounts, store, _) = setup("case_rename", no_http(), cx).await;
+        add(&accounts, "rozed-bot", cx).await;
+        add(&accounts, "Rozed-Bot", cx).await;
+        assert_eq!(store.keys(), [server_for("rozed-bot")]);
+        accounts
+            .update(cx, |accounts, cx| accounts.remove("ROZED-BOT", cx))
+            .await
+            .unwrap();
+        assert_eq!(store.keys(), Vec::<String>::new());
     }
 
     #[gpui::test]
