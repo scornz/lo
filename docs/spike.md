@@ -35,6 +35,10 @@ Things that surprised:
   silences it but leaves out `__unwind_info`, which the unwinder needs: every panic then aborts with
   "failed to initiate panic", and one failing test kills the whole test binary. Optimized builds stay
   under the limit (`release` 7 MB, `release-fast` 11 MB) and don't warn.
+- **`shallow = true` doesn't keep the submodule shallow.** With it, `git submodule update --init`
+  still fetched all of Zed's history (400 MB, 55 s), because the pinned commit, on rozed's patch
+  branch, isn't on the fork's default branch. `git submodule update --init --depth 1` fetches the
+  pinned commit alone (32 MB, 7 s), as CI's checkout does.
 - **Zed-owned files.** A run creates only rozed's folders. It also creates
   `~/Library/Logs/rozed/telemetry.log`, empty, because Zed's `Client` sets up its telemetry sink;
   nothing is sent.
