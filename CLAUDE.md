@@ -135,6 +135,11 @@ Zed").
 3. `project: let an app keep worktrees out of Recent Items`. Adds
    `WorktreeStore::keep_out_of_recent_documents`, so rozed's checkouts never reach macOS's Recent
    Items. Adding them there also kept rozed from quitting on some desktops.
+4. `editor: keep a split diff's expand buttons hidden when it splits again`. Adds
+   `SplittableEditor::disable_expand_excerpt_buttons`, which also hides them on the left editor
+   that `split()` makes when the diff widens or its style changes, and
+   `Editor::expand_excerpt_buttons_disabled`. GitHub's diff of a pull request shows hunks only,
+   and its excerpts must never expand.
 
 ### Cargo settings copied from Zed
 

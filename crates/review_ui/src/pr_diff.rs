@@ -1225,9 +1225,10 @@ impl Target<'_> {
             if editor.diff_view_style() == DiffViewStyle::Split {
                 editor.split(window, cx);
             }
-            // The rows between the ones asked for aren't the file's, so they never show.
+            // The rows between the ones asked for aren't the file's, so they never show, even
+            // on a left side made when the diff splits again.
             if hunks_only {
-                editor.update_editors(cx, |editor, cx| editor.disable_expand_excerpt_buttons(cx));
+                editor.disable_expand_excerpt_buttons(cx);
             }
         })?;
         Ok(Shown {

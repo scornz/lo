@@ -3030,6 +3030,56 @@ mod tests {
         assert!(banners(&tab, cx).is_empty());
     }
 
+    /// Whether each side of `diff` hides the buttons that expand excerpts: the right side, and
+    /// the left one if the diff is split.
+    fn expand_buttons_hidden(
+        diff: &Entity<SplittableEditor>,
+        cx: &mut VisualTestContext,
+    ) -> (bool, Option<bool>) {
+        diff.read_with(cx, |diff, cx| {
+            let hidden =
+                |editor: &Entity<Editor>| editor.read(cx).expand_excerpt_buttons_disabled();
+            (hidden(diff.rhs_editor()), diff.lhs_editor().map(hidden))
+        })
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_cant_be_expanded_even_once_it_splits_again(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(&tab, vec![github_file("a.txt", 50)], cx);
+        let diff = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        let before = shown_text(&diff, cx);
+        assert_eq!(expand_buttons_hidden(&diff, cx), (true, Some(true)));
+
+        // The left side is made anew when the diff splits again, as when it widens past
+        // `minimum_split_diff_width` or the diff view style changes.
+        for _ in 0..2 {
+            diff.update_in(cx, |diff, window, cx| {
+                diff.toggle_split(&editor::ToggleSplitDiff, window, cx)
+            });
+            cx.run_until_parked();
+        }
+        assert!(diff.read_with(cx, |diff, _| diff.is_split()));
+        assert_eq!(expand_buttons_hidden(&diff, cx), (true, Some(true)));
+
+        // Nor do the keys expand it, on either side.
+        for side in [true, false] {
+            let editor = diff.read_with(cx, |diff, _| {
+                if side {
+                    diff.rhs_editor().clone()
+                } else {
+                    diff.lhs_editor().unwrap().clone()
+                }
+            });
+            cx.update(|window, cx| window.focus(&editor.focus_handle(cx), cx));
+            cx.simulate_keystrokes("shift-enter");
+            cx.dispatch_action(editor::actions::ExpandExcerptsUp::default());
+            cx.dispatch_action(editor::actions::ExpandExcerptsDown::default());
+            assert_eq!(shown_text(&diff, cx), before);
+        }
+    }
+
     #[gpui::test]
     async fn a_file_whose_diff_doesnt_match_githubs_shows_githubs_patch(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
