@@ -6,8 +6,10 @@ use std::time::Duration;
 use futures::AsyncReadExt as _;
 use futures::future::BoxFuture;
 use graphql_client::GraphQLQuery;
-use http_client::http::{HeaderMap, StatusCode};
-use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, Method, RedirectPolicy, Request};
+use http_client::http::{HeaderMap, HeaderValue, StatusCode};
+use http_client::{
+    AsyncBody, HttpClient, HttpRequestExt as _, Method, RedirectPolicy, Request, Url,
+};
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -19,6 +21,10 @@ use crate::token::Token;
 use crate::user::AuthenticatedUser;
 
 pub const API_URL: &str = "https://api.github.com";
+/// The only hosts a client sends its token to: the API, and the API's host for uploads, which
+/// responses name in full URLs. Anything else found in a response, such as an image or a check's
+/// details page, is fetched without the token by whatever shows it.
+const API_HOSTS: &[&str] = &["api.github.com", "uploads.github.com"];
 /// The REST API version rozed is written against. Responses echo it in
 /// `x-github-api-version-selected`.
 pub const API_VERSION: &str = "2022-11-28";
@@ -125,12 +131,33 @@ impl GithubClient {
         self.state.lock().rate_limits.clone()
     }
 
-    fn url(&self, path: &str) -> String {
-        if path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{}/{}", self.api_url, path.trim_start_matches('/'))
+    /// The URL for `path`, which is either relative to the API or a full URL on one of
+    /// [`API_HOSTS`], over HTTPS on the default port. Anything else is refused.
+    fn url(&self, path: &str) -> Result<String, GithubError> {
+        let url = match Url::parse(path) {
+            Ok(url) => url,
+            Err(_) => Url::parse(&format!(
+                "{}/{}",
+                self.api_url,
+                path.trim_start_matches('/')
+            ))
+            .map_err(|_| GithubError::RefusedUrl {
+                host: "a malformed URL".into(),
+            })?,
+        };
+        let allowed = url.scheme() == "https"
+            && url.host_str().is_some_and(|host| API_HOSTS.contains(&host))
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none();
+        if !allowed {
+            return Err(GithubError::RefusedUrl {
+                host: url
+                    .host_str()
+                    .map_or_else(|| url.scheme().to_string(), str::to_string),
+            });
         }
+        Ok(url.to_string())
     }
 
     fn request(
@@ -141,10 +168,13 @@ impl GithubClient {
         body: Option<Vec<u8>>,
         etag: Option<&str>,
     ) -> Result<Request<AsyncBody>, GithubError> {
+        let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
+            .map_err(|_| GithubError::Decode("the token isn't a valid header value".into()))?;
+        authorization.set_sensitive(true);
         Request::builder()
             .method(method)
-            .uri(self.url(path))
-            .header("Authorization", format!("token {}", token.expose()))
+            .uri(self.url(path)?)
+            .header("Authorization", authorization)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
             .header("User-Agent", user_agent())
@@ -514,6 +544,38 @@ mod tests {
         assert!(error.is_unauthorized(), "{error:?}");
         assert_eq!(*refused.lock(), ["gho_FAKE"]);
         assert_eq!(http.seen().len(), 2);
+    }
+
+    #[test]
+    fn the_token_goes_only_to_githubs_api_hosts() {
+        let http = replay(vec![]);
+        let client = client(&http);
+        for url in [
+            "https://evil.example/x",
+            "https://api.github.com.evil.example/x",
+            "https://github.com/login",
+            "http://api.github.com/user",
+            "https://api.github.com:8443/user",
+            "https://someone@api.github.com/user",
+            "file:///etc/passwd",
+        ] {
+            let error =
+                futures::executor::block_on(client.get::<serde_json::Value>(url)).unwrap_err();
+            assert!(
+                matches!(error, GithubError::RefusedUrl { .. }),
+                "{url}: {error:?}"
+            );
+            assert!(!error.to_string().contains("/x"), "{error}");
+        }
+        assert!(http.seen().is_empty());
+    }
+
+    #[test]
+    fn the_authorization_header_is_marked_sensitive() {
+        let http = replay(vec![("GET", "https://api.github.com/user", 200, &[], "{}")]);
+        let _: serde_json::Value = futures::executor::block_on(client(&http).get("/user")).unwrap();
+        let seen = &http.seen()[0];
+        assert!(seen.headers["authorization"].is_sensitive());
     }
 
     #[test]

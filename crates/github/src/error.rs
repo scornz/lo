@@ -69,6 +69,13 @@ pub enum GithubError {
     #[error("{}", graphql_messages(.errors))]
     GraphQl { errors: Vec<GraphQlError> },
 
+    /// A request to somewhere other than GitHub's API. rozed sends its token nowhere else, so
+    /// it never sent this one.
+    #[error(
+        "rozed sends GitHub requests only to api.github.com and uploads.github.com, not {host}"
+    )]
+    RefusedUrl { host: String },
+
     /// The request didn't get an answer.
     #[error("couldn't reach GitHub: {0:#}")]
     Network(anyhow::Error),
