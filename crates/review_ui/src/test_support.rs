@@ -344,6 +344,11 @@ impl GitServer {
         }
     }
 
+    /// Takes `repo`, an `owner/name`, off the server, so fetching from it fails, as offline.
+    pub fn remove(&self, repo: &str) {
+        std::fs::remove_dir_all(self.dir.path().join(format!("{repo}.git"))).unwrap();
+    }
+
     /// Pull request `number` of `repo`, an `owner/name`: `base`, a new commit on `main`, and
     /// `head`, a commit on top of it, as `refs/pull/<number>/head`. Each is a list of files and
     /// their text.

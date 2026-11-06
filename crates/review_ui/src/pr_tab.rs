@@ -12,7 +12,7 @@ use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{HelpLink, PullRef, Target};
+use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -101,8 +101,8 @@ pub fn open_with(
     if let Some(index) = find_tab(&keys, &link) {
         let tab = tabs[index].clone();
         workspace.activate_item(&tab, true, true, window, cx);
-        if matches!(tab.read(cx).status, Status::Failed(_)) {
-            log::info!("{link} failed to open before; trying again");
+        if tab.read(cx).status.tries_again() {
+            log::info!("{link} didn't load from GitHub before; trying again");
             tab.update(cx, |tab, cx| {
                 tab.start_again(cx);
                 start(tab, window, cx);
@@ -151,7 +151,17 @@ pub enum Status {
     Loading(SharedString),
     /// Every file is in the diff.
     Ready,
+    /// GitHub couldn't be reached, and the diff is the local copy's, read-only. Says so, and why.
+    Offline(SharedString),
     Failed(SharedString),
+}
+
+impl Status {
+    /// Whether opening the tab's link again loads it again: it failed, or showed only what rozed
+    /// had while offline.
+    fn tries_again(&self) -> bool {
+        matches!(self, Self::Failed(_) | Self::Offline(_))
+    }
 }
 
 /// Sent when what the tab's title shows changes.
@@ -257,7 +267,13 @@ impl PrTab {
     pub fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (link, trust, opened) = (self.key.opened_as.clone(), self.trust, self.opened);
         self._load = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Err(error) = load(this.clone(), link.clone(), trust, opened, cx).await {
+            let loaded = match load(this.clone(), link.clone(), trust, opened, cx).await {
+                Err(error) if is_offline(&error) => {
+                    show_offline(this.clone(), link.clone(), opened, error, cx).await
+                }
+                loaded => loaded,
+            };
+            if let Err(error) = loaded {
                 log::error!("{link}: {error:#}");
                 let links = error
                     .downcast_ref::<Refusal>()
@@ -401,6 +417,16 @@ impl PrTab {
         self.set_details(&saved.details, cx);
         self.saved = Some((saved.login.clone(), saved.fetched_at));
         self.show_saved_banner(true, cx);
+    }
+
+    /// GitHub couldn't be reached, so the tab shows the local copy's diff with what rozed saved.
+    fn showing_offline(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
+        self.show_saved_banner(false, cx);
+        let text = format!(
+            "Offline: {why:#}. This is the local copy's diff, read-only; open the pull request \
+             again to try GitHub again."
+        );
+        self.set_status(Status::Offline(text.into()), cx);
     }
 
     /// Says how old the saved details the tab shows are, if it shows them.
@@ -809,6 +835,7 @@ impl PrTab {
         let (icon, color, text) = match &self.status {
             Status::Ready => return None,
             Status::Loading(step) => (IconName::ArrowCircle, Color::Muted, step.clone()),
+            Status::Offline(why) => (IconName::Warning, Color::Warning, why.clone()),
             Status::Failed(error) => (IconName::Warning, Color::Error, error.clone()),
         };
         Some(
@@ -1074,7 +1101,7 @@ fn merge_into_twin(
     );
     twin.update(cx, |twin, cx| {
         twin.key.merge(key);
-        if matches!(twin.status, Status::Failed(_)) {
+        if twin.status.tries_again() {
             twin.start_again(cx);
             twin.load(window, cx);
         }
@@ -1196,6 +1223,53 @@ async fn load(
     .await?;
     this.update(cx, |this, cx| this.set_status(Status::Ready, cx))?;
     Ok(())
+}
+
+/// Whether `error` says GitHub couldn't be reached.
+fn is_offline(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| matches!(cause.downcast_ref(), Some(GithubError::Network(_))))
+}
+
+/// When GitHub couldn't be reached (`offline`), shows the pull request's diff from the local
+/// copy, if it has the head rozed saved, with the saved details and their age (design §11
+/// "Offline"). Without a copy, it's `offline` again, and the tab shows the saved details alone.
+async fn show_offline(
+    this: WeakEntity<PrTab>,
+    link: PrLink,
+    opened: Instant,
+    offline: anyhow::Error,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let Some(layer) = cx.update(|_, cx| github_layer::loaded(cx))? else {
+        return Err(offline);
+    };
+    let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number)?);
+    let Some(saved) = cx.update(|_, cx| layer.read(cx).saved_details(&pull, cx))? else {
+        return Err(offline);
+    };
+    let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
+    let shown = pr_diff::open_offline(
+        this.clone(),
+        workspace,
+        link.clone(),
+        &saved.details,
+        opened,
+        cx,
+    )
+    .await;
+    match shown {
+        Ok(true) => {
+            this.update(cx, |this, cx| this.showing_offline(&offline, cx))?;
+            Ok(())
+        }
+        Ok(false) => Err(offline),
+        Err(error) => {
+            log::warn!("{link}: can't show the local copy offline: {error:#}");
+            Err(offline)
+        }
+    }
 }
 
 /// Asks which of `logins`, the accounts that can see `link`'s repository, to open it with, and
@@ -1947,6 +2021,11 @@ mod tests {
             banners(&tab, cx),
             ["Showing what rozed saved for rozed-bot 2 hours ago."]
         );
+        // There's no local copy, so no diff.
+        tab.read_with(cx, |tab, _| {
+            assert!(tab.diff().is_none());
+            assert_eq!(tab.files().len(), 0);
+        });
         // Offline, GitHub can't confirm the pull request, so nothing records it as opened.
         assert_eq!(cache.recent(10).unwrap(), Vec::new());
 
@@ -1968,6 +2047,156 @@ mod tests {
                 "rozed-bot".to_string()
             )]
         );
+    }
+
+    /// `rozed-dev/playground#2`, opened once online, which copied it, and closed; with what
+    /// rozed saved about it for `rozed-bot` two hours ago, at `saved_head`, or at the head it
+    /// copied. Then offline, GitHub's git server included.
+    async fn playground_copied_then_offline(
+        workspace: &Entity<Workspace>,
+        github: &FakeGithub,
+        git: &GitServer,
+        saved_head: Option<&str>,
+        cx: &mut VisualTestContext,
+    ) -> FakePull {
+        let mut pull = git.pull_request(
+            "rozed-dev/playground",
+            2,
+            &[("a.rs", "a\n"), ("b.rs", "b\n")],
+            &[("a.rs", "a2\n"), ("b.rs", "b2\n")],
+        );
+        pull.title = "Add b".into();
+        github.add_pull(pull.clone());
+        github.let_see("gho_BOT", "rozed-dev/playground");
+        let (_, cache) = sign_in(github, &[("rozed-bot", "gho_BOT")], cx).await;
+        let tab = open_loaded(workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        close(workspace, tab, cx);
+
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3_600 + 30);
+        let head = saved_head.unwrap_or(&pull.head);
+        cache
+            .put(
+                "rozed-bot",
+                &Target::Pull(PullRef::new("rozed-dev", "playground", 2)),
+                &details_at("Add b", "VIEWED", head),
+                None,
+                two_hours_ago,
+            )
+            .await
+            .unwrap();
+        github.set_offline(true);
+        git.remove("rozed-dev/playground");
+        pull
+    }
+
+    #[gpui::test]
+    async fn offline_a_pull_request_the_local_copy_has_shows_its_diff_from_the_copy(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = playground_copied_then_offline(&workspace, &github, &git, None, cx).await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        let Status::Offline(message) = status(&tab, cx) else {
+            panic!("expected the local copy offline: {:?}", status(&tab, cx));
+        };
+        assert!(message.starts_with("Offline: "), "{message}");
+        assert!(message.contains("couldn't reach GitHub"), "{message}");
+        assert!(message.ends_with("open the pull request again to try GitHub again."));
+        assert_eq!(
+            banners(&tab, cx),
+            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+        );
+        tab.read_with(cx, |tab, cx| {
+            assert!(tab.diff().is_some());
+            let files: Vec<_> = tab
+                .files()
+                .rows()
+                .map(|entry| (entry.path().to_string(), entry.viewed))
+                .collect();
+            assert_eq!(
+                files,
+                [
+                    ("a.rs".to_string(), Some(ViewedState::Viewed)),
+                    ("b.rs".to_string(), Some(ViewedState::Unviewed))
+                ]
+            );
+            assert_eq!(
+                tab.revisions().unwrap().label(&pull.head).as_deref(),
+                Some("r1")
+            );
+            assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
+        });
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("rozed-dev/playground#2 — Add b")
+        );
+        let diff_text = tab.read_with(cx, |tab, cx| {
+            let editor = tab.diff().unwrap().read(cx).rhs_editor().clone();
+            editor.read(cx).buffer().read(cx).snapshot(cx).text()
+        });
+        assert!(diff_text.contains("a2"), "{diff_text}");
+        assert!(diff_text.contains("b2"), "{diff_text}");
+
+        // Back online, opening it again asks GitHub again.
+        github.set_offline(false);
+        let reopened = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert_eq!(reopened, tab);
+        let requests = github.requests();
+        assert!(
+            requests.contains(&"GET /repos/rozed-dev/playground/pulls/2 as gho_BOT".to_string()),
+            "{requests:#?}"
+        );
+        assert_eq!(banners(&tab, cx), Vec::<String>::new());
+    }
+
+    #[gpui::test]
+    async fn offline_a_head_the_local_copy_never_fetched_shows_only_the_saved_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        // GitHub had a newer head when rozed last saved the details.
+        let newer = "e".repeat(40);
+        playground_copied_then_offline(&workspace, &github, &git, Some(&newer), cx).await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("expected only the saved details: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("couldn't reach GitHub"), "{message}");
+        assert_eq!(
+            banners(&tab, cx),
+            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+        );
+        tab.read_with(cx, |tab, cx| {
+            assert!(tab.diff().is_none());
+            assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
+        });
+    }
+
+    #[test]
+    fn only_an_unreachable_github_counts_as_offline() {
+        let unreachable =
+            || anyhow::Error::new(GithubError::Network(anyhow::anyhow!("the network is down")));
+        assert!(is_offline(&unreachable()));
+        assert!(is_offline(
+            &unreachable().context("asking GitHub for a/b#1")
+        ));
+        assert!(!is_offline(&anyhow::anyhow!(
+            "GitHub has no pull request a/b#1, or bot can't see it"
+        )));
+        assert!(!is_offline(&anyhow::Error::new(
+            GithubError::Unauthorized {
+                message: "Bad credentials".into()
+            }
+        )));
     }
 
     #[gpui::test]
@@ -2110,6 +2339,11 @@ mod tests {
 
     /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.
     fn details(title: &str, viewed: &str) -> PullRequestData {
+        details_at(title, viewed, "d712aa7652cc723fee5fd9b3eba867b0480d40da")
+    }
+
+    /// [`details`], with `head` as the pull request's head.
+    fn details_at(title: &str, viewed: &str, head: &str) -> PullRequestData {
         serde_json::from_value(serde_json::json!({
             "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
             "number": 2,
@@ -2126,7 +2360,7 @@ mod tests {
             "baseRefName": "stack-a",
             "baseRefOid": "b046244d9569964088e952243e5e557312322488",
             "headRefName": "stack-b",
-            "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+            "headRefOid": head,
             "isCrossRepository": false,
             "headRepository": { "nameWithOwner": "rozed-dev/playground", "isFork": false },
             "files": {
