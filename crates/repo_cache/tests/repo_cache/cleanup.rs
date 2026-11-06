@@ -104,6 +104,24 @@ fn clear_removes_every_clone_and_checkout() {
 }
 
 #[test]
+fn clear_leaves_a_clone_another_rozed_is_making_alone() {
+    let server = server();
+    let (dir, cache) = server.cache();
+    use_repo(&cache, "old");
+    // Another rozed is making a clone, in a temporary folder of its own.
+    let making = dir.path().join("tmp/99999-0.git");
+    fs::create_dir_all(&making).unwrap();
+    fs::write(making.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+    cache.clear().unwrap();
+
+    assert!(making.join("HEAD").is_file());
+    assert!(!dir.path().join("repos").exists());
+    assert!(!dir.path().join("checkouts").exists());
+    assert_eq!(fs::read_dir(dir.path().join("tmp")).unwrap().count(), 1);
+}
+
+#[test]
 fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
     let server = server();
     let (dir, cache) = server.cache();

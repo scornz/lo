@@ -240,21 +240,24 @@ impl RepoCache {
         disk_usage(&self.root)
     }
 
-    /// Removes every clone and checkout, for "clear cache" in settings. Each clone's lock is held
-    /// while it goes, so a fetch in progress finishes first. Close the repositories first:
-    /// a [`Repo`] whose clone is gone fails until it's opened again.
+    /// Removes every clone and checkout, for "clear cache" in settings. `repos/` and
+    /// `checkouts/` are each moved aside in one rename and then deleted, so another rozed finds a
+    /// clone whole or not at all; a fetch it has in progress fails, and opening the repository
+    /// again makes a new clone. Clones another rozed is still making, in `tmp/`, are left alone.
     pub fn clear(&self) -> Result<(), Error> {
-        for (owner, repo) in self.clones()? {
-            let _lock = RepoLock::acquire(&self.lock_path(&owner, &repo))?;
-            self.remove_clone(&owner, &repo)?;
+        let trash = temporary_path(&self.root, "trash")?;
+        fs::create_dir(&trash).map_err(Error::io(format!("creating {}", trash.display())))?;
+        for name in ["repos", "checkouts"] {
+            match fs::rename(self.root.join(name), trash.join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let _ = remove_dir_all_if_exists(&trash);
+                    return Err(Error::io(format!("moving {name} aside"))(error));
+                }
+            }
         }
-        for dir in [
-            self.root.join("repos"),
-            self.root.join("checkouts"),
-            self.root.join("tmp"),
-        ] {
-            remove_dir_all_if_exists(&dir)?;
-        }
+        remove_dir_all_if_exists(&trash)?;
         log::info!("cleared {}", self.root.display());
         Ok(())
     }
