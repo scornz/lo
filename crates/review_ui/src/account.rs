@@ -142,6 +142,7 @@ mod tests {
             owner: "org".into(),
             name: "repo".into(),
             choice,
+            visible: Vec::new(),
             remembered: Default::default(),
             problems: problems
                 .into_iter()
