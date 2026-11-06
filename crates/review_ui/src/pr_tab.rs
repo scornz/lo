@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::anyhow;
 use editor::scroll::Autoscroll;
@@ -31,7 +31,7 @@ use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer;
 use crate::pr_banner::{self, BannerKind, Banners};
-use crate::pr_diff::{self, Trust};
+use crate::pr_diff::{self, CopyProgress, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
 
@@ -237,10 +237,8 @@ impl PrTab {
         self._load = Some(cx.spawn_in(window, async move |this, cx| {
             if let Err(error) = load(this.clone(), link.clone(), trust, opened, cx).await {
                 log::error!("{link}: {error:#}");
-                this.update(cx, |this, cx| {
-                    this.set_status(Status::Failed(format!("{error:#}").into()), cx)
-                })
-                .ok();
+                this.update(cx, |this, cx| this.load_failed(&error, cx))
+                    .ok();
             }
         }));
     }
@@ -502,8 +500,80 @@ impl PrTab {
         });
     }
 
+    /// Shows how far copying the pull request locally has got.
+    pub(crate) fn copy_progress(&mut self, progress: &CopyProgress, cx: &mut Context<Self>) {
+        self.set_status(Status::Loading(progress.text().into()), cx);
+    }
+
+    /// Says copying the pull request locally failed with `why` and will be tried again in `left`,
+    /// or now when `left` is `None`. With no `problem`, the copy worked and the banner goes.
+    pub(crate) fn copy_retried(
+        &mut self,
+        problem: Option<(&str, Option<Duration>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((why, left)) = problem else {
+            self.banners.update(cx, |banners, cx| {
+                banners.hide(BannerKind::LocalCopyFailed, cx)
+            });
+            return;
+        };
+        let when = match left {
+            Some(left) => format!("Trying again in {} s.", left.as_secs().max(1)),
+            None => "Trying again now.".to_string(),
+        };
+        let meanwhile = if self.diff_source == Some(DiffSource::GitHub) {
+            " Until then, this is GitHub's diff: changed lines only."
+        } else {
+            ""
+        };
+        let text =
+            format!("rozed couldn't copy this pull request locally: {why}. {when}{meanwhile}");
+        self.banners.update(cx, |banners, cx| {
+            banners.show(BannerKind::LocalCopyFailed, Severity::Warning, text, cx)
+        });
+        let step = match left {
+            Some(_) => "Waiting to copy it locally again…",
+            None => "Copying it locally…",
+        };
+        self.set_status(Status::Loading(step.into()), cx);
+    }
+
+    /// Shows that the local copy's diff has `done` of its `total` files.
+    pub(crate) fn loading_diff(&mut self, done: usize, total: usize, cx: &mut Context<Self>) {
+        let what = if self.diff_source == Some(DiffSource::GitHub) {
+            "the local copy's diff"
+        } else {
+            "the diff"
+        };
+        self.set_status(
+            Status::Loading(format!("Loading {what}: {done} of {total} files…").into()),
+            cx,
+        );
+    }
+
     /// Every file is in the local copy's diff.
     pub(crate) fn diff_loaded(&mut self, cx: &mut Context<Self>) {
+        self.set_status(Status::Ready, cx);
+    }
+
+    /// Loading failed with `error`. GitHub's diff, if it shows, stays, with a banner saying why
+    /// the local copy's won't come; otherwise the tab says why it couldn't open.
+    fn load_failed(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+        if self.diff.is_none() {
+            self.set_status(Status::Failed(format!("{error:#}").into()), cx);
+            return;
+        }
+        let text = match self.diff_source {
+            Some(DiffSource::GitHub) => format!(
+                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed \
+                 lines only. {error:#}"
+            ),
+            _ => format!("rozed couldn't finish loading this pull request: {error:#}"),
+        };
+        self.banners.update(cx, |banners, cx| {
+            banners.show(BannerKind::LocalCopyFailed, Severity::Error, text, cx)
+        });
         self.set_status(Status::Ready, cx);
     }
 
@@ -1849,6 +1919,70 @@ mod tests {
         let scrolled = scrolled_to(&local, cx).unwrap();
         assert_eq!((scrolled.path.as_str(), scrolled.row), ("b.txt", 59));
         assert_eq!(scrolled.below_top, 0.);
+    }
+
+    fn banners(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Vec<String> {
+        tab.read_with(cx, |tab, cx| {
+            tab.banners()
+                .read(cx)
+                .messages()
+                .iter()
+                .map(|message| message.text.to_string())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    async fn a_failed_copy_shows_a_banner_until_it_works(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(&tab, vec![github_file("a.txt", 50)], cx);
+
+        let why = "can't fetch pull request #1: the network failed";
+        tab.update(cx, |tab, cx| {
+            tab.copy_retried(Some((why, Some(Duration::from_secs(20)))), cx)
+        });
+        assert_eq!(
+            banners(&tab, cx),
+            [format!(
+                "rozed couldn't copy this pull request locally: {why}. Trying again in 20 s. \
+                 Until then, this is GitHub's diff: changed lines only."
+            )]
+        );
+        tab.update(cx, |tab, cx| tab.copy_retried(Some((why, None)), cx));
+        assert!(banners(&tab, cx)[0].contains("Trying again now."));
+
+        tab.update(cx, |tab, cx| tab.copy_retried(None, cx));
+        assert!(banners(&tab, cx).is_empty());
+    }
+
+    #[gpui::test]
+    async fn a_copy_that_fails_for_good_leaves_githubs_diff_with_a_banner(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(&tab, vec![github_file("a.txt", 50)], cx);
+
+        let error = anyhow::anyhow!("the repository doesn't exist, or the account can't see it");
+        tab.update(cx, |tab, cx| tab.load_failed(&error, cx));
+
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.status(), &Status::Ready);
+            assert_eq!(tab.diff_source(), Some(DiffSource::GitHub));
+        });
+        assert_eq!(
+            banners(&tab, cx),
+            [
+                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
+              only. the repository doesn't exist, or the account can't see it"
+            ]
+        );
+
+        // Without any diff, the tab says why it couldn't open.
+        let other = open_unloaded(&workspace, "https://github.com/owner/repo/pull/2", cx);
+        other.update(cx, |tab, cx| tab.load_failed(&error, cx));
+        other.read_with(cx, |tab, _| {
+            assert!(matches!(tab.status(), Status::Failed(_)))
+        });
     }
 
     #[gpui::test]

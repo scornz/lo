@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use buffer_diff::BufferDiff;
@@ -26,6 +26,8 @@ use editor::{
     Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
     SplittableEditor, multibuffer_context_lines,
 };
+use futures::StreamExt as _;
+use futures::channel::mpsc;
 use git::status::{FileStatus, StatusCode, TrackedStatus};
 use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
 use language::{
@@ -42,8 +44,8 @@ use workspace::Workspace;
 use workspace::notifications::NotificationId;
 
 use repo_cache::{
-    Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, PullRequestRefs, Repo, RepoCache,
-    Token,
+    Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, Progress, PullRequestRefs, Repo,
+    RepoCache, Token,
 };
 
 use crate::github_api::PullRequest;
@@ -64,10 +66,11 @@ pub enum Trust {
 }
 
 /// Copies the pull request locally, signed in with `token` for a private repository, and shows
-/// the local copy's diff in `tab`, from git first. When `trust` asks for a checkout, it's made in
-/// the background once the diff shows, and each file whose checkout copy matches the head switches
-/// to the checkout's project buffer when it's ready, or a banner says why there's none.
-/// `launched` is when the tab opened, for timing.
+/// the local copy's diff in `tab`, from git first. While it copies, the tab shows git's progress,
+/// and a fetch that fails for a reason that may pass is tried again, with a banner saying why.
+/// When `trust` asks for a checkout, it's made in the background once the diff shows, and each
+/// file whose checkout copy matches the head switches to the checkout's project buffer when it's
+/// ready, or a banner says why there's none. `launched` is when the tab opened, for timing.
 #[allow(clippy::too_many_arguments)]
 pub async fn open(
     tab: WeakEntity<PrTab>,
@@ -85,27 +88,89 @@ pub async fn open(
         pull_request.base.branch,
         launched.elapsed()
     );
-
-    // Waits for the launch check, which finds git.
-    let cache = cx.update(|_, cx| local_copies::cache(cx))?.await?;
-    let started = Instant::now();
-    let local = Arc::new(
-        cx.background_spawn({
-            let (link, pull_request) = (link.clone(), pull_request.clone());
-            async move { copy(&cache, &link, &pull_request, token) }
-        })
-        .await
-        .with_context(|| format!("copying {link} locally"))?,
-    );
-    log::info!(
-        "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
-        started.elapsed(),
-        local.files.len(),
-        local.base,
-        local.head
-    );
+    let local = copy_with_retries(&tab, &link, &pull_request, token, cx).await?;
     let title = format!("{link}: {}", pull_request.title);
     show_local_copy(tab, workspace, link, title, local, trust, launched, cx).await
+}
+
+/// How long to wait before trying a failed copy again the first time. Each failure doubles it, up
+/// to [`LAST_RETRY`].
+const FIRST_RETRY: Duration = Duration::from_secs(5);
+const LAST_RETRY: Duration = Duration::from_secs(5 * 60);
+
+/// Copies the pull request locally, showing git's progress in `tab`. A copy that fails for a
+/// reason that may pass, such as the network, is tried again, waiting longer each time, while a
+/// banner in the tab says why; any other failure is returned.
+async fn copy_with_retries(
+    tab: &WeakEntity<PrTab>,
+    link: &PrLink,
+    pull_request: &PullRequest,
+    token: Option<Token>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<Arc<LocalPullRequest>> {
+    // Waits for the launch check, which finds git.
+    let cache = cx.update(|_, cx| local_copies::cache(cx))?.await?;
+    let mut wait = FIRST_RETRY;
+    loop {
+        let started = Instant::now();
+        let (progress, mut updates) = mpsc::unbounded();
+        let copying = cx.background_spawn({
+            let (cache, link, pull_request, token) = (
+                cache.clone(),
+                link.clone(),
+                pull_request.clone(),
+                token.clone(),
+            );
+            async move { copy(&cache, &link, &pull_request, token, progress) }
+        });
+        // The channel closes when the copy finishes, one way or the other.
+        while let Some(mut update) = updates.next().await {
+            // Of a burst of updates, only the latest is worth showing.
+            while let Ok(next) = updates.try_recv() {
+                update = next;
+            }
+            tab.update(cx, |tab, cx| tab.copy_progress(&update, cx))?;
+        }
+        let error = match copying.await {
+            Ok(local) => {
+                log::info!(
+                    "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
+                    started.elapsed(),
+                    local.files.len(),
+                    local.base,
+                    local.head
+                );
+                tab.update(cx, |tab, cx| tab.copy_retried(None, cx))?;
+                return Ok(Arc::new(local));
+            }
+            Err(error) => error,
+        };
+        if !is_retryable(&error) {
+            return Err(error.context(format!("copying {link} locally")));
+        }
+        log::warn!("{link}: copying it locally: {error:#}; trying again in {wait:?}");
+        let why = format!("{error:#}");
+        // Counts down on the executor's clock, a second at a time.
+        let mut left = wait;
+        while !left.is_zero() {
+            tab.update(cx, |tab, cx| tab.copy_retried(Some((&why, Some(left))), cx))?;
+            let step = left.min(Duration::from_secs(1));
+            cx.background_executor().timer(step).await;
+            left -= step;
+        }
+        tab.update(cx, |tab, cx| tab.copy_retried(Some((&why, None)), cx))?;
+        wait = (wait * 2).min(LAST_RETRY);
+    }
+}
+
+/// Whether a failed copy may work if tried again: a fetch that failed on the network or for a
+/// reason rozed doesn't know (`repo_cache::Error::is_retryable`).
+fn is_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<repo_cache::Error>()
+            .is_some_and(repo_cache::Error::is_retryable)
+    })
 }
 
 /// Shows the local copy's diff of the pull request in `tab`. While the tab shows GitHub's diff,
@@ -178,6 +243,7 @@ pub(crate) async fn show_local_copy(
     let mut not_shown = 0;
     let mut not_loaded = 0;
     for (index, file) in local.files.iter().enumerate() {
+        tab.update(cx, |tab, cx| tab.loading_diff(index, local.files.len(), cx))?;
         let plan = cx
             .background_spawn({
                 let repo = local.repo.clone();
@@ -572,6 +638,33 @@ impl Addon for OpenClone {
     }
 }
 
+/// How far copying a pull request locally has got.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CopyProgress {
+    /// git is fetching, and said this.
+    Fetching(Progress),
+    /// Listing the files the pull request changes, which downloads what git needs to count lines.
+    Listing,
+}
+
+impl CopyProgress {
+    /// What the tab's status line says.
+    pub(crate) fn text(&self) -> String {
+        match self {
+            Self::Fetching(progress) => {
+                let stage = progress.stage.to_lowercase();
+                match (progress.percent(), progress.total) {
+                    (Some(percent), Some(total)) => {
+                        format!("Copying it locally: {stage}, {percent}% of {total}…")
+                    }
+                    _ => format!("Copying it locally: {stage}, {}…", progress.done),
+                }
+            }
+            Self::Listing => "Copying it locally: listing the changed files…".to_string(),
+        }
+    }
+}
+
 /// A pull request in the local copy.
 pub(crate) struct LocalPullRequest {
     repo: Repo,
@@ -594,6 +687,7 @@ fn copy(
     link: &PrLink,
     pull_request: &PullRequest,
     token: Option<Token>,
+    progress: mpsc::UnboundedSender<CopyProgress>,
 ) -> anyhow::Result<LocalPullRequest> {
     // The repository's canonical name, not the link's, so a renamed one keeps its clone.
     let (owner, name) = pull_request.base.repo.owner_and_name()?;
@@ -608,14 +702,16 @@ fn copy(
     };
     let fetched = repo
         .with_progress({
-            let link = link.clone();
-            move |progress| {
+            let (link, progress) = (link.clone(), progress.clone());
+            move |update| {
                 log::debug!(
                     "{link}: {} {}/{}",
-                    progress.stage,
-                    progress.done,
-                    progress.total.map_or("?".into(), |total| total.to_string())
-                )
+                    update.stage,
+                    update.done,
+                    update.total.map_or("?".into(), |total| total.to_string())
+                );
+                // The tab may have closed.
+                progress.unbounded_send(CopyProgress::Fetching(update)).ok();
             }
         })
         .fetch_pull(&PullRequestRefs {
@@ -653,6 +749,7 @@ fn copy(
                 pull_request.base.branch
             )
         })?;
+    progress.unbounded_send(CopyProgress::Listing).ok();
     let files = repo.changed_files(&base, &fetched.head)?;
     Ok(LocalPullRequest {
         repo,
@@ -1505,6 +1602,54 @@ pub(crate) mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn copying_says_how_far_git_has_got() {
+        let fetching = |stage: &str, done, total| {
+            CopyProgress::Fetching(Progress {
+                stage: stage.into(),
+                done,
+                total,
+            })
+            .text()
+        };
+        assert_eq!(
+            fetching("Receiving objects", 555, Some(1234)),
+            "Copying it locally: receiving objects, 44% of 1234…"
+        );
+        assert_eq!(
+            fetching("Enumerating objects", 12, None),
+            "Copying it locally: enumerating objects, 12…"
+        );
+        assert_eq!(
+            CopyProgress::Listing.text(),
+            "Copying it locally: listing the changed files…"
+        );
+    }
+
+    #[test]
+    fn only_a_fetch_that_may_work_later_is_tried_again() {
+        let fetch = |failure| {
+            anyhow::Error::new(repo_cache::Error::Fetch {
+                what: "pull request #1".into(),
+                failure,
+                message: "fatal: unable to access".into(),
+            })
+            .context("reading the files")
+        };
+        assert!(is_retryable(&fetch(repo_cache::FetchFailure::Network)));
+        assert!(is_retryable(&fetch(repo_cache::FetchFailure::Other)));
+        assert!(!is_retryable(&fetch(repo_cache::FetchFailure::Auth)));
+        assert!(!is_retryable(&fetch(
+            repo_cache::FetchFailure::RepoNotFound
+        )));
+        assert!(!is_retryable(&anyhow::Error::new(
+            repo_cache::Error::DiskFull
+        )));
+        assert!(!is_retryable(&anyhow::anyhow!(
+            "sharkdp/fd#2212 shares no history with its base branch master"
+        )));
     }
 
     #[test]

@@ -16,6 +16,9 @@ pub enum BannerKind {
     CheckingOut,
     /// The trusted checkout failed, so everything shows from git.
     CheckoutFailed,
+    /// Copying the pull request locally failed, so whole files don't show (design §11, "Fetch
+    /// fails").
+    LocalCopyFailed,
     /// GitHub's diff couldn't be read, so nothing shows until the local copy is ready.
     GithubDiffFailed,
 }
