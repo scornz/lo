@@ -144,3 +144,58 @@ fn an_added_argument_in_tsx() {
         ["1 render(<App />); | 1 render(<App />[,] [root]);"]
     );
 }
+
+#[test]
+fn a_changed_comment_marks_only_the_changed_words() {
+    let old = "// Returns the total price.\nfn total() {}\n";
+    let new = "// Returns the total cost.\nfn total() {}\n";
+
+    assert_eq!(
+        rows("rust", old, new),
+        [
+            "1 // Returns the total [price]. | 1 // Returns the total [cost].",
+            "2 fn total() {} | 2 fn total() {}",
+        ]
+    );
+}
+
+#[test]
+fn a_changed_string_marks_only_the_changed_words() {
+    let old = "let greeting = \"hello brave world\";\n";
+    let new = "let greeting = \"hello bold new world\";\n";
+
+    assert_eq!(
+        rows("rust", old, new),
+        [
+            "1 let greeting = \"hello [brave] world\"; | 1 let greeting = \"hello [bold] [new] world\";"
+        ]
+    );
+}
+
+#[test]
+fn a_string_with_few_words_in_common_is_novel_as_a_whole() {
+    let old = "let s = \"abc\";\n";
+    let new = "let s = \"xyz\";\n";
+
+    assert_eq!(
+        rows("rust", old, new),
+        ["1 let s = [\"abc\"]; | 1 let s = [\"xyz\"];"]
+    );
+}
+
+#[test]
+fn a_changed_line_of_a_block_comment_pairs_with_its_line() {
+    let old = "/*\n * Adds one.\n * Never fails.\n */\nfn f() {}\n";
+    let new = "/*\n * Adds two.\n * Never fails.\n */\nfn f() {}\n";
+
+    assert_eq!(
+        rows("rust", old, new),
+        [
+            "1 /* | 1 /*",
+            "2  * Adds [one]. | 2  * Adds [two].",
+            "3  * Never fails. | 3  * Never fails.",
+            "4  */ | 4  */",
+            "5 fn f() {} | 5 fn f() {}",
+        ]
+    );
+}

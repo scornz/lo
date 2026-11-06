@@ -26,8 +26,11 @@
 //! Where each side's tokens sit, line by line, and whether each is novel or matched with lines on
 //! the other side: what the line alignment and the novel ranges are built from.
 
+use std::ops::Range;
+
 use super::changes::{Change, Changes};
-use super::nodes::{NodeId, Shape, Span, Syntax};
+use super::nodes::{NodeId, Shape, Span, Syntax, Token};
+use super::words::{self, Word};
 
 /// A token's part on one line: a 0-based line and byte columns within it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,9 +202,39 @@ impl Walk<'_, '_> {
                     self.nodes(children);
                     self.token(change, close.span, Part::Close);
                 }
-                Shape::Atom { token, .. } => self.token(change, token.span, Part::Atom),
+                Shape::Atom { token, .. } => self.atom(change, token),
             }
         }
+    }
+
+    fn atom(&mut self, change: Change, token: &Token) {
+        // A replaced comment or string shows word by word, if it has enough words in common
+        // with the other side.
+        if let Change::ReplacedComment(opposite) | Change::ReplacedString(opposite) = change
+            && let Shape::Atom {
+                token: opposite_token,
+                ..
+            } = &self.syntax[opposite].shape
+            && let Some(words) = words::split_atom_words(token.text, opposite_token.text)
+        {
+            for word in words {
+                match word {
+                    Word::Novel(range) => {
+                        let pos = self.lines.spans(within(token.span, range));
+                        self.novel(&pos);
+                    }
+                    Word::Unchanged { range, opposite } => {
+                        let pos = self.lines.spans(within(token.span, range));
+                        let opposite_pos = self
+                            .opposite_lines
+                            .spans(within(opposite_token.span, opposite));
+                        self.unchanged(&pos, &opposite_pos);
+                    }
+                }
+            }
+            return;
+        }
+        self.token(change, token.span, Part::Atom);
     }
 
     fn token(&mut self, change: Change, span: Span, part: Part) {
@@ -217,29 +250,43 @@ impl Walk<'_, '_> {
                     (Shape::Atom { token, .. }, _) => token.span,
                 };
                 let opposite_pos = self.opposite_lines.spans(opposite_span);
-                let first = opposite_pos[0].line;
-                let last = opposite_pos[opposite_pos.len() - 1].line;
-                // As many parts as the opposite token has, so the sides' matches pair up.
-                for &pos in pos.iter().take(opposite_pos.len()) {
-                    self.positions.push(MatchedPos {
-                        kind: MatchKind::Unchanged {
-                            opposite: (first, last),
-                        },
-                        pos,
-                    });
-                }
+                self.unchanged(pos, &opposite_pos);
             }
             Change::Novel | Change::ReplacedComment(_) | Change::ReplacedString(_) => {
-                for &pos in pos {
-                    self.positions.push(MatchedPos {
-                        kind: MatchKind::Novel,
-                        pos,
-                    });
-                }
+                self.novel(pos);
             }
             Change::IgnoredPunctuation => {}
         }
     }
+
+    /// Adds a token's parts as matched with `opposite_pos`, the opposite token's parts: as many
+    /// parts as the opposite token has, so the two sides' matches pair up.
+    fn unchanged(&mut self, pos: &[LineSpan], opposite_pos: &[LineSpan]) {
+        let first = opposite_pos[0].line;
+        let last = opposite_pos[opposite_pos.len() - 1].line;
+        for &pos in pos.iter().take(opposite_pos.len()) {
+            self.positions.push(MatchedPos {
+                kind: MatchKind::Unchanged {
+                    opposite: (first, last),
+                },
+                pos,
+            });
+        }
+    }
+
+    fn novel(&mut self, pos: &[LineSpan]) {
+        for &pos in pos {
+            self.positions.push(MatchedPos {
+                kind: MatchKind::Novel,
+                pos,
+            });
+        }
+    }
+}
+
+/// The part of `span` at `range`, relative to its start.
+fn within(span: Span, range: Range<usize>) -> Span {
+    Span::new(span.start + range.start, span.start + range.end)
 }
 
 fn without_empty_ends(spans: &[LineSpan]) -> &[LineSpan] {
