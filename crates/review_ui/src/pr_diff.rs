@@ -52,6 +52,7 @@ use repo_cache::{
 
 use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
 use crate::github_api::PullRequest;
+use crate::github_layer::Saved;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
@@ -69,8 +70,9 @@ pub enum Trust {
 }
 
 /// Copies the pull request locally, signed in with `token` for a private repository, and shows
-/// the local copy's diff in `tab`, from git first. While it copies, the tab shows git's progress,
-/// and a fetch that fails for a reason that may pass is tried again, with a banner saying why.
+/// the local copy's diff in `tab`, from git first; GitHub gave the pull request at `answered_at`.
+/// While it copies, the tab shows git's progress, and a fetch that fails for a reason that may
+/// pass is tried again, with a banner saying why.
 /// When `trust` asks for a checkout, it's made in the background once the diff shows, and each
 /// file whose checkout copy matches the head switches to the checkout's project buffer when it's
 /// ready, or a banner says why there's none. `launched` is when the tab opened, for timing.
@@ -80,6 +82,7 @@ pub async fn open(
     workspace: WeakEntity<Workspace>,
     link: PrLink,
     pull_request: PullRequest,
+    answered_at: SystemTime,
     token: Option<Token>,
     trust: Trust,
     launched: Instant,
@@ -103,8 +106,89 @@ pub async fn open(
         cx.background_spawn(async move { copy(&cache, &link, &pull_request, token, progress) })
     };
     let local = copy_with_retries(&tab, &link, copy_once, cx).await?;
-    let title = format!("{link}: {}", pull_request.title);
-    show_local_copy(tab, workspace, link, title, local, trust, launched, cx).await
+    let title = format!(
+        "{link}: {}",
+        crate::window_title::without_bidi(&pull_request.title)
+    );
+    show_local_copy(
+        tab,
+        workspace,
+        link,
+        title,
+        local,
+        answered_at,
+        trust,
+        launched,
+        cx,
+    )
+    .await
+}
+
+/// Shows the pull request from the local copy, without GitHub, when GitHub can't be reached
+/// (design §11 "Offline"): the head rozed saved as GitHub's, `headRefOid`, if the copy fetched
+/// it, against the saved base (see [`copy_offline`]). Returns whether the copy had them;
+/// without them, it shows nothing. It reads only what's in the clone: no fetch, no download, no
+/// write, and no checkout or language servers.
+pub async fn open_offline(
+    tab: WeakEntity<PrTab>,
+    workspace: WeakEntity<Workspace>,
+    link: PrLink,
+    saved: &Saved,
+    launched: Instant,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<bool> {
+    let details = &saved.details;
+    let Ok(head) = details.head_ref_oid.parse::<Oid>() else {
+        log::warn!("{link}: the saved head isn't a commit ID");
+        return Ok(false);
+    };
+    let base = SavedBase {
+        branch: details.base_ref_name.clone(),
+        tip: details.base_ref_oid.parse().ok(),
+    };
+    // The clone goes by the repository's name as GitHub gave it with the saved details.
+    let (owner, name) = match details.url.parse::<PrLink>() {
+        Ok(saved_link) => (saved_link.owner, saved_link.repo),
+        Err(_) => (link.owner.clone(), link.repo.clone()),
+    };
+    let cache = cx.update(|_, cx| local_copies::cache(cx))?.await?;
+    let local = cx
+        .background_spawn({
+            let (number, head) = (link.number, head.clone());
+            async move { copy_offline(&cache, &owner, &name, number, &head, &base) }
+        })
+        .await
+        .with_context(|| format!("reading {link} from its local copy"))?;
+    let local = match local {
+        Ok(local) => local,
+        Err(lacks) => {
+            log::info!("{link}: offline, and the local copy {lacks}");
+            return Ok(false);
+        }
+    };
+    log::info!(
+        "{link}: offline, so showing the local copy's head {head}, {} changed files",
+        local.files.len()
+    );
+    let title = format!(
+        "{link}: {}",
+        crate::window_title::without_bidi(&details.title)
+    );
+    let local = Arc::new(local);
+    let polled_at = saved.fetched_at;
+    show_local_copy(
+        tab,
+        workspace,
+        link,
+        title,
+        local,
+        polled_at,
+        Trust::Untrusted,
+        launched,
+        cx,
+    )
+    .await?;
+    Ok(true)
 }
 
 /// How long to wait before trying a failed copy again the first time. Each failure doubles it, up
@@ -266,9 +350,10 @@ fn retry(error: &anyhow::Error) -> Option<Retry> {
         })
 }
 
-/// Shows the local copy's diff of the pull request in `tab`. While the tab shows GitHub's diff,
-/// the local copy's is built out of sight and replaces it once every file is in, scrolled to the
-/// same file and line; otherwise it shows at once and fills in as files load.
+/// Shows the local copy's diff of the pull request in `tab`, of the head GitHub gave at
+/// `polled_at`. While the tab shows a diff, GitHub's or an older local copy's, this one is built
+/// out of sight and replaces it once every file is in, scrolled to the same file and line;
+/// otherwise it shows at once and fills in as files load.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn show_local_copy(
     tab: WeakEntity<PrTab>,
@@ -276,6 +361,7 @@ pub(crate) async fn show_local_copy(
     link: PrLink,
     title: String,
     local: Arc<LocalPullRequest>,
+    polled_at: SystemTime,
     trust: Trust,
     launched: Instant,
     cx: &mut AsyncWindowContext,
@@ -313,17 +399,17 @@ pub(crate) async fn show_local_copy(
             });
         })
     });
-    // The tab lists the files and says where each goes in the diff, at once, or with GitHub's
-    // diff on screen, once this one replaces it, so the list always matches the diff shown.
+    // The tab lists the files and says where each goes in the diff, at once, or with a diff on
+    // screen, once this one replaces it, so the list always matches the diff shown.
     let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
-        if tab.diff_source() == Some(DiffSource::GitHub) {
-            return (true, tab.positions_of(&local.files));
+        if let Some(source) = tab.diff_source() {
+            return (Some(source), tab.positions_of(&local.files));
         }
-        let positions = tab.copied(&local.files, &local.head, cx);
+        let positions = tab.copied(&local.files, &local.head, polled_at, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
-        (false, positions)
+        (None, positions)
     })?;
-    if !replacing {
+    if replacing.is_none() {
         show_banners(cx);
     }
 
@@ -420,16 +506,20 @@ pub(crate) async fn show_local_copy(
         });
     });
     tab.update_in(cx, |tab, window, cx| {
-        if replacing {
-            tab.copied(&local.files, &local.head, cx);
+        if replacing.is_some() {
+            tab.copied(&local.files, &local.head, polled_at, cx);
             tab.switch_diff(editor.clone(), &local.head, window, cx);
         }
         tab.diff_loaded(cx);
     })?;
-    if replacing {
+    if let Some(replaced) = replacing {
         show_banners(cx);
+        let replaced = match replaced {
+            DiffSource::GitHub => "GitHub's diff",
+            DiffSource::LocalCopy => "an older local copy's",
+        };
         log::info!(
-            "{link}: switched from GitHub's diff to the local copy's {:?} after launch",
+            "{link}: switched from {replaced} to the local copy's diff {:?} after launch",
             launched.elapsed()
         );
     }
@@ -870,6 +960,72 @@ pub(crate) struct LocalPullRequest {
     head_source: HeadSource,
     /// What changed between `base` and `head`, in git's order.
     files: Vec<ChangedFile>,
+}
+
+/// The base GitHub gave with a pull request's saved details.
+struct SavedBase {
+    branch: String,
+    /// The branch's tip then.
+    tip: Option<Oid>,
+}
+
+/// The pull request from its clone alone, or what the clone lacks for it: `head`, if the clone
+/// fetched it as one of the pull request's heads, from where it branched off the saved base.
+/// That's `base.tip` when the clone has it pinned as one of the pull request's bases; else the
+/// tip of `base.branch` as last fetched, if the pull request was ever fetched against that
+/// branch; else nothing, since another branch's tip, such as the one before a stack's layer was
+/// retargeted, would show other changes than GitHub's. The clone must also have every changed
+/// file's contents, since nothing is downloaded. Never makes a clone, writes to one or waits for
+/// its lock. Blocks while git runs.
+fn copy_offline(
+    cache: &RepoCache,
+    owner: &str,
+    name: &str,
+    number: u64,
+    head: &Oid,
+    base: &SavedBase,
+) -> anyhow::Result<Result<LocalPullRequest, String>> {
+    let Some(repo) = cache.open_offline(owner, name)? else {
+        return Ok(Err("doesn't exist".into()));
+    };
+    if !repo.pull_revisions(number)?.contains(head) {
+        return Ok(Err(format!("doesn't have its head {head}")));
+    }
+    let pinned = match &base.tip {
+        Some(tip) if repo.has_base(number, tip)? => Some(tip.clone()),
+        _ => None,
+    };
+    let base_tip = match pinned {
+        Some(tip) => tip,
+        None => match repo.branch_base(number, &base.branch)? {
+            Some(tip) => tip,
+            None => {
+                return Ok(Err(format!(
+                    "was never fetched against its base branch {}",
+                    base.branch
+                )));
+            }
+        },
+    };
+    let Some(merge_base) = repo.merge_base(head, &base_tip)? else {
+        return Ok(Err(format!(
+            "finds no history its head shares with {base_tip}"
+        )));
+    };
+    if !repo.has_diff_contents(&merge_base, head)? {
+        return Ok(Err(format!(
+            "lacks some changed files' contents from {merge_base} to {head}"
+        )));
+    }
+    let files = repo.changed_files(&merge_base, head)?;
+    Ok(Ok(LocalPullRequest {
+        repo,
+        name: name.to_string(),
+        base: merge_base,
+        head: head.clone(),
+        head_source: HeadSource::PullRef,
+        files,
+    }))
 }
 
 /// Fetches the pull request into its repository's clone, finds where it branched from its base

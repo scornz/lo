@@ -106,6 +106,19 @@ impl Domain for RozedDb {
                 FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
             ) STRICT;
         ),
+        sql!(
+            // The account to open one repository's PRs with, when the account chosen for its
+            // owner can't see it and several others can. It wins over the owner's choice for
+            // this repository only.
+            CREATE TABLE repo_accounts(
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                login TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY(host, owner, repo),
+                FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
     ];
 }
 
@@ -219,7 +232,8 @@ impl RozedDb {
         self.0
             .write(move |connection| {
                 connection.with_savepoint("delete_account", || {
-                    // Its owners and cached answers go with it, by their foreign keys.
+                    // Its owners, repositories and cached answers go with it, by their foreign
+                    // keys.
                     connection.exec_bound::<(String, String)>(sql!(
                         DELETE FROM accounts WHERE host = ?1 AND login = ?2
                     ))?((host.clone(), login.clone()))?;
@@ -250,6 +264,33 @@ impl RozedDb {
                     INSERT INTO owner_accounts(host, owner, login) VALUES (?1, ?2, ?3)
                     ON CONFLICT(host, owner) DO UPDATE SET owner = excluded.owner, login = excluded.login
                 ))?((host, owner, login))
+            })
+            .await
+    }
+
+    /// The account remembered for one repository, if any, which wins over its owner's.
+    pub fn repo_account(&self, host: &str, owner: &str, repo: &str) -> Result<Option<String>> {
+        self.0.select_row_bound::<(&str, &str, &str), String>(sql!(
+            SELECT login FROM repo_accounts WHERE host = ?1 AND owner = ?2 AND repo = ?3
+        ))?((host, owner, repo))
+    }
+
+    pub async fn set_repo_account(
+        &self,
+        host: String,
+        owner: String,
+        repo: String,
+        login: String,
+    ) -> Result<()> {
+        self.0
+            .write(move |connection| {
+                connection.exec_bound::<(String, String, String, String)>(sql!(
+                    INSERT INTO repo_accounts(host, owner, repo, login) VALUES (?1, ?2, ?3, ?4)
+                    ON CONFLICT(host, owner, repo) DO UPDATE SET
+                        owner = excluded.owner,
+                        repo = excluded.repo,
+                        login = excluded.login
+                ))?((host, owner, repo, login))
             })
             .await
     }
@@ -418,6 +459,49 @@ mod tests {
     }
 
     #[test]
+    fn a_repositorys_own_account_is_kept_apart_from_its_owners() {
+        futures::executor::block_on(async {
+            let db = RozedDb::open_test("repo_accounts").await;
+            db.save_account(account("a", 1)).await.unwrap();
+            db.save_account(account("b", 2)).await.unwrap();
+            db.set_owner_account("github.com".into(), "acme".into(), "a".into())
+                .await
+                .unwrap();
+            db.set_repo_account(
+                "github.com".into(),
+                "acme".into(),
+                "secret".into(),
+                "b".into(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "ACME", "Secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("b")
+            );
+            assert_eq!(db.repo_account("github.com", "acme", "app").unwrap(), None);
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+
+            db.delete_account("github.com".into(), "b".into())
+                .await
+                .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret").unwrap(),
+                None
+            );
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+        });
+    }
+
+    #[test]
     fn opens_a_file_and_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0-dev/rozed.sqlite");
@@ -563,6 +647,76 @@ mod tests {
                     .get("a.rs")
                     .map(String::as_str),
                 Some("h1")
+            );
+        });
+    }
+
+    /// rozed's database as it was before accounts per repository: with viewed files recorded.
+    struct BeforeRepoAccounts;
+
+    impl Domain for BeforeRepoAccounts {
+        const NAME: &str = RozedDb::NAME;
+        // The first three steps: `[..3]`, which a constant can't index with.
+        const MIGRATIONS: &[&str] = RozedDb::MIGRATIONS.split_at(3).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_accounts_per_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rozed.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeRepoAccounts>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO owner_accounts(host, owner, login) VALUES ("github.com", "acme", "a")
+                ))?()?;
+                connection.exec(sql!(
+                    INSERT INTO viewed_files(host, account, owner, repo, number, path, head, viewed_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "a.rs", "h1", 1)
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = RozedDb::open(&path).await.unwrap();
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+            let records = crate::viewed::ViewedRecords::new(db.clone());
+            let pull = crate::PullRef::new("o", "r", 1);
+            assert_eq!(
+                records
+                    .heads("a", &pull)
+                    .unwrap()
+                    .get("a.rs")
+                    .map(String::as_str),
+                Some("h1")
+            );
+            db.set_repo_account(
+                "github.com".into(),
+                "acme".into(),
+                "secret".into(),
+                "a".into(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("a")
             );
         });
     }

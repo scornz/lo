@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::git::{Auth, Git, GitCommand, Location, Token};
 use crate::lock::RepoLock;
-use crate::repo::Repo;
+use crate::repo::{Access, Repo};
 use crate::{Error, Oid, checkout};
 
 /// rozed's local copies of repositories, in one folder (`~/Library/Caches/rozed`):
@@ -201,7 +201,42 @@ impl RepoCache {
             lock_path,
             in_use,
             token,
+            Access::Fetch,
         ))
+    }
+
+    /// The clone of `owner/repo` to read offline, or `None` when there's none. It never makes a
+    /// clone, writes to one, or waits for the lock another rozed holds while fetching, and its
+    /// git never downloads what the clone lacks: with git 2.44 or later a missing object is an
+    /// error, and on older git [`Repo::has_diff_contents`] says what's there first. Fetching or
+    /// checking out with it fails with [`Error::ReadOnly`].
+    pub fn open_offline(&self, owner: &str, repo: &str) -> Result<Option<Repo>, Error> {
+        check_name("repository owner", owner)?;
+        check_name("repository name", repo)?;
+        let git_dir = self.repo_dir(owner, repo);
+        if !git_dir.join("HEAD").is_file() {
+            return Ok(None);
+        }
+        // Held as any open clone holds it, so cleanup leaves the clone alone; it waits only while
+        // cleanup is removing it, and then the clone is gone. Every clone rozed opened has the
+        // lock's file, so without it there's nothing to read.
+        let Some(in_use) = RepoLock::acquire_shared_existing(&self.in_use_path(owner, repo))?
+        else {
+            return Ok(None);
+        };
+        if !git_dir.join("HEAD").is_file() {
+            return Ok(None);
+        }
+        Ok(Some(Repo::new(
+            self.env.clone(),
+            format!("{owner}/{repo}"),
+            git_dir,
+            self.repo_checkouts_dir(owner, repo),
+            self.lock_path(owner, repo),
+            in_use,
+            None,
+            Access::ReadOffline,
+        )))
     }
 
     /// Creates a bare clone at `git_dir`, set up to fetch from `url`. It's made in a temporary

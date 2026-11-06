@@ -9,17 +9,54 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use github::accounts::Accounts;
 use github::cache::PrCache;
 use github::db::{AccountSource, RozedDb};
 use github::{AuthenticatedUser, Token, User};
-use gpui::{Entity, Task, TestAppContext};
+use gpui::{Entity, Task, TestAppContext, VisualTestContext};
 use http_client::http::HeaderValue;
 use http_client::{AsyncBody, HttpClient, Request, Response, Url};
 use parking_lot::Mutex;
+use project::{FakeFs, Project};
 use repo_cache::{Git, RepoCache};
 use tempfile::TempDir;
+use workspace::{MultiWorkspace, Workspace};
+
+/// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
+/// keymap, and rozed's changes to every workspace.
+pub fn init(cx: &mut TestAppContext) {
+    crate::trust::tests::init_test(cx);
+    cx.update(|cx| {
+        command_palette_hooks::init(cx);
+        editor::init(cx);
+        crate::init_workspaces(cx);
+        crate::keymap::load(cx);
+    });
+}
+
+/// A window like rozed's: a workspace in a `MultiWorkspace`, which renders the workspace's
+/// actions.
+pub async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+    init(cx);
+    let fs = FakeFs::new(cx.executor());
+    // A repository elsewhere on disk, which nothing in rozed should open.
+    fs.insert_tree(
+        "/elsewhere",
+        serde_json::json!({
+            "Cargo.toml": "[package]\nname = \"elsewhere\"\n",
+            "src": { "main.rs": "fn main() {}\n" },
+        }),
+    )
+    .await;
+    let project = Project::test(fs, [], cx).await;
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    let workspace =
+        multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+    (workspace, cx)
+}
 
 /// A pull request the fake GitHub has.
 #[derive(Clone, Debug)]
@@ -71,6 +108,14 @@ struct State {
     /// Answers that win over the rest, by token (`""` for none) and path.
     answers: HashMap<(String, String), Answer>,
     offline: bool,
+    /// Whether every request connects and then times out, as on a slow connection.
+    timing_out: bool,
+    /// Whether a proxy refuses every request, wanting a password.
+    proxy_refusing: bool,
+    /// Tokens whose requests can't connect, though others' can.
+    cut_off: Vec<String>,
+    /// Requests to these paths wait until they're let go, each with what lets it go.
+    held: HashMap<String, Vec<oneshot::Sender<()>>>,
     /// How many requests without a token GitHub still allows this hour, when it says.
     anonymous_left: Option<u32>,
     /// Each request, as `GET /path as token`.
@@ -135,9 +180,55 @@ impl FakeGithub {
         self.0.lock().anonymous_left = Some(left);
     }
 
-    /// Whether every request fails as if the network were down.
+    /// Whether every request fails as if the network were down: no connection can be made.
     pub fn set_offline(&self, offline: bool) {
         self.0.lock().offline = offline;
+    }
+
+    /// Whether every request times out after connecting, as on a slow connection.
+    pub fn set_timing_out(&self, timing_out: bool) {
+        self.0.lock().timing_out = timing_out;
+    }
+
+    /// Whether a proxy refuses every request, as one that wants a password does.
+    pub fn set_proxy_refusing(&self, refusing: bool) {
+        self.0.lock().proxy_refusing = refusing;
+    }
+
+    /// Makes `token`'s requests fail to connect, while other tokens' get answers.
+    pub fn cut_off(&self, token: &str) {
+        self.0.lock().cut_off.push(token.to_string());
+    }
+
+    /// Makes pull request `number` of `repo` merge into `branch`, whose tip is `base`, as
+    /// changing its base on GitHub does.
+    pub fn retarget(&self, repo: &str, number: u64, branch: &str, base: &str) {
+        let mut state = self.0.lock();
+        let pull = state
+            .pulls
+            .iter_mut()
+            .find(|pull| pull.repo.eq_ignore_ascii_case(repo) && pull.number == number)
+            .expect("no such pull request");
+        pull.base_branch = branch.to_string();
+        pull.base = base.to_string();
+    }
+
+    /// Undoes [`Self::cut_off`].
+    pub fn reconnect(&self, token: &str) {
+        self.0.lock().cut_off.retain(|cut_off| cut_off != token);
+    }
+
+    /// Makes requests to `path`, with any token, wait until [`Self::let_go`].
+    pub fn hold(&self, path: &str) {
+        self.0.lock().held.entry(path.to_string()).or_default();
+    }
+
+    /// Lets the requests to `path` that [`Self::hold`] held through, and any later ones.
+    pub fn let_go(&self, path: &str) {
+        let waiting = self.0.lock().held.remove(path).unwrap_or_default();
+        for waiter in waiting {
+            waiter.send(()).ok();
+        }
     }
 
     /// Stops answering `path` asked with `token` as [`Self::answer`] said.
@@ -157,8 +248,24 @@ impl FakeGithub {
         let mut state = self.0.lock();
         let who = if token.is_empty() { "nobody" } else { token };
         state.requests.push(format!("{method} {path} as {who}"));
-        if state.offline {
-            anyhow::bail!("the network is down");
+        if state.offline || state.cut_off.iter().any(|cut_off| cut_off == token) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "the network is down",
+            )
+            .into());
+        }
+        if state.proxy_refusing {
+            return Err(anyhow::anyhow!("proxy authentication required")
+                .context("client error (Connect)")
+                .context(format!(
+                    "error sending request for url (https://api.github.com{path})"
+                )));
+        }
+        if state.timing_out {
+            return Err(anyhow::anyhow!("operation timed out").context(format!(
+                "error sending request for url (https://api.github.com{path})"
+            )));
         }
         let Some(left) = state.anonymous_left.filter(|_| token.is_empty()) else {
             return self.answer_for(&state, path, token);
@@ -206,15 +313,16 @@ impl FakeGithub {
                         .iter()
                         .any(|old| old.eq_ignore_ascii_case(&asked))
             })
-            .map(|pull| pull.repo.to_ascii_lowercase())
+            .map(|pull| pull.repo.clone())
         else {
             return Ok(not_found());
         };
-        let visible = state.public.contains(&canonical)
+        let key = canonical.to_ascii_lowercase();
+        let visible = state.public.contains(&key)
             || state
                 .sees
                 .get(token)
-                .is_some_and(|repos| repos.contains(&canonical));
+                .is_some_and(|repos| repos.contains(&key));
         if !visible {
             return Ok(not_found());
         }
@@ -327,9 +435,22 @@ impl HttpClient for FakeGithub {
             .path_and_query()
             .map(|path| path.to_string())
             .unwrap_or_default();
-        let answer = self.respond(request.method().as_str(), &path, &token);
+        let method = request.method().to_string();
+        let held = {
+            let mut state = self.0.lock();
+            let bare = path.split('?').next().unwrap_or_default().to_string();
+            state.held.get_mut(&bare).map(|waiting| {
+                let (let_go, held) = oneshot::channel();
+                waiting.push(let_go);
+                held
+            })
+        };
+        let this = self.clone();
         Box::pin(async move {
-            let answer = answer?;
+            if let Some(held) = held {
+                held.await.ok();
+            }
+            let answer = this.respond(&method, &path, &token)?;
             let mut response = Response::builder().status(answer.status);
             for (name, value) in answer.headers {
                 response = response.header(name, value);
@@ -382,6 +503,32 @@ pub async fn sign_in(
     (entity, PrCache::new(db))
 }
 
+/// Signs `login` in with `token` after [`sign_in`], as Accounts… does: a new account, or one
+/// signed out signing in again.
+pub async fn sign_in_as(
+    accounts: &Entity<Accounts>,
+    login: &str,
+    token: &str,
+    cx: &mut TestAppContext,
+) {
+    let user = AuthenticatedUser {
+        user: User {
+            login: login.to_string(),
+            id: 1_000,
+            name: None,
+            avatar_url: None,
+        },
+        scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+    };
+    accounts
+        .update(cx, |accounts, cx| {
+            accounts.add(user, Token::new(token), AccountSource::DeviceFlow, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+}
+
 /// Without signing in: the app's HTTP client is `github`, and there's no accounts database.
 pub fn anonymous(github: &FakeGithub, cx: &mut TestAppContext) {
     cx.update(|cx| cx.set_http_client(Arc::new(github.clone())));
@@ -406,6 +553,65 @@ impl GitServer {
             dir,
             _cache: cache_dir,
         }
+    }
+
+    /// Takes `repo`, an `owner/name`, off the server, so fetching from it fails, as offline,
+    /// until [`Self::restore`].
+    pub fn hide(&self, repo: &str) {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        std::fs::rename(&git_dir, git_dir.with_extension("hidden")).unwrap();
+    }
+
+    /// Puts `repo` back on the server, as when GitHub can be reached again.
+    pub fn restore(&self, repo: &str) {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        std::fs::rename(git_dir.with_extension("hidden"), &git_dir).unwrap();
+    }
+
+    /// Pushes a commit of `files`, the whole tree, on top of pull request `number`'s head in
+    /// `repo`, as its new `refs/pull/<number>/head`, and returns the commit.
+    pub fn push(&self, repo: &str, number: u64, files: &[(&str, &str)]) -> String {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        let index = self.dir.path().join("index");
+        let pull_ref = format!("refs/pull/{number}/head");
+        let head = git(&git_dir, &["rev-parse", &pull_ref], None, None);
+        let pushed = commit(&git_dir, &index, files, Some(head.trim()));
+        git(&git_dir, &["update-ref", &pull_ref, &pushed], None, None);
+        pushed
+    }
+
+    /// Pull request `number` of `repo` on top of a stack's lower layer: `base`, a new commit on
+    /// `main`; `lower`, a commit on top of it, as branch `stack-a`; and `head`, a commit on top of
+    /// that, as `refs/pull/<number>/head`. It merges into `main` to start with. Each is a list of
+    /// files and their text. Returns the pull request and the lower layer's commit.
+    pub fn stacked_pull_request(
+        &self,
+        repo: &str,
+        number: u64,
+        base: &[(&str, &str)],
+        lower: &[(&str, &str)],
+        head: &[(&str, &str)],
+    ) -> (FakePull, String) {
+        let mut pull = self.pull_request(repo, number, base, lower);
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        let index = self.dir.path().join("index");
+        let lower_commit = pull.head.clone();
+        let head_commit = commit(&git_dir, &index, head, Some(&lower_commit));
+        git(
+            &git_dir,
+            &["update-ref", "refs/heads/stack-a", &lower_commit],
+            None,
+            None,
+        );
+        let pull_ref = format!("refs/pull/{number}/head");
+        git(
+            &git_dir,
+            &["update-ref", &pull_ref, &head_commit],
+            None,
+            None,
+        );
+        pull.head = head_commit;
+        (pull, lower_commit)
     }
 
     /// Pull request `number` of `repo`, an `owner/name`: `base`, a new commit on `main`, and

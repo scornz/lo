@@ -10,7 +10,7 @@
 //! one whose diff is too large, gets a placeholder saying so until the local copy fills it in.
 
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use buffer_diff::BufferDiffSnapshot;
 use git::status::{FileStatus as GitStatus, StatusCode, TrackedStatus};
@@ -78,6 +78,8 @@ pub(crate) struct GithubDiff {
     pub repo_name: String,
     /// The head commit GitHub listed the files at, when their links say.
     pub head: Option<String>,
+    /// When GitHub listed them.
+    pub listed_at: SystemTime,
 }
 
 /// Shows GitHub's diff of the pull request, `files`, in `tab`, unless the local copy's diff got
@@ -102,7 +104,14 @@ pub(crate) async fn show(
     let (_, editor) = pr_diff::new_diff_editor(&workspace, &project, &source.title, cx)?;
     let entries = files.iter().map(file_entry).collect();
     let positions = tab.update_in(cx, |tab, window, cx| {
-        tab.show_github_diff(entries, editor.clone(), source.head.clone(), window, cx)
+        tab.show_github_diff(
+            entries,
+            editor.clone(),
+            source.head.clone(),
+            source.listed_at,
+            window,
+            cx,
+        )
     })?;
     let Some(positions) = positions else {
         log::info!("{link}: the local copy's diff came first, so GitHub's doesn't show");

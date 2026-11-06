@@ -246,6 +246,10 @@ impl AccountsModal {
             .try_global::<AccountsUnavailable>()
             .map(|unavailable| unavailable.0.clone());
         let http = cx.http_client();
+        // A question about which account to use waits until this closes. An account signed in
+        // here sends the waiting tabs back to check which accounts can see their repositories,
+        // so the picker then lists it.
+        review_ui::account_picker::set_aside(workspace, cx);
         workspace.toggle_modal(window, cx, move |window, cx| {
             let mut modal = Self::new(accounts, unavailable, http, cx);
             window.focus(&modal.focus_handle, cx);
