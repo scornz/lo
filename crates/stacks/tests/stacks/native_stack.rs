@@ -80,25 +80,51 @@ fn layers_of_different_stacks_are_not_linked() {
 }
 
 #[test]
-fn a_missing_lower_layer_falls_back_to_the_other_rules() {
-    // Position 2 wasn't loaded, so #3 links by its base branch.
-    assert_forest(
-        &[
-            pr(1, "main", "a").native(100, 1),
-            pr(3, "a", "c").native(100, 3),
-        ],
-        &["main", "  #1", "    #3 base-branch"],
-    );
-}
-
-#[test]
-fn a_closed_lower_layer_counts_as_missing() {
-    assert_forest(
+fn a_closed_middle_layer_doesnt_split_the_stack() {
+    let stacks = assert_forest(
         &[
             pr(1, "main", "a").native(100, 1),
             pr(2, "a", "b").native(100, 2).closed(),
             pr(3, "b", "c").native(100, 3),
         ],
-        &["b", "  #3", "main", "  #1"],
+        &["main", "  #1", "    #3 native-stack"],
     );
+    assert_eq!(stacks.layer(3).unwrap().retarget_to, Some("a".into()));
+}
+
+#[test]
+fn a_middle_layer_not_passed_is_skipped_too() {
+    assert_forest(
+        &[
+            pr(1, "main", "a").native(100, 1),
+            pr(3, "b", "c").native(100, 3),
+        ],
+        &["main", "  #1", "    #3 native-stack"],
+    );
+}
+
+#[test]
+fn the_lowest_layer_passed_links_by_the_other_rules() {
+    // GitHub merged position 1 and pointed #2 at main; #1 wasn't passed.
+    assert_forest(
+        &[
+            pr(2, "main", "b").native(100, 2),
+            pr(3, "b", "c").native(100, 3),
+        ],
+        &["main", "  #2", "    #3 native-stack"],
+    );
+}
+
+#[test]
+fn a_layer_on_a_merged_middle_layer_sits_on_the_layer_below_it() {
+    // #2 was squash-merged into #1's branch. GitHub rebases the layers above.
+    let stacks = assert_forest(
+        &[
+            pr(1, "main", "a").native(100, 1),
+            pr(2, "a", "b").native(100, 2).merged(false),
+            pr(3, "b", "c").native(100, 3),
+        ],
+        &["main", "  #1", "    #3 native-stack"],
+    );
+    assert_eq!(stacks.layer(3).unwrap().needs_rebase, None);
 }

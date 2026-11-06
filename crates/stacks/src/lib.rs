@@ -138,8 +138,9 @@ pub fn branches_to_look_up(prs: &[PullRequest], trunks: &[&str]) -> Vec<String> 
 /// PR wins over a merged one, then the newest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
-    /// It's the layer one position above the PR below in a GitHub stack. When that position wasn't
-    /// passed or is closed, the other rules decide.
+    /// The PR below is the next layer down in the same GitHub stack. Closed layers, and layers
+    /// not passed, are skipped, so a closed middle layer doesn't split the stack. The bottom layer
+    /// passed links by the other rules.
     NativeStack,
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor an
     /// open PR to a merged PR's branch that has moved on since the merge.
@@ -405,7 +406,8 @@ struct Graph<'a> {
 
 /// Each rule's lookup from what it matches to the PR below, as indexes into [`Graph::prs`].
 struct Lookups<'a> {
-    position: HashMap<NativeStackEntry, usize>,
+    /// By GitHub stack and position.
+    position: BTreeMap<(u64, u32), usize>,
     head_ref: HashMap<&'a str, usize>,
     commit: HashMap<&'a str, usize>,
 }
@@ -431,7 +433,10 @@ impl<'a> Graph<'a> {
     /// Each PR's link to the PR below it.
     fn links(&self) -> Vec<Option<Edge>> {
         let by = Lookups {
-            position: self.index(|pr| pr.native_stack),
+            position: self
+                .index(|pr| pr.native_stack.map(|entry| (entry.stack, entry.position)))
+                .into_iter()
+                .collect(),
             head_ref: self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str())),
             commit: self.index(|pr| match pr.state {
                 State::Open => vec![pr.head_oid.as_str()],
@@ -456,12 +461,12 @@ impl<'a> Graph<'a> {
     /// The link from `prs[index]` to the PR below it, by the first rule that applies.
     fn link(&self, index: usize, by: &Lookups) -> Option<Edge> {
         let pr = self.prs[index];
+        // The nearest lower position that's still there, skipping closed layers and any not
+        // passed.
         let native_stack = || {
-            let entry = pr.native_stack.filter(|entry| entry.position > 1)?;
-            by.position.get(&NativeStackEntry {
-                position: entry.position - 1,
-                ..entry
-            })
+            let entry = pr.native_stack?;
+            let below = (entry.stack, 0)..(entry.stack, entry.position);
+            by.position.range(below).next_back().map(|(_, below)| below)
         };
         // An open PR's base branch only leads to a merged PR while it still points where that PR
         // merged from. Once it moves on, like a long-lived `develop`, it's a root. A merged PR's
