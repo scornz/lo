@@ -11,7 +11,62 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
+[workspace.dependencies]
+# Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
+assets = { path = "third_party/zed/crates/assets" }
+client = { path = "third_party/zed/crates/client" }
+clock = { path = "third_party/zed/crates/clock" }
+db = { path = "third_party/zed/crates/db" }
+editor = { path = "third_party/zed/crates/editor" }
+feature_flags = { path = "third_party/zed/crates/feature_flags" }
+fs = { path = "third_party/zed/crates/fs" }
+gpui = { path = "third_party/zed/crates/gpui" }
+# Without font-kit, gpui renders no text on macOS.
+gpui_platform = { path = "third_party/zed/crates/gpui_platform", features = ["font-kit"] }
+gpui_tokio = { path = "third_party/zed/crates/gpui_tokio" }
+http_client = { path = "third_party/zed/crates/http_client" }
+language = { path = "third_party/zed/crates/language" }
+# load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
+languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
+node_runtime = { path = "third_party/zed/crates/node_runtime" }
+paths = { path = "third_party/zed/crates/paths" }
+project = { path = "third_party/zed/crates/project" }
+release_channel = { path = "third_party/zed/crates/release_channel" }
+reqwest_client = { path = "third_party/zed/crates/reqwest_client" }
+session = { path = "third_party/zed/crates/session" }
+settings = { path = "third_party/zed/crates/settings" }
+theme = { path = "third_party/zed/crates/theme" }
+theme_settings = { path = "third_party/zed/crates/theme_settings" }
+# debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
+# under rozed's root and panic.
+util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
+workspace = { path = "third_party/zed/crates/workspace" }
+zed_actions = { path = "third_party/zed/crates/zed_actions" }
+zlog = { path = "third_party/zed/crates/zlog" }
+
+# Other crates. Versions match Zed's.
+anyhow = "1.0.86"
+futures = "0.3.34"
+log = { version = "0.4", default-features = false, features = ["std"] }
+toml_edit = "0.23.7"
+uuid = { version = "1.1", features = ["v4"] }
+
 # BEGIN generated from Zed's Cargo.toml. Run `cargo xtask sync-zed`; don't edit by hand.
+[patch.crates-io]
+# Unify `tree_sitter_language::LanguageFn` between crates.io grammar crates and
+# the git tree-sitter above; two instances of the crate would make grammar
+# constants type-incompatible with `tree_sitter::Language`.
+tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "803c6ebaac27d69e1808b45058482e868d073ceb" }
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+notify = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+notify-types = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+# Avoid panicking when a failed EGL call reports EGL_SUCCESS.
+# https://github.com/timothee-haudebourg/khronos-egl/pull/37
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+
 [profile.dev]
 split-debuginfo = "unpacked"
 incremental = true
@@ -34,9 +89,44 @@ debug = "full"
 debug = "full"
 
 [profile.dev.package]
+# proc-macros start
+gpui_macros = { opt-level = 3 }
+derive_refineable = { opt-level = 3 }
+feature_flags_macros = { opt-level = 3 }
+settings_macros = { opt-level = 3 }
+sqlez_macros = { opt-level = 3, codegen-units = 1 }
+ui_macros = { opt-level = 3 }
 quote = { opt-level = 3 }
 syn = { opt-level = 3 }
 proc-macro2 = { opt-level = 3 }
+# proc-macros end
+
+tree-sitter = { opt-level = 3 }
+taffy = { opt-level = 3 }
+resvg = { opt-level = 3 }
+wasmtime = { opt-level = 3 }
+cranelift-codegen = { opt-level = 3 }
+wasmtime-environ = { opt-level = 3 }
+wasmtime-internal-cranelift = { opt-level = 3 }
+serde_json = { opt-level = 3 }
+assets = { codegen-units = 1 }
+breadcrumbs = { codegen-units = 1 }
+collections = { codegen-units = 1 }
+feature_flags = { codegen-units = 1 }
+file_content = { codegen-units = 1 }
+file_icons = { codegen-units = 1 }
+json_schema_store = { codegen-units = 1 }
+menu = { codegen-units = 1 }
+paths = { codegen-units = 1 }
+prettier = { codegen-units = 1 }
+refineable = { codegen-units = 1 }
+release_channel = { codegen-units = 1 }
+reqwest_client = { codegen-units = 1 }
+session = { codegen-units = 1 }
+snippet = { codegen-units = 1 }
+telemetry_events = { codegen-units = 1 }
+ui_input = { codegen-units = 1 }
+zed_actions = { codegen-units = 1 }
 
 [profile.release]
 debug = "limited"

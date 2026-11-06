@@ -6,5 +6,5 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-anyhow = "1.0.104"
-toml_edit = "0.23.7"
+anyhow.workspace = true
+toml_edit.workspace = true

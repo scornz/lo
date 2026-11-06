@@ -24,7 +24,8 @@ These bind every change (design §1).
 ## Layout
 
 - `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
-  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`).
+  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`). `xtask` holds repo
+  tasks (`cargo xtask <task>`).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
 - `docs/`: the design, plan, status and decisions.
@@ -34,15 +35,20 @@ These bind every change (design §1).
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH" # rustup's cargo, if your shell doesn't add it
-mise install                         # Node and pnpm, pinned in mise.toml
+mise install                         # Node, pnpm and cmake, pinned in mise.toml
 pnpm install                         # commitlint and lefthook; installs the git hooks
 git submodule update --init          # Zed, one commit deep; see "Zed submodule"
 ```
 
 Rust comes from rustup. `rust-toolchain.toml` pins Zed's toolchain, and cargo installs it on first
-use. If your shell doesn't activate mise, prefix Node and pnpm commands with `mise exec --`. Run
-`pnpm install` and `git submodule update --init` in every new clone and worktree: the `commit-msg`
-hook runs commitlint from its `node_modules`, and nothing builds without Zed.
+use. Run `pnpm install` and `git submodule update --init` in every new clone and worktree: the
+`commit-msg` hook runs commitlint from its `node_modules`, and nothing builds without Zed.
+
+Building needs Xcode (not just the Command Line Tools), because gpui compiles Metal shaders, and
+cmake, because Zed's tree-sitter builds wasmtime. If your shell doesn't activate mise, run cargo,
+Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p rozed`). mise's cmake shim
+fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
+`PATH`, which activation or `mise exec` provides.
 
 ## Build, test and run
 
@@ -51,6 +57,11 @@ cargo build -p rozed
 cargo run -p rozed
 cargo test --workspace
 ```
+
+rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
+`~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
+`~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
+`RUST_LOG=info,rozed=debug` also logs the host of every HTTP request.
 
 ## Verify
 
