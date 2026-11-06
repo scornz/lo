@@ -65,16 +65,22 @@ actions!(
 
 const KEY_CONTEXT: &str = "PrTab";
 const FILE_LIST_CONTEXT: &str = "PrFileList";
-/// The diff's editors, inside the tab, where `tab` would otherwise indent.
-const DIFF_CONTEXT: &str = "PrTab > Editor";
+/// The diff's editors, inside the tab, where `tab` would otherwise indent: not an editor that's
+/// typed in, such as a comment's.
+const DIFF_CONTEXT: &str = "PrTab > Editor && mode == full";
 
 /// The tab's keys. Panels toggle with Zed's keys for its docks.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", SwitchSide, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-v", ToggleDiffLayout, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-w", ToggleWhitespace, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-a", ExpandFile, Some(KEY_CONTEXT)),
+        // Option and a letter types a character where there's text to type, so these work only
+        // in the diff and the file list.
+        KeyBinding::new("alt-v", ToggleDiffLayout, Some(DIFF_CONTEXT)),
+        KeyBinding::new("alt-v", ToggleDiffLayout, Some(FILE_LIST_CONTEXT)),
+        KeyBinding::new("alt-w", ToggleWhitespace, Some(DIFF_CONTEXT)),
+        KeyBinding::new("alt-w", ToggleWhitespace, Some(FILE_LIST_CONTEXT)),
+        KeyBinding::new("alt-a", ExpandFile, Some(DIFF_CONTEXT)),
+        KeyBinding::new("alt-a", ExpandFile, Some(FILE_LIST_CONTEXT)),
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
@@ -1285,12 +1291,18 @@ impl PrTab {
         }));
     }
 
-    /// Opens, loads or shows the whole of the file the diff's cursor is in.
+    /// Opens, loads or shows the whole of the file selected in the file list, when it has focus,
+    /// or else the file the diff's cursor is in.
     fn expand_file(&mut self, _: &ExpandFile, window: &mut Window, cx: &mut Context<Self>) {
         let Some(diff) = self.diff.clone() else {
             return;
         };
-        let Some(path) = shown_files::file_at_cursor(&diff, cx) else {
+        let in_file_list = self.file_list_focus.contains_focused(window, cx);
+        let selected = self.files.selected().filter(|_| in_file_list);
+        let Some(path) = selected
+            .map(|entry| entry.path().to_string())
+            .or_else(|| shown_files::file_at_cursor(&diff, cx))
+        else {
             return;
         };
         if shown_files::expand(&diff, &path, window, cx) != Expanded::Load
@@ -2208,15 +2220,14 @@ mod tests {
         );
     }
 
-    /// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
-    /// keymap, and rozed's changes to every workspace.
+    /// Sets the app up as rozed does: the command palette, the editor, Zed's keymap with the tab's
+    /// keys over it, and rozed's changes to every workspace.
     fn init(cx: &mut TestAppContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
             command_palette_hooks::init(cx);
             editor::init(cx);
             crate::init_workspaces(cx);
-            crate::keymap::load(cx);
         });
     }
 
@@ -3523,6 +3534,43 @@ mod tests {
         assert!(!in_file_list(cx));
         cx.simulate_keystrokes("cmd-b");
         assert_eq!(shown(cx), (false, true));
+    }
+
+    #[gpui::test]
+    fn rozeds_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let first = |key: &'static str, contexts: &[&str]| -> Option<&'static str> {
+                let stack: Vec<gpui::KeyContext> = contexts
+                    .iter()
+                    .map(|context| gpui::KeyContext::parse(context).unwrap())
+                    .collect();
+                let keystroke = gpui::Keystroke::parse(key).unwrap();
+                let (bindings, _) = keymap.bindings_for_input(&[keystroke], &stack);
+                bindings.first().map(|binding| binding.action().name())
+            };
+            let diff = ["Workspace", "Pane", "PrTab", "Editor mode=full"];
+            let file_list = ["Workspace", "Pane", "PrTab", "PrFileList"];
+            let comment = ["Workspace", "Pane", "PrTab", "Editor mode=auto_height"];
+            let elsewhere = ["Workspace", "Pane", "Editor mode=full"];
+
+            // Zed's keys are bound, and rozed's, bound after, win where both apply.
+            assert_eq!(first("tab", &elsewhere), Some("editor::Tab"));
+            assert_eq!(first("tab", &diff), Some("review_ui::SwitchSide"));
+            assert_eq!(first("tab", &comment), Some("editor::Tab"));
+            for (key, action) in [
+                ("alt-v", "review_ui::ToggleDiffLayout"),
+                ("alt-w", "review_ui::ToggleWhitespace"),
+                ("alt-a", "review_ui::ExpandFile"),
+            ] {
+                assert_eq!(first(key, &diff), Some(action), "{key}");
+                assert_eq!(first(key, &file_list), Some(action), "{key}");
+                // Where text is typed, option and a letter types a character.
+                assert_eq!(first(key, &comment), None, "{key}");
+            }
+        });
     }
 
     #[gpui::test]

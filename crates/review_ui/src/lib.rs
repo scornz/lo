@@ -8,7 +8,7 @@ pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
 mod image_preview;
-pub mod keymap;
+mod keymap;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
@@ -34,7 +34,7 @@ pub use pr_diff::Trust;
 pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, open};
 
-/// Sets up the PR tab: its keys, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
+/// Sets up the PR tab: Zed's keys and its own, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
 /// their database, or `None` without one), and rozed's changes to every workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
@@ -44,6 +44,8 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
 /// [`init`] without the GitHub layer, for tests: pull requests open without signing in. Call it
 /// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
+    // Of two bindings for a key in the same place, the later one wins: rozed's.
+    keymap::load(cx);
     pr_tab::bind_keys(cx);
     open_box::bind_keys(cx);
     read_only::hide_from_palette(cx);

@@ -944,19 +944,10 @@ mod tests {
 
     /// rozed's window with a tab for [`PULL`], wide enough to show its diff side by side.
     async fn tab(cx: &mut TestAppContext) -> (Entity<PrTab>, &mut VisualTestContext) {
-        tab_with_keymap(cx, |_| {}).await
-    }
-
-    /// [`tab`], with `keymap` bound after rozed's keys, as rozed binds Zed's.
-    async fn tab_with_keymap(
-        cx: &mut TestAppContext,
-        keymap: impl FnOnce(&mut App),
-    ) -> (Entity<PrTab>, &mut VisualTestContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
             editor::init(cx);
             crate::init_workspaces(cx);
-            keymap(cx);
         });
         let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
         let (multi_workspace, cx) =
@@ -1376,6 +1367,44 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn alt_a_in_the_file_list_acts_on_its_selected_file(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let (diff, _copy) = show(
+            &tab,
+            &[
+                Entry::File("Cargo.lock", b"a = 1\n"),
+                Entry::File("b.txt", lines("b", 20).as_bytes()),
+            ],
+            &[
+                Entry::File("Cargo.lock", b"a = 2\n"),
+                Entry::File("b.txt", changed("b", 20, 10).as_bytes()),
+            ],
+            cx,
+        );
+        let list = tab.read_with(cx, |tab, _| tab.file_list_focus_handle().clone());
+        let selected = |cx: &mut VisualTestContext| {
+            tab.read_with(cx, |tab, _| {
+                tab.files().selected().map(|entry| entry.path().to_string())
+            })
+        };
+        // The list selects the lockfile, and the diff's cursor then moves to b.txt.
+        cx.update(|window, cx| window.focus(&list, cx));
+        for _ in 0..2 {
+            if selected(cx).as_deref() != Some("Cargo.lock") {
+                cx.simulate_keystrokes("j");
+            }
+        }
+        assert_eq!(selected(cx).as_deref(), Some("Cargo.lock"));
+        select(&diff, "b.txt", cx);
+        cx.update(|window, cx| window.focus(&list, cx));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("alt-a");
+        assert!(!is_folded(&diff, "Cargo.lock", cx));
+        assert!(!file(&diff, "b.txt", cx, |file, _| file.whole));
+    }
+
+    #[gpui::test]
     async fn alt_a_shows_the_whole_file_and_then_its_changes_again(cx: &mut TestAppContext) {
         let (tab, cx) = tab(cx).await;
         let (diff, _copy) = show(
@@ -1700,22 +1729,10 @@ mod tests {
         assert!(split(cx));
     }
 
-    /// Zed's default macOS keymap, which binds `tab` in every editor.
-    fn zeds_keymap(cx: &mut App) {
-        let content = util::asset_str::<settings::SettingsAssets>(settings::DEFAULT_KEYMAP_PATH);
-        let bindings = match settings::KeymapFile::load(&content, cx) {
-            settings::KeymapFileLoadResult::Success { key_bindings }
-            | settings::KeymapFileLoadResult::SomeFailedToLoad { key_bindings, .. } => key_bindings,
-            settings::KeymapFileLoadResult::JsonParseFailure { error } => panic!("{error:#}"),
-        };
-        cx.bind_keys(bindings);
-    }
-
-    /// Zed binds `tab` to indent in every editor, after rozed's keys, but a read-only editor
-    /// doesn't handle indenting, so `tab` reaches rozed's binding.
+    /// Zed binds `tab` to indent in every editor, and rozed binds it after.
     #[gpui::test]
     async fn tab_switches_sides_with_zeds_keymap_too(cx: &mut TestAppContext) {
-        let (tab, cx) = tab_with_keymap(cx, zeds_keymap).await;
+        let (tab, cx) = tab(cx).await;
         let (diff, _copy) = show(
             &tab,
             &[Entry::File("a.txt", lines("a", 20).as_bytes())],
