@@ -58,6 +58,8 @@ jobs:
           persist-credentials: false
 
       - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          install_args: node pnpm
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
@@ -83,27 +85,65 @@ jobs:
     name: rust
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: macos-latest
+    # Pinned, so a new macOS or Xcode arrives in a PR of its own.
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      # Every run builds from a fresh checkout, so incremental state and debug info would only cost
+      # time and disk, and make the cache bigger.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG: "0"
     steps:
+      # Also checks out Zed (third_party/zed), one commit deep.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
 
+      # cmake, pinned in mise.toml, builds wasmtime for Zed's tree-sitter.
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          install_args: cmake
+
       # With no arguments, rustup installs the toolchain and components in rust-toolchain.toml.
       - name: Install the pinned Rust toolchain
-        run: rustup toolchain install && rustc --version
+        run: rustup toolchain install && rustc --version && cmake --version
 
+      # Caches registry and git crates. It drops Zed's crates, because they sit inside the
+      # repository, so those build on every run.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Not --all, which also formats path dependencies: Zed's crates.
       - name: Format
-        run: cargo fmt --all --check
+        run: cargo fmt --check
+
+      # xtask (crates/xtask) is its own workspace, so the steps for rozed's workspace skip it.
+      - name: Check xtask
+        run: |
+          cargo fmt --check --manifest-path crates/xtask/Cargo.toml
+          cargo clippy --locked --manifest-path crates/xtask/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path crates/xtask/Cargo.toml
+
+      # --locked everywhere. sync-zed prunes against Cargo.lock, which the clippy and test steps
+      # check is committed up to date.
+      - name: Check the Cargo settings copied from Zed
+        run: cargo --locked xtask sync-zed --check
+
+      # Fails when the set of Zed crates linked into rozed changes; see script/zed-crates.txt.
+      - name: Check the Zed crates compiled in
+        run: script/check-zed-crates.sh
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
+
+      - name: Disk use
+        if: always()
+        run: df -h . && du -sh target ~/.cargo/registry ~/.cargo/git 2>/dev/null || true
 
   # The one required check besides pr-title, so adding jobs never changes the ruleset. Skipped jobs
   # pass.

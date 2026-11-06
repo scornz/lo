@@ -1,0 +1,5 @@
+[submodule "third_party/zed"]
+	path = third_party/zed
+	url = https://github.com/scornz/zed.git
+	branch = rozed/v1.27.0
+	shallow = true

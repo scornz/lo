@@ -1,0 +1,12 @@
+[alias]
+# xtask is its own workspace (crates/xtask/Cargo.toml). Run it from the repository's root.
+xtask = "run --manifest-path crates/xtask/Cargo.toml --"
+
+# BEGIN generated from Zed's .cargo/config.toml. Run `cargo xtask sync-zed`; don't edit by hand.
+[target.'cfg(all())']
+# v0 mangling scheme provides more detailed backtraces around closures
+rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "12.0"
+# END generated from Zed's .cargo/config.toml.

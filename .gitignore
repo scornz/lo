@@ -1,3 +1,6 @@
 /target
+/crates/xtask/target
 node_modules/
 .DS_Store
+# A SwiftPM cache some tools drop in the Zed checkout.
+.build/

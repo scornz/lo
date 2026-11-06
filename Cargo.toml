@@ -1,9 +1,185 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["third_party"]
+exclude = [
+    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates rozed
+    # depends on by path members of rozed's workspace, and their `workspace = true` keys fail to
+    # inherit from rozed's root. Excluded, they inherit from Zed's.
+    "third_party",
+    # xtask is its own workspace, so it runs when this one can't resolve.
+    "crates/xtask",
+]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
+
+[workspace.dependencies]
+# Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
+askpass = { path = "third_party/zed/crates/askpass" }
+assets = { path = "third_party/zed/crates/assets" }
+buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
+client = { path = "third_party/zed/crates/client" }
+clock = { path = "third_party/zed/crates/clock" }
+command_palette = { path = "third_party/zed/crates/command_palette" }
+credentials_provider = { path = "third_party/zed/crates/credentials_provider" }
+db = { path = "third_party/zed/crates/db" }
+editor = { path = "third_party/zed/crates/editor" }
+feature_flags = { path = "third_party/zed/crates/feature_flags" }
+fs = { path = "third_party/zed/crates/fs" }
+git = { path = "third_party/zed/crates/git" }
+gpui = { path = "third_party/zed/crates/gpui" }
+# Without font-kit, gpui renders no text on macOS.
+gpui_platform = { path = "third_party/zed/crates/gpui_platform", features = ["font-kit"] }
+gpui_tokio = { path = "third_party/zed/crates/gpui_tokio" }
+http_client = { path = "third_party/zed/crates/http_client" }
+language = { path = "third_party/zed/crates/language" }
+# load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
+languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
+menu = { path = "third_party/zed/crates/menu" }
+multi_buffer = { path = "third_party/zed/crates/multi_buffer" }
+node_runtime = { path = "third_party/zed/crates/node_runtime" }
+paths = { path = "third_party/zed/crates/paths" }
+project = { path = "third_party/zed/crates/project" }
+release_channel = { path = "third_party/zed/crates/release_channel" }
+reqwest_client = { path = "third_party/zed/crates/reqwest_client" }
+session = { path = "third_party/zed/crates/session" }
+settings = { path = "third_party/zed/crates/settings" }
+sqlez = { path = "third_party/zed/crates/sqlez" }
+sqlez_macros = { path = "third_party/zed/crates/sqlez_macros" }
+theme = { path = "third_party/zed/crates/theme" }
+theme_settings = { path = "third_party/zed/crates/theme_settings" }
+ui = { path = "third_party/zed/crates/ui" }
+# debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
+# under rozed's root and panic.
+util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
+workspace = { path = "third_party/zed/crates/workspace" }
+zed_actions = { path = "third_party/zed/crates/zed_actions" }
+zlog = { path = "third_party/zed/crates/zlog" }
+
+# rozed's crates.
+github = { path = "crates/github" }
+repo_cache = { path = "crates/repo_cache" }
+
+# Other crates. Versions match Zed's where Zed has them.
+anyhow = "1.0.86"
+# Only the github crate's tests use it, to validate queries against GitHub's schema.
+apollo-compiler = "1.33.1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+futures = "0.3.34"
+graphql_client = "0.16.0"
+libc = "0.2"
+log = { version = "0.4", default-features = false, features = ["std"] }
+parking_lot = "0.12.1"
+regex = { version = "1.5", default-features = false, features = ["std", "perf"] }
+# Already in the build through gpui. The github crate hashes the JSON schema of what it caches.
+schemars = { version = "1.0", default-features = false, features = ["std", "derive"] }
+semver = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.144"
+serde_urlencoded = "0.7"
+sha2 = "0.10"
+tempfile = "3.20.0"
+thiserror = "2.0.12"
+tree-sitter = { git = "https://github.com/tree-sitter/tree-sitter", rev = "803c6ebaac27d69e1808b45058482e868d073ceb" }
+tree-sitter-go = { git = "https://github.com/zed-industries/tree-sitter-go", rev = "6862a49e3c5a7567a6c576420e9a8f944e198a85" }
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24.2"
+# Not one of Zed's dependencies: from the same tree-sitter revision Zed pins.
+tree-sitter-tags = { git = "https://github.com/tree-sitter/tree-sitter", rev = "803c6ebaac27d69e1808b45058482e868d073ceb" }
+tree-sitter-typescript = { git = "https://github.com/zed-industries/tree-sitter-typescript", rev = "e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899" }
+uuid = { version = "1.1", features = ["v4"] }
+
+# BEGIN generated from Zed's Cargo.toml. Run `cargo xtask sync-zed`; don't edit by hand.
+[patch.crates-io]
+# Unify `tree_sitter_language::LanguageFn` between crates.io grammar crates and
+# the git tree-sitter above; two instances of the crate would make grammar
+# constants type-incompatible with `tree_sitter::Language`.
+tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "803c6ebaac27d69e1808b45058482e868d073ceb" }
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+notify = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+notify-types = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+# Avoid panicking when a failed EGL call reports EGL_SUCCESS.
+# https://github.com/timothee-haudebourg/khronos-egl/pull/37
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+
+[profile.dev]
+split-debuginfo = "unpacked"
+incremental = true
+codegen-units = 16
+debug = "limited"
+
+# mirror configuration for crates compiled for the build platform
+# (without this cargo will compile ~400 crates twice)
+[profile.dev.build-override]
+codegen-units = 16
+split-debuginfo = "unpacked"
+debug = "limited"
+
+# "debug" is a reserved profile name.
+[profile.dbg]
+inherits = "dev"
+debug = "full"
+
+[profile.dbg.build-override]
+debug = "full"
+
+[profile.dev.package]
+# proc-macros start
+gpui_macros = { opt-level = 3 }
+derive_refineable = { opt-level = 3 }
+feature_flags_macros = { opt-level = 3 }
+settings_macros = { opt-level = 3 }
+sqlez_macros = { opt-level = 3, codegen-units = 1 }
+ui_macros = { opt-level = 3 }
+util_macros = { opt-level = 3 }
+quote = { opt-level = 3 }
+syn = { opt-level = 3 }
+proc-macro2 = { opt-level = 3 }
+# proc-macros end
+
+tree-sitter = { opt-level = 3 }
+taffy = { opt-level = 3 }
+resvg = { opt-level = 3 }
+wasmtime = { opt-level = 3 }
+cranelift-codegen = { opt-level = 3 }
+wasmtime-environ = { opt-level = 3 }
+wasmtime-internal-cranelift = { opt-level = 3 }
+serde_json = { opt-level = 3 }
+assets = { codegen-units = 1 }
+breadcrumbs = { codegen-units = 1 }
+collections = { codegen-units = 1 }
+command_palette = { codegen-units = 1 }
+command_palette_hooks = { codegen-units = 1 }
+feature_flags = { codegen-units = 1 }
+file_content = { codegen-units = 1 }
+file_icons = { codegen-units = 1 }
+json_schema_store = { codegen-units = 1 }
+menu = { codegen-units = 1 }
+paths = { codegen-units = 1 }
+prettier = { codegen-units = 1 }
+refineable = { codegen-units = 1 }
+release_channel = { codegen-units = 1 }
+reqwest_client = { codegen-units = 1 }
+session = { codegen-units = 1 }
+snippet = { codegen-units = 1 }
+telemetry_events = { codegen-units = 1 }
+ui_input = { codegen-units = 1 }
+zed_actions = { codegen-units = 1 }
+
+[profile.release]
+debug = "limited"
+lto = "thin"
+codegen-units = 1
+
+[profile.release-fast]
+inherits = "release"
+debug = "full"
+lto = false
+codegen-units = 16
+# END generated from Zed's Cargo.toml.

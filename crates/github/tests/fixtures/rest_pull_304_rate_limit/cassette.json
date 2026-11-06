@@ -1,0 +1,5 @@
+{
+  "description": "Whether a 304 costs rate limit: GET /rate_limit (itself free) around a plain GET of PR #1 and three conditional GETs answered 304",
+  "recorded_at": "2026-11-06T11:49:09Z",
+  "repo": "rozed-dev/playground"
+}
