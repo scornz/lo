@@ -307,7 +307,11 @@ fn a_conflicting_rebase_falls_back_to_the_plain_comparison_with_each_conflicted_
         )
         .unwrap();
 
-    let Replay::Conflicted { tree } = &comparison.replay else {
+    let Replay::Conflicted {
+        tree,
+        retargeted: false,
+    } = &comparison.replay
+    else {
         panic!("{:?}", comparison.replay);
     };
     // The plain comparison of the heads, trunk's e.txt included, with a.txt marked.
@@ -690,8 +694,9 @@ fn a_stacked_layer_compares_across_its_lower_layers_force_push() {
             },
         )
         .unwrap();
-    // The author changed nothing.
-    assert_eq!(rebased_only.replay, Replay::Clean);
+    // The author changed nothing. An amended lower layer isn't a descendant of the old one, so
+    // the comparison is flagged as one whose base moved sideways.
+    assert_eq!(rebased_only.replay, Replay::Retargeted);
     assert_eq!(rebased_only.files, []);
 
     // The merge base of u1 with the lower branch as it is now is trunk's m1, since l1 is gone
@@ -733,7 +738,7 @@ fn a_stacked_layer_compares_across_its_lower_layers_force_push() {
             },
         )
         .unwrap();
-    assert_eq!(changed.replay, Replay::Clean);
+    assert_eq!(changed.replay, Replay::Retargeted);
     assert_eq!(paths(&changed.files), ["upper.txt"]);
     assert_eq!(f.read(&changed.old, "upper.txt"), Some(text("upper", &[])));
     assert_eq!(
@@ -901,8 +906,160 @@ fn a_stacked_layer_starts_at_the_newest_lower_head_it_contains() {
             },
         )
         .unwrap();
-    assert_eq!(restack.replay, Replay::Clean);
+    // The amended lower layer isn't a descendant of l1, so this is flagged.
+    assert_eq!(restack.replay, Replay::Retargeted);
     assert_eq!(restack.files, []);
+}
+
+/// Pull request #1 branched from `develop`, which `main` doesn't have, and is retargeted to `main`,
+/// with its head unchanged, then rebased onto it with one more change:
+///
+/// ```text
+/// m1 ── d1 ── h1            (develop adds develop-only.txt; the PR changes a.txt)
+///  └─── h2                  (the PR on main, then c.txt changed too)
+/// ```
+///
+/// Its patch now brings `develop-only.txt` too, which came with the base, not from the author.
+#[test]
+fn a_retargeted_base_is_flagged() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote
+        .write("a.txt", text("a", &[]))
+        .write("c.txt", text("c", &[]));
+    // The working copy's `trunk` is the server's `main`.
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/main");
+    remote
+        .switch("develop")
+        .write("develop-only.txt", "develop\n");
+    let d1 = remote.commit("d1");
+    remote.publish("refs/heads/develop");
+    remote
+        .switch("feature")
+        .write("a.txt", text("a", &[(3, "a line 3, the PR's")]));
+    remote.commit("h1");
+    let h1 = f.push(1, "develop");
+    let on_develop = Revision {
+        base: f.repo.merge_base(&h1, &d1).unwrap().unwrap(),
+        head: h1.clone(),
+    };
+    let on_main = Revision {
+        base: f.repo.merge_base(&h1, &m1).unwrap().unwrap(),
+        head: h1.clone(),
+    };
+    assert_eq!((&on_develop.base, &on_main.base), (&d1, &m1));
+
+    let retargeted = f.repo.compare_revisions(&on_develop, &on_main).unwrap();
+
+    assert_eq!(retargeted.replay, Replay::Retargeted);
+    assert_eq!(paths(&retargeted.files), ["develop-only.txt"]);
+    assert_eq!(changes(&retargeted.files)[0].change, Change::Added);
+
+    // The author rebases onto main and changes c.txt, which shows, still flagged.
+    remote
+        .switch("trunk")
+        .switch("feature-2")
+        .write("a.txt", text("a", &[(3, "a line 3, the PR's")]))
+        .write("c.txt", text("c", &[(15, "c line 15, the change h2 adds")]));
+    remote.commit("h2");
+    let h2 = f.push(1, "main");
+    let rebased = f
+        .repo
+        .compare_revisions(&on_develop, &Revision { base: m1, head: h2 })
+        .unwrap();
+    assert_eq!(rebased.replay, Replay::Retargeted);
+    assert_eq!(paths(&rebased.files), ["c.txt"]);
+}
+
+/// Retargeting can conflict too, and what the conflicted files' resolutions show then includes
+/// what came with the base.
+#[test]
+fn a_retargeted_base_that_conflicts_is_flagged() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("a.txt", text("a", &[]));
+    let m1 = remote.commit("m1");
+    remote.publish("refs/heads/main");
+    remote
+        .switch("develop")
+        .write("a.txt", text("a", &[(3, "a line 3, develop's")]));
+    let d1 = remote.commit("d1");
+    remote.publish("refs/heads/develop");
+    remote.switch("feature").write(
+        "a.txt",
+        text(
+            "a",
+            &[(3, "a line 3, develop's"), (4, "a line 4, the PR's")],
+        ),
+    );
+    remote.commit("h1");
+    let h1 = f.push(1, "develop");
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision {
+                base: d1,
+                head: h1.clone(),
+            },
+            &Revision { base: m1, head: h1 },
+        )
+        .unwrap();
+
+    assert!(
+        matches!(
+            comparison.replay,
+            Replay::Conflicted {
+                retargeted: true,
+                ..
+            }
+        ),
+        "{:?}",
+        comparison.replay
+    );
+    assert_eq!(conflicted(&comparison.files), ["a.txt"]);
+}
+
+/// The lower layer of a stack gets a push the upper layer already has, so the upper layer's base
+/// moves on while its head stays put: nothing changed, and nothing is the author's.
+#[test]
+fn an_unchanged_head_whose_base_moved_on_is_flagged() {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("a.txt", text("a", &[]));
+    remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("lower")
+        .write("lower.txt", text("lower", &[]));
+    let l1 = remote.commit("l1");
+    remote.publish("refs/heads/lower");
+    remote.write("lower.txt", text("lower", &[(4, "lower line 4, l2's")]));
+    let l2 = remote.commit("l2");
+    remote
+        .switch("upper")
+        .write("upper.txt", text("upper", &[]));
+    remote.commit("u1");
+    let u1 = f.push(2, "lower");
+    // The lower layer's next push, then a fetch of the upper layer, whose head stays put.
+    remote.switch("lower").publish("refs/heads/lower");
+    remote.switch("upper");
+    assert_eq!(f.push(2, "lower"), u1);
+
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision {
+                base: l1,
+                head: u1.clone(),
+            },
+            &Revision { base: l2, head: u1 },
+        )
+        .unwrap();
+
+    assert_eq!(comparison.replay, Replay::Retargeted);
+    assert_eq!(comparison.files, []);
 }
 
 #[test]

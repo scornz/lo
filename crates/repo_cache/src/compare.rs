@@ -41,8 +41,9 @@ pub struct Comparison {
     /// The files that changed, as [`Repo::changed_files`] lists them, from [`Self::old`] to
     /// [`Self::new`]; and after a conflicted replay, every file it conflicted on.
     pub files: Vec<ComparedFile>,
-    /// What the old side's files are read from with [`Repo::read_file`]: after a clean replay,
-    /// the tree of the old revision's changes replayed onto the new base; otherwise the old head.
+    /// What the old side's files are read from with [`Repo::read_file`]: after a clean replay
+    /// ([`Replay::Clean`] or [`Replay::Retargeted`]), the tree of the old revision's changes
+    /// replayed onto the new base; otherwise the old head.
     pub old: Oid,
     /// What the new side's files are read from: the new head.
     pub new: Oid,
@@ -58,6 +59,12 @@ pub enum Replay {
     /// The old revision's changes, replayed onto the new base, are compared with the new head,
     /// so only what the author changed shows. Nothing showing means the author only rebased.
     Clean,
+    /// Replayed as for [`Replay::Clean`], but the base changed in a way a rebase onto a newer
+    /// base doesn't explain, so what shows can have come with the base rather than from the
+    /// author, which the UI says: the new base isn't the old one or a descendant of it, as when
+    /// the pull request was retargeted to another branch, its base branch was rewound, or the
+    /// lower layer of a stack was amended; or the head didn't change at all.
+    Retargeted,
     /// Replaying the old revision onto the new base conflicted, so the comparison is of the
     /// heads and also shows what changed between the bases, which the UI says (design §6). Every
     /// file the replay conflicted on is listed too, with how the author resolved it (see
@@ -69,6 +76,9 @@ pub enum Replay {
         /// author did, as `git log --remerge-diff` does, base changes they dropped from files
         /// that didn't conflict included.
         tree: Oid,
+        /// Whether the base changed as for [`Replay::Retargeted`], so the resolutions can hold
+        /// what came with the base, not only what the author did.
+        retargeted: bool,
     },
 }
 
@@ -123,7 +133,10 @@ impl Repo {
     /// the bases match, it compares the heads. When the replay conflicts, it compares the heads
     /// too, and lists every file it conflicted on with how the author resolved it
     /// ([`Replay::Conflicted`]); any other failure is an error. Whether the heads match doesn't
-    /// matter, only the bases: an unchanged head whose base moved still gets the replay.
+    /// matter, only the bases: an unchanged head whose base moved still gets the replay, which
+    /// shows how its patch changed. That, and a base that moved anywhere but forward, as when a
+    /// pull request is retargeted or a stack's lower layer amended, is flagged
+    /// ([`Replay::Retargeted`]), since what shows can have come with the base.
     ///
     /// For a layer of a stack whose lower layer got a new push, the bases are the lower layer's
     /// heads that each revision contains (see [`Revision::base`]). A base that isn't its head or
@@ -163,6 +176,9 @@ impl Repo {
                 replay: Replay::SameBase,
             });
         }
+        // A rebase moves the base forward and the head with it. Otherwise what shows can have come
+        // with the base.
+        let retargeted = old.head == new.head || !self.is_ancestor(&old.base, &new.base)?;
         // Pinned before it's compared, so nothing can remove the tree meanwhile.
         match self.replay_pinned(|| self.replay(old, &new.base))? {
             Replayed::Clean(tree) => Ok(Comparison {
@@ -173,7 +189,11 @@ impl Repo {
                     .collect(),
                 old: tree,
                 new: new.head.clone(),
-                replay: Replay::Clean,
+                replay: if retargeted {
+                    Replay::Retargeted
+                } else {
+                    Replay::Clean
+                },
             }),
             Replayed::Conflicted { tree, paths } => {
                 let labels = [&new.base, &old.head];
@@ -194,7 +214,7 @@ impl Repo {
                     files: with_conflicts(plain()?, &conflicted, &resolutions, &labels),
                     old: old.head.clone(),
                     new: new.head.clone(),
-                    replay: Replay::Conflicted { tree },
+                    replay: Replay::Conflicted { tree, retargeted },
                 })
             }
         }
