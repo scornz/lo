@@ -347,6 +347,13 @@ impl PrTab {
         self.acting = None;
         self.guessed_among = None;
         self.help_links.clear();
+        // The load before is dropped, and with it the copy its Retry button would try again.
+        self.retry_copy = None;
+        self.copy_failed = None;
+        self.github_failed = false;
+        self.banners.update(cx, |banners, cx| {
+            banners.hide(BannerKind::LocalCopyFailed, cx)
+        });
         self.set_status(
             Status::Loading("Finding an account that can see it…".into()),
             cx,
@@ -3852,6 +3859,25 @@ mod tests {
         assert_eq!(tries.get(), 6);
         assert!(banners(&tab, cx).is_empty());
         assert!(task.now_or_never().unwrap().is_ok());
+    }
+
+    #[gpui::test]
+    async fn opening_a_stopped_copy_again_starts_over_without_its_retry_button(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        let (retry, retried) = oneshot::channel();
+        tab.update(cx, |tab, cx| tab.copy_stopped("git said no", 5, retry, cx));
+        assert!(matches!(status(&tab, cx), Status::Failed(_)));
+        assert_eq!(banners(&tab, cx).len(), 1);
+
+        open_unloaded(&workspace, PULL, cx);
+
+        assert!(matches!(status(&tab, cx), Status::Loading(_)));
+        assert!(banners(&tab, cx).is_empty());
+        // The old copy's button is gone with it.
+        assert!(retried.now_or_never().unwrap().is_err());
     }
 
     #[gpui::test]
