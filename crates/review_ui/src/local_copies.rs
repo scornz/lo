@@ -1,8 +1,9 @@
 //! rozed's local copies of repositories (`repo_cache`), set up once at launch.
 //!
-//! At launch rozed finds git and checks it's new enough, then removes clones nobody opened for 30
-//! days (design §3, "Cleanup"), on a background thread. Opening a pull request waits for that
-//! and gets the same cache, or the same error, which says how to install git.
+//! At launch rozed finds git and checks it's new enough, then removes clones nobody used for 30
+//! days and checkouts nobody used for 14 (design §3, "Cleanup"), on a background thread. Opening
+//! a pull request waits for that and gets the same cache, or the same error, which says how to
+//! install git. Then clones with too many packs are repacked, one at a time.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,14 +42,43 @@ pub fn init(cx: &mut App) {
                 Ok(_) => {}
                 Err(error) => log::warn!("can't clean up {}: {error}", cache_dir().display()),
             }
+
             Ok(Arc::new(cache))
         })
         .shared();
+    // Repacking can take a while for a big clone, so opening a pull request doesn't wait for it,
+    // except in a clone being repacked, whose lock it holds.
+    cx.background_executor()
+        .spawn({
+            let ready = ready.clone();
+            async move {
+                if let Ok(cache) = ready.await
+                    && let Err(error) = cache.maintain(RepoCache::PACK_LIMIT)
+                {
+                    log::warn!("can't repack clones in {}: {error}", cache_dir().display());
+                }
+            }
+        })
+        .detach();
     cx.set_global(LocalCopies { ready });
 }
 
 /// The cache, once [`init`]'s check is done, or why rozed can't use git.
 pub fn cache(cx: &App) -> impl Future<Output = anyhow::Result<Arc<RepoCache>>> + use<> {
-    let ready = cx.global::<LocalCopies>().ready.clone();
-    async move { ready.await.map_err(|error| anyhow::anyhow!("{error}")) }
+    let ready = cx
+        .try_global::<LocalCopies>()
+        .map(|copies| copies.ready.clone());
+    async move {
+        let Some(ready) = ready else {
+            anyhow::bail!("rozed's local copies aren't set up");
+        };
+        ready.await.map_err(|error| anyhow::anyhow!("{error}"))
+    }
+}
+
+/// Makes `cache` the local copies, as [`init`] does once git is checked.
+#[cfg(test)]
+pub(crate) fn init_with(cache: RepoCache, cx: &mut App) {
+    let ready = Task::ready(Ok(Arc::new(cache))).shared();
+    cx.set_global(LocalCopies { ready });
 }

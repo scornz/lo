@@ -3,101 +3,21 @@
 //!
 //! rozed is read-only (design §1). Its buffers are read-only too, but Zed's open, new and save
 //! actions work on the workspace, not a buffer: cmd-O opens any file on disk, cmd-N creates one,
-//! and Save As on a read-only buffer writes a copy. So rozed never binds them.
+//! and Save As on a read-only buffer writes a copy. So rozed never binds them
+//! ([`FileActions`]).
 
 use gpui::{App, KeyBinding};
 use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, SettingsAssets};
 
-/// Actions rozed never binds to a key, because they open, create or write files.
-///
-/// Only actions compiled into rozed are listed: Zed's keymap loader skips a binding whose action
-/// doesn't exist, so the project panel's file actions, for example, can't be bound. Add an
-/// action's crate, and its file actions go here.
-pub const FILE_ACTIONS: &[&str] = &[
-    // Opening files and folders from anywhere on disk, or a new window to open them in.
-    "workspace::Open",
-    "workspace::OpenFiles",
-    "workspace::AddFolderToProject",
-    "workspace::NewWindow",
-    "projects::OpenRecent",
-    "projects::OpenRemote",
-    "welcome::OpenRecentProject",
-    // Opens whatever path the text under the cursor names (Vim's `gf`).
-    "editor::OpenSelectedFilename",
-    // Opening settings, keymap and task files, rozed's own or the repository's `.zed/`, to edit.
-    "zed::OpenSettings",
-    "zed::OpenSettingsFile",
-    "zed::OpenProjectSettings",
-    "zed::OpenProjectTasks",
-    "zed::OpenWorktreeSetupTasks",
-    "zed::OpenKeymap",
-    "zed::OpenKeymapFile",
-    "zed::OpenServerSettings",
-    // Creating files.
-    "workspace::NewFile",
-    "workspace::NewFileSplit",
-    "workspace::NewFileSplitVertical",
-    "workspace::NewFileSplitHorizontal",
-    // Writing files, or making a read-only one writable.
-    "workspace::Save",
-    "workspace::SaveAs",
-    "workspace::SaveAll",
-    "workspace::SaveWithoutFormat",
-    "workspace::FormatAndSave",
-    "workspace::ToggleReadOnlyFile",
-    // Handing a file to the app macOS picks for it, which may run it.
-    "workspace::OpenWithSystem",
-    // Changing the repository: its files, index, stashes, commits, branches or remotes.
-    "git::ToggleStaged",
-    "git::StageRange",
-    "git::StageAndNext",
-    "git::UnstageAndNext",
-    "git::Restore",
-    "git::RestoreAndNext",
-    "git::RestoreFile",
-    "git::StageFile",
-    "git::UnstageFile",
-    "git::StageSection",
-    "git::UnstageSection",
-    "git::StageAll",
-    "git::UnstageAll",
-    "git::StashAll",
-    "git::StashTracked",
-    "git::StashStaged",
-    "git::StashPop",
-    "git::StashApply",
-    "git::RestoreTrackedFiles",
-    "git::TrashUntrackedFiles",
-    "git::Uncommit",
-    "git::Push",
-    "git::PushTo",
-    "git::ForcePush",
-    "git::Pull",
-    "git::PullRebase",
-    "git::Fetch",
-    "git::FetchFrom",
-    "git::Commit",
-    "git::Amend",
-    "git::Init",
-    "git::Clone",
-    "git::AddToGitignore",
-    "git::AddToGitInfoExclude",
-    "git::CreateTagAtHead",
-    "git::RenameBranch",
-    "git::CheckoutBranch",
-    "git::Switch",
-    "git::Branch",
-    "git::CreateRemote",
-    "git::Worktree",
-];
+use crate::read_only::FileActions;
 
-/// Binds Zed's default macOS keymap, without [`FILE_ACTIONS`].
+/// Binds Zed's default macOS keymap, without [`FileActions`].
 pub fn load(cx: &mut App) {
     let bindings = default_bindings(cx);
     cx.bind_keys(bindings);
 }
 
-/// Zed's default macOS keymap, without [`FILE_ACTIONS`]. Bindings for actions from Zed crates rozed
+/// Zed's default macOS keymap, without [`FileActions`]. Bindings for actions from Zed crates rozed
 /// doesn't include (the agent, terminal, debugger and so on) are skipped.
 fn default_bindings(cx: &App) -> Vec<KeyBinding> {
     let mut all = Vec::new();
@@ -130,11 +50,12 @@ fn default_bindings(cx: &App) -> Vec<KeyBinding> {
     all
 }
 
-/// Drops the bindings for [`FILE_ACTIONS`].
+/// Drops the bindings for [`FileActions`].
 fn without_file_actions(bindings: Vec<KeyBinding>) -> impl Iterator<Item = KeyBinding> {
-    bindings.into_iter().filter(|binding| {
+    let file_actions = FileActions::names();
+    bindings.into_iter().filter(move |binding| {
         let name = binding.action().name();
-        let keep = !FILE_ACTIONS.contains(&name);
+        let keep = !file_actions.contains(&name);
         if !keep {
             log::debug!("not binding {name}: it opens, creates or writes files");
         }
@@ -158,10 +79,11 @@ mod tests {
         cx.update(|cx| {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
+            let file_actions = FileActions::names();
             let bound: Vec<&str> = keymap
                 .bindings()
                 .map(|binding| binding.action().name())
-                .filter(|name| FILE_ACTIONS.contains(name))
+                .filter(|name| file_actions.contains(name))
                 .collect();
             assert!(bound.is_empty(), "bound to a key: {bound:?}");
         });
@@ -195,20 +117,6 @@ mod tests {
                     "Zed's keymap no longer binds {key} to {action}"
                 );
             }
-        });
-    }
-
-    #[gpui::test]
-    fn every_file_action_exists(cx: &mut TestAppContext) {
-        // A name Zed renamed or removed would no longer match its binding, which would come back.
-        cx.update(|cx| {
-            let known = cx.all_action_names();
-            let missing: Vec<&str> = FILE_ACTIONS
-                .iter()
-                .copied()
-                .filter(|name| !known.contains(name))
-                .collect();
-            assert!(missing.is_empty(), "not actions in rozed: {missing:?}");
         });
     }
 

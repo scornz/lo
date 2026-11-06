@@ -67,9 +67,12 @@ impl FileEntry {
             .map_or((0, 0), |lines| (lines.added, lines.deleted));
         Self {
             file: ChangedFile {
-                path: file.path().to_string(),
+                // A name that isn't UTF-8 shows with U+FFFD, as in the diff.
+                path: file.display_path().into_owned(),
                 previous_path: match file.change {
-                    repo_cache::Change::Renamed { .. } => file.old_path().map(str::to_string),
+                    repo_cache::Change::Renamed { .. } => file
+                        .old_path()
+                        .map(|path| String::from_utf8_lossy(path).into_owned()),
                     _ => None,
                 },
                 additions,
@@ -480,6 +483,7 @@ mod tests {
             path: path.into(),
             oid: "1".repeat(40).parse().unwrap(),
             mode: FileMode::Regular,
+            size: Some(10),
         })
     }
 

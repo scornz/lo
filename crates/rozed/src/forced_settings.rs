@@ -4,13 +4,15 @@
 //! user's `settings.json` can't override them, and a repository's `.zed/settings.json` never
 //! applies at all ([`review_ui::local_project`]). They keep Zed's account, telemetry, update and AI
 //! code from starting, point every Zed service URL at a placeholder that rozed's HTTP client
-//! refuses ([`crate::http`]), let only rust-analyzer start, keep Prettier off, and narrow what
-//! rust-analyzer does.
+//! refuses ([`crate::http`]), let only rust-analyzer start, and only with `--trust`, keep Prettier
+//! off, and narrow what rust-analyzer does.
 //!
 //! They don't keep a repository's code from running: rust-analyzer still runs cargo and rustc in
 //! the checkout, and a repository's `.cargo/config.toml` can point those at its own programs. So
-//! only a pull request the user trusts gets a checkout ([`review_ui::trust`]). `docs/spike.md`,
-//! "Trust risks", lists what the settings stop and what they don't.
+//! only a pull request the user trusts gets a checkout ([`review_ui::trust`]). Without `--trust`,
+//! no language server can start at all, as a second line: Zed counts a worktree that holds a
+//! single file, such as one dropped on the window, as trusted. `docs/spike.md`, "Trust risks",
+//! lists what the settings stop and what they don't.
 
 use gpui::{App, UpdateGlobal as _};
 use language::LanguageName;
@@ -36,9 +38,9 @@ pub const FORCED_SETTINGS: &str = r#"{
   // of it, one request at a time: about 900 for sharkdp/fd#2212.
   "git": { "inline_blame": { "enabled": false } },
   // Only rust-analyzer can start, and only for Rust; no other language gets a language server.
-  // Prettier never runs: rozed never formats, and Prettier loads a repository's plugins. A
-  // language's own entry wins over these defaults, so rozed adds them for every language it
-  // knows. Later milestones add servers one at a time.
+  // Without `--trust`, rozed turns Rust's off too. Prettier never runs: rozed never formats, and
+  // Prettier loads a repository's plugins. A language's own entry wins over these defaults, so
+  // rozed adds them for every language it knows. Later milestones add servers one at a time.
   "language_servers": [],
   "prettier": { "allowed": false },
   "languages": {
@@ -72,9 +74,19 @@ pub const FORCED_SETTINGS: &str = r#"{
   }
 }"#;
 
-/// The forced settings, with no language server or Prettier for any of `languages` (rust-analyzer
-/// alone for Rust), and rustup pinned to `rust_toolchain` for rust-analyzer when there's one.
-pub fn forced_settings(languages: &[LanguageName], rust_toolchain: Option<&str>) -> String {
+/// Which language servers can start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Servers<'a> {
+    /// None, for any language: rozed wasn't asked to trust a pull request.
+    None,
+    /// rust-analyzer, for Rust, with rustup pinned to `toolchain` when rozed found one
+    /// ([`crate::rust_toolchain`]). Only the trusted pull request's checkout runs it.
+    RustAnalyzer { toolchain: Option<&'a str> },
+}
+
+/// The forced settings, with no language server or Prettier for any of `languages`, except
+/// what `servers` allows for Rust.
+pub fn forced_settings(languages: &[LanguageName], servers: Servers) -> String {
     let mut settings: serde_json::Value = settings::parse_json_with_comments(FORCED_SETTINGS)
         .expect("rozed's forced settings are valid");
     let forced_languages = settings["languages"]
@@ -85,16 +97,25 @@ pub fn forced_settings(languages: &[LanguageName], rust_toolchain: Option<&str>)
             || serde_json::json!({ "language_servers": [], "prettier": { "allowed": false } }),
         );
     }
-    if let Some(toolchain) = rust_toolchain {
-        settings["lsp"]["rust-analyzer"]["binary"]["env"]["RUSTUP_TOOLCHAIN"] = toolchain.into();
+    match servers {
+        Servers::None => {
+            settings["languages"]["Rust"]["language_servers"] = serde_json::json!([]);
+        }
+        Servers::RustAnalyzer {
+            toolchain: Some(toolchain),
+        } => {
+            settings["lsp"]["rust-analyzer"]["binary"]["env"]["RUSTUP_TOOLCHAIN"] =
+                toolchain.into();
+        }
+        Servers::RustAnalyzer { toolchain: None } => {}
     }
     settings.to_string()
 }
 
 /// Sets the forced settings. Call it at startup, before anything reads settings, and again once
 /// every language is registered.
-pub fn apply(languages: &[LanguageName], rust_toolchain: Option<&str>, cx: &mut App) {
-    let settings = forced_settings(languages, rust_toolchain);
+pub fn apply(languages: &[LanguageName], servers: Servers, cx: &mut App) {
+    let settings = forced_settings(languages, servers);
     SettingsStore::update_global(cx, |store, cx| {
         store
             .set_server_settings(&settings, cx)
@@ -120,14 +141,15 @@ mod tests {
         ParseStatus, RootUserSettings as _, SaturatingBool, Settings as _, SettingsContent,
     };
 
-    fn content(languages: &[LanguageName], rust_toolchain: Option<&str>) -> SettingsContent {
-        SettingsContent::parse_json_with_comments(&forced_settings(languages, rust_toolchain))
-            .unwrap()
+    fn content(languages: &[LanguageName], servers: Servers) -> SettingsContent {
+        SettingsContent::parse_json_with_comments(&forced_settings(languages, servers)).unwrap()
     }
+
+    const TRUSTED: Servers<'static> = Servers::RustAnalyzer { toolchain: None };
 
     #[test]
     fn forced_settings_set_the_fields_they_mean_to() {
-        let content = content(&[], None);
+        let content = content(&[], TRUSTED);
         let telemetry = content.telemetry.unwrap();
         assert_eq!(telemetry.diagnostics, Some(false));
         assert_eq!(telemetry.metrics, Some(false));
@@ -206,7 +228,7 @@ mod tests {
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
             // The user's settings did change the defaults, so the next check means something.
             assert!(TelemetrySettings::get_global(cx).metrics);
-            apply(&[], None, cx);
+            apply(&[], TRUSTED, cx);
             assert_forced(cx);
         });
     }
@@ -216,14 +238,30 @@ mod tests {
         // rozed applies them at startup, before reading the user's settings file.
         cx.update(|cx| {
             settings::init(cx);
-            apply(&[], None, cx);
+            apply(&[], TRUSTED, cx);
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
             assert_forced(cx);
         });
     }
 
     #[gpui::test]
-    fn only_rust_analyzer_can_start_and_prettier_never_does(cx: &mut gpui::TestAppContext) {
+    fn trusted_only_rust_analyzer_can_start_and_prettier_never_does(cx: &mut gpui::TestAppContext) {
+        for (name, started) in started_servers(TRUSTED, cx) {
+            let expected = if name.as_ref() == "Rust" {
+                vec![LanguageServerName::new_static("rust-analyzer")]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(started, expected, "{name:?}");
+        }
+    }
+
+    /// The language servers each of the languages rozed knows would start under `servers`, and
+    /// whether any would run Prettier.
+    fn started_servers(
+        servers: Servers,
+        cx: &mut gpui::TestAppContext,
+    ) -> Vec<(LanguageName, Vec<LanguageServerName>)> {
         let fs = FakeFs::new(cx.executor());
         cx.update(|cx| {
             settings::init(cx);
@@ -235,29 +273,113 @@ mod tests {
                 !languages.lsp_adapters(&python).is_empty(),
                 "Python has language servers to turn off"
             );
-
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
-            apply(&names, None, cx);
-
+            apply(&names, servers, cx);
             let available: Vec<LanguageServerName> = languages.available_lsp_adapter_names();
-            for name in &names {
-                let mut adapters: Vec<LanguageServerName> = languages
-                    .lsp_adapters(name)
-                    .iter()
-                    .map(|adapter| adapter.name.clone())
-                    .collect();
-                adapters.extend(available.iter().cloned());
-                let settings = AllLanguageSettings::get_global(cx).language(None, Some(name), cx);
-                assert!(!settings.prettier.allowed, "Prettier runs for {name:?}");
-                let started = settings.customized_language_servers(&adapters);
-                let expected = if name.as_ref() == "Rust" {
-                    vec![LanguageServerName::new_static("rust-analyzer")]
-                } else {
-                    Vec::new()
-                };
-                assert_eq!(started, expected, "{name:?}");
-            }
+            names
+                .iter()
+                .map(|name| {
+                    let mut adapters: Vec<LanguageServerName> = languages
+                        .lsp_adapters(name)
+                        .iter()
+                        .map(|adapter| adapter.name.clone())
+                        .collect();
+                    adapters.extend(available.iter().cloned());
+                    let settings =
+                        AllLanguageSettings::get_global(cx).language(None, Some(name), cx);
+                    assert!(!settings.prettier.allowed, "Prettier runs for {name:?}");
+                    (
+                        name.clone(),
+                        settings.customized_language_servers(&adapters),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn untrusted_no_language_server_can_start(cx: &mut gpui::TestAppContext) {
+        let started = started_servers(Servers::None, cx);
+        assert!(
+            started.iter().any(|(name, _)| name.as_ref() == "Rust"),
+            "Rust is among the languages"
+        );
+        for (name, servers) in started {
+            assert_eq!(servers, Vec::<LanguageServerName>::new(), "{name:?}");
+        }
+    }
+
+    /// Opens `/elsewhere/src/main.rs` the way Zed opens a file dropped on a pane, in a worktree of
+    /// its own that Zed counts as trusted, with a fake rust-analyzer for Rust, and says whether it
+    /// started.
+    async fn rust_analyzer_starts_for_a_dropped_file(
+        servers: Servers<'static>,
+        cx: &mut gpui::TestAppContext,
+    ) -> bool {
+        cx.update(|cx| {
+            settings::init(cx);
+            release_channel::init(semver::Version::new(0, 0, 0), cx);
+            project::trusted_worktrees::init(Default::default(), cx);
         });
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/elsewhere",
+            serde_json::json!({
+                "Cargo.toml": "[package]\nname = \"elsewhere\"\n",
+                "src": { "main.rs": "fn main() {}\n" },
+            }),
+        )
+        .await;
+        let project = project::Project::test_with_worktree_trust(fs, [], cx).await;
+        let languages = project.read_with(cx, |project, _| project.languages().clone());
+        languages.add(language::rust_lang());
+        let mut fake_servers = languages.register_fake_lsp(
+            "Rust",
+            language::FakeLspAdapter {
+                name: "rust-analyzer",
+                ..Default::default()
+            },
+        );
+        cx.update(|cx| apply(&[LanguageName::new_static("Rust")], servers, cx));
+
+        // What a pane does with a dropped file: a worktree of its own, not visible, which the
+        // project keeps only while something holds it.
+        let (_worktree, _) = project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree("/elsewhere/src/main.rs", false, cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        let (_buffer, _handle) = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer_with_lsp("/elsewhere/src/main.rs", cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        let worktree_visible = project.read_with(cx, |project, cx| {
+            project.worktrees(cx).next().unwrap().read(cx).is_visible()
+        });
+        assert!(
+            !worktree_visible,
+            "the file opened in a worktree of its own"
+        );
+        fake_servers.try_recv().is_ok()
+    }
+
+    /// Why rozed turns every language server off without `--trust`: Zed trusts the worktree a
+    /// dropped file opens in, so rust-analyzer would start there.
+    #[gpui::test]
+    async fn trusted_rust_analyzer_starts_for_a_file_zed_trusts(cx: &mut gpui::TestAppContext) {
+        assert!(rust_analyzer_starts_for_a_dropped_file(TRUSTED, cx).await);
+    }
+
+    #[gpui::test]
+    async fn untrusted_no_language_server_starts_even_where_zed_trusts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        assert!(!rust_analyzer_starts_for_a_dropped_file(Servers::None, cx).await);
     }
 
     #[gpui::test]
@@ -266,7 +388,7 @@ mod tests {
             settings::init(cx);
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
 
-            apply(&[], None, cx);
+            apply(&[], TRUSTED, cx);
             let env = rust_analyzer_binary(cx).env.unwrap();
             assert_eq!(
                 env,
@@ -280,7 +402,13 @@ mod tests {
                 )
             );
 
-            apply(&[], Some("1.98.1-aarch64-apple-darwin"), cx);
+            apply(
+                &[],
+                Servers::RustAnalyzer {
+                    toolchain: Some("1.98.1-aarch64-apple-darwin"),
+                },
+                cx,
+            );
             let env = rust_analyzer_binary(cx).env.unwrap();
             assert_eq!(env["RUSTUP_TOOLCHAIN"], "1.98.1-aarch64-apple-darwin");
             assert_eq!(env["RUSTUP_AUTO_INSTALL"], "0");
@@ -289,7 +417,7 @@ mod tests {
 
     #[test]
     fn rust_analyzer_is_downloaded_with_build_scripts_proc_macros_and_checks_off() {
-        let content = content(&[], None);
+        let content = content(&[], TRUSTED);
         let rust_analyzer = &content.project.lsp.0["rust-analyzer"];
         assert_eq!(
             rust_analyzer.binary.as_ref().unwrap().ignore_system_version,
@@ -304,7 +432,7 @@ mod tests {
 
     #[test]
     fn the_server_url_is_refused_by_the_http_client() {
-        let content = content(&[], None);
+        let content = content(&[], TRUSTED);
         let url: http_client::Url = content.server_url.unwrap().parse().unwrap();
         assert!(crate::http::is_refused_host(url.host_str().unwrap()));
     }

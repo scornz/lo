@@ -1,13 +1,16 @@
 //! One repository's clone: fetching into it and reading from it.
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
-use crate::cache::GitEnv;
+use crate::cache::{GitEnv, stamp_last_used};
 use crate::cat_file::{CatFile, ReadError};
 use crate::diff::{self, ChangedFile};
-use crate::git::{GitCommand, Token, failure_message};
+use crate::git::{GitCommand, Location, Token, failure_message};
 use crate::lock::RepoLock;
 use crate::oid::{self, Oid};
 use crate::progress::{Progress, ProgressFn};
@@ -41,6 +44,8 @@ struct Shared {
     checkouts_dir: PathBuf,
     /// Held while writing to the clone or its checkouts.
     lock_path: PathBuf,
+    /// Held shared while this repository is open, so cleanup leaves it alone.
+    _in_use: RepoLock,
     token: Option<Token>,
     cat_file: Mutex<Option<CatFile>>,
 }
@@ -109,6 +114,7 @@ impl Repo {
         git_dir: PathBuf,
         checkouts_dir: PathBuf,
         lock_path: PathBuf,
+        in_use: RepoLock,
         token: Option<Token>,
     ) -> Self {
         Self {
@@ -118,6 +124,7 @@ impl Repo {
                 git_dir,
                 checkouts_dir,
                 lock_path,
+                _in_use: in_use,
                 token,
                 cat_file: Mutex::new(None),
             }),
@@ -160,6 +167,7 @@ impl Repo {
         let branch = format!("refs/heads/{}", pull.base_branch);
 
         let _lock = self.lock()?;
+        self.stamp_used()?;
         let mut base_source = BaseSource::Branch;
         match self.fetch_locked(&what, &[&head_spec, &format!("+{branch}:{base_ref}")]) {
             Ok(()) => {}
@@ -174,7 +182,12 @@ impl Repo {
                     self.shared.name,
                     pull.base_branch
                 );
-                self.fetch_locked(&what, &[&head_spec, &format!("+{base}:{base_ref}")])?;
+                match self.fetch_locked(&what, &[&head_spec, &format!("+{base}:{base_ref}")]) {
+                    Err(Error::Fetch { message, .. }) if is_lost_commit(&message, base) => {
+                        return Err(Error::Unavailable { oid: base.clone() });
+                    }
+                    result => result?,
+                }
                 base_source = BaseSource::Api;
             }
             Err(error) => return Err(error),
@@ -238,6 +251,7 @@ impl Repo {
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.
     pub fn fetch_commit(&self, oid: &Oid) -> Result<(), Error> {
         let _lock = self.lock()?;
+        self.stamp_used()?;
         self.fetch_by_id_locked(
             &format!("commit {}", oid.short(7)),
             oid,
@@ -250,10 +264,7 @@ impl Repo {
     fn fetch_by_id_locked(&self, what: &str, oid: &Oid, pin: &str) -> Result<(), Error> {
         if !self.has_commit(oid)? {
             match self.fetch_locked(what, &[&format!("+{oid}:{pin}")]) {
-                Err(Error::Fetch { message, .. })
-                    if message.contains("not our ref")
-                        || message.contains("unadvertised object") =>
-                {
+                Err(Error::Fetch { message, .. }) if is_lost_commit(&message, oid) => {
                     return Err(Error::Unavailable { oid: oid.clone() });
                 }
                 result => result?,
@@ -311,8 +322,9 @@ impl Repo {
     }
 
     /// What changed from `from` to `to`, in git's order (by path), with renames detected, binary
-    /// files marked, and each side's mode and blob. Downloads both sides of every changed file in
-    /// one batch, so reading them afterwards needs no network. Submodules are never fetched.
+    /// files marked, and each side's mode, blob and size. Downloads both sides of every changed
+    /// file in one batch, so reading them afterwards needs no network. Submodules are never
+    /// fetched.
     pub fn changed_files(&self, from: &Oid, to: &Oid) -> Result<Vec<ChangedFile>, Error> {
         let output = self.run(self.git().args([
             "diff",
@@ -328,7 +340,41 @@ impl Repo {
             to.as_str(),
             "--",
         ]))?;
-        diff::parse(&output)
+        let mut files = diff::parse(&output)?;
+        self.fill_in_sizes(&mut files)?;
+        Ok(files)
+    }
+
+    /// Sets the size of each side of `files` but submodules', from one `git cat-file
+    /// --batch-check`. The diff downloaded them already, so this reads only what's on disk.
+    fn fill_in_sizes(&self, files: &mut [ChangedFile]) -> Result<(), Error> {
+        let mut versions: Vec<_> = files
+            .iter_mut()
+            .flat_map(|file| [file.old.as_mut(), file.new.as_mut()])
+            .flatten()
+            .filter(|version| version.mode != diff::FileMode::Submodule)
+            .collect();
+        if versions.is_empty() {
+            return Ok(());
+        }
+        let input: String = versions
+            .iter()
+            .map(|version| format!("{}\n", version.oid))
+            .collect();
+        let output = self
+            .git()
+            .args(["cat-file", "--batch-check=%(objectname) %(objectsize)"]);
+        let output = output.run_with_input(Some(input.as_bytes()))?;
+        let output = String::from_utf8_lossy(&output);
+        let mut lines = output.lines();
+        for version in &mut versions {
+            let line = lines.next().unwrap_or_default();
+            // "<oid> <size>", or "<oid> missing" for a blob the server no longer has.
+            version.size = line
+                .strip_prefix(version.oid.as_str())
+                .and_then(|rest| rest.trim().parse().ok());
+        }
+        Ok(())
     }
 
     /// The contents of blob `oid`, such as a [`crate::FileVersion::oid`], downloading it if
@@ -374,36 +420,44 @@ impl Repo {
     }
 
     /// The contents of the file at `path` in `rev`, a commit or a tree, downloading it if needed.
-    /// `None` when there's no file there. A folder or a submodule there is an error.
-    pub fn read_file(&self, rev: &Oid, path: &str) -> Result<Option<Vec<u8>>, Error> {
-        if path.is_empty() || path.contains('\0') {
+    /// `path` is bytes, as git stores it (see [`crate::FileVersion::path`]). `None` when there's
+    /// no file there. A folder or a submodule there is an error.
+    pub fn read_file(&self, rev: &Oid, path: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        let shown = String::from_utf8_lossy(path);
+        if path.is_empty() || path.contains(&0) {
             return Err(Error::Invalid {
                 what: "path",
-                value: path.to_string(),
+                value: shown.into_owned(),
             });
         }
         // ls-tree reads only trees, which a partial clone has, so it tells a submodule (a commit
         // in another repository, which must never be fetched from this one) from a file.
-        let output = self.run(self.git().args(["ls-tree", "-z", rev.as_str(), "--", path]))?;
-        let entry = String::from_utf8_lossy(&output);
-        let Some(entry) = entry.strip_suffix('\0') else {
+        let output = self.run(
+            self.git()
+                .args(["ls-tree", "-z", rev.as_str(), "--"])
+                .arg(OsStr::from_bytes(path)),
+        )?;
+        let Some(entry) = output.strip_suffix(b"\0") else {
             return Ok(None);
         };
-        let Some((info, found)) = entry.split_once('\t') else {
+        let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
             return Err(unexpected_ls_tree(entry));
         };
+        let (info, found) = (&entry[..tab], &entry[tab + 1..]);
         if found != path {
             return Ok(None);
         }
-        let mut info = info.split(' ');
+        let mut info = std::str::from_utf8(info)
+            .map_err(|_| unexpected_ls_tree(entry))?
+            .split(' ');
         let (Some(mode), Some(kind), Some(oid)) = (info.next(), info.next(), info.next()) else {
             return Err(unexpected_ls_tree(entry));
         };
         if mode == "160000" || kind != "blob" {
             let what = if mode == "160000" { "submodule" } else { kind };
             return Err(Error::Git {
-                command: format!("git ls-tree {rev} -- {path}"),
-                message: format!("{path} is a {what}, not a file"),
+                command: format!("git ls-tree {rev} -- {shown}"),
+                message: format!("{shown} is a {what}, not a file"),
             });
         }
         self.read_blob(&oid.parse()?)
@@ -414,7 +468,7 @@ impl Repo {
     fn check_branch_name(&self, name: &str) -> Result<(), Error> {
         let valid = !name.starts_with('-')
             && self
-                .git()
+                .git_at(Location::Nowhere)
                 .args(["check-ref-format", &format!("refs/heads/{name}")])
                 .finish(None)?
                 .status
@@ -473,19 +527,33 @@ impl Repo {
         Ok(())
     }
 
+    /// Records that the clone was used just now, which keeps cleanup away for a while. The caller
+    /// holds the lock.
+    pub(crate) fn stamp_used(&self) -> Result<(), Error> {
+        stamp_last_used(&self.shared.git_dir, SystemTime::now())
+    }
+
     /// Waits for the lock on this repository's clone and checkouts.
     pub(crate) fn lock(&self) -> Result<RepoLock, Error> {
         RepoLock::acquire(&self.shared.lock_path)
     }
 
-    /// A git command in the clone, signed in when the repository has a token.
+    /// A git command on the clone, signed in when the repository has a token.
     pub(crate) fn git(&self) -> GitCommand {
-        self.git_in(&self.shared.git_dir)
+        self.git_at(Location::Clone(&self.shared.git_dir))
     }
 
-    /// A git command in `dir`, a checkout of the clone, signed in like [`Self::git`].
-    pub(crate) fn git_in(&self, dir: &Path) -> GitCommand {
-        self.shared.env.command(dir, self.shared.token.as_ref())
+    /// A git command on the repository at `location`, such as a checkout of the clone, signed in
+    /// like [`Self::git`].
+    pub(crate) fn git_at(&self, location: Location<'_>) -> GitCommand {
+        self.shared
+            .env
+            .command(location, self.shared.token.as_ref())
+    }
+
+    /// Moves `path`, in the cache, out of the way and deletes it.
+    pub(crate) fn trash(&self, path: &Path) -> Result<(), Error> {
+        self.shared.env.trash(path)
     }
 
     /// Runs `command`. Its errors say when a download failed, since any command can download
@@ -501,14 +569,24 @@ impl Repo {
     }
 }
 
+/// Whether a fetch failed with `message` because the server doesn't have commit `oid`, which was
+/// asked for by ID.
+fn is_lost_commit(message: &str, oid: &Oid) -> bool {
+    (message.contains("not our ref") || message.contains("unadvertised object"))
+        && message.contains(oid.as_str())
+}
+
 /// Where pull request `number`'s head `oid` is pinned.
 fn revision_ref(number: u64, oid: &Oid) -> String {
     format!("refs/rozed/pull/{number}/revs/{oid}")
 }
 
-fn unexpected_ls_tree(entry: &str) -> Error {
+fn unexpected_ls_tree(entry: &[u8]) -> Error {
     Error::Git {
         command: "git ls-tree".into(),
-        message: format!("printed an unexpected entry {entry:?}"),
+        message: format!(
+            "printed an unexpected entry {:?}",
+            String::from_utf8_lossy(entry)
+        ),
     }
 }

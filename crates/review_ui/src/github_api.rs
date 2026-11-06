@@ -73,9 +73,10 @@ pub async fn fetch_as(
     link: &PrLink,
 ) -> anyhow::Result<PullRequest> {
     let path = format!("/repos/{}/{}/pulls/{}", link.owner, link.repo, link.number);
-    match client.get::<serde_json::Value>(&path).await {
-        Ok(body) => parse_pull_request(&body.to_string())
-            .with_context(|| format!("reading GitHub's answer for {link}")),
+    match client.get::<PullRequest>(&path).await {
+        Ok(pull_request) => {
+            checked(pull_request).with_context(|| format!("reading GitHub's answer for {link}"))
+        }
         Err(GithubError::NotFound { .. }) => {
             bail!("GitHub has no pull request {link}, or {login} can't see it")
         }
@@ -83,11 +84,19 @@ pub async fn fetch_as(
     }
 }
 
+/// Whether rozed can sign in to GitHub, which it can't when it couldn't read its accounts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanSignIn {
+    Yes,
+    No,
+}
+
 /// `GET /repos/{owner}/{repo}/pulls/{number}` without signing in. It works for public
 /// repositories only and counts against GitHub's 60 requests an hour per IP address.
 pub async fn fetch_pull_request(
     http: Arc<dyn HttpClient>,
     link: &PrLink,
+    can_sign_in: CanSignIn,
 ) -> anyhow::Result<PullRequest> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/pulls/{}",
@@ -109,7 +118,13 @@ pub async fn fetch_pull_request(
         .read_to_string(&mut body)
         .await
         .with_context(|| format!("reading GitHub's answer for {link}"))?;
-    check_status(response.status(), response.headers(), &body, link)?;
+    check_status(
+        response.status(),
+        response.headers(),
+        &body,
+        link,
+        can_sign_in,
+    )?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
@@ -119,6 +134,7 @@ fn check_status(
     headers: &HeaderMap,
     body: &str,
     link: &PrLink,
+    can_sign_in: CanSignIn,
 ) -> anyhow::Result<()> {
     if status.is_success() {
         return Ok(());
@@ -127,16 +143,28 @@ fn check_status(
         .get("x-ratelimit-remaining")
         .is_some_and(|remaining| remaining == "0");
     if rate_limited && matches!(status.as_u16(), 403 | 429) {
-        bail!(
-            "GitHub's limit of 60 requests an hour without signing in is used up; sign in from \
-             Accounts… in the rozed menu, or try again later"
-        );
+        match can_sign_in {
+            CanSignIn::Yes => bail!(
+                "GitHub's limit of 60 requests an hour without signing in is used up; sign in \
+                 from Accounts… in the rozed menu, or try again later"
+            ),
+            CanSignIn::No => bail!(
+                "GitHub's limit of 60 requests an hour without signing in is used up; try again \
+                 later"
+            ),
+        }
     }
     if status == StatusCode::NOT_FOUND {
-        bail!(
-            "GitHub has no public pull request {link}, and no account rozed is signed in to can \
-             see it. Sign in from Accounts… in the rozed menu"
-        );
+        match can_sign_in {
+            CanSignIn::Yes => bail!(
+                "GitHub has no public pull request {link}, and no account rozed is signed in to \
+                 can see it. Sign in from Accounts… in the rozed menu"
+            ),
+            CanSignIn::No => bail!(
+                "GitHub has no public pull request {link}, and rozed couldn't read its accounts \
+                 to sign in"
+            ),
+        }
     }
     let message = serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -146,7 +174,11 @@ fn check_status(
 }
 
 fn parse_pull_request(body: &str) -> anyhow::Result<PullRequest> {
-    let pull_request: PullRequest = serde_json::from_str(body)?;
+    checked(serde_json::from_str(body)?)
+}
+
+/// `pull_request`, if its repository is on github.com and named `owner/name`.
+fn checked(pull_request: PullRequest) -> anyhow::Result<PullRequest> {
     let clone_url = &pull_request.base.repo.clone_url;
     anyhow::ensure!(
         clone_url.starts_with("https://github.com/"),
@@ -241,7 +273,7 @@ mod tests {
     }
 
     fn fetch(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212()))
+        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), CanSignIn::Yes))
     }
 
     fn fetch_signed_in(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
@@ -337,6 +369,28 @@ mod tests {
         assert!(
             error.to_string().contains("Sign in from Accounts…"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn without_an_accounts_database_it_doesnt_say_to_sign_in() {
+        let fetch =
+            |http| futures::executor::block_on(fetch_pull_request(http, &fd_2212(), CanSignIn::No));
+        let error = fetch(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "GitHub has no public pull request sharkdp/fd#2212, and rozed couldn't read its \
+             accounts to sign in"
+        );
+        let rate_limited = Canned::with_headers(
+            403,
+            &[("x-ratelimit-remaining", "0")],
+            r#"{"message":"API rate limit exceeded"}"#,
+        );
+        let error = fetch(rate_limited).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "GitHub's limit of 60 requests an hour without signing in is used up; try again later"
         );
     }
 

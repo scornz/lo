@@ -8259,6 +8259,7 @@ dependencies = [
  "anyhow",
  "buffer_diff",
  "chrono",
+ "command_palette_hooks",
  "credentials_provider",
  "db",
  "editor",
@@ -8271,6 +8272,7 @@ dependencies = [
  "log",
  "menu",
  "multi_buffer",
+ "parking_lot",
  "paths",
  "project",
  "release_channel",
@@ -8286,6 +8288,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
+ "zed_actions",
 ]
 
 [[package]]
