@@ -7,8 +7,8 @@ use super::{MergeMethod, MergeSnapshot, PullRequestState, blockers};
 pub enum MergeAction {
     /// Merge it now, with one of `methods`: those allowed here, in the order GitHub's merge button
     /// lists them, without rebase when the base branch requires signed commits. `default` is the
-    /// one to pick first: the one you last used here, else GitHub's default for you. The merge carries the head on
-    /// screen, so GitHub refuses it if someone pushed since (design §11).
+    /// one to pick first: the one you last used here, else GitHub's default for you. The merge
+    /// carries the head on screen, so GitHub refuses it if someone pushed since (design §11).
     Merge {
         methods: Vec<MergeMethod>,
         default: MergeMethod,

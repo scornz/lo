@@ -57,7 +57,8 @@ pub struct Plan {
     /// the next step may be auto-merge and the base branch's rules don't want a new approval after
     /// a push ([`ReviewRules::push_needs_new_approval`]). The next step may be auto-merge when it's
     /// likely, and also when a merge is likely only because rozed expects GitHub to stop blocking
-    /// once you've approved. While rozed runs, [`after_push`] turns auto-merge off on such a push.
+    /// once you've approved. While rozed runs, [`after_push`] turns off the auto-merge approve and
+    /// ship turned on when such a push follows your approval.
     ///
     /// [`ReviewRules::push_needs_new_approval`]: super::ReviewRules::push_needs_new_approval
     pub stale_approval_warning: bool,
@@ -170,10 +171,11 @@ impl Approval {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ship {
     /// Merge it with this method. [`after_approving`] returns it only when GitHub reports the pull
-    /// request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and nothing rozed sees blocks it, so it
-    /// never relies on an admin's bypass.
+    /// request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and nothing rozed sees blocks it, so
+    /// it never relies on an admin's bypass.
     Merge(MergeMethod),
-    /// Add it to the base branch's merge queue, on the same terms as [`Ship::Merge`].
+    /// Add it to the base branch's merge queue, on the same terms as [`Ship::Merge`], or when
+    /// GitHub reports only that the head is behind the base (`BEHIND`), which the queue handles.
     Enqueue,
     /// Turn on auto-merge with this method, so GitHub merges it once what it's waiting on clears:
     /// `waiting_on`, every blocker left, each one waiting clears. A `BLOCKED` can also hide a rule
@@ -307,9 +309,10 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
 /// - It stops, with the blockers, when something waiting won't fix blocks the merge.
 /// - It does nothing more when auto-merge is on.
 /// - It merges with the preferred method, or joins the queue on a branch that requires one, only
-///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, or `BEHIND`
-///   on a queue branch) and nothing rozed sees blocks it. Those are the states in which GitHub's rules are met, so approve
-///   and ship never merges past a rule, even for an admin GitHub would let bypass one.
+///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, or
+///   `BEHIND` on a queue branch) and nothing rozed sees blocks it. In those states GitHub's rules
+///   are met, so approve and ship never merges past a rule, even for an admin GitHub would let
+///   bypass one.
 /// - Otherwise only things waiting will fix block it, and it turns on auto-merge, or merge when
 ///   ready on a queue branch. When rozed's explanation of a `BLOCKED` is only partial, auto-merge
 ///   waits for what it can't see too.
