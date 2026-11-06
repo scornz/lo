@@ -137,6 +137,8 @@ pub struct Revision {
     /// The branch's head just before this push. A source's `before` or `previousSha` when one
     /// names it, else the revision before this one. `None` for the first revision unless a source
     /// names the head it replaced, which can be a commit pushed before the pull request opened.
+    /// It can name a later revision: when a head was pushed again (`a` → `b` → `a`), `b`'s
+    /// previous head is `a`, which sits after it at its latest push.
     pub previous: Option<String>,
     /// Whether the push was forced: `Some(true)` for a force-push, `Some(false)` for a normal push,
     /// `None` when no source says and the current commits can't tell.

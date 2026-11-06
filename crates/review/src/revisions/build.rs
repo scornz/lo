@@ -8,9 +8,12 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 
 /// Merges push records from every source into the pull request's revisions, one per head SHA.
 ///
-/// `commits` are the pull request's current commits from git, oldest first. `head` is its current
-/// head (`headRefOid`), which is always the latest revision, even when no source saw it or a
-/// source's time says otherwise. `opened_at` is when the pull request opened (`createdAt`).
+/// `commits` are the pull request's current commits from git, as `git rev-list --topo-order
+/// --reverse <base>..<head>` lists them: oldest first, each after its parents. Until the local
+/// copy has them, pass none, not GitHub's commit list, which stops at 250. `head` is the pull
+/// request's current head (`headRefOid`), which is always the latest revision, even when no source
+/// saw it or a source's time says otherwise. `opened_at` is when the pull request opened
+/// (`createdAt`).
 ///
 /// - **Starting where the pull request opened.** The first revision is the head when the pull
 ///   request opened: the newest head pushed at or before `opened_at`. Older heads were pushed
@@ -281,7 +284,8 @@ fn latest_push_times(
 
 /// The heads in revision order: each after the heads that must come before it, the earliest
 /// first. Heads nothing bounds go last, and ties keep the order the records first named them in.
-/// The heads of a loop go together, by their own times.
+/// A loop's heads go together, ordered by their times without the loop's own constraints, and
+/// ties among them again in the order the records first named them.
 fn order(
     latest: &[Option<SystemTime>],
     after: &[BTreeSet<usize>],
