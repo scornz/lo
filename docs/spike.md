@@ -125,9 +125,10 @@ Not compiled in: `auto_update`, `extension_host`, `git_ui`, `git_ui_core`, `call
 
 1. `GET api.github.com/repos/<owner>/<repo>/pulls/<n>`, without signing in, for the base branch and
    the clone URL.
-2. The local copy (`crates/rozed/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`): a
-   bare `blob:none` partial clone at `~/Library/Caches/rozed/repos/github.com/<owner>/<repo>.git`, a
-   fetch of `refs/pull/<n>/head` and the base branch into `refs/rozed/pull/<n>/head` and
+2. The local copy (`crates/rozed/src/local_copy.rs`, a stand-in for milestone 4's `repo_cache`,
+   which has since replaced it): a bare `blob:none` partial clone at
+   `~/Library/Caches/rozed/repos/github.com/<owner>/<repo>.git`, a fetch of `refs/pull/<n>/head`
+   and the base branch into `refs/rozed/pull/<n>/head` and
    `refs/rozed/base/<branch>`, their merge base, and the changed files with each side's mode and
    blob ID (`git diff -M` with `--raw` and `--numstat`).
 3. Every changed file goes into one `SplittableEditor`, in git's order, both sides read from git
@@ -135,7 +136,7 @@ Not compiled in: `auto_update`, `extension_host`, `git_ui`, `git_ui_core`, `call
    project folder and no language server.
 
 With `--trust`, rozed also checks the head out, detached, as a `git worktree` at
-`~/Library/Caches/rozed/checkouts/github.com/<owner>/<repo>/pull-<n>`, trusts that folder and
+`~/Library/Caches/rozed/checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`, trusts that folder and
 nothing else, and opens it as the project's only folder. A file whose bytes there hash to the
 head's blob (`git hash-object --no-filters`, against the blob ID from `--raw`) shows the checkout's
 project buffer on the right, so rust-analyzer attaches to it, as in Zed's `file_diff_view.rs`. A
@@ -396,10 +397,11 @@ Still open with `--trust`, so only trust a pull request whose code you'd run:
 - **rust-analyzer always comes from GitHub,** where design §2 says rozed uses an installed copy
   when it finds one. The copy on `PATH` is usually rustup's proxy (see "Trust risks"); an installed
   binary that isn't a proxy would be safe to use. Milestone 10 decides.
-- **A force-pushed head replaces the old one** in `refs/rozed/pull/<n>/head`, so older revisions
-  don't survive yet; milestone 4 keeps every fetched revision.
-- **Big pull requests:** rozed runs a `git cat-file` per side of each file, and with `--trust` a
-  `git hash-object`, and adds each file's hunks at once. `git cat-file --batch` and adding hunks in
-  batches, as Zed's commit view does, would keep large diffs responsive.
+- **A force-pushed head replaced the old one** in `refs/rozed/pull/<n>/head`, so older revisions
+  didn't survive. Milestone 4's `repo_cache` pins every fetched head under
+  `refs/rozed/pull/<n>/revs/<sha>`.
+- **Big pull requests:** rozed reads both sides through one long-lived `git cat-file --batch` per
+  repository, with `--trust` runs a `git hash-object` per file, and adds each file's hunks at once.
+  Adding hunks in batches, as Zed's commit view does, would keep large diffs responsive.
 - **GitHub's limit without signing in,** 60 requests an hour per address, is shared by the pull
   request lookup and rust-analyzer's release check until milestone 3 signs in.

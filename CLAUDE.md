@@ -70,6 +70,11 @@ point at its own programs, so only pass `--trust` for a pull request whose code 
 `docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Without a link,
 rozed shows its own `main.rs`.
 
+The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
+your git config, HTTPS only. Until rozed can sign in, it opens pull requests in private repositories
+with a token from `ROZED_GITHUB_TOKEN`, which it removes from its environment at launch so nothing
+it starts inherits it.
+
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
 `~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:

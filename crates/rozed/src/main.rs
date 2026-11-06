@@ -7,8 +7,9 @@ mod forced_settings;
 mod github_api;
 mod http;
 mod keymap;
-mod local_copy;
+mod local_copies;
 mod local_project;
+mod pr_banner;
 mod pr_diff;
 mod pr_link;
 mod rust_toolchain;
@@ -25,8 +26,8 @@ use db::kvp::KeyValueStore;
 use editor::{Editor, MultiBuffer};
 use fs::RealFs;
 use gpui::{
-    App, AppContext as _, Bounds, Context, Menu, MenuItem, Task, TaskExt as _, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Bounds, Context, Entity, Menu, MenuItem, Task, TaskExt as _,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, px, size,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
 use language::{Capability, LanguageRegistry};
@@ -39,13 +40,17 @@ use settings::Settings as _;
 use theme::ActiveTheme as _;
 use util::ResultExt as _;
 use workspace::notifications::NotifyTaskExt as _;
-use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
+use workspace::{AppState, MultiWorkspace, Pane, Workspace, WorkspaceStore};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 use crate::pr_link::PrLink;
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
+
+/// A GitHub token to sign in with, until milestone 3's accounts. rozed reads it at launch and
+/// removes it from its environment, so no child process inherits it.
+const TOKEN_VAR: &str = "ROZED_GITHUB_TOKEN";
 
 const USAGE: &str = "usage: rozed [--trust] [<pull request link>]
 example: rozed https://github.com/sharkdp/fd/pull/2212
@@ -104,8 +109,13 @@ fn main() {
         std::process::exit(1);
     }
 
+    let token = std::env::var(TOKEN_VAR)
+        .ok()
+        .map(repo_cache::Token::new)
+        .filter(|token| !token.expose().is_empty());
     // SAFETY: no other thread exists yet, so nothing reads the environment concurrently.
     unsafe {
+        std::env::remove_var(TOKEN_VAR);
         std::env::set_var(SHELL_ENV_GUARD, std::process::id().to_string());
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
@@ -147,6 +157,8 @@ fn main() {
         settings::init(cx);
         // Before anything reads settings. Again below, once every language is known.
         forced_settings::apply(&[], None, cx);
+        // Checks git and cleans up old clones in the background.
+        local_copies::init(token, cx);
 
         let http = http_client(cx);
         cx.set_http_client(http.clone());
@@ -212,6 +224,21 @@ fn main() {
 
         editor::init(cx);
         workspace::init(app_state.clone(), cx);
+        // Every pane shows its pull request's banners above it.
+        cx.observe_new(|workspace: &mut Workspace, window, cx| {
+            let Some(window) = window else {
+                return;
+            };
+            add_banner_bar(workspace.active_pane(), window, cx);
+            let workspace_entity = cx.entity();
+            cx.subscribe_in(&workspace_entity, window, |_, _, event, window, cx| {
+                if let workspace::Event::PaneAdded(pane) = event {
+                    add_banner_bar(pane, window, cx);
+                }
+            })
+            .detach();
+        })
+        .detach();
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
         cx.set_menus([
@@ -239,6 +266,15 @@ fn main() {
             })
         })
         .detach();
+    });
+}
+
+/// Adds the row that shows a pull request's banners to `pane`'s toolbar.
+fn add_banner_bar(pane: &Entity<Pane>, window: &mut Window, cx: &mut Context<Workspace>) {
+    pane.update(cx, |pane, cx| {
+        pane.toolbar().update(cx, |toolbar, cx| {
+            toolbar.add_item(cx.new(|_| pr_banner::BannerBar::default()), window, cx)
+        })
     });
 }
 
@@ -407,7 +443,15 @@ fn open_window(
                     })
                     .detach_and_notify_err(workspace.downgrade(), window, cx);
             }
-            None => workspace.update(cx, |workspace, cx| show_source(workspace, window, cx)),
+            None => {
+                workspace.update(cx, |workspace, cx| show_source(workspace, window, cx));
+                // Opening a pull request reports a missing or old git itself. Without one, say
+                // so as soon as the launch check finds it.
+                let check = local_copies::cache(cx);
+                window
+                    .spawn(cx, async move |_| check.await.map(|_| ()))
+                    .detach_and_notify_err(workspace.downgrade(), window, cx);
+            }
         }
     })?;
     Ok(())
