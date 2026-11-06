@@ -211,6 +211,8 @@ pub struct PrTab {
     _load: Option<Task<()>>,
     /// Reads and shows GitHub's diff, until the local copy's replaces it.
     _github_diff: Option<Task<()>>,
+    /// Why the local copy failed for good, when it did before GitHub's diff showed.
+    copy_failed: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -266,6 +268,7 @@ impl PrTab {
             opened: Instant::now(),
             _load: None,
             _github_diff: None,
+            copy_failed: None,
             _subscriptions: vec![on_focus, on_banners],
         }
     }
@@ -619,11 +622,23 @@ impl PrTab {
         }
         self.list(entries);
         self.show_diff(editor, DiffSource::GitHub, window, cx);
+        // The local copy failed for good, so this is the diff the tab shows.
+        if self.copy_failed.is_some() {
+            self.set_status(Status::Ready, cx);
+        }
         Some(self.files.review_positions())
     }
 
     fn github_diff_failed(&mut self, error: &github::GithubError, cx: &mut Context<Self>) {
         if self.diff.is_some() {
+            return;
+        }
+        // Neither diff can show.
+        if let Some(copy_failed) = self.copy_failed.clone() {
+            self.banners.update(cx, |banners, cx| {
+                banners.hide(BannerKind::LocalCopyFailed, cx)
+            });
+            self.set_status(Status::Failed(copy_failed), cx);
             return;
         }
         self.banners.update(cx, |banners, cx| {
@@ -696,11 +711,28 @@ impl PrTab {
         self.set_status(Status::Ready, cx);
     }
 
-    /// Loading failed with `error`. GitHub's diff, if it shows, stays, with a banner saying why
-    /// the local copy's won't come; otherwise the tab says why it couldn't open.
+    /// Loading failed with `error`. GitHub's diff, if it shows or is on its way, stays, with a
+    /// banner saying why the local copy's won't come; otherwise the tab says why it couldn't open.
     fn load_failed(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
-        if self.diff.is_none() {
+        let github_coming = self.diff.is_none() && self._github_diff.is_some();
+        if self.diff.is_none() && !github_coming {
             self.set_status(Status::Failed(format!("{error:#}").into()), cx);
+            return;
+        }
+        if github_coming {
+            self.copy_failed = Some(format!("{error:#}").into());
+            self.banners.update(cx, |banners, cx| {
+                banners.show(
+                    BannerKind::LocalCopyFailed,
+                    Severity::Error,
+                    format!(
+                        "rozed couldn't show the local copy's diff, so this is GitHub's diff: \
+                         changed lines only. {error:#}"
+                    ),
+                    cx,
+                )
+            });
+            self.set_status(Status::Loading("Reading GitHub's diff…".into()), cx);
             return;
         }
         let text = match self.diff_source {
@@ -1832,6 +1864,40 @@ mod tests {
         github.add_pull(pull.clone());
         github.make_public(repo);
         pull
+    }
+
+    /// A public pull request of `count` files on the fake GitHub, which its git server doesn't
+    /// have, so its local copy fails and GitHub's diff stays.
+    fn uncopyable_pull(github: &FakeGithub, repo: &str, number: u64, count: usize) {
+        let head = "d".repeat(40);
+        let files = (0..count)
+            .map(|index| {
+                let path = format!("src/f{index:04}.rs");
+                serde_json::json!({
+                    "filename": path,
+                    "status": "modified",
+                    "additions": 1,
+                    "deletions": 1,
+                    "changes": 2,
+                    "patch": "@@ -1 +1 @@\n-a\n+b",
+                    "blob_url": format!("https://github.com/{repo}/blob/{head}/{path}"),
+                    "contents_url": format!(
+                        "https://api.github.com/repos/{repo}/contents/{path}?ref={head}"
+                    ),
+                })
+            })
+            .collect();
+        github.add_pull(FakePull {
+            repo: repo.into(),
+            old_names: Vec::new(),
+            number,
+            title: format!("Pull request {number}"),
+            head,
+            base_branch: "main".into(),
+            base: "b".repeat(40),
+            files,
+        });
+        github.make_public(repo);
     }
 
     #[gpui::test]
@@ -3143,6 +3209,63 @@ mod tests {
         other.read_with(cx, |tab, _| {
             assert!(matches!(tab.status(), Status::Failed(_)))
         });
+    }
+
+    #[gpui::test]
+    async fn a_copy_that_fails_before_githubs_diff_arrives_leaves_it_with_a_banner(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        let error = anyhow::anyhow!("the repository doesn't exist, or the account can't see it");
+
+        // GitHub's diff is on its way when the copy fails for good.
+        tab.update_in(cx, |tab, window, cx| {
+            let source = GithubDiff {
+                link: link(PULL),
+                title: format!("{PULL}: Change a"),
+                repo_name: "repo".into(),
+            };
+            tab.show_github_files(source, vec![github_file("a.txt", 50)], window, cx);
+            tab.load_failed(&error, cx);
+        });
+        assert!(matches!(status(&tab, cx), Status::Loading(_)));
+        assert_eq!(banners(&tab, cx).len(), 1);
+        cx.run_until_parked();
+
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.status(), &Status::Ready);
+            assert_eq!(tab.diff_source(), Some(DiffSource::GitHub));
+        });
+        assert_eq!(
+            banners(&tab, cx),
+            [
+                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
+              only. the repository doesn't exist, or the account can't see it"
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn a_public_pull_request_git_cant_copy_shows_githubs_diff(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/app", 1, 2);
+        anonymous(&github, cx);
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.status(), &Status::Ready);
+            assert_eq!(tab.diff_source(), Some(DiffSource::GitHub));
+            assert_eq!(tab.files().len(), 2);
+        });
+        let banners = banners(&tab, cx);
+        assert!(
+            banners[0].starts_with("rozed couldn't show the local copy's diff"),
+            "{banners:#?}"
+        );
     }
 
     #[gpui::test]
