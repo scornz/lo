@@ -708,14 +708,20 @@ fn try_plan_file(
         return Ok(FilePlan::diff(old_bytes.map(text), NewSide::Deleted));
     };
     let new_bytes = read_side(repo, new).context("reading the head's version")?;
-    // Both sides' line endings are normalized for the diff, so a change to them alone would
-    // otherwise look like no change at all.
+    let old_text = old_bytes.clone().map(text);
+    let new_text = text(new_bytes.clone());
+    // Both sides' line endings are normalized, and bytes that aren't UTF-8 shown as U+FFFD, so a
+    // change to those alone would otherwise look like no change at all.
     let badge = old_bytes
         .as_ref()
-        .filter(|old| **old != new_bytes && normalized(old) == normalized(&new_bytes))
-        .map(|_| SharedString::from("line endings only"));
-    let old_text = old_bytes.map(text);
-    let new_text = text(new_bytes.clone());
+        .filter(|old| **old != new_bytes && old_text.as_ref() == Some(&new_text))
+        .map(|old| {
+            SharedString::from(if normalized(old) == normalized(&new_bytes) {
+                "line endings only"
+            } else {
+                "no visible change"
+            })
+        });
     let from_git = |warning: Option<Warning>| FilePlan {
         warning,
         badge: badge.clone(),
@@ -1372,6 +1378,25 @@ mod tests {
         assert_eq!(swap(&placeholder, from_checkout.clone()), Swap::Keep);
         let deleted = FilePlan::diff(Some("text".into()), NewSide::Deleted);
         assert_eq!(swap(&deleted, from_checkout), Swap::Keep);
+    }
+
+    #[test]
+    fn a_change_only_to_bytes_that_arent_utf8_gets_a_badge() {
+        let copied = copy(
+            &[Entry::File("a.txt", b"caf\xe9\n")],
+            &[Entry::File("a.txt", b"caf\xe8\n")],
+            false,
+        );
+        assert_eq!(
+            copied.plans(),
+            vec![(
+                "a.txt".into(),
+                FilePlan {
+                    badge: Some("no visible change".into()),
+                    ..FilePlan::diff(Some("caf\u{fffd}\n".into()), from_git("caf\u{fffd}\n"))
+                }
+            )]
+        );
     }
 
     #[test]
