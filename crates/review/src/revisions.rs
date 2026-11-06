@@ -8,12 +8,14 @@
 
 mod build;
 mod compare;
+mod viewed;
 
 use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
 pub use build::build_revisions;
 pub use compare::{Comparison, default_comparison};
+pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
 
 /// Something a source saw on the pull request's head branch. Each variant's doc names the GitHub
 /// data it comes from.
