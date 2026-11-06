@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use futures::StreamExt as _;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::future::{BoxFuture, FutureExt as _};
 use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Subscription, Task, WeakEntity,
@@ -562,7 +562,10 @@ impl Poller {
     /// Afterwards what rozed knows about `target` is out of date, whether or not the write
     /// succeeded (a failed one may still have reached GitHub): a pull request's details are
     /// fetched in full again, a repository's open PRs are listed again, and either is polled at
-    /// once if it's watched.
+    /// once if it's watched. A rate limit the write runs into pauses polling as a poll's would.
+    ///
+    /// The write goes on if the returned task is dropped, so closing what asked for it can't cut
+    /// a merge or a review off halfway.
     pub fn write<T, F, Fut>(
         &mut self,
         target: impl Into<Target>,
@@ -580,17 +583,20 @@ impl Poller {
             .accounts
             .update(cx, |accounts, cx| accounts.client(&login, cx));
         let queue = self.queue.clone();
+        let (done, result) = oneshot::channel();
         cx.spawn(async move |this, cx| {
             let client = match client.await {
                 Ok(client) => client,
                 Err(error) => {
                     let signed_out = this.read_with(cx, |this, cx| this.account_signed_out(cx));
                     let message = format!("{error:#}");
-                    return Err(if signed_out.unwrap_or(true) {
+                    done.send(Err(if signed_out.unwrap_or(true) {
                         GithubError::Unauthorized { message }
                     } else {
                         GithubError::TokenUnavailable(message)
-                    });
+                    }))
+                    .ok();
+                    return;
                 }
             };
             let result = queue.write(|| request(client.clone())).await;
@@ -599,15 +605,35 @@ impl Poller {
                     this.offline = None;
                 }
                 this.limits = client.rate_limits();
+                if let Err(GithubError::RateLimited {
+                    secondary,
+                    reset,
+                    retry_after,
+                    resource,
+                    message,
+                }) = &result
+                {
+                    log::info!("GitHub's rate limit, writing: {message}");
+                    let wall = this.config.wall_clock.now();
+                    this.rate_limited(*secondary, *reset, *retry_after, resource.clone(), wall);
+                }
                 this.refresh_status(cx);
                 this.invalidate(&target, cx)
             });
+            done.send(result).ok();
             if let Ok(forget) = forget
                 && let Err(error) = forget.await
             {
                 log::warn!("writing the cache: {error:#}");
             }
-            result
+        })
+        .detach();
+        cx.foreground_executor().spawn(async move {
+            result.await.unwrap_or_else(|_| {
+                Err(GithubError::Network(anyhow::anyhow!(
+                    "rozed stopped before the write finished"
+                )))
+            })
         })
     }
 

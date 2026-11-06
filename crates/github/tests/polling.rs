@@ -1574,6 +1574,72 @@ async fn the_open_prs_details_are_fetched_in_full_every_five_minutes(cx: &mut Te
 }
 
 #[gpui::test]
+async fn a_write_finishes_when_its_caller_stops_waiting(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::with(
+        "write_dropped",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    t.requests();
+    // The tab that asked for it closes while it's in flight.
+    let write = t.update(post_comment);
+    assert_eq!(t.requests(), log(&[(5, "POST /issues/1/comments")]));
+    drop(write);
+    t.run_until(10);
+    // It finished: what it changed is fetched again.
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (6, "GET /pulls/1 (since)"),
+            (7, "PullRequestCheck"),
+            (8, "PullRequest"),
+        ])
+    );
+}
+
+#[gpui::test]
+async fn a_write_that_hits_a_rate_limit_pauses_polling(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut limited = comment(&r);
+    limited.response = answer(
+        &r[0],
+        403,
+        &[("retry-after", "60")],
+        r#"{"message":"You have exceeded a secondary rate limit."}"#,
+    )
+    .response;
+    let mut interactions = r.clone();
+    interactions.push(limited);
+    let mut t = Polling::new("write_rate_limited", interactions, cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    let write = t.update(post_comment);
+    t.run();
+    assert!(matches!(
+        write.await,
+        Err(github::GithubError::RateLimited {
+            secondary: true,
+            ..
+        })
+    ));
+    assert_eq!(
+        t.status().rate_limit,
+        RateLimitState::Paused {
+            until: wall(65),
+            reason: PauseReason::Secondary,
+        }
+    );
+}
+
+#[gpui::test]
 async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut TestAppContext) {
     let r = recorded();
     let mut interactions = r.clone();
