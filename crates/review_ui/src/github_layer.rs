@@ -30,6 +30,8 @@ pub struct GithubLayer {
     cache: PrCache,
     /// One per account that has a tab, by lowercased login.
     pollers: HashMap<String, Entity<Poller>>,
+    /// Whether rozed is in the foreground, for pollers yet to start.
+    foreground: bool,
 }
 
 /// The layer once the accounts database opened, or `None` when it couldn't.
@@ -71,6 +73,7 @@ impl GithubLayer {
             accounts,
             cache,
             pollers: HashMap::new(),
+            foreground: true,
         }
     }
 
@@ -84,7 +87,12 @@ impl GithubLayer {
             .entry(login.to_ascii_lowercase())
             .or_insert_with(|| {
                 let (accounts, cache) = (self.accounts.clone(), self.cache.clone());
-                cx.new(|cx| Poller::new(accounts, login, cache, PollConfig::default(), cx))
+                let foreground = self.foreground;
+                cx.new(|cx| {
+                    let mut poller = Poller::new(accounts, login, cache, PollConfig::default(), cx);
+                    poller.set_foreground(foreground, cx);
+                    poller
+                })
             })
             .clone()
     }
@@ -171,7 +179,8 @@ impl GithubLayer {
 
     /// Tells every poller whether rozed is in the foreground. In the background they all slow to
     /// every 5 minutes.
-    pub fn set_foreground(&self, foreground: bool, cx: &mut Context<Self>) {
+    pub fn set_foreground(&mut self, foreground: bool, cx: &mut Context<Self>) {
+        self.foreground = foreground;
         for poller in self.pollers.values() {
             poller.update(cx, |poller, cx| poller.set_foreground(foreground, cx));
         }

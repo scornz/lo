@@ -29,7 +29,7 @@ use workspace::{ItemNavHistory, Workspace};
 
 use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
-use crate::github_api::{self, PullRequest};
+use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
 use crate::poll_state::{self, PollNote, PollState};
 use crate::pr_banner::{self, BannerKind, Banners};
@@ -167,6 +167,9 @@ pub struct PrTab {
     file_list_focus: FocusHandle,
     file_list_scroll: UniformListScrollHandle,
     acting: Option<Acting>,
+    /// How many accounts could see the repository, when none was chosen for its owner and the
+    /// tab acts as the first.
+    guessed_among: Option<usize>,
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
@@ -229,6 +232,7 @@ impl PrTab {
             file_list_focus: cx.focus_handle(),
             file_list_scroll: UniformListScrollHandle::new(),
             acting: None,
+            guessed_among: None,
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
@@ -309,6 +313,7 @@ impl PrTab {
     /// Forgets why the tab failed, before it loads again.
     fn start_again(&mut self, cx: &mut Context<Self>) {
         self.acting = None;
+        self.guessed_among = None;
         self.help_links.clear();
         self.set_status(
             Status::Loading("Finding an account that can see it…".into()),
@@ -570,6 +575,27 @@ impl PrTab {
         }
     }
 
+    /// The header's title: the pull request's, once known.
+    pub fn title(&self) -> String {
+        match (&self.header.title, &self.status) {
+            (Some(title), _) => title.clone(),
+            (None, Status::Failed(_)) => "Not opened".to_string(),
+            (None, _) => "Loading…".to_string(),
+        }
+    }
+
+    /// Who the header says the tab acts as.
+    pub fn acting_text(&self) -> String {
+        match (&self.acting, &self.guessed_among) {
+            (Some(Acting::Account(login)), Some(count)) => {
+                format!("as {login}, the first of the {count} accounts that can see it")
+            }
+            (Some(Acting::Account(login)), None) => format!("as {login}"),
+            (Some(Acting::Anonymous), _) => "not signed in".to_string(),
+            (None, _) => String::new(),
+        }
+    }
+
     /// What the header says about how polling the pull request goes, if anything's wrong.
     pub fn poll_note(&self) -> Option<PollNote> {
         let login = self.acting.as_ref()?.login()?;
@@ -704,16 +730,8 @@ impl PrTab {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let number = self.link().number;
-        let title = self
-            .header
-            .title
-            .clone()
-            .unwrap_or_else(|| "Loading…".to_string());
-        let acting = match &self.acting {
-            Some(Acting::Account(login)) => format!("as {login}"),
-            Some(Acting::Anonymous) => "not signed in".to_string(),
-            None => String::new(),
-        };
+        let title = self.title();
+        let acting = self.acting_text();
         let revision = self
             .revisions
             .as_ref()
@@ -1097,16 +1115,17 @@ async fn load(
         ),
         None => None,
     };
-    let acting = match account::decide(&link.owner, &link.repo, found.as_ref()) {
-        AccountDecision::Open(acting) => acting,
+    let (acting, guessed_among) = match account::decide(&link.owner, &link.repo, found.as_ref()) {
+        AccountDecision::Open(acting) => (acting, None),
         AccountDecision::Ask(logins) => {
-            // Until rozed asks which account to use, the first one signed in.
+            // Until rozed asks which account to use, the first one signed in, and the header
+            // says so.
             log::info!(
                 "{link}: several accounts can see it ({}); using {}",
                 logins.join(", "),
                 logins[0]
             );
-            Acting::Account(logins[0].clone())
+            (Acting::Account(logins[0].clone()), Some(logins.len()))
         }
         AccountDecision::Refuse(refusal) => return Err(refusal.into()),
     };
@@ -1117,7 +1136,10 @@ async fn load(
             Acting::Anonymous => "without signing in".to_string(),
         }
     );
-    this.update(cx, |this, cx| this.set_acting(acting.clone(), cx))?;
+    this.update(cx, |this, cx| {
+        this.guessed_among = guessed_among;
+        this.set_acting(acting.clone(), cx)
+    })?;
 
     // Signed in, the account's client reads the pull request in the account's queue, and its
     // token copies it.
@@ -1137,8 +1159,12 @@ async fn load(
         }
         _ => {
             let http = cx.update(|_, cx| cx.http_client())?;
+            let can_sign_in = match layer {
+                Some(_) => CanSignIn::Yes,
+                None => CanSignIn::No,
+            };
             (
-                github_api::fetch_pull_request(http, &link).await?,
+                github_api::fetch_pull_request(http, &link, can_sign_in).await?,
                 None,
                 None,
             )
@@ -1567,6 +1593,7 @@ mod tests {
         assert_eq!(status(&tab, cx), Status::Ready);
         tab.read_with(cx, |tab, _| {
             assert_eq!(tab.acting(), Some(&Acting::Account("rozed-bot".into())));
+            assert_eq!(tab.acting_text(), "as rozed-bot");
             let paths: Vec<_> = tab.files().rows().map(FileEntry::path).collect();
             assert_eq!(paths, ["a.rs"]);
         });
@@ -1605,6 +1632,44 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn with_several_accounts_and_none_chosen_the_header_says_it_took_the_first(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("acme/app", 1, &[], &[("a.rs", "a\n")]);
+        github.add_pull(pull);
+        github.let_see("gho_HOME", "acme/app");
+        github.let_see("gho_WORK", "acme/app");
+        sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.acting_text()),
+            "as home, the first of the 2 accounts that can see it"
+        );
+    }
+
+    #[gpui::test]
+    async fn a_poller_started_while_rozed_is_in_the_background_starts_slow(
+        cx: &mut TestAppContext,
+    ) {
+        let (_workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        sign_in(&github, &[("home", "gho_HOME")], cx).await;
+        let layer = cx.update(|_, cx| github_layer::ready(cx));
+        let layer = layer.await.unwrap();
+
+        layer.update(cx, |layer, cx| layer.set_foreground(false, cx));
+        let poller = layer.update(cx, |layer, cx| layer.poller("home", cx));
+
+        assert!(!poller.read_with(cx, |poller, _| poller.is_foreground()));
+    }
+
+    #[gpui::test]
     async fn when_no_account_can_check_it_the_tab_says_why_with_githubs_link(
         cx: &mut TestAppContext,
     ) {
@@ -1636,7 +1701,10 @@ mod tests {
                 .any(|request| request.ends_with("as nobody")),
             "{requests:#?}"
         );
-        tab.read_with(cx, |tab, _| assert_eq!(tab.acting(), None));
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.acting(), None);
+            assert_eq!(tab.title(), "Not opened");
+        });
     }
 
     #[gpui::test]
