@@ -68,6 +68,9 @@ pub(crate) enum Edge {
 }
 
 impl Edge {
+    /// The most any edge costs: a replacement with nothing in common.
+    pub(crate) const MAX_COST: u32 = 600;
+
     pub(crate) fn cost(self) -> u32 {
         match self {
             // Matching nodes is always best. Every cost is above zero, and a match between
@@ -569,6 +572,28 @@ mod tests {
         assert_eq!(similarity_percent("", ""), 100);
         assert_eq!(similarity_percent("abc", ""), 0);
         assert_eq!(similarity_percent("kitten", "sitting"), 57);
+    }
+
+    #[test]
+    fn no_edge_costs_more_than_the_most() {
+        let costliest = [
+            Edge::UnchangedNode {
+                depth_difference: u32::MAX,
+                probably_punctuation: true,
+            },
+            Edge::EnterUnchangedDelimiter {
+                depth_difference: u32::MAX,
+            },
+            Edge::ReplacedComment { levenshtein_pct: 0 },
+            Edge::ReplacedString { levenshtein_pct: 0 },
+            Edge::NovelAtomLhs,
+            Edge::EnterNovelDelimiterRhs,
+        ];
+
+        assert_eq!(
+            costliest.map(Edge::cost).into_iter().max(),
+            Some(Edge::MAX_COST)
+        );
     }
 
     #[test]

@@ -30,9 +30,6 @@
 //! that matches a whole subtree crosses a long way for a low cost. Finding smaller parts of the
 //! trees to diff (see [`super::unchanged`]) does more for speed.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-
 use super::changes::{Change, Changes};
 use super::graph::{Edge, Graph, Vertex, VertexId};
 use super::nodes::{NodeId, Syntax};
@@ -77,14 +74,12 @@ fn shortest_path(
         distance: 0,
         from: None,
     }];
-    // Cheapest first. Among equally cheap vertices, the last pushed comes first.
-    let mut heap = BinaryHeap::new();
-    let mut pushed: u32 = 0;
-    heap.push(Reverse((0, Reverse(pushed), start)));
+    let mut queue = BucketQueue::default();
+    queue.push(0, start);
     let mut neighbours = Vec::new();
 
     let end = loop {
-        let Some(Reverse((distance, _, current))) = heap.pop() else {
+        let Some((distance, current)) = queue.pop() else {
             unreachable!("the end is always reachable, by marking everything novel");
         };
         // An entry left behind when a cheaper route was found.
@@ -111,8 +106,7 @@ fn shortest_path(
                     distance,
                     from: Some((current, edge)),
                 };
-                pushed += 1;
-                heap.push(Reverse((distance, Reverse(pushed), next)));
+                queue.push(distance, next);
             }
         }
 
@@ -129,6 +123,51 @@ fn shortest_path(
     }
     route.reverse();
     Ok(route)
+}
+
+/// The vertices to visit, cheapest first, and among equally cheap ones the last pushed first.
+///
+/// A ring of buckets, one per distance (Dial's algorithm): Dijkstra's algorithm never pushes a
+/// vertex cheaper than the last it popped, nor dearer by more than the costliest edge, so the
+/// distances waiting fit in the ring, one to a bucket. difftastic uses a radix heap.
+struct BucketQueue {
+    buckets: Vec<Vec<VertexId>>,
+    /// The distance of the last vertex popped.
+    distance: u32,
+    len: usize,
+}
+
+impl Default for BucketQueue {
+    fn default() -> Self {
+        Self {
+            buckets: vec![Vec::new(); Edge::MAX_COST as usize + 1],
+            distance: 0,
+            len: 0,
+        }
+    }
+}
+
+impl BucketQueue {
+    fn push(&mut self, distance: u32, vertex: VertexId) {
+        debug_assert!((self.distance..=self.distance + Edge::MAX_COST).contains(&distance));
+        let index = distance as usize % self.buckets.len();
+        self.buckets[index].push(vertex);
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<(u32, VertexId)> {
+        if self.len == 0 {
+            return None;
+        }
+        loop {
+            let index = self.distance as usize % self.buckets.len();
+            if let Some(vertex) = self.buckets[index].pop() {
+                self.len -= 1;
+                return Some((self.distance, vertex));
+            }
+            self.distance += 1;
+        }
+    }
 }
 
 /// Marks the nodes an edge decides, at the vertex it leaves.
