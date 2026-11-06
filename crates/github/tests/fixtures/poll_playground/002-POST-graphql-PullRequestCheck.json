@@ -1,0 +1,69 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequestCheck",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 1
+    },
+    "query_sha256": "2e0c794b22d16bc7d562489ebdff6d69efb76af956d368fdd7bf619cdf21aa68"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4997",
+      "x-ratelimit-reset": "1793973997",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "3"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4997,
+          "used": 3,
+          "resetAt": "2026-11-06T14:06:37Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "updatedAt": "2026-11-06T08:15:07Z",
+            "state": "OPEN",
+            "isDraft": false,
+            "baseRefName": "main",
+            "baseRefOid": "6ce218eb1930c49db64d5744c76a6739d4525e82",
+            "headRefOid": "b046244d9569964088e952243e5e557312322488",
+            "reviewDecision": null,
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": null,
+            "mergeQueueEntry": null,
+            "timelineItems": {
+              "updatedAt": "2026-11-06T08:15:21Z",
+              "totalCount": 2
+            },
+            "commits": {
+              "totalCount": 1
+            },
+            "reviews": {
+              "totalCount": 0
+            },
+            "reviewThreads": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "comments": {
+              "totalCount": 0
+            },
+            "changedFiles": 1
+          }
+        }
+      }
+    }
+  }
+}

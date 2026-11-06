@@ -57,9 +57,23 @@ fails when a build script calls it from outside the repo, so cargo needs mise's 
 
 ```sh
 cargo build -p rozed
-cargo run -p rozed
+cargo run -p rozed -- https://github.com/sharkdp/fd/pull/2212           # a public pull request
+cargo run -p rozed -- --trust https://github.com/sharkdp/fd/pull/2212   # with rust-analyzer
 cargo test --workspace
 ```
+
+`rozed <pull request link>` copies the pull request into a partial clone per repository under
+`~/Library/Caches/rozed/repos/` and shows it in Zed's side-by-side diff, both sides read from git,
+with no language server. `--trust` also checks the head out under `checkouts/` and runs
+rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
+point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
+`docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Without a link,
+rozed shows its own `main.rs`.
+
+The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
+your git config, HTTPS only. Until rozed can sign in, it opens pull requests in private repositories
+with a token from `ROZED_GITHUB_TOKEN`, which it removes from its environment at launch so nothing
+it starts inherits it.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
@@ -76,7 +90,12 @@ cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 script/check-symlinks.sh
+script/check-zed-crates.sh
 ```
+
+`script/check-zed-crates.sh` fails when the set of Zed crates compiled into rozed changes. If the
+change is intended, run it with `--update`, update the crate list in `docs/spike.md`, and commit
+both.
 
 xtask is a separate workspace, so check it too when you change it:
 
@@ -106,6 +125,13 @@ Zed").
 1. `paths: use rozed's folders`. Sets `APP_NAME` to `"rozed"` in `crates/paths/src/paths.rs`, so
    rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
    and `~/Library/Logs/rozed`, never Zed's folders.
+2. `project: let an app ignore worktrees' own settings files`. Adds
+   `SettingsObserver::ignore_worktree_settings_files` and `Project::settings_observer`. rozed calls
+   it on every project, so a repository's `.zed/settings.json`, `.zed/tasks.json`,
+   `.zed/debug.json`, `.vscode/tasks.json` and `.vscode/launch.json` never apply, trusted or not.
+3. `project: let an app keep worktrees out of Recent Items`. Adds
+   `WorktreeStore::keep_out_of_recent_documents`, so rozed's checkouts never reach macOS's Recent
+   Items. Adding them there also kept rozed from quitting on some desktops.
 
 ### Cargo settings copied from Zed
 
@@ -145,6 +171,7 @@ submodule at it as in step 2.
 
 3. Run `cargo xtask sync-zed --seed-lock`.
 4. Build, fix what breaks, and update the patch list here.
+5. Run `script/check-zed-crates.sh` and review any Zed crates that come or go.
 
 ## Agent rules
 
