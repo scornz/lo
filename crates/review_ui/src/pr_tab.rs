@@ -66,6 +66,10 @@ actions!(
 
 const KEY_CONTEXT: &str = "PrTab";
 const FILE_LIST_CONTEXT: &str = "PrFileList";
+/// The tab outside any text box in it, such as a comment box: keys that type a character work
+/// here, so a text box still types them. The diff's own editors are the only full-size ones.
+/// Milestone 12 binds rozed's diff keys in a context deeper than vim's.
+const READING_CONTEXT: &str = "PrTab && !(Editor && mode != full)";
 
 /// The tab's keys. Panels toggle with Zed's keys for its docks.
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -73,12 +77,13 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-o", ToggleFileOrder, Some(KEY_CONTEXT)),
-        KeyBinding::new("e", ToggleViewed, Some(KEY_CONTEXT)),
-        KeyBinding::new("] f", NextFile, Some(KEY_CONTEXT)),
-        KeyBinding::new("[ f", PreviousFile, Some(KEY_CONTEXT)),
-        KeyBinding::new("] c", NextChange, Some(KEY_CONTEXT)),
-        KeyBinding::new("[ c", PreviousChange, Some(KEY_CONTEXT)),
+        // alt-o types ø.
+        KeyBinding::new("alt-o", ToggleFileOrder, Some(READING_CONTEXT)),
+        KeyBinding::new("e", ToggleViewed, Some(READING_CONTEXT)),
+        KeyBinding::new("] f", NextFile, Some(READING_CONTEXT)),
+        KeyBinding::new("[ f", PreviousFile, Some(READING_CONTEXT)),
+        KeyBinding::new("] c", NextChange, Some(READING_CONTEXT)),
+        KeyBinding::new("[ c", PreviousChange, Some(READING_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // Back and forward through where the diff's cursor has been (design §10), beside Zed's
         // ctrl-- and ctrl-_.
@@ -4071,6 +4076,70 @@ mod tests {
         let (in_file, row, listed) = cursor(&tab, &editor, cx);
         assert_eq!((in_file.as_deref(), row), (Some("src/a.rs"), second));
         assert_eq!(listed.as_deref(), Some("src/a.rs"));
+    }
+
+    #[gpui::test]
+    fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let stack = |contexts: &[&str]| -> Vec<gpui::KeyContext> {
+                contexts
+                    .iter()
+                    .map(|context| gpui::KeyContext::parse(context).unwrap())
+                    .collect()
+            };
+            let tab = ["Workspace", "Pane", "PrTab"];
+            let diff = stack(&[&tab[..], &["Editor mode=full multibuffer"]].concat());
+            let file_list = stack(&[&tab[..], &["PrFileList"]].concat());
+            // A comment box in the diff, as milestone 8 adds, or any other text box in the tab.
+            let text_box = stack(
+                &[
+                    &tab[..],
+                    &["Editor mode=full multibuffer", "Editor mode=auto_height"],
+                ]
+                .concat(),
+            );
+            let line = stack(&[&tab[..], &["Editor mode=single_line"]].concat());
+            let rozed = |input: &'static str, contexts: &[gpui::KeyContext]| {
+                let keystrokes: Vec<gpui::Keystroke> = input
+                    .split(' ')
+                    .map(|key| gpui::Keystroke::parse(key).unwrap())
+                    .collect();
+                let (bindings, pending) = keymap.bindings_for_input(&keystrokes, contexts);
+                let actions: Vec<&str> = bindings
+                    .iter()
+                    .map(|binding| binding.action().name())
+                    .filter(|name| name.starts_with("review_ui::"))
+                    .collect();
+                (actions, pending)
+            };
+
+            for (keys, action) in [
+                ("e", "review_ui::ToggleViewed"),
+                ("] f", "review_ui::NextFile"),
+                ("[ f", "review_ui::PreviousFile"),
+                ("] c", "review_ui::NextChange"),
+                ("[ c", "review_ui::PreviousChange"),
+                ("alt-o", "review_ui::ToggleFileOrder"),
+            ] {
+                assert_eq!(rozed(keys, &diff).0, [action], "{keys} in the diff");
+                assert_eq!(
+                    rozed(keys, &file_list).0,
+                    [action],
+                    "{keys} in the file list"
+                );
+                for contexts in [&text_box, &line] {
+                    assert_eq!(rozed(keys, contexts).0, [""; 0], "{keys} in a text box");
+                }
+            }
+            // A bracket types at once, not waiting for a second key.
+            for prefix in ["]", "["] {
+                assert!(rozed(prefix, &diff).1, "{prefix} waits in the diff");
+                assert!(!rozed(prefix, &text_box).1, "{prefix} types in a text box");
+            }
+        });
     }
 
     #[gpui::test]
