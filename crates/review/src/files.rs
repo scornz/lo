@@ -2,10 +2,12 @@
 //! (design §5, "File order", "Generated files", "Very large files").
 
 mod generated;
+mod kind;
 mod order;
 mod state;
 
 pub use generated::{Generated, generated, is_lockfile};
+pub use kind::{FileKind, kind};
 pub use order::path_order;
 pub use state::{InitialState, LARGE_FILE_LINES, initial_state};
 
@@ -37,4 +39,9 @@ impl ChangedFile {
     pub fn changed_lines(&self) -> u64 {
         u64::from(self.additions) + u64::from(self.deletions)
     }
+}
+
+/// A path's last component.
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }

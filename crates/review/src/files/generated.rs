@@ -1,6 +1,6 @@
 //! Generated files: those the repository marks `linguist-generated`, and lockfiles.
 
-use super::ChangedFile;
+use super::{ChangedFile, file_name};
 
 /// Why a file counts as generated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,11 +56,6 @@ pub fn generated(file: &ChangedFile) -> Option<Generated> {
         Some(false) => None,
         None => is_lockfile(&file.path).then_some(Generated::Lockfile),
     }
-}
-
-/// A path's last component.
-pub(super) fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
 }
 
 #[cfg(test)]
