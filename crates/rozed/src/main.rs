@@ -192,11 +192,13 @@ fn main() {
         })
         .detach();
 
-        if let Err(error) = open_window(app_state, cx) {
-            log::error!("{error:#}");
-            cx.quit();
+        match open_window(app_state, cx) {
+            Ok(()) => cx.activate(true),
+            Err(error) => {
+                log::error!("{error:#}");
+                cx.quit();
+            }
         }
-        cx.activate(true);
     });
 }
 
