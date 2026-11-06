@@ -33,8 +33,8 @@ mod user;
 pub mod viewed;
 
 pub use client::{
-    API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RestResponse,
-    user_agent,
+    API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RequestGate,
+    RestResponse, user_agent,
 };
 pub use error::{CLIENT_ID, GithubError, HelpLink, SsoHeader, approval_url};
 pub use graphql::{GraphQlError, GraphQlResponse};

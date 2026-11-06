@@ -45,6 +45,11 @@ pub fn user_agent() -> String {
 /// [`Accounts`]: crate::accounts::Accounts
 pub type OnUnauthorized = Arc<dyn Fn(Token) -> BoxFuture<'static, Option<Token>> + Send + Sync>;
 
+/// What a client waits for before each request, and holds until its answer is read: a turn in
+/// the account's request queue, for a read made of many requests that a write may go between
+/// (`poll::RequestQueue::gate`).
+pub type RequestGate = Arc<dyn Fn() -> BoxFuture<'static, Box<dyn Send>> + Send + Sync>;
+
 /// One account's client, or one without an account. Clones share the token and rate limits.
 #[derive(Clone)]
 pub struct GithubClient {
@@ -54,6 +59,7 @@ pub struct GithubClient {
     api_url: Arc<str>,
     state: Arc<Mutex<ClientState>>,
     on_unauthorized: Option<OnUnauthorized>,
+    gate: Option<RequestGate>,
 }
 
 /// What the account's responses have said about it.
@@ -125,6 +131,7 @@ impl GithubClient {
             api_url: API_URL.into(),
             state: Arc::default(),
             on_unauthorized: None,
+            gate: None,
         }
     }
 
@@ -133,6 +140,15 @@ impl GithubClient {
     /// token always sends it, even an empty one, which GitHub refuses.
     pub fn anonymous(http: Arc<dyn HttpClient>) -> Self {
         Self::with_token(http, None)
+    }
+
+    /// This client, waiting at `gate` before each request ([`RequestGate`]). It shares the token
+    /// and rate limits.
+    pub fn gated(&self, gate: RequestGate) -> Self {
+        Self {
+            gate: Some(gate),
+            ..self.clone()
+        }
     }
 
     /// Calls `hook` whenever GitHub refuses the token, retrying the request once with the token
@@ -236,6 +252,10 @@ impl GithubClient {
 
     /// Sends a request and reads the whole response, recording its rate limit and SSO header.
     async fn execute(&self, request: Request<AsyncBody>) -> Result<RestResponse, GithubError> {
+        let _turn = match &self.gate {
+            Some(gate) => Some(gate().await),
+            None => None,
+        };
         let response = self
             .http
             .send(request)

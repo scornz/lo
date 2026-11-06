@@ -1596,10 +1596,19 @@ async fn poll(
                         continue;
                     }
                 };
-                // The poll's requests start only once it holds the queue.
-                let result = queue
-                    .read(|| executor.spawn((*job).clone().run(client.clone())))
-                    .await;
+                // The poll's requests start only once it holds the queue. A read, which can be many
+                // requests, takes a turn for each, so a write can go between them.
+                let result = match &*job {
+                    Job::Read { .. } => {
+                        let gated = client.gated(queue.gate());
+                        executor.spawn((*job).clone().run(gated)).await
+                    }
+                    _ => {
+                        queue
+                            .read(|| executor.spawn((*job).clone().run(client.clone())))
+                            .await
+                    }
+                };
                 let writes = this.update(cx, |this, cx| {
                     this.finish(*job, ticket, result, &client, cx)
                 })?;

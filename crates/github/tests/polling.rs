@@ -2185,6 +2185,59 @@ async fn a_cached_read_waits_while_its_pull_request_isnt_open(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+async fn a_write_goes_between_the_requests_of_a_long_cached_read(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::with(
+        "read_yields",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    let runs = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        let runs = runs.clone();
+        // A read of three requests, a second each.
+        poller.read_cached(
+            pr(1),
+            move |client, _| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    for _ in 0..3 {
+                        client.get::<serde_json::Value>(&pr(1).rest_path()).await?;
+                    }
+                    Ok(Counted(1))
+                }
+            },
+            cx,
+        );
+    });
+    // The open PR's poll and the repository's take the first five seconds; the read starts at 5.
+    t.run_until(6);
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    let write = t.update(post_comment);
+    t.run_until(12);
+    write.await.unwrap();
+
+    let requests: Vec<(u64, String)> = (t.requests().into_iter())
+        .filter(|(secs, _)| (5..=8).contains(secs))
+        .collect();
+    assert_eq!(
+        requests,
+        log(&[
+            (5, "GET /pulls/1"),
+            (6, "GET /pulls/1"),
+            (7, "POST /issues/1/comments"),
+            (8, "GET /pulls/1"),
+        ])
+    );
+}
+
+#[gpui::test]
 async fn the_poller_notes_every_head_it_sees(cx: &mut TestAppContext) {
     let r = recorded();
     let pushed = "1111111111111111111111111111111111111111";
