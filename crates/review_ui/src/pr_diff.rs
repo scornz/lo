@@ -1607,7 +1607,7 @@ impl Target<'_> {
         );
         let hunks_only = rows.is_some();
         file.rows = rows;
-        file.images = images;
+        file.set_images(images);
         file.collapsed = collapsed.clone();
         file.whitespace_hidden = self.hide_whitespace;
         // A file that replaces another keeps whether it was folded and shown whole, and the
@@ -2864,7 +2864,10 @@ pub(crate) mod tests {
             );
             let images = plan.images.as_ref().unwrap();
             assert_eq!(images.old.as_ref().unwrap().format, gpui::ImageFormat::Svg);
-            assert_eq!(&*images.new.as_ref().unwrap().bytes, new.as_bytes());
+            assert_eq!(
+                images.new.as_ref().unwrap().bytes.as_deref(),
+                Some(new.as_bytes())
+            );
         }
     }
 

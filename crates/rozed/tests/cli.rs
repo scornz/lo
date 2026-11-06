@@ -128,3 +128,38 @@ fn an_argument_that_isnt_a_pull_request_link_is_refused_with_usage() {
         assert!(stderr.contains("usage: rozed"), "{stderr}");
     }
 }
+
+/// Runs `rozed --render-preview` on `request`, as the preview pool does, and returns its stdout.
+fn render_preview(request: &[u8]) -> Output {
+    let mut child = rozed_command(&["--render-preview"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("running rozed");
+    child.stdin.take().unwrap().write_all(request).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn render_preview_draws_an_image_and_never_starts_the_app() {
+    // The guard that stops a rozed started by another rozed is set, as it is for the helper:
+    // the helper must run anyway, and never open a window.
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="blue"/></svg>"#;
+    let output = render_preview(&[b"svg 2 2\n".as_slice(), svg].concat());
+    assert!(output.status.success(), "{output:?}");
+    let magic = b"\nROZED-PREVIEW-REPLY 1\nok 2 1\n";
+    assert!(output.stdout.starts_with(magic), "{output:?}");
+    // Two pixels, BGRA: blue first.
+    assert_eq!(
+        &output.stdout[magic.len()..],
+        &[255, 0, 0, 255, 255, 0, 0, 255]
+    );
+
+    let output = render_preview(b"bmp 2 2\n");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "\nROZED-PREVIEW-REPLY 1\nerr no format \"bmp\"\n"
+    );
+}

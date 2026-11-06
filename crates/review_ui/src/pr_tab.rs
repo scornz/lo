@@ -234,8 +234,8 @@ pub struct PrTab {
     _whitespace: Option<Task<()>>,
     /// Loads large files on a key, one task a path, each until it's done.
     loading: HashMap<String, Task<()>>,
-    /// Keeps the diff's images right as it goes side by side and back, and decodes a file's
-    /// images when it opens.
+    /// Keeps the diff's images right as it goes side by side and back, and stops decoding a
+    /// file's images when it folds.
     _diff_watch: Vec<Subscription>,
     show_file_list: bool,
     show_threads: bool,
@@ -1023,15 +1023,11 @@ impl PrTab {
             cx.observe_in(&editor, window, |_, diff, window, cx| {
                 shown_files::sync_side_by_side(&diff, window, cx)
             }),
-            cx.subscribe_in(
-                &editor,
-                window,
-                |_, diff, event: &EditorEvent, window, cx| {
-                    if let EditorEvent::BufferFoldToggled { ids, folded: false } = event {
-                        shown_files::opened(diff, ids, window, cx);
-                    }
-                },
-            ),
+            cx.subscribe_in(&editor, window, |_, diff, event: &EditorEvent, _, cx| {
+                if let EditorEvent::BufferFoldToggled { ids, folded } = event {
+                    shown_files::fold_toggled(diff, ids, *folded, cx);
+                }
+            }),
         ];
         if let Some(history) = self.nav_history.clone() {
             let rhs_editor = editor.read(cx).rhs_editor().clone();

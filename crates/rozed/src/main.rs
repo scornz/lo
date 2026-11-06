@@ -55,6 +55,10 @@ fn main() {
     let launched = Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // A pull request's images are decoded by rozed run as a helper process, which reads one
+        // image on stdin, writes its preview on stdout and exits. It's matched first: the helper
+        // runs inside rozed, and must never start the app or capture an environment.
+        Some(flag) if flag == review_ui::PREVIEW_HELPER_FLAG => review_ui::serve_preview_helper(),
         Some("--version") => {
             println!("rozed {}", version());
             return;

@@ -17,6 +17,7 @@ pub mod pr_banner;
 pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
+mod preview_pool;
 mod read_only;
 mod shown_files;
 pub mod tabs;
@@ -29,6 +30,7 @@ use github::db::RozedDb;
 use gpui::{App, Entity, Task};
 use workspace::Workspace;
 
+pub use image_preview::{HELPER_FLAG as PREVIEW_HELPER_FLAG, serve_helper as serve_preview_helper};
 pub use open_box::{OpenBox, OpenPullRequest};
 pub use pr_diff::Trust;
 pub use pr_link::PrLink;

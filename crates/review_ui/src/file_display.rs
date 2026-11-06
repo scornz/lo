@@ -188,12 +188,18 @@ pub(crate) fn binary_text(old: Option<u64>, new: Option<u64>) -> String {
     }
 }
 
-/// One side of a changed image, read from git. It's decoded only when it shows, and then only to a
-/// small preview (`image_preview`).
+/// The most memory reading an image's header may take.
+const HEADER_BUDGET: u64 = 16 * 1024 * 1024;
+
+/// One side of a changed image, read from git. Only its header is read here: it's decoded only when
+/// it shows, and then by a helper process to a small preview (`preview_pool`).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ImageSide {
     pub(crate) format: ImageFormat,
-    pub(crate) bytes: Arc<[u8]>,
+    /// Its size in bytes.
+    pub(crate) size: u64,
+    /// The image itself, until its preview is decoded.
+    pub(crate) bytes: Option<Arc<[u8]>>,
     /// Width and height in pixels, from the image's header. `None` for SVG.
     pub(crate) dimensions: Option<(u32, u32)>,
     /// How many frames a GIF has, counted from its blocks, when it has more than one. Only the
@@ -205,7 +211,7 @@ impl fmt::Debug for ImageSide {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImageSide")
             .field("format", &self.format)
-            .field("bytes", &self.bytes.len())
+            .field("size", &self.size)
             .field("dimensions", &self.dimensions)
             .field("frames", &self.frames)
             .finish()
@@ -222,7 +228,8 @@ impl ImageSide {
             let text = std::str::from_utf8(&bytes).ok()?;
             return text.contains("<svg").then(|| Self {
                 format: ImageFormat::Svg,
-                bytes: bytes.into(),
+                size: bytes.len() as u64,
+                bytes: Some(bytes.into()),
                 dimensions: None,
                 frames: None,
             });
@@ -239,16 +246,21 @@ impl ImageSide {
             image::ImageFormat::WebP => ImageFormat::Webp,
             _ => return None,
         };
-        let dimensions = image::ImageReader::with_format(Cursor::new(&bytes), found)
-            .into_dimensions()
-            .ok()?;
+        // Reading the header can mean inflating an embedded colour profile, which a few hundred
+        // kilobytes can make hundreds of megabytes: past the limit, it's skipped.
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(HEADER_BUDGET);
+        let mut reader = image::ImageReader::with_format(Cursor::new(&bytes), found);
+        reader.limits(limits);
+        let dimensions = reader.into_dimensions().ok()?;
         let frames = (format == ImageFormat::Gif)
             .then(|| crate::image_preview::gif_frames(&bytes))
             .flatten()
             .filter(|frames| *frames > 1);
         Some(Self {
             format,
-            bytes: bytes.into(),
+            size: bytes.len() as u64,
+            bytes: Some(bytes.into()),
             dimensions: Some(dimensions),
             frames,
         })
@@ -271,7 +283,7 @@ impl ImageSide {
         if let Some(frames) = self.frames {
             parts.push(format!("animated, {frames} frames"));
         }
-        parts.push(size_text(self.bytes.len() as u64));
+        parts.push(size_text(self.size));
         parts.join(", ")
     }
 }
@@ -443,6 +455,17 @@ pub(crate) mod tests {
             .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
             .unwrap();
         bytes
+    }
+
+    #[test]
+    fn reading_an_images_header_skips_a_huge_colour_profile() {
+        // 3 MB that inflate to 480 MiB as the header is read, without a limit.
+        let png = crate::image_preview::tests::png_of_zeros(1, 1, 8, Some(480 << 20));
+        let sampler = crate::preview_pool::tests::PeakSampler::start();
+        let side = ImageSide::new("profile.png", png).unwrap();
+        let grew = sampler.stop();
+        assert_eq!(side.dimensions, Some((1, 1)));
+        assert!(grew < 128 * 1024 * 1024, "grew {} MiB", grew >> 20);
     }
 
     #[test]
