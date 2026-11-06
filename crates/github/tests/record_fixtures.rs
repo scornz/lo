@@ -20,7 +20,8 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
 use github::record::RecordingHttpClient;
-use github::{Conditional, GithubClient, Token};
+use github::{Conditional, GithubClient, PullRef, PullSummary, RepoRef, Token};
+use serde::de::IgnoredAny;
 
 const REPO: &str = "rozed-dev/playground";
 
@@ -228,6 +229,104 @@ fn graphql_not_found() {
                 .pull_request("rozed-dev", "does-not-exist", 1)
                 .await
                 .unwrap_err();
+        },
+    );
+}
+
+/// What a conditional GET returned: its ETag, after checking it was a `200`.
+fn modified<T: std::fmt::Debug>(answer: Conditional<T>) -> Option<String> {
+    match answer {
+        Conditional::Modified { etag, .. } => etag,
+        Conditional::NotModified => panic!("expected a 200, got a 304"),
+    }
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn poll_playground() {
+    record_graphql(
+        "poll_playground",
+        "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (conditional \
+         GET, PullRequestCheck, then PullRequest the first time), PR #2 as a watched one \
+         (conditional GET), and the playground's open PRs (conditional GET of the list, then \
+         OpenPullRequests the first time)",
+        |client| async move {
+            let open = PullRef::new("rozed-dev", "playground", 1);
+            let watched = PullRef::new("rozed-dev", "playground", 2);
+            let repo = RepoRef::new("rozed-dev", "playground");
+            let (owner, name) = (repo.owner.as_str(), repo.name.as_str());
+
+            let open_etag = modified(
+                client
+                    .get_conditional::<PullSummary>(&open.rest_path(), None)
+                    .await
+                    .unwrap(),
+            );
+            let check = client.pull_request_check(owner, name, 1).await.unwrap();
+            client.pull_request(owner, name, 1).await.unwrap();
+            let watched_etag = modified(
+                client
+                    .get_conditional::<PullSummary>(&watched.rest_path(), None)
+                    .await
+                    .unwrap(),
+            );
+            let list_etag = modified(
+                client
+                    .get_conditional::<Vec<IgnoredAny>>(&repo.open_pulls_path(), None)
+                    .await
+                    .unwrap(),
+            );
+            client.open_pull_requests(owner, name).await.unwrap();
+
+            let unchanged = client
+                .get_conditional::<PullSummary>(&open.rest_path(), open_etag.as_deref())
+                .await
+                .unwrap();
+            assert_eq!(unchanged, Conditional::NotModified);
+            assert_eq!(
+                client.pull_request_check(owner, name, 1).await.unwrap(),
+                check
+            );
+            let unchanged = client
+                .get_conditional::<PullSummary>(&watched.rest_path(), watched_etag.as_deref())
+                .await
+                .unwrap();
+            assert_eq!(unchanged, Conditional::NotModified);
+            let unchanged = client
+                .get_conditional::<Vec<IgnoredAny>>(&repo.open_pulls_path(), list_etag.as_deref())
+                .await
+                .unwrap();
+            assert_eq!(unchanged, Conditional::NotModified);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn rest_pull_304_rate_limit() {
+    record(
+        "rest_pull_304_rate_limit",
+        "Whether a 304 costs rate limit: GET /rate_limit (itself free) around a plain GET of PR \
+         #1 and three conditional GETs answered 304",
+        |client| async move {
+            let pull = PullRef::new("rozed-dev", "playground", 1);
+            let rate_limit = || client.get::<serde_json::Value>("/rate_limit");
+            rate_limit().await.unwrap();
+            let etag = modified(
+                client
+                    .get_conditional::<IgnoredAny>(&pull.rest_path(), None)
+                    .await
+                    .unwrap(),
+            );
+            rate_limit().await.unwrap();
+            for _ in 0..3 {
+                let answer = client
+                    .get_conditional::<IgnoredAny>(&pull.rest_path(), etag.as_deref())
+                    .await
+                    .unwrap();
+                assert_eq!(answer, Conditional::NotModified);
+            }
+            rate_limit().await.unwrap();
         },
     );
 }

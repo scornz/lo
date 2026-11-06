@@ -30,6 +30,33 @@ fn a_conditional_get_returns_not_modified_when_nothing_changed() {
     assert!(client.rate_limits().core().is_some());
 }
 
+/// Recorded alone, with `GET /rate_limit` (itself free) before and after: the plain GET cost 1,
+/// and three 304s cost nothing.
+#[test]
+fn a_304_costs_no_rate_limit() {
+    let http = ReplayHttpClient::cassette("rest_pull_304_rate_limit");
+    let client = GithubClient::new(http, Token::new("gho_FAKE"));
+    let core_used = || {
+        let limits: serde_json::Value = block_on(client.get("/rate_limit")).unwrap();
+        limits["resources"]["core"]["used"].as_u64().unwrap()
+    };
+    let before = core_used();
+    let Conditional::Modified { etag, .. } =
+        block_on(client.get_conditional::<serde_json::Value>(PULL, None)).unwrap()
+    else {
+        panic!("expected the PR");
+    };
+    let after_200 = core_used();
+    for _ in 0..3 {
+        let answer =
+            block_on(client.get_conditional::<serde_json::Value>(PULL, etag.as_deref())).unwrap();
+        assert_eq!(answer, Conditional::NotModified);
+    }
+    let after_304s = core_used();
+    assert_eq!(after_200, before + 1);
+    assert_eq!(after_304s, after_200);
+}
+
 #[test]
 fn user_reads_the_login_and_scopes() {
     let http = ReplayHttpClient::cassette("user");
