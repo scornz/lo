@@ -54,6 +54,8 @@ pub(crate) struct ShownFile {
     pub(crate) collapsed: Option<Collapsed>,
     /// Whether the whole file shows, rather than its changes with the lines around them.
     pub(crate) whole: bool,
+    /// Whether it was folded when it was added, so a fold the reviewer changed shows.
+    initial_folded: bool,
     /// Whether its diff hides changes to whitespace alone.
     pub(crate) whitespace_hidden: bool,
     /// The image blocks shown for it, in the right-hand editor and the left-hand one.
@@ -80,6 +82,7 @@ impl ShownFile {
             decoding: None,
             collapsed: None,
             whole: false,
+            initial_folded: false,
             whitespace_hidden: false,
             image_blocks: Vec::new(),
         }
@@ -267,6 +270,8 @@ pub(crate) fn add(
 ) {
     let buffer_id = file.buffer_id;
     let collapsed = file.collapsed.clone();
+    let mut file = file;
+    file.initial_folded = fold;
     let replaced = update(diff, cx, |files, headers| {
         headers.set_collapsed(buffer_id, collapsed);
         let replaced = files.files.insert(path.clone(), file)?;
@@ -292,6 +297,53 @@ pub(crate) fn add(
         start_decode(diff, &path, window, cx);
     }
     show_images(diff, &path, window, cx);
+}
+
+/// Opens or folds each of `to`'s files as the reviewer left it in `from`, the diff it replaces,
+/// and shows it whole if they asked: what they chose wins over `to`'s own rules, which apply only
+/// to the files they didn't touch. The file at `cursor` never folds under them.
+pub(crate) fn carry_over(
+    from: &Entity<SplittableEditor>,
+    to: &Entity<SplittableEditor>,
+    cursor: Option<&str>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let from_rhs = from.read(cx).rhs_editor().clone();
+    let chosen: HashMap<String, (bool, bool)> = read(from, cx, |files| {
+        files
+            .files
+            .iter()
+            .filter_map(|(path, file)| {
+                let folded = from_rhs.read(cx).is_buffer_folded(file.buffer_id, cx);
+                let touched = folded != file.initial_folded || file.whole;
+                let under_cursor = cursor == Some(path.as_str()) && !folded;
+                (touched || under_cursor).then(|| (path.clone(), (folded, file.whole)))
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    let to_rhs = to.read(cx).rhs_editor().clone();
+    for (path, (folded, whole)) in chosen {
+        let Some((buffer_id, was_whole)) = read(to, cx, |files| {
+            files.get(&path).map(|file| (file.buffer_id, file.whole))
+        })
+        .flatten() else {
+            continue;
+        };
+        if whole != was_whole {
+            update(to, cx, |files, _| {
+                if let Some(file) = files.files.get_mut(&path) {
+                    file.whole = whole;
+                }
+            });
+            show_rows(to, &path, Some(folded), window, cx);
+        } else if folded {
+            to_rhs.update(cx, |rhs, cx| rhs.fold_buffers([buffer_id], cx));
+        } else {
+            to_rhs.update(cx, |rhs, cx| rhs.unfold_buffer(buffer_id, cx));
+        }
+    }
 }
 
 /// The path of the file the diff's cursor is in. The right-hand editor holds the cursor; side by
@@ -1187,6 +1239,115 @@ mod tests {
         assert_eq!((hunks("a.txt", cx), hunks("b.txt", cx)), (1, 2));
         assert!(!is_folded(&diff, "a.txt", cx));
         assert_eq!(collapsed_label(&diff, "a.txt", cx), None);
+    }
+
+    /// GitHub's entry for `path`, holding [`lines`] of `name` with line `line` changed, with
+    /// three lines around it.
+    fn github_file(path: &str, name: &str, line: u32) -> github::files::PullFile {
+        let start = line - 3;
+        let mut patch = format!("@@ -{start},7 +{start},7 @@");
+        for unchanged in start..line {
+            patch.push_str(&format!("\n {name} {unchanged}"));
+        }
+        patch.push_str(&format!("\n-{name} {line}\n+{name} {line} changed"));
+        for unchanged in line + 1..=line + 3 {
+            patch.push_str(&format!("\n {name} {unchanged}"));
+        }
+        github::files::PullFile {
+            filename: path.to_string(),
+            status: github::files::FileStatus::Modified,
+            additions: 1,
+            deletions: 1,
+            changes: 2,
+            patch: Some(patch),
+            previous_filename: None,
+            blob_url: None,
+            contents_url: None,
+        }
+    }
+
+    /// Shows GitHub's diff of `files` in `tab`, and returns it.
+    fn show_github(
+        tab: &Entity<PrTab>,
+        files: Vec<github::files::PullFile>,
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
+        tab.update_in(cx, |tab, window, cx| {
+            let source = crate::api_diff::GithubDiff {
+                link: PULL.parse().unwrap(),
+                title: format!("{PULL}: test"),
+                repo_name: "repo".into(),
+                head: None,
+            };
+            tab.show_github_files(source, files, window, cx)
+        });
+        cx.run_until_parked();
+        let diff = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        cx.update(|window, cx| window.focus(&diff.focus_handle(cx), cx));
+        cx.run_until_parked();
+        diff
+    }
+
+    #[gpui::test]
+    async fn the_local_copys_diff_keeps_what_the_reviewer_opened_and_folded(
+        cx: &mut TestAppContext,
+    ) {
+        let (tab, cx) = tab(cx).await;
+        let names = [
+            ("Cargo.lock", "lock"),
+            ("api.pb.go", "api"),
+            ("gen.pb.go", "gen"),
+            ("b.txt", "b"),
+        ];
+        let github = show_github(
+            &tab,
+            names
+                .iter()
+                .map(|(path, name)| github_file(path, name, 20))
+                .collect(),
+            cx,
+        );
+        let folded = |diff: &Entity<SplittableEditor>, cx: &mut VisualTestContext| {
+            names.map(|(path, _)| is_folded(diff, path, cx))
+        };
+        // GitHub's diff knows lockfiles by name, but not what .gitattributes says.
+        assert_eq!(folded(&github, cx), [true, false, false, false]);
+        // The reviewer opens the lockfile, and reads api.pb.go.
+        select(&github, "Cargo.lock", cx);
+        cx.simulate_keystrokes("alt-a");
+        select(&github, "api.pb.go", cx);
+
+        let base: Vec<String> = names.iter().map(|(_, name)| lines(name, 40)).collect();
+        let head: Vec<String> = names
+            .iter()
+            .map(|(_, name)| changed(name, 40, 20))
+            .collect();
+        let entries = |texts: &[String]| -> Vec<(&str, Vec<u8>)> {
+            names
+                .iter()
+                .zip(texts)
+                .map(|((path, _), text)| (*path, text.clone().into_bytes()))
+                .collect()
+        };
+        let (base, head) = (entries(&base), entries(&head));
+        let mut head: Vec<Entry> = head
+            .iter()
+            .map(|(path, text)| Entry::File(path, text))
+            .collect();
+        head.push(Entry::File(
+            ".gitattributes",
+            b"*.pb.go linguist-generated\n",
+        ));
+        let base: Vec<Entry> = base
+            .iter()
+            .map(|(path, text)| Entry::File(path, text))
+            .collect();
+        let (local, _copy) = show(&tab, &base, &head, cx);
+        assert_ne!(local, github);
+
+        // The lockfile stays open, and api.pb.go, with the cursor in it, doesn't fold; gen.pb.go,
+        // which the reviewer didn't touch, follows .gitattributes.
+        assert_eq!(folded(&local, cx), [false, false, true, false]);
     }
 
     #[gpui::test]

@@ -604,6 +604,9 @@ impl PrTab {
             self.created_at.unwrap_or(now),
         ));
         self.status = Status::Loading("Loading the diff…".into());
+        // The list may reorder, as files its new entries say are generated go last; the file
+        // selected stays selected and in view.
+        self.scroll_to_selected();
         cx.notify();
         self.files.review_positions()
     }
@@ -1075,6 +1078,12 @@ impl PrTab {
             ),
             None => (None, None),
         };
+        // Files stay open or folded as the reviewer left them, before the view scrolls to the
+        // same line.
+        if let Some(old) = self.diff.clone() {
+            let at_cursor = shown_files::file_at_cursor(&old, cx);
+            shown_files::carry_over(&old, &editor, at_cursor.as_deref(), window, cx);
+        }
         self.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         if let Some(position) = &position
             && !pr_diff::scroll_to(&editor, position, window, cx)
@@ -3075,6 +3084,43 @@ mod tests {
             marks(&two, cx)[0],
             ("a.rs".to_string(), Some(ViewedState::Dismissed))
         );
+    }
+
+    #[gpui::test]
+    async fn the_file_list_keeps_its_selection_when_the_local_copy_reorders_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let head: Oid = "2".repeat(40).parse().unwrap();
+        let files = [
+            changed("a.pb.go", Change::Modified),
+            changed("b.rs", Change::Modified),
+        ];
+        let entries = |generated: Option<bool>| -> Vec<FileEntry> {
+            files
+                .iter()
+                .map(|file| {
+                    let is_pb = file.display_path().ends_with(".pb.go");
+                    FileEntry::from_local(file, generated.filter(|_| is_pb))
+                })
+                .collect()
+        };
+        tab.update(cx, |tab, cx| {
+            tab.copied(entries(None), &head, cx);
+            tab.files.select_path("a.pb.go");
+        });
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.files().selected_row()),
+            Some(0)
+        );
+
+        // .gitattributes marks a.pb.go generated, so it lists last, still selected.
+        tab.update(cx, |tab, cx| tab.copied(entries(Some(true)), &head, cx));
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.files().selected().map(FileEntry::path), Some("a.pb.go"));
+            assert_eq!(tab.files().selected_row(), Some(1));
+        });
     }
 
     #[gpui::test]
