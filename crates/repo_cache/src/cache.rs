@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::Error;
 use crate::git::{Auth, Git, GitCommand, Location, Token};
 use crate::lock::RepoLock;
 use crate::repo::Repo;
+use crate::{Error, Oid, checkout};
 
 /// rozed's local copies of repositories, in one folder (`~/Library/Caches/rozed`):
 ///
@@ -130,7 +130,7 @@ impl RepoCache {
     }
 
     /// The lock held while writing to `owner/repo`'s clone or its checkouts.
-    fn lock_path(&self, owner: &str, repo: &str) -> PathBuf {
+    pub(crate) fn lock_path(&self, owner: &str, repo: &str) -> PathBuf {
         self.locks_dir(owner)
             .join(format!("{}.lock", repo.to_ascii_lowercase()))
     }
@@ -245,8 +245,12 @@ impl RepoCache {
     }
 
     /// A git command on the clone at `git_dir`.
-    fn git(&self, git_dir: &Path) -> GitCommand {
+    pub(crate) fn git(&self, git_dir: &Path) -> GitCommand {
         self.env.command(Location::Clone(git_dir), None)
+    }
+
+    pub(crate) fn git_version(&self) -> crate::GitVersion {
+        self.env.git.version()
     }
 
     /// How much disk space the cache takes, in bytes.
@@ -278,8 +282,9 @@ impl RepoCache {
 
     /// Removes the clones nobody opened, fetched into or checked out from for `max_age`,
     /// [`RepoCache::UNUSED_FOR`] at launch, with their checkouts, and checkouts left without a
-    /// clone. A clone being written to, or open in any rozed, is skipped. Returns the
-    /// `owner/repo` of each clone removed.
+    /// clone. Of the clones kept, it removes checkouts unused for
+    /// [`RepoCache::CHECKOUTS_UNUSED_FOR`]. A clone being written to, or open in any rozed, is
+    /// skipped. Returns the `owner/repo` of each clone removed.
     pub fn remove_unused(&self, max_age: Duration) -> Result<Vec<String>, Error> {
         let now = SystemTime::now();
         let is_stale = |git_dir: &Path| {
@@ -292,6 +297,7 @@ impl RepoCache {
         for (owner, repo) in self.clones()? {
             let git_dir = self.repo_dir(&owner, &repo);
             if !is_stale(&git_dir) {
+                self.remove_unused_checkouts(&owner, &repo, now)?;
                 continue;
             }
             let Some(_lock) = RepoLock::try_acquire(&self.lock_path(&owner, &repo))? else {
@@ -330,8 +336,72 @@ impl RepoCache {
     /// How long a clone can go unopened before [`RepoCache::remove_unused`] removes it at launch.
     pub const UNUSED_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+    /// How long a checkout can go unused before [`RepoCache::remove_unused`] removes it, since
+    /// each is a full copy of a head's files.
+    pub const CHECKOUTS_UNUSED_FOR: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+    /// Removes the checkouts of `owner/repo` nobody used for [`RepoCache::CHECKOUTS_UNUSED_FOR`],
+    /// unless the clone is being written to or is open in any rozed.
+    fn remove_unused_checkouts(
+        &self,
+        owner: &str,
+        repo: &str,
+        now: SystemTime,
+    ) -> Result<(), Error> {
+        let git_dir = self.repo_dir(owner, repo);
+        let checkouts_dir = self.repo_checkouts_dir(owner, repo);
+        let stale = || -> Result<Vec<PathBuf>, Error> {
+            let mut stale = Vec::new();
+            for pull_dir in real_dirs(&checkouts_dir)? {
+                // Earlier, `pull-<n>` was itself the checkout; now each head has one in it.
+                let checkouts = if pull_dir.join(".git").is_file() {
+                    vec![pull_dir]
+                } else {
+                    let mut checkouts = real_dirs(&pull_dir)?;
+                    checkouts.retain(|dir| {
+                        file_name(dir).is_some_and(|name| name.parse::<Oid>().is_ok())
+                    });
+                    checkouts
+                };
+                for checkout in checkouts {
+                    let used = checkout::worktree_git_dir(&git_dir, &checkout)
+                        .and_then(|worktree| last_used(&worktree))
+                        .or_else(|| fs::metadata(&checkout).and_then(|m| m.modified()).ok());
+                    let unused_for = used.and_then(|used| now.duration_since(used).ok());
+                    if unused_for.is_none_or(|unused_for| unused_for > Self::CHECKOUTS_UNUSED_FOR) {
+                        stale.push(checkout);
+                    }
+                }
+            }
+            Ok(stale)
+        };
+        if stale()?.is_empty() {
+            return Ok(());
+        }
+        let Some(_lock) = RepoLock::try_acquire(&self.lock_path(owner, repo))? else {
+            return Ok(());
+        };
+        let Some(_in_use) = RepoLock::try_acquire(&self.in_use_path(owner, repo))? else {
+            return Ok(());
+        };
+        // Checked again: used while we waited?
+        let stale = stale()?;
+        for checkout in &stale {
+            self.env.trash(checkout)?;
+            if let Some(pull_dir) = checkout.parent() {
+                remove_dir_if_empty(pull_dir);
+            }
+        }
+        if !stale.is_empty() {
+            // Forget the checkouts whose folders are gone.
+            self.git(&git_dir).args(["worktree", "prune"]).run()?;
+            log::info!("removed {} unused checkouts of {owner}/{repo}", stale.len());
+        }
+        Ok(())
+    }
+
     /// The `(owner, repo)` of every clone, as their folders name them (lowercase).
-    fn clones(&self) -> Result<Vec<(String, String)>, Error> {
+    pub(crate) fn clones(&self) -> Result<Vec<(String, String)>, Error> {
         let mut clones = Vec::new();
         for owner in real_dirs(&self.repos_dir())? {
             for clone in real_dirs(&owner)? {
@@ -450,8 +520,8 @@ pub(crate) fn trash(root: &Path, path: &Path) -> Result<(), Error> {
     remove_dir_all_if_exists(&trash)
 }
 
-/// When the clone at `git_dir` was last opened, from its stamp, or the folder's own time if the
-/// stamp is missing.
+/// When the clone or checkout whose git dir is `git_dir` was last used, from its stamp, or the
+/// folder's own time if the stamp is missing.
 fn last_used(git_dir: &Path) -> Option<SystemTime> {
     let stamp = fs::read_to_string(git_dir.join(LAST_USED_FILE))
         .ok()
@@ -539,7 +609,7 @@ fn check_name(what: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
-/// Records that the clone at `git_dir` was used at `time`.
+/// Records that the clone or checkout whose git dir is `git_dir` was used at `time`.
 pub(crate) fn stamp_last_used(git_dir: &Path, time: SystemTime) -> Result<(), Error> {
     let seconds = time
         .duration_since(UNIX_EPOCH)

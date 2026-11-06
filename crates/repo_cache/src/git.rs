@@ -267,6 +267,13 @@ impl Git {
         self.version
     }
 
+    /// This git, as if it were `version`, for tests of what rozed does differently on older git.
+    #[cfg(test)]
+    pub(crate) fn with_version(mut self, version: GitVersion) -> Self {
+        self.version = version;
+        self
+    }
+
     /// A git command with rozed's environment (see the module docs), working on the repository
     /// at `location`, which git is always told so it never looks for one. `home` is the empty
     /// folder git gets as its `HOME`, and git never looks for a repository in `ceiling` or above

@@ -330,3 +330,72 @@ fn fetching_or_checking_out_keeps_a_clone() {
         Vec::<String>::new()
     );
 }
+
+/// Makes the checkout in `dir` look last used `days` ago. Its stamp is in its git dir, which its
+/// `.git` file names, so nothing in the checkout itself changes.
+fn checkout_used_days_ago(dir: &Path, days: u64) {
+    let dot_git = fs::read_to_string(dir.join(".git")).unwrap();
+    let git_dir = dot_git.strip_prefix("gitdir:").unwrap().trim();
+    stamp_days_ago(Path::new(git_dir), days);
+}
+
+#[test]
+fn removes_checkouts_unused_for_two_weeks() {
+    let server = server();
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "old", None).unwrap();
+    let head = fetch(&repo);
+    let base = git(repo.git_dir(), &["rev-parse", "refs/rozed/pull/1/base"])
+        .parse()
+        .unwrap();
+    let stale = repo.checkout(1, &head).unwrap();
+    let fresh = repo.checkout(2, &base).unwrap();
+    checkout_used_days_ago(&stale, 15);
+    checkout_used_days_ago(&fresh, 13);
+    let git_dir = repo.git_dir().to_path_buf();
+    drop(repo);
+
+    // No clone goes, but the stale checkout does.
+    assert_eq!(
+        cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
+        Vec::<String>::new()
+    );
+
+    assert!(!stale.exists());
+    assert!(!stale.parent().unwrap().exists(), "its empty pull-1 folder");
+    assert!(fresh.join("README.md").is_file());
+    let worktrees = git(&git_dir, &["worktree", "list", "--porcelain"]);
+    assert!(!worktrees.contains(stale.to_str().unwrap()), "{worktrees}");
+    assert_eq!(worktrees.matches("worktree ").count(), 2, "{worktrees}");
+}
+
+#[test]
+fn a_checkout_of_a_clone_still_open_is_kept() {
+    let server = server();
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "old", None).unwrap();
+    let head = fetch(&repo);
+    let checkout = repo.checkout(1, &head).unwrap();
+    checkout_used_days_ago(&checkout, 15);
+
+    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+
+    assert!(checkout.join("README.md").is_file());
+    drop(repo);
+}
+
+#[test]
+fn checking_a_head_out_again_keeps_its_checkout() {
+    let server = server();
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "old", None).unwrap();
+    let head = fetch(&repo);
+    let checkout = repo.checkout(1, &head).unwrap();
+    checkout_used_days_ago(&checkout, 15);
+    repo.checkout(1, &head).unwrap();
+    drop(repo);
+
+    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+
+    assert!(checkout.join("README.md").is_file());
+}

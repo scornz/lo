@@ -5,6 +5,9 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 
+use std::time::SystemTime;
+
+use crate::cache::stamp_last_used;
 use crate::git::Location;
 use crate::{Error, Oid, Repo};
 
@@ -43,7 +46,10 @@ impl Repo {
                 ]))
                 .and_then(|_| self.run(self.git_at(checkout).args(["clean", "-ffdxq"])));
             match moved {
-                Ok(_) => return Ok(dir),
+                Ok(_) => {
+                    stamp_last_used(&git_dir, SystemTime::now())?;
+                    return Ok(dir);
+                }
                 // A checkout in a bad state is rebuilt below.
                 Err(error) => log::warn!("rebuilding {}: {error}", dir.display()),
             }
@@ -59,6 +65,9 @@ impl Repo {
                 .arg(&dir)
                 .arg(head.as_str()),
         )?;
+        if let Some(git_dir) = self.worktree_git_dir(&dir) {
+            stamp_last_used(&git_dir, SystemTime::now())?;
+        }
         Ok(dir)
     }
 
@@ -104,13 +113,19 @@ impl Repo {
         crate::oid::parse_output(&output).map(Some)
     }
 
-    /// The git dir of the checkout in `dir`, if it's one of this clone's, judged from its `.git`
-    /// file rather than by running git there, which could find some other repository.
+    /// The git dir of the checkout in `dir`, if it's one of this clone's.
     fn worktree_git_dir(&self, dir: &Path) -> Option<PathBuf> {
-        let dot_git = fs::read_to_string(dir.join(".git")).ok()?;
-        let worktree_git_dir = dot_git.strip_prefix("gitdir:")?;
-        let worktree_git_dir = fs::canonicalize(worktree_git_dir.trim()).ok()?;
-        let worktrees = fs::canonicalize(self.git_dir().join("worktrees")).ok()?;
-        (worktree_git_dir.parent() == Some(worktrees.as_path())).then_some(worktree_git_dir)
+        worktree_git_dir(self.git_dir(), dir)
     }
+}
+
+/// The git dir of the checkout in `dir`, if it's one of the clone at `clone`'s, judged from its
+/// `.git` file rather than by running git there, which could find some other repository. It
+/// holds the checkout's last-used stamp too.
+pub(crate) fn worktree_git_dir(clone: &Path, dir: &Path) -> Option<PathBuf> {
+    let dot_git = fs::read_to_string(dir.join(".git")).ok()?;
+    let worktree_git_dir = dot_git.strip_prefix("gitdir:")?;
+    let worktree_git_dir = fs::canonicalize(worktree_git_dir.trim()).ok()?;
+    let worktrees = fs::canonicalize(clone.join("worktrees")).ok()?;
+    (worktree_git_dir.parent() == Some(worktrees.as_path())).then_some(worktree_git_dir)
 }

@@ -40,6 +40,7 @@ mod git;
 #[cfg(test)]
 mod http_tests;
 mod lock;
+mod maintain;
 mod oid;
 mod progress;
 mod repo;
