@@ -10,15 +10,14 @@ use anyhow::Context as _;
 
 use editor::scroll::Autoscroll;
 use editor::{Anchor, Direction, Editor, EditorEvent, SelectionEffects, SplittableEditor};
-use futures::FutureExt as _;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
 use github::viewed::ViewedRecords;
 use github::{GithubClient, GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
-    Window, actions, uniform_list,
+    AnyElement, App, AsyncApp, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle,
+    WeakEntity, Window, actions, uniform_list,
 };
 use language::{Capability, Point};
 use project::WorktreeId;
@@ -1037,6 +1036,19 @@ impl PrTab {
             }
         }
         let (mark, github_path) = (toggle.mark, toggle.path.clone());
+        let written = ViewedWrite {
+            record: match (toggle.mark, &self.head) {
+                (true, Some(head)) => RecordChange::Record(head.clone()),
+                (true, None) => RecordChange::Keep,
+                (false, _) => RecordChange::Forget,
+            },
+            toggle,
+            pressed_at: SystemTime::now(),
+            records: self.records.clone(),
+            login: poller.read(cx).login().to_string(),
+            pull: pull.clone(),
+            workspace: self.workspace.clone(),
+        };
         let write = poller.update(cx, |poller, cx| {
             poller.write(
                 pull,
@@ -1050,58 +1062,37 @@ impl PrTab {
                 cx,
             )
         });
-        let head = self.head.clone();
         cx.spawn(async move |this, cx| {
             let result = write.await;
-            this.update(cx, |this, cx| this.viewed_written(toggle, head, result, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.viewed_written(&written, result.is_ok(), cx)
+            })
+            .ok();
+            // The tab may have closed, which the write, this Mac's record and the toast outlive.
+            written.finish(result, cx).await;
         })
         .detach();
         cx.notify();
     }
 
-    /// A toggle's write finished: on success this Mac records or forgets where the file was
-    /// viewed; on failure the file shows GitHub's mark again and a toast says why.
-    fn viewed_written(
-        &mut self,
-        toggle: Toggle,
-        head: Option<String>,
-        result: Result<(), GithubError>,
-        cx: &mut Context<Self>,
-    ) {
-        self.marks.finish(&toggle, result.is_ok());
+    /// A toggle's write finished: the file shows the new mark, or GitHub's again if the write
+    /// failed, and on success the tab knows where this Mac records the file was viewed.
+    fn viewed_written(&mut self, written: &ViewedWrite, succeeded: bool, cx: &mut Context<Self>) {
+        self.marks.finish(&written.toggle, succeeded);
         self.files.set_viewed(&self.marks.shown());
-        cx.notify();
-        let Some((poller, pull)) = self.watched.clone() else {
-            return;
-        };
-        let login = poller.read(cx).login().to_string();
-        if let Err(error) = result {
-            log::warn!("{pull}: {}: {error}", toggle.path);
-            self.toast(write_failed(&toggle, &login, &error), cx);
-            return;
+        if succeeded {
+            let path = written.toggle.path.clone();
+            match &written.record {
+                RecordChange::Record(head) => {
+                    self.viewed_at.insert(path, head.clone());
+                }
+                RecordChange::Forget => {
+                    self.viewed_at.remove(&path);
+                }
+                RecordChange::Keep => {}
+            }
         }
-        let Some(records) = self.records.clone() else {
-            return;
-        };
-        let path = toggle.path;
-        let write = match head.filter(|_| toggle.mark) {
-            Some(head) => {
-                self.viewed_at.insert(path.clone(), head.clone());
-                let now = SystemTime::now();
-                async move { records.record(&login, &pull, &path, &head, now).await }.boxed_local()
-            }
-            None => {
-                self.viewed_at.remove(&path);
-                async move { records.forget(&login, &pull, &path).await }.boxed_local()
-            }
-        };
-        cx.spawn(async move |_, _| {
-            if let Err(error) = write.await {
-                log::error!("recording where a file was viewed: {error:#}");
-            }
-        })
-        .detach();
+        cx.notify();
     }
 
     fn toast(&self, message: String, cx: &mut Context<Self>) {
@@ -1471,6 +1462,74 @@ impl PrTab {
 
 /// The toast that says why a viewed mark couldn't be set or cleared.
 struct ViewedMarkToast;
+
+/// A toggle's write to GitHub, with what's needed once it finishes, whether or not its tab is
+/// still open.
+struct ViewedWrite {
+    toggle: Toggle,
+    /// What this Mac records about the file once GitHub took the write.
+    record: RecordChange,
+    /// When `e` was pressed, which the record keeps.
+    pressed_at: SystemTime,
+    records: Option<ViewedRecords>,
+    login: String,
+    pull: PullRef,
+    workspace: WeakEntity<Workspace>,
+}
+
+/// How a successful write changes this Mac's record of where a file was viewed.
+enum RecordChange {
+    /// Marked viewed with this head on screen.
+    Record(String),
+    /// Cleared.
+    Forget,
+    /// Marked, but the head on screen isn't known.
+    Keep,
+}
+
+impl ViewedWrite {
+    /// The write finished: on success this Mac records or forgets where the file was viewed; on
+    /// failure a toast says why.
+    async fn finish(self, result: Result<(), GithubError>, cx: &mut AsyncApp) {
+        let Self {
+            toggle,
+            record,
+            pressed_at,
+            records,
+            login,
+            pull,
+            workspace,
+        } = self;
+        if let Err(error) = result {
+            log::warn!("{pull}: {}: {error}", toggle.path);
+            let message = write_failed(&toggle, &login, &error);
+            cx.update(|cx| {
+                show_toast(
+                    &workspace,
+                    NotificationId::unique::<ViewedMarkToast>(),
+                    message,
+                    None,
+                    cx,
+                )
+            });
+            return;
+        }
+        let Some(records) = records else {
+            return;
+        };
+        let path = &toggle.path;
+        let written = match record {
+            RecordChange::Record(head) => {
+                records.record(&login, &pull, path, &head, pressed_at).await
+            }
+            RecordChange::Forget => records.forget(&login, &pull, path).await,
+            RecordChange::Keep => Ok(()),
+        };
+        if let Err(error) = written {
+            log::error!("{pull}: recording where {path} was viewed: {error:#}");
+        }
+    }
+}
 
 /// A toast's button: its label and what it does.
 type ToastButton = (&'static str, Box<dyn Fn(&mut Window, &mut App)>);
@@ -2755,6 +2814,8 @@ mod tests {
         github: std::sync::Arc<WriteGithub>,
         records: ViewedRecords,
         pull: PullRef,
+        /// The account's poller, which rozed's GitHub layer keeps after its tabs close.
+        _poller: Entity<Poller>,
     }
 
     /// Signs `tab` in as the bot, with `recorded` already in its records of viewed files.
@@ -2812,10 +2873,11 @@ mod tests {
         });
         tab.update(cx, |tab, cx| {
             tab.set_acting(Acting::Account(BOT.into()), cx);
-            tab.watch(poller, pull.clone(), Some(records.clone()), cx);
+            tab.watch(poller.clone(), pull.clone(), Some(records.clone()), cx);
         });
         cx.run_until_parked();
         SignedIn {
+            _poller: poller,
             github,
             records,
             pull,
@@ -3283,6 +3345,51 @@ mod tests {
         assert_eq!(
             github.recorded(),
             HashMap::from([("old.rs".to_string(), HEAD.to_string())])
+        );
+    }
+
+    #[gpui::test]
+    async fn writes_waiting_when_the_tab_closes_still_record_and_say_why_they_failed(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_then_close",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Done);
+        github.github.answer(WriteAnswer::Done);
+        github.github.answer(WriteAnswer::Forbidden);
+
+        // Writes are a second apart, so the second and third wait while the tab closes.
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        close(&workspace, tab, cx);
+        assert!(tabs(&workspace, cx).is_empty());
+        cx.executor().advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+
+        assert_eq!(github.github.mutations().len(), 3);
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([
+                ("a.rs".to_string(), HEAD.to_string()),
+                ("b.rs".to_string(), HEAD.to_string()),
+            ])
+        );
+        assert_eq!(
+            toasts(cx),
+            [
+                "Couldn't mark c.rs viewed: rozed-bot isn't allowed to (Resource not accessible by \
+              integration). It shows GitHub's mark again."
+            ]
         );
     }
 
