@@ -48,6 +48,7 @@ use repo_cache::{
     RepoCache, Token,
 };
 
+use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
 use crate::github_api::PullRequest;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
@@ -815,6 +816,9 @@ pub(crate) struct FilePlan {
     /// The head's rows that show, when only they're known, as from GitHub's patch: each range
     /// shows as it is, and can't be expanded. `None` shows each change with the lines around it.
     pub(crate) rows: Option<Vec<Range<u32>>>,
+    /// GitHub's hunks, which Zed's diff of the two sides must lie inside. When it doesn't, adding
+    /// the file fails with [`OutsideGithubsHunks`] and shows nothing.
+    pub(crate) hunks: Option<Vec<HunkRows>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -867,6 +871,7 @@ impl FilePlan {
             warning: None,
             badge: None,
             rows: None,
+            hunks: None,
         }
     }
 
@@ -880,6 +885,7 @@ impl FilePlan {
             warning: None,
             badge: None,
             rows: None,
+            hunks: None,
         }
     }
 
@@ -887,6 +893,14 @@ impl FilePlan {
     pub(crate) fn with_rows(self, rows: Vec<Range<u32>>) -> Self {
         Self {
             rows: Some(rows),
+            ..self
+        }
+    }
+
+    /// Shows the file only if Zed's diff of it lies inside GitHub's `hunks`.
+    pub(crate) fn inside(self, hunks: Vec<HunkRows>) -> Self {
+        Self {
+            hunks: Some(hunks),
             ..self
         }
     }
@@ -1088,7 +1102,7 @@ impl Target<'_> {
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Shown> {
         let path = RelPath::from_unix_str(path)?.into_arc();
-        let rows = plan.rows;
+        let (rows, hunks) = (plan.rows, plan.hunks);
         let (buffer, old_text, folded) = match plan.content {
             Content::Diff {
                 old_text,
@@ -1166,6 +1180,12 @@ impl Target<'_> {
                 diff
             }
         };
+        if let Some(hunks) = &hunks {
+            diff.read_with(cx, |diff, cx| {
+                api_diff::check_hunks(&diff.snapshot(cx), &snapshot, hunks)
+            })
+            .map_err(OutsideGithubsHunks)?;
+        }
         cx.update(|_, cx| follow_language(&buffer, &diff, cx))?;
 
         // Only the rows asked for, or each change with the lines around it.

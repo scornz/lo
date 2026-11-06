@@ -153,7 +153,8 @@ pub fn parse_patch(patch: &str) -> Result<Patch, PatchError> {
     }
     if remaining != (0, 0) {
         return Err(PatchError {
-            line: count,
+            // The last line, not the empty one after a final newline.
+            line: count - usize::from(count > 1 && patch.ends_with('\n')),
             problem: format!(
                 "the patch ends {} lines of the base and {} of the head short of its last hunk",
                 remaining.0, remaining.1
@@ -330,6 +331,10 @@ mod tests {
     fn a_patch_that_doesnt_add_up_is_an_error() {
         let short = parse_patch("@@ -1,3 +1,3 @@\n a\n-b").unwrap_err();
         assert!(short.problem.contains("short of its last hunk"), "{short}");
+        assert_eq!(short.line, 3);
+        // The error names the last line, not the empty one after a final newline.
+        let short = parse_patch("@@ -1,4 +1,4 @@\n a\n-b\n").unwrap_err();
+        assert_eq!(short.line, 3);
 
         let long = parse_patch("@@ -1 +1 @@\n-a\n+b\n+c").unwrap_err();
         assert_eq!(long.line, 4);

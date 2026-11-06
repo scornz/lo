@@ -2974,6 +2974,8 @@ mod tests {
         );
         assert!(text.contains("a 47\n") && text.contains("b 63"), "{text}");
         assert!(!text.contains("a 46\n") && !text.contains("b 64"), "{text}");
+        // The rows between hunks never show.
+        assert!(!text.contains('\u{E000}'), "{text:?}");
         let paths: Vec<_> = tab.read_with(cx, |tab, _| {
             tab.files()
                 .rows()
@@ -3026,6 +3028,40 @@ mod tests {
 
         tab.update(cx, |tab, cx| tab.copy_retried(None, cx));
         assert!(banners(&tab, cx).is_empty());
+    }
+
+    #[gpui::test]
+    async fn a_file_whose_diff_doesnt_match_githubs_shows_githubs_patch(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        // 94c4db2's poll cassette, whose swapped entries Zed's diff pairs across GitHub's hunks.
+        let patch =
+            include_str!("../tests/fixtures/github_patches/94c4db2-open-pull-requests.json.patch");
+        let swapped = PullFile {
+            filename: "cassette.json".into(),
+            additions: 50,
+            deletions: 50,
+            changes: 100,
+            patch: Some(patch.into()),
+            ..github_file("cassette.json", 10)
+        };
+
+        show_github_files(&tab, vec![github_file("a.txt", 50), swapped], cx);
+
+        let diff = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        let text = shown_text(&diff, cx);
+        assert!(text.contains("a 50 changed"), "{text}");
+        assert!(text.contains(patch), "{text}");
+        let warnings: Vec<_> = diff.read_with(cx, |diff, cx| {
+            let editor = diff.rhs_editor().read(cx);
+            let headers = editor.addon::<pr_diff::FileHeaders>().unwrap();
+            headers
+                .warnings
+                .values()
+                .map(|warning| warning.label.to_string())
+                .collect()
+        });
+        assert_eq!(warnings, [api_diff::GITHUBS_PATCH]);
     }
 
     #[gpui::test]
