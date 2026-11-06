@@ -585,7 +585,17 @@ fn a_pinned_replay_survives_a_repack_and_fetches() {
     // it does with git older than 2.52.
     let moved = f.remote.git_dir.with_extension("moved");
     fs::rename(&f.remote.git_dir, &moved).unwrap();
-    assert_eq!(f.cache.maintain(0).unwrap(), ["owner/repo"]);
+    // A child process another test thread starts as the fetch lets go of the clone's lock can
+    // hold it for an instant, and maintenance skips a locked clone, so this allows a moment.
+    let mut repacked = Vec::new();
+    for _ in 0..100 {
+        repacked = f.cache.maintain(0).unwrap();
+        if !repacked.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(repacked, ["owner/repo"]);
     git(
         f.repo.git_dir(),
         &["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
