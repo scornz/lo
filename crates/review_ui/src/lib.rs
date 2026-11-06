@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod api_diff;
+mod file_display;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
@@ -14,6 +15,7 @@ pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
 mod read_only;
+mod shown_files;
 pub mod tabs;
 pub mod trust;
 

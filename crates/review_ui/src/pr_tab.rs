@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::anyhow;
 use editor::scroll::Autoscroll;
-use editor::{Editor, SelectionEffects, SplittableEditor};
+use editor::{Editor, EditorSettings, SelectionEffects, SplittableEditor};
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
 use github::{GithubClient, PullRef, Target};
@@ -18,8 +18,9 @@ use gpui::{
     Window, actions, uniform_list,
 };
 use language::Capability;
-use repo_cache::{ChangedFile, Oid};
+use repo_cache::Oid;
 use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
+use settings::{DiffViewStyle, Settings as _, SettingsStore};
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 use util::rel_path::RelPath;
 use workspace::item::{Item, ItemEvent, TabContentParams};
@@ -33,6 +34,7 @@ use crate::github_layer;
 use crate::pr_banner::{self, BannerKind, Banners};
 use crate::pr_diff::{self, CopyProgress, Trust};
 use crate::pr_link::PrLink;
+use crate::shown_files::{self, Expanded};
 use crate::tabs::{TabKey, find_tab};
 
 actions!(
@@ -44,15 +46,31 @@ actions!(
         ToggleThreads,
         /// Switches the file list between review order and path order.
         ToggleFileOrder,
+        /// Side by side, moves the cursor to the diff's other side.
+        SwitchSide,
+        /// Shows the diff inline or side by side.
+        ToggleDiffLayout,
+        /// Hides changes to whitespace alone, or shows them again.
+        ToggleWhitespace,
+        /// Opens the current file when it's collapsed, loads it when it's too large to have
+        /// loaded, and otherwise shows the whole file or only its changes.
+        ExpandFile,
     ]
 );
 
 const KEY_CONTEXT: &str = "PrTab";
 const FILE_LIST_CONTEXT: &str = "PrFileList";
+/// The diff's editors, inside the tab, where `tab` would otherwise indent.
+const DIFF_CONTEXT: &str = "PrTab > Editor";
 
-/// The tab's keys. Panels toggle with Zed's keys for its docks.
+/// The tab's keys. Panels toggle with Zed's keys for its docks. Bind them after Zed's keymap, so
+/// `tab` beats Zed's in the diff's editors.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("tab", SwitchSide, Some(DIFF_CONTEXT)),
+        KeyBinding::new("alt-v", ToggleDiffLayout, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-w", ToggleWhitespace, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-a", ExpandFile, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
@@ -173,6 +191,18 @@ pub struct PrTab {
     banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
     diff_source: Option<DiffSource>,
+    /// Inline or side by side, for this tab's diffs: the setting's at first, then the key's.
+    diff_style: DiffViewStyle,
+    /// The setting's style when last seen, to tell a change to it from any other settings change.
+    setting_style: DiffViewStyle,
+    /// Whether changes to whitespace alone are hidden.
+    hide_whitespace: bool,
+    /// Brings the diff's files in line with `hide_whitespace`.
+    _whitespace: Option<Task<()>>,
+    /// Loads a large file on a key.
+    _load_file: Option<Task<()>>,
+    /// Keeps the diff's images right as it goes side by side and back.
+    _diff_layout: Option<Subscription>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab.
@@ -204,6 +234,17 @@ impl PrTab {
         });
         let banners = cx.new(|_| Banners::default());
         let on_banners = cx.observe(&banners, |_, _, cx| cx.notify());
+        let style = EditorSettings::get_global(cx).diff_view_style;
+        // A diff goes back to the setting's style on any change to settings; the tab's style
+        // follows a change to the setting itself, and otherwise puts its own back.
+        let on_settings = cx.observe_global_in::<SettingsStore>(window, |this, window, cx| {
+            let setting = EditorSettings::get_global(cx).diff_view_style;
+            if setting != this.setting_style {
+                this.setting_style = setting;
+                this.diff_style = setting;
+            }
+            cx.defer_in(window, |this, window, cx| this.apply_diff_style(window, cx));
+        });
         Self {
             key: TabKey::new(link),
             trust,
@@ -221,13 +262,19 @@ impl PrTab {
             banners,
             diff: None,
             diff_source: None,
+            diff_style: style,
+            setting_style: style,
+            hide_whitespace: false,
+            _whitespace: None,
+            _load_file: None,
+            _diff_layout: None,
             show_file_list: true,
             show_threads: true,
             watched: None,
             opened: Instant::now(),
             _load: None,
             _github_diff: None,
-            _subscriptions: vec![on_focus, on_banners],
+            _subscriptions: vec![on_focus, on_banners, on_settings],
         }
     }
 
@@ -286,6 +333,16 @@ impl PrTab {
     /// Where the diff shown comes from, once one shows.
     pub fn diff_source(&self) -> Option<DiffSource> {
         self.diff_source
+    }
+
+    /// Whether the tab's diffs show inline or side by side.
+    pub fn diff_style(&self) -> DiffViewStyle {
+        self.diff_style
+    }
+
+    /// Whether the tab's diffs hide changes to whitespace alone.
+    pub fn hides_whitespace(&self) -> bool {
+        self.hide_whitespace
     }
 
     pub fn is_file_list_shown(&self) -> bool {
@@ -358,14 +415,14 @@ impl PrTab {
     }
 
     /// The local copy listed the pull request's files: lists them, builds its revisions, and
-    /// returns where each file goes in the diff, by its index in `files`.
+    /// returns where each file goes in the diff, by its index in `entries`.
     pub(crate) fn copied(
         &mut self,
-        files: &[ChangedFile],
+        entries: Vec<FileEntry>,
         head: &Oid,
         cx: &mut Context<Self>,
     ) -> Vec<usize> {
-        self.list(files.iter().map(FileEntry::from_local).collect());
+        self.list(entries);
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let now = SystemTime::now();
@@ -384,10 +441,10 @@ impl PrTab {
         self.files.review_positions()
     }
 
-    /// Where each of the local copy's `files` goes in its diff, by its index in `files`, without
-    /// listing them yet.
-    pub(crate) fn positions_of(&self, files: &[ChangedFile]) -> Vec<usize> {
-        FileList::new(files.iter().map(FileEntry::from_local).collect()).review_positions()
+    /// Where each of the local copy's `entries` goes in its diff, by its index in `entries`,
+    /// without listing them yet.
+    pub(crate) fn positions_of(&self, entries: &[FileEntry]) -> Vec<usize> {
+        FileList::new(entries.to_vec()).review_positions()
     }
 
     /// Lists `entries` in place of the files listed so far, in the same order and keeping the
@@ -553,8 +610,10 @@ impl PrTab {
     }
 
     /// Every file is in the local copy's diff.
-    pub(crate) fn diff_loaded(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn diff_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_status(Status::Ready, cx);
+        // A file added while the whitespace key was pressed may show the other way.
+        self.sync_whitespace(window, cx);
     }
 
     /// Loading failed with `error`. GitHub's diff, if it shows, stays, with a banner saying why
@@ -587,6 +646,9 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
+        self._diff_layout = Some(cx.observe_in(&editor, window, |_, diff, window, cx| {
+            shown_files::sync_side_by_side(&diff, window, cx)
+        }));
         self.diff = Some(editor.clone());
         self.diff_source = Some(source);
         if source == DiffSource::LocalCopy {
@@ -701,6 +763,96 @@ impl PrTab {
         self.files.toggle_order();
         self.scroll_to_selected();
         cx.notify();
+    }
+
+    /// `tab`: side by side, moves the cursor to the diff's other side.
+    fn switch_side(&mut self, _: &SwitchSide, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            shown_files::switch_side(diff, window, cx);
+        }
+    }
+
+    /// Shows the tab's diffs inline or side by side.
+    fn toggle_diff_layout(
+        &mut self,
+        _: &ToggleDiffLayout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.diff_style = match self.diff_style {
+            DiffViewStyle::Split => DiffViewStyle::Unified,
+            DiffViewStyle::Unified => DiffViewStyle::Split,
+        };
+        self.apply_diff_style(window, cx);
+        cx.notify();
+    }
+
+    fn apply_diff_style(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            shown_files::set_style(diff, self.diff_style, window, cx);
+        }
+    }
+
+    /// Hides changes to whitespace alone, or shows them again.
+    fn toggle_whitespace(
+        &mut self,
+        _: &ToggleWhitespace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.hide_whitespace = !self.hide_whitespace;
+        self.sync_whitespace(window, cx);
+        cx.notify();
+    }
+
+    /// Brings each of the diff's files in line with whether whitespace changes are hidden.
+    pub(crate) fn sync_whitespace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(diff) = self.diff.clone() else {
+            return;
+        };
+        let hide = self.hide_whitespace;
+        // Replacing the task stops the one before, so no file is changed by two at once.
+        self._whitespace = Some(cx.spawn_in(window, async move |_, cx| {
+            shown_files::hide_whitespace(diff, hide, cx).await
+        }));
+    }
+
+    /// Opens, loads or shows the whole of the file the diff's cursor is in.
+    fn expand_file(&mut self, _: &ExpandFile, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(diff) = self.diff.clone() else {
+            return;
+        };
+        let Some(path) = shown_files::file_at_cursor(&diff, cx) else {
+            return;
+        };
+        if shown_files::expand(&diff, &path, window, cx) != Expanded::Load {
+            return;
+        }
+        let Some(project) = self
+            .workspace
+            .upgrade()
+            .map(|workspace| workspace.read(cx).project().clone())
+        else {
+            return;
+        };
+        let hide = self.hide_whitespace;
+        self._load_file = Some(cx.spawn_in(window, async move |this, cx| {
+            let loaded = pr_diff::load_large_file(diff, project, path.clone(), hide, cx).await;
+            if let Err(error) = loaded {
+                log::error!("can't load {path}: {error:#}");
+                this.update(cx, |this, cx| {
+                    this.banners.update(cx, |banners, cx| {
+                        banners.show(
+                            BannerKind::LoadFileFailed,
+                            Severity::Warning,
+                            format!("rozed couldn't load {path}: {error:#}"),
+                            cx,
+                        )
+                    })
+                })
+                .ok();
+            }
+        }));
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
@@ -871,7 +1023,8 @@ impl PrTab {
             Status::Failed(error) => Some((IconName::Warning, Color::Error, error.clone())),
         };
         let github = self.diff_source == Some(DiffSource::GitHub);
-        if step.is_none() && !github {
+        let whitespace = self.hide_whitespace;
+        if step.is_none() && !github && !whitespace {
             return None;
         }
         Some(
@@ -886,13 +1039,24 @@ impl PrTab {
                         .child(Icon::new(icon).size(IconSize::Small).color(color))
                         .child(Label::new(text).size(LabelSize::Small).color(color))
                 })))
-                .when(github, |this| {
-                    this.child(
-                        Label::new("GitHub's diff: changed lines only")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
-                })
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .when(whitespace, |this| {
+                            this.child(
+                                Label::new("Whitespace changes hidden")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                        })
+                        .when(github, |this| {
+                            this.child(
+                                Label::new("GitHub's diff: changed lines only")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                        }),
+                )
                 .into_any_element(),
         )
     }
@@ -1251,6 +1415,10 @@ impl Render for PrTab {
             .on_action(cx.listener(Self::toggle_file_list))
             .on_action(cx.listener(Self::toggle_threads))
             .on_action(cx.listener(Self::toggle_file_order))
+            .on_action(cx.listener(Self::switch_side))
+            .on_action(cx.listener(Self::toggle_diff_layout))
+            .on_action(cx.listener(Self::toggle_whitespace))
+            .on_action(cx.listener(Self::expand_file))
             .size_full()
             .bg(colors.editor_background)
             .child(self.render_header(cx))
@@ -1373,7 +1541,7 @@ mod tests {
 
     use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
-    use repo_cache::{Change, FileMode, FileVersion, LineCounts};
+    use repo_cache::{Change, ChangedFile, FileMode, FileVersion, LineCounts};
     use workspace::MultiWorkspace;
 
     use std::sync::Arc;
@@ -1490,6 +1658,14 @@ mod tests {
         }
     }
 
+    /// The file list's entries for `files`, none marked generated.
+    fn entries(files: &[ChangedFile]) -> Vec<FileEntry> {
+        files
+            .iter()
+            .map(|file| FileEntry::from_local(file, None))
+            .collect()
+    }
+
     #[gpui::test]
     async fn a_pull_request_opens_in_a_tab_that_fills_in_as_it_loads(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
@@ -1517,7 +1693,7 @@ mod tests {
             changed("tests/main.rs", Change::Added),
         ];
         let head: Oid = "2".repeat(40).parse().unwrap();
-        let positions = tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        let positions = tab.update(cx, |tab, cx| tab.copied(entries(&files), &head, cx));
         cx.run_until_parked();
 
         assert_eq!(title(cx), "fd#2212 Honor explicit use-jemalloc req…");
@@ -1582,7 +1758,7 @@ mod tests {
             changed("a.rs", Change::Modified),
             changed("b.rs", Change::Modified),
         ];
-        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        tab.update(cx, |tab, cx| tab.copied(entries(&files), &head, cx));
         // A changed title makes the workspace report the active item changed, which comes back
         // to the tab; the same details again must not, or the two would loop.
         let active_item_changes = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -1676,7 +1852,7 @@ mod tests {
             changed("a.json", Change::Modified),
         ];
         let head: Oid = "2".repeat(40).parse().unwrap();
-        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        tab.update(cx, |tab, cx| tab.copied(entries(&files), &head, cx));
         let shown = |cx: &mut VisualTestContext| {
             tab.read_with(cx, |tab, _| {
                 (tab.is_file_list_shown(), tab.is_threads_panel_shown())

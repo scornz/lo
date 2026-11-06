@@ -19,8 +19,9 @@ use github::{GithubClient, GithubError, PullRef};
 use gpui::{AppContext as _, AsyncWindowContext, WeakEntity};
 use ui::SharedString;
 
+use crate::file_display::{Collapsed, initial_collapse};
 use crate::file_list::{FileChange, FileEntry};
-use crate::pr_diff::{self, FileHeaders, FilePlan, NewSide, Target, Warning};
+use crate::pr_diff::{self, FileHeader, FilePlan, NewSide, Target, Warning};
 use crate::pr_link::PrLink;
 use crate::pr_tab::PrTab;
 
@@ -76,10 +77,11 @@ pub(crate) async fn show(
             async move { files.iter().map(plan).collect::<Vec<_>>() }
         })
         .await;
-    let workspace = tab.read_with(cx, |tab, _| tab.workspace().clone())?;
+    let (workspace, style) =
+        tab.read_with(cx, |tab, _| (tab.workspace().clone(), tab.diff_style()))?;
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
-    let (_, editor) = pr_diff::new_diff_editor(&workspace, &project, &source.title, cx)?;
+    let (_, editor) = pr_diff::new_diff_editor(&workspace, &project, &source.title, style, cx)?;
     let entries = files.iter().map(file_entry).collect();
     let positions = tab.update_in(cx, |tab, window, cx| {
         tab.show_github_diff(entries, editor.clone(), window, cx)
@@ -89,37 +91,32 @@ pub(crate) async fn show(
         return Ok(());
     };
 
-    let target = Target {
+    let mut target = Target {
         repo_name: &source.repo_name,
         project: &project,
         checkout: None,
         languages: &languages,
         editor: &editor,
+        hide_whitespace: false,
     };
-    let mut headers = FileHeaders::default();
     for (index, (file, plan)) in files.iter().zip(plans).enumerate() {
+        target.hide_whitespace = tab.read_with(cx, |tab, _| tab.hides_whitespace())?;
         let (position, path) = (positions[index], file.filename.as_str());
         let deleted = file.status == FileStatus::Removed;
-        let shown = match target.add_file(position, path, deleted, plan, cx).await {
+        let shown = match target
+            .add_file(position, path, deleted, plan, header(file), cx)
+            .await
+        {
             Ok(shown) => Ok(shown),
             Err(error) => {
                 let plan = FilePlan::failed(&error);
-                target.add_file(position, path, deleted, plan, cx).await
+                target
+                    .add_file(position, path, deleted, plan, header(file), cx)
+                    .await
             }
         };
-        match shown {
-            Ok(shown) => {
-                headers
-                    .statuses
-                    .insert(shown.buffer_id, status(file.status));
-                if let Some(badge) = shown.badge {
-                    headers.badges.insert(shown.buffer_id, badge);
-                }
-                if let Some(warning) = shown.warning {
-                    headers.warnings.insert(shown.buffer_id, warning);
-                }
-            }
-            Err(error) => log::error!("{link}: can't show {path} from GitHub's diff: {error:#}"),
+        if let Err(error) = shown {
+            log::error!("{link}: can't show {path} from GitHub's diff: {error:#}");
         }
         if index == 0 {
             log::info!(
@@ -128,17 +125,26 @@ pub(crate) async fn show(
             );
         }
     }
-    editor.update(cx, |editor, cx| {
-        editor
-            .rhs_editor()
-            .update(cx, |editor, _| editor.register_addon(headers))
-    });
+    // A file added while the whitespace key was pressed may show the other way.
+    tab.update_in(cx, |tab, window, cx| tab.sync_whitespace(window, cx))?;
     log::info!(
         "{link}: GitHub's diff of {} files shown {:?} after launch",
         files.len(),
         launched.elapsed()
     );
     Ok(())
+}
+
+/// What a file's header says about GitHub's change to it.
+fn header(file: &PullFile) -> FileHeader {
+    FileHeader {
+        status: status(file.status),
+        renamed_from: file
+            .previous_filename
+            .clone()
+            .filter(|_| file.status == FileStatus::Renamed)
+            .map(Into::into),
+    }
 }
 
 /// The status a file's header shows for GitHub's.
@@ -221,6 +227,7 @@ fn push_line(text: &mut String, rows: &mut u32, line: &str) {
 pub(crate) const NOT_IN_GITHUBS_DIFF: &str = "Not in GitHub's diff";
 
 /// What `file` shows in GitHub's diff: its hunks, or a placeholder until the local copy is ready.
+/// It starts collapsed as the local copy's would (`file_display::initial_collapse`).
 pub(crate) fn plan(file: &PullFile) -> FilePlan {
     let added = file.status == FileStatus::Added;
     let deleted = file.status == FileStatus::Removed;
@@ -239,9 +246,10 @@ pub(crate) fn plan(file: &PullFile) -> FilePlan {
             format!("rozed couldn't read GitHub's diff of this file ({error})"),
         ),
         // GitHub gives no patch for a rename or a change of mode alone.
-        _ if file.changes == 0 && file.status == FileStatus::Renamed => {
-            FilePlan::placeholder("(renamed without changes)", deleted, false)
-        }
+        _ if file.changes == 0 && file.status == FileStatus::Renamed => FilePlan {
+            collapsed: Some(Collapsed::NoChanges),
+            ..FilePlan::placeholder("(renamed without changes)", deleted)
+        },
         _ if file.changes == 0 => left_out(
             deleted,
             "GitHub shows no diff of this file: it's binary, or no lines changed".to_string(),
@@ -255,8 +263,12 @@ pub(crate) fn plan(file: &PullFile) -> FilePlan {
             ),
         ),
     };
+    // GitHub's list says nothing of `.gitattributes` or sizes, so lockfiles by name and files
+    // with too many changed lines.
+    let collapsed = initial_collapse(&file_entry(file).file, true);
     FilePlan {
         badge: badge(file),
+        collapsed: collapsed.or(plan.collapsed),
         ..plan
     }
 }
@@ -271,16 +283,14 @@ fn left_out(deleted: bool, why: String) -> FilePlan {
         ..FilePlan::placeholder(
             format!("({why}. It shows once the local copy is ready.)"),
             deleted,
-            false,
         )
     }
 }
 
-/// What a file's header says about the change besides its status.
+/// What a file's header says about the change besides its status and a rename.
 fn badge(file: &PullFile) -> Option<SharedString> {
     let from = file.previous_filename.as_deref();
     match (file.status, from) {
-        (FileStatus::Renamed, Some(from)) => Some(format!("renamed from {from}").into()),
         (FileStatus::Copied, Some(from)) => Some(format!("copied from {from}").into()),
         (FileStatus::Changed, _) => Some("type or mode changed".into()),
         _ => None,
@@ -471,14 +481,51 @@ mod tests {
     }
 
     #[test]
+    fn lockfiles_start_collapsed_in_githubs_diff_too() {
+        let mut lockfile = file(FileStatus::Modified, Some("@@ -1 +1 @@\n-a\n+b"));
+        lockfile.filename = "web/pnpm-lock.yaml".into();
+        assert_eq!(
+            plan(&lockfile).collapsed,
+            Some(Collapsed::Generated(review::files::Generated::Lockfile))
+        );
+        assert_eq!(
+            plan(&file(FileStatus::Modified, Some("@@ -1 +1 @@\n-a\n+b"))).collapsed,
+            None
+        );
+    }
+
+    #[test]
     fn a_rename_says_where_from() {
         let mut renamed = file(FileStatus::Renamed, None);
         renamed.previous_filename = Some("src/old.rs".into());
         (renamed.additions, renamed.deletions, renamed.changes) = (0, 0, 0);
-        let plan = plan(&renamed);
-        assert_eq!(placeholder(&plan), "(renamed without changes)");
-        assert_eq!(plan.warning, None);
-        assert_eq!(plan.badge.as_deref(), Some("renamed from src/old.rs"));
+        let unchanged = plan(&renamed);
+        assert_eq!(placeholder(&unchanged), "(renamed without changes)");
+        assert_eq!(unchanged.warning, None);
+        assert_eq!(unchanged.badge, None);
+        assert_eq!(unchanged.collapsed, Some(Collapsed::NoChanges));
+        // The header shows "src/old.rs →" before the new path.
+        assert_eq!(header(&renamed).renamed_from.as_deref(), Some("src/old.rs"));
+
+        // With changes, it shows them, and says where it came from the same way.
+        let mut edited = file(FileStatus::Renamed, Some("@@ -1 +1 @@\n-a\n+b"));
+        edited.previous_filename = Some("src/old.rs".into());
+        assert_eq!(
+            plan(&edited).content,
+            Content::Diff {
+                old_text: Some("a\n".into()),
+                new: NewSide::Git("b\n".into())
+            }
+        );
+        assert_eq!(header(&edited).renamed_from.as_deref(), Some("src/old.rs"));
+        // A copy isn't a rename: its badge says where from.
+        let mut copied = edited.clone();
+        copied.status = FileStatus::Copied;
+        assert_eq!(header(&copied).renamed_from, None);
+        assert_eq!(
+            plan(&copied).badge.as_deref(),
+            Some("copied from src/old.rs")
+        );
 
         let entry = file_entry(&renamed);
         assert_eq!(entry.change, FileChange::Renamed);

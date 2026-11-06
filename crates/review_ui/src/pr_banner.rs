@@ -21,6 +21,8 @@ pub enum BannerKind {
     LocalCopyFailed,
     /// GitHub's diff couldn't be read, so nothing shows until the local copy is ready.
     GithubDiffFailed,
+    /// A large file couldn't be loaded on its key.
+    LoadFileFailed,
 }
 
 /// One banner: its kind, how serious it is, and what it says.

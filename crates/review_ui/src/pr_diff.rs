@@ -7,13 +7,16 @@
 //! it. Modelled on Zed's `git_ui_core/src/file_diff_view.rs` (project buffer on the right) and
 //! `git_ui/src/commit_view.rs` (many files in one view), without depending on either crate.
 //!
-//! The local copy is `repo_cache`'s. No changed file is left out: one rozed can't show as text
-//! (binary, more than 5,000 changed lines or 1 MiB, or failing to load) gets a placeholder saying
-//! why, and the title counts the ones not shown. A submodule shows "Subproject commit a" against
-//! "Subproject commit b", and a badge in the header marks renames, type and mode changes, names
-//! that aren't UTF-8 (shown with U+FFFD), and changes to line endings alone.
+//! The local copy is `repo_cache`'s. No changed file is left out. Generated files, lockfiles and
+//! files with no changes to their text start collapsed, and files with more than 5,000 changed
+//! lines or over 1 MiB start collapsed without loading, until a key loads them; each header says
+//! why. An image shows before and after; any other binary file says it changed. A file rozed
+//! can't read gets a placeholder saying why, and the title counts the ones not shown. A submodule
+//! shows "Subproject commit a" against "Subproject commit b". A header shows a rename as
+//! "old →" before the new path, and a badge marks type and mode changes, names that aren't UTF-8
+//! (shown with U+FFFD), and changes to line endings alone.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,20 +26,20 @@ use anyhow::Context as _;
 use buffer_diff::BufferDiff;
 use editor::display_map::{DisplayRow, ToDisplayPoint as _};
 use editor::{
-    Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
-    SplittableEditor, multibuffer_context_lines,
+    Addon, Bias, DisplayPoint, HiddenDiffHunkRenderer, MultiBuffer, SelectionEffects,
+    SplittableEditor,
 };
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use git::status::{FileStatus, StatusCode, TrackedStatus};
 use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
 use language::{
-    Buffer, BufferId, Capability, DiskState, File, LanguageRegistry, LineEnding,
-    OffsetRangeExt as _, Point, ReplicaId, Rope, TextBuffer,
+    Buffer, BufferId, Capability, DiskState, File, LanguageRegistry, LineEnding, Point, ReplicaId,
+    Rope, TextBuffer,
 };
 use multi_buffer::{ExcerptBoundaryInfo, PathKey};
 use project::{Project, ProjectPath, WorktreeId};
-use settings::{DiffViewStyle, Settings as _};
+use settings::DiffViewStyle;
 use ui::{Icon, IconName, IconSize, Label, LabelSize, Tooltip, prelude::*};
 use util::paths::PathStyle;
 use util::rel_path::RelPath;
@@ -44,15 +47,20 @@ use workspace::Workspace;
 use workspace::notifications::NotificationId;
 
 use repo_cache::{
-    Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, Progress, PullRequestRefs, Repo,
-    RepoCache, Token,
+    Attribute, Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, Progress,
+    PullRequestRefs, Repo, RepoCache, Token,
 };
 
+use crate::file_display::{
+    Collapsed, ImageSide, Images, binary_text, initial_collapse, without_whitespace_changes,
+};
+use crate::file_list::FileEntry;
 use crate::github_api::PullRequest;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::{DiffSource, PrTab};
+use crate::pr_tab::{DiffSource, ExpandFile, PrTab};
+use crate::shown_files::{self, ShownFile, ShownFiles};
 use crate::trust;
 
 /// Whether the pull request gets a checkout and language servers. The caller decides.
@@ -207,79 +215,75 @@ pub(crate) async fn show_local_copy(
         }
     });
 
-    let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, cx)?;
+    let style = tab.read_with(cx, |tab, _| tab.diff_style())?;
+    let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, style, cx)?;
     editor.update(cx, |editor, cx| {
         editor.rhs_editor().update(cx, |editor, _| {
-            // Keeps the clone open, so no cleanup removes it or its checkout while the tab
-            // shows it.
-            editor.register_addon(OpenClone {
-                _repo: local.repo.clone(),
-            });
+            // Keeps the clone open, so no cleanup removes it or its checkout while the tab shows
+            // it, and lets a large file load on a key.
+            if let Some(files) = editor.addon_mut::<ShownFiles>() {
+                files.local = Some(local.clone());
+            }
         })
     });
     // The tab lists the files and says where each goes in the diff, at once, or with GitHub's
     // diff on screen, once this one replaces it, so the list always matches the diff shown.
+    let entries = local.entries();
     let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
         if tab.diff_source() == Some(DiffSource::GitHub) {
-            return (true, tab.positions_of(&local.files));
+            return (true, tab.positions_of(&entries));
         }
-        let positions = tab.copied(&local.files, &local.head, cx);
+        let positions = tab.copied(entries.clone(), &local.head, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (false, positions)
     })?;
 
-    let target = Target {
+    let mut target = Target {
         repo_name: &local.name,
         project: &project,
         checkout: None,
         languages: &languages,
         editor: &editor,
+        hide_whitespace: false,
     };
-    let mut headers = FileHeaders::default();
-    let mut folded = HashSet::new();
     // Each file's buffer and what it shows, for switching to the checkout.
     let mut shown_files = Vec::with_capacity(local.files.len());
-    // Files whose header says they couldn't be shown, and files not loaded.
+    // Files whose header says they couldn't be shown.
     let mut not_shown = 0;
-    let mut not_loaded = 0;
     for (index, file) in local.files.iter().enumerate() {
-        tab.update(cx, |tab, cx| tab.loading_diff(index, local.files.len(), cx))?;
+        target.hide_whitespace = tab.update(cx, |tab, cx| {
+            tab.loading_diff(index, local.files.len(), cx);
+            tab.hides_whitespace()
+        })?;
+        let generated = local.generated[index];
         let plan = cx
             .background_spawn({
                 let repo = local.repo.clone();
                 let file = file.clone();
-                async move { plan_file(&repo, &file, None) }
+                async move { plan_file(&repo, &file, generated, None, false) }
             })
             .await;
         let position = positions[index];
         let (path, deleted) = (file.display_path(), file.new.is_none());
+        let header = FileHeader::of(file);
         let shown = match target
-            .add_file(position, &path, deleted, plan.clone(), cx)
+            .add_file(position, &path, deleted, plan.clone(), header.clone(), cx)
             .await
         {
             Ok(shown) => Ok((shown, plan)),
             Err(error) => {
                 let plan = FilePlan::failed(&error);
                 target
-                    .add_file(position, &path, deleted, plan.clone(), cx)
+                    .add_file(position, &path, deleted, plan.clone(), header, cx)
                     .await
                     .map(|shown| (shown, plan))
             }
         };
         match shown {
             Ok((shown, plan)) => {
-                headers.statuses.insert(shown.buffer_id, status(file));
-                if let Some(badge) = shown.badge {
-                    headers.badges.insert(shown.buffer_id, badge);
-                }
-                if let Some(warning) = shown.warning {
+                if let Some(warning) = &shown.warning {
                     log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
                     not_shown += usize::from(warning.label == NOT_SHOWN);
-                    not_loaded += usize::from(warning.label == NOT_LOADED);
-                    headers.warnings.insert(shown.buffer_id, warning);
-                }
-                if shown.folded {
-                    folded.insert(shown.buffer_id);
                 }
                 shown_files.push(Some((shown.buffer_id, plan)));
             }
@@ -303,27 +307,18 @@ pub(crate) async fn show_local_copy(
         launched.elapsed()
     );
 
-    if not_shown + not_loaded > 0 {
-        let count = not_shown + not_loaded;
-        let files = if count == 1 { "file" } else { "files" };
+    if not_shown > 0 {
+        let files = if not_shown == 1 { "file" } else { "files" };
         multi_buffer.update(cx, |multi_buffer, cx| {
-            multi_buffer.set_title(format!("{title} ({count} {files} not shown)"), cx)
+            multi_buffer.set_title(format!("{title} ({not_shown} {files} not shown)"), cx)
         });
     }
-    editor.update(cx, |editor, cx| {
-        editor.rhs_editor().update(cx, |editor, cx| {
-            editor.register_addon(headers);
-            if !folded.is_empty() {
-                editor.fold_buffers(folded, cx);
-            }
-        });
-    });
     tab.update_in(cx, |tab, window, cx| {
         if replacing {
-            tab.copied(&local.files, &local.head, cx);
+            tab.copied(entries, &local.head, cx);
             tab.switch_diff(editor.clone(), window, cx);
         }
-        tab.diff_loaded(cx);
+        tab.diff_loaded(window, cx);
     })?;
     if replacing {
         log::info!(
@@ -368,7 +363,7 @@ pub(crate) async fn show_local_copy(
             return Ok(());
         }
     };
-    let target = Target {
+    let mut target = Target {
         checkout: Some(&checkout),
         ..target
     };
@@ -376,12 +371,13 @@ pub(crate) async fn show_local_copy(
         let Some((buffer_id, first)) = shown else {
             continue;
         };
+        let generated = local.generated[index];
         let plan = cx
             .background_spawn({
                 let repo = local.repo.clone();
                 let file = file.clone();
                 let dir = checkout.dir.clone();
-                async move { plan_file(&repo, &file, Some(&dir)) }
+                async move { plan_file(&repo, &file, generated, Some(&dir), false) }
             })
             .await;
         match swap(first, plan) {
@@ -392,27 +388,25 @@ pub(crate) async fn show_local_copy(
                     headers.warnings.insert(*buffer_id, warning);
                 });
             }
-            Swap::ToCheckout(plan) => match target
-                .add_file(
-                    positions[index],
-                    &file.display_path(),
-                    file.new.is_none(),
-                    plan,
-                    cx,
-                )
-                .await
-            {
-                Ok(shown) => update_headers(&editor, cx, |headers| {
-                    headers.move_to(*buffer_id, shown.buffer_id);
-                    if let Some(badge) = shown.badge {
-                        headers.badges.insert(shown.buffer_id, badge);
-                    }
-                }),
-                Err(error) => log::warn!(
-                    "{link}: can't show {} from the checkout, so it stays from git: {error:#}",
-                    file.display_path()
-                ),
-            },
+            Swap::ToCheckout(plan) => {
+                target.hide_whitespace = tab.read_with(cx, |tab, _| tab.hides_whitespace())?;
+                if let Err(error) = target
+                    .add_file(
+                        positions[index],
+                        &file.display_path(),
+                        file.new.is_none(),
+                        plan,
+                        FileHeader::of(file),
+                        cx,
+                    )
+                    .await
+                {
+                    log::warn!(
+                        "{link}: can't show {} from the checkout, so it stays from git: {error:#}",
+                        file.display_path()
+                    )
+                }
+            }
         }
     }
     log::info!(
@@ -422,12 +416,73 @@ pub(crate) async fn show_local_copy(
     Ok(())
 }
 
-/// A new, empty side-by-side diff of `title`, read-only and without the controls for staging and
-/// restoring hunks.
+/// Loads `path`, a file too large to have been loaded with the others, into `diff` in place of
+/// its placeholder, and opens it. Does nothing in GitHub's diff, which has nothing to load.
+pub(crate) async fn load_large_file(
+    diff: Entity<SplittableEditor>,
+    project: Entity<Project>,
+    path: String,
+    hide_whitespace: bool,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let found = cx.update(|_, cx| {
+        shown_files::read(&diff, cx, |files| {
+            let local = files.local.clone()?;
+            let index = local
+                .files
+                .iter()
+                .position(|file| file.display_path() == path)?;
+            let position = usize::try_from(files.get(&path)?.key.sort_prefix?).ok()?;
+            Some((local, index, position))
+        })
+        .flatten()
+    })?;
+    let Some((local, index, position)) = found else {
+        return Ok(());
+    };
+    let file = local.files[index].clone();
+    let generated = local.generated[index];
+    let started = Instant::now();
+    let plan = cx
+        .background_spawn({
+            let (repo, file) = (local.repo.clone(), file.clone());
+            async move { plan_file(&repo, &file, generated, None, true) }
+        })
+        .await;
+    let languages = project.read_with(cx, |project, _| project.languages().clone());
+    let target = Target {
+        repo_name: &local.name,
+        project: &project,
+        checkout: None,
+        languages: &languages,
+        editor: &diff,
+        hide_whitespace,
+    };
+    let shown = target
+        .add_file(
+            position,
+            &path,
+            file.new.is_none(),
+            plan,
+            FileHeader::of(&file),
+            cx,
+        )
+        .await?;
+    diff.update(cx, |diff, cx| {
+        diff.rhs_editor()
+            .update(cx, |rhs, cx| rhs.unfold_buffer(shown.buffer_id, cx))
+    });
+    log::info!("{path}: loaded on request in {:?}", started.elapsed());
+    Ok(())
+}
+
+/// A new, empty side-by-side or inline diff of `title`, read-only and without the controls for
+/// staging and restoring hunks.
 pub(crate) fn new_diff_editor(
     workspace: &WeakEntity<Workspace>,
     project: &Entity<Project>,
     title: &str,
+    style: DiffViewStyle,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<(Entity<MultiBuffer>, Entity<SplittableEditor>)> {
     let multi_buffer = cx.new(|cx| {
@@ -439,7 +494,7 @@ pub(crate) fn new_diff_editor(
         let workspace_entity = cx.entity();
         cx.new(|cx| {
             let editor = SplittableEditor::new(
-                EditorSettings::get_global(cx).diff_view_style,
+                style,
                 multi_buffer.clone(),
                 project.clone(),
                 workspace_entity,
@@ -450,6 +505,8 @@ pub(crate) fn new_diff_editor(
             editor.rhs_editor().update(cx, |editor, cx| {
                 editor.set_show_bookmarks(false, cx);
                 editor.set_show_breakpoints(false, cx);
+                editor.register_addon(FileHeaders::default());
+                editor.register_addon(ShownFiles::default());
             });
             editor
         })
@@ -626,18 +683,6 @@ fn head_banner(link: &PrLink, head: &Oid, head_source: &HeadSource) -> Option<St
     }
 }
 
-/// Keeps a pull request's clone open while its tab is, so no rozed's cleanup removes the clone or
-/// its checkout from under it.
-struct OpenClone {
-    _repo: Repo,
-}
-
-impl Addon for OpenClone {
-    fn to_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
 /// How far copying a pull request locally has got.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CopyProgress {
@@ -678,6 +723,20 @@ pub(crate) struct LocalPullRequest {
     head_source: HeadSource,
     /// What changed between `base` and `head`, in git's order.
     files: Vec<ChangedFile>,
+    /// Each file's `linguist-generated` attribute in the head's `.gitattributes`, in the same
+    /// order (see `review::files::ChangedFile::linguist_generated`).
+    generated: Vec<Option<bool>>,
+}
+
+impl LocalPullRequest {
+    /// The file list's entry for each file, in git's order.
+    pub(crate) fn entries(&self) -> Vec<FileEntry> {
+        self.files
+            .iter()
+            .zip(&self.generated)
+            .map(|(file, generated)| FileEntry::from_local(file, *generated))
+            .collect()
+    }
 }
 
 /// Fetches the pull request into its repository's clone, finds where it branched from its base
@@ -751,6 +810,7 @@ fn copy(
         })?;
     progress.unbounded_send(CopyProgress::Listing).ok();
     let files = repo.changed_files(&base, &fetched.head)?;
+    let generated = linguist_generated(&repo, &fetched.head, &files, link);
     Ok(LocalPullRequest {
         repo,
         name: name.to_string(),
@@ -758,7 +818,27 @@ fn copy(
         head: fetched.head,
         head_source: fetched.head_source,
         files,
+        generated,
     })
+}
+
+/// Each of `files`' `linguist-generated` attribute in `head`'s `.gitattributes`, which git reads
+/// from the commit. When they can't be read, no file counts as generated by attribute, though
+/// lockfiles still do by name.
+fn linguist_generated(
+    repo: &Repo,
+    head: &Oid,
+    files: &[ChangedFile],
+    link: &PrLink,
+) -> Vec<Option<bool>> {
+    let paths: Vec<&[u8]> = files.iter().map(ChangedFile::path).collect();
+    match repo.attribute(head, "linguist-generated", &paths) {
+        Ok(attributes) => attributes.iter().map(Attribute::as_bool).collect(),
+        Err(error) => {
+            log::warn!("{link}: can't read which files .gitattributes marks generated: {error}");
+            vec![None; files.len()]
+        }
+    }
 }
 
 /// The key a file's excerpts sit under in the diff: its position in the tab's order, then its
@@ -766,13 +846,6 @@ fn copy(
 pub fn path_key(position: usize, path: Arc<RelPath>) -> PathKey {
     PathKey::with_sort_prefix(position as u64, path)
 }
-
-/// Files with more changed lines than this get a placeholder instead of loading (design §5).
-const LARGE_FILE_LINES: u32 = 5_000;
-
-/// Files larger than this, on either side, get a placeholder too: a minified bundle or generated
-/// data can be megabytes in a few lines.
-const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
 /// The trusted checkout a pull request's project buffers come from.
 pub(crate) struct Checkout {
@@ -792,6 +865,11 @@ pub(crate) struct FilePlan {
     /// The head's rows that show, when only they're known, as from GitHub's patch: each range
     /// shows as it is, and can't be expanded. `None` shows each change with the lines around it.
     pub(crate) rows: Option<Vec<Range<u32>>>,
+    /// Why the file starts collapsed, as its header says. A file whose text didn't change starts
+    /// collapsed too, which showing it finds.
+    pub(crate) collapsed: Option<Collapsed>,
+    /// A changed image's before and after, which show under the file's last line.
+    pub(crate) images: Option<Images>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -802,14 +880,12 @@ pub(crate) enum Content {
         old_text: Option<String>,
         new: NewSide,
     },
-    /// Text that stands in for a file rozed doesn't compare: a binary file, a submodule, or one
-    /// it couldn't read.
+    /// Text that stands in for a file rozed doesn't compare: a binary file that isn't an image, a
+    /// file too large to load at once, or one it couldn't read.
     Placeholder {
         text: String,
         /// Whether the pull request deletes the file.
         deleted: bool,
-        /// Whether the file starts folded, showing only its header.
-        folded: bool,
     },
 }
 
@@ -834,9 +910,6 @@ pub(crate) struct Warning {
 /// The header label of a file rozed couldn't show.
 const NOT_SHOWN: &str = "Not shown";
 
-/// The header label of a file too large to load.
-const NOT_LOADED: &str = "Not loaded";
-
 impl FilePlan {
     pub(crate) fn diff(old_text: Option<String>, new: NewSide) -> Self {
         Self {
@@ -844,19 +917,22 @@ impl FilePlan {
             warning: None,
             badge: None,
             rows: None,
+            collapsed: None,
+            images: None,
         }
     }
 
-    pub(crate) fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
+    pub(crate) fn placeholder(text: impl Into<String>, deleted: bool) -> Self {
         Self {
             content: Content::Placeholder {
                 text: text.into(),
                 deleted,
-                folded,
             },
             warning: None,
             badge: None,
             rows: None,
+            collapsed: None,
+            images: None,
         }
     }
 
@@ -875,19 +951,24 @@ impl FilePlan {
                 label: NOT_SHOWN.into(),
                 detail: format!("rozed couldn't show this file: {error:#}").into(),
             }),
-            ..Self::placeholder(
-                format!("(rozed couldn't show this file: {error:#})"),
-                false,
-                false,
-            )
+            ..Self::placeholder(format!("(rozed couldn't show this file: {error:#})"), false)
         }
     }
 }
 
-/// Works out what `file` shows. Reads git, and with a `checkout`, hashes the file there. Never
-/// fails: a file it can't read gets a placeholder that says why. Blocks while git runs.
-fn plan_file(repo: &Repo, file: &ChangedFile, checkout: Option<&Path>) -> FilePlan {
-    let plan = try_plan_file(repo, file, checkout).unwrap_or_else(|error| FilePlan::failed(&error));
+/// Works out what `file` shows, given its `linguist-generated` attribute. Reads git, and with a
+/// `checkout`, hashes the file there. A file too large to load at once gets a placeholder, unless
+/// `load_large` asks for it anyway. Never fails: a file it can't read gets a placeholder that says
+/// why. Blocks while git runs.
+fn plan_file(
+    repo: &Repo,
+    file: &ChangedFile,
+    generated: Option<bool>,
+    checkout: Option<&Path>,
+    load_large: bool,
+) -> FilePlan {
+    let plan = try_plan_file(repo, file, generated, checkout, load_large)
+        .unwrap_or_else(|error| FilePlan::failed(&error));
     // Line endings are noted when the contents were compared.
     let badge = [badge(file), plan.badge]
         .into_iter()
@@ -902,53 +983,36 @@ fn plan_file(repo: &Repo, file: &ChangedFile, checkout: Option<&Path>) -> FilePl
 fn try_plan_file(
     repo: &Repo,
     file: &ChangedFile,
+    generated: Option<bool>,
     checkout: Option<&Path>,
+    load_large: bool,
 ) -> anyhow::Result<FilePlan> {
     let deleted = file.new.is_none();
-    if file.binary {
-        return Ok(FilePlan::placeholder(
-            "(binary file not shown)",
-            deleted,
-            true,
-        ));
-    }
-    if let Some(lines) = file.lines
-        && lines.added + lines.deleted > LARGE_FILE_LINES
-    {
-        let summary = format!(
-            "{} lines added and {} deleted, more than the {LARGE_FILE_LINES} rozed loads at once",
-            lines.added, lines.deleted
-        );
-        return Ok(FilePlan {
-            warning: Some(Warning {
-                label: NOT_LOADED.into(),
-                detail: format!("This file's diff isn't loaded: {summary}.").into(),
-            }),
-            ..FilePlan::placeholder(
-                format!("(large diff not loaded: {summary})"),
-                deleted,
-                false,
-            )
-        });
-    }
+    let image = is_image(file);
+    // A binary file that isn't an image is never read, so its size doesn't matter.
+    let loads = !file.binary || image;
+    let collapsed = initial_collapse(&FileEntry::from_local(file, generated).file, loads);
+    let collapsed = match collapsed {
+        Some(Collapsed::Large { generated, why }) if !load_large => {
+            let text = format!("(not loaded: {why})");
+            return Ok(FilePlan {
+                collapsed: Some(Collapsed::Large { generated, why }),
+                ..FilePlan::placeholder(text, deleted)
+            });
+        }
+        // Loaded on request: only being generated is left to say.
+        Some(Collapsed::Large { generated, .. }) => generated.map(Collapsed::Generated),
+        collapsed => collapsed,
+    };
 
-    if let Some(size) = file.size()
-        && size > LARGE_FILE_BYTES
-    {
-        let summary = format!(
-            "{}, more than the 1 MiB rozed loads at once",
-            mebibytes(size)
-        );
+    if file.binary {
+        if image && let Some(plan) = image_plan(repo, file)? {
+            return Ok(FilePlan { collapsed, ..plan });
+        }
+        let size = |version: &Option<FileVersion>| version.as_ref().and_then(|v| v.size);
         return Ok(FilePlan {
-            warning: Some(Warning {
-                label: NOT_LOADED.into(),
-                detail: format!("This file isn't loaded: {summary}.").into(),
-            }),
-            ..FilePlan::placeholder(
-                format!("(large file not loaded: {summary})"),
-                deleted,
-                false,
-            )
+            collapsed,
+            ..FilePlan::placeholder(binary_text(size(&file.old), size(&file.new)), deleted)
         });
     }
 
@@ -959,9 +1023,20 @@ fn try_plan_file(
         .transpose()
         .context("reading the base's version")?;
     let Some(new) = &file.new else {
-        return Ok(FilePlan::diff(old_bytes.map(text), NewSide::Deleted));
+        let images = image
+            .then(|| images_of(file, old_bytes.as_deref(), None))
+            .flatten();
+        return Ok(FilePlan {
+            collapsed,
+            images,
+            ..FilePlan::diff(old_bytes.map(text), NewSide::Deleted)
+        });
     };
     let new_bytes = read_side(repo, new).context("reading the head's version")?;
+    // An SVG file is text, compared as text, and shows as images too.
+    let images = image
+        .then(|| images_of(file, old_bytes.as_deref(), Some(&new_bytes)))
+        .flatten();
     let old_text = old_bytes.clone().map(text);
     let new_text = text(new_bytes.clone());
     // Both sides' line endings are normalized, and bytes that aren't UTF-8 shown as U+FFFD, so a
@@ -979,15 +1054,19 @@ fn try_plan_file(
     let from_git = |warning: Option<Warning>| FilePlan {
         warning,
         badge: badge.clone(),
+        collapsed: collapsed.clone(),
+        images: images.clone(),
         ..FilePlan::diff(old_text.clone(), NewSide::Git(new_text.clone()))
     };
-    // A submodule is never a file in the checkout.
-    let Some(checkout) = checkout.filter(|_| new.mode != FileMode::Submodule) else {
+    // A submodule is never a file in the checkout, and an image needs no language server.
+    let Some(checkout) = checkout.filter(|_| new.mode != FileMode::Submodule && images.is_none())
+    else {
         return Ok(from_git(None));
     };
     Ok(match repo.hash_checkout_file(checkout, &new.path) {
         Ok(Some(id)) if id == new.oid => FilePlan {
             badge: badge.clone(),
+            collapsed: collapsed.clone(),
             ..FilePlan::diff(old_text.clone(), NewSide::Checkout)
         },
         Ok(found) => from_git(Some(Warning {
@@ -1013,9 +1092,60 @@ fn try_plan_file(
     })
 }
 
-/// `bytes` in mebibytes, as "2.5 MiB".
-fn mebibytes(bytes: u64) -> String {
-    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+/// Whether `file` would show as an image, by its name: PNG, JPEG, GIF, WebP or SVG.
+fn is_image(file: &ChangedFile) -> bool {
+    [file.old_path(), file.new_path()]
+        .into_iter()
+        .flatten()
+        .all(|path| {
+            let path = String::from_utf8_lossy(path);
+            path.rsplit_once('.').is_some_and(|(_, extension)| {
+                ["png", "jpg", "jpeg", "gif", "webp", "svg"]
+                    .contains(&extension.to_ascii_lowercase().as_str())
+            })
+        })
+}
+
+/// A changed binary image: a line for each side saying its format, dimensions and size, compared
+/// so they show as a change, and the images under them. `None` when either side isn't an image
+/// after all, such as a Git LFS pointer.
+fn image_plan(repo: &Repo, file: &ChangedFile) -> anyhow::Result<Option<FilePlan>> {
+    let read = |version: &Option<FileVersion>| {
+        version
+            .as_ref()
+            .map(|version| read_side(repo, version))
+            .transpose()
+    };
+    let old_bytes = read(&file.old).context("reading the base's version")?;
+    let new_bytes = read(&file.new).context("reading the head's version")?;
+    let Some(images) = images_of(file, old_bytes.as_deref(), new_bytes.as_deref()) else {
+        return Ok(None);
+    };
+    let old_text = images.old.as_ref().map(ImageSide::summary);
+    let new = match &images.new {
+        Some(image) => NewSide::Git(image.summary()),
+        None => NewSide::Deleted,
+    };
+    Ok(Some(FilePlan {
+        images: Some(images),
+        ..FilePlan::diff(old_text, new)
+    }))
+}
+
+/// The two sides of `file` as images, from their bytes. `None` when a side that's there isn't an
+/// image.
+fn images_of(file: &ChangedFile, old: Option<&[u8]>, new: Option<&[u8]>) -> Option<Images> {
+    let side = |version: &Option<FileVersion>, bytes: Option<&[u8]>| match (version, bytes) {
+        (Some(version), Some(bytes)) => {
+            let path = String::from_utf8_lossy(&version.path);
+            ImageSide::new(&path, bytes.to_vec()).map(Some)
+        }
+        _ => Some(None),
+    };
+    Some(Images {
+        old: side(&file.old, old)?,
+        new: side(&file.new, new)?,
+    })
 }
 
 /// One side's bytes: a blob's from git, or for a submodule the line GitHub shows, since its
@@ -1043,30 +1173,66 @@ pub(crate) struct Target<'a> {
     pub(crate) checkout: Option<&'a Checkout>,
     pub(crate) languages: &'a Arc<LanguageRegistry>,
     pub(crate) editor: &'a Entity<SplittableEditor>,
+    /// Whether changes to whitespace alone are hidden.
+    pub(crate) hide_whitespace: bool,
+}
+
+/// What a file's header says about the pull request's change to it, besides its plan's badge and
+/// warning.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FileHeader {
+    /// Added, deleted, renamed or modified.
+    pub(crate) status: FileStatus,
+    /// The path a renamed file had, which the header shows before its new one.
+    pub(crate) renamed_from: Option<SharedString>,
+}
+
+impl FileHeader {
+    pub(crate) fn of(file: &ChangedFile) -> Self {
+        let renamed_from = match file.change {
+            Change::Renamed { .. } => file
+                .old_path()
+                .map(|path| String::from_utf8_lossy(path).into_owned().into()),
+            _ => None,
+        };
+        Self {
+            status: status(file),
+            renamed_from,
+        }
+    }
 }
 
 /// A file added to the diff.
 pub(crate) struct Shown {
     pub(crate) buffer_id: BufferId,
     pub(crate) warning: Option<Warning>,
-    pub(crate) badge: Option<SharedString>,
-    pub(crate) folded: bool,
 }
 
 impl Target<'_> {
-    /// Adds one changed file to the diff, at `position` in the tab's order. `path` is its path
-    /// as shown: a name that isn't UTF-8 shows with U+FFFD, and its badge says so.
+    /// Adds one changed file to the diff, at `position` in the tab's order, or replaces the one at
+    /// its path, keeping whether that one was folded. `path` is its path as shown: a name that
+    /// isn't UTF-8 shows with U+FFFD, and its badge says so. A file that starts collapsed starts
+    /// folded, its header saying why.
     pub(crate) async fn add_file(
         &self,
         position: usize,
         path: &str,
         deleted: bool,
         plan: FilePlan,
+        header: FileHeader,
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Shown> {
+        let shown_path = path.to_string();
         let path = RelPath::from_unix_str(path)?.into_arc();
-        let rows = plan.rows;
-        let (buffer, old_text, folded) = match plan.content {
+        let FilePlan {
+            content,
+            warning,
+            badge,
+            rows,
+            collapsed,
+            images,
+        } = plan;
+        let (buffer, base) = match content {
             Content::Diff {
                 old_text,
                 new: NewSide::Checkout,
@@ -1087,7 +1253,7 @@ impl Target<'_> {
                         )
                     })
                     .await?;
-                (buffer, Some(old_text), false)
+                (buffer, Some(old_text))
             }
             Content::Diff {
                 old_text,
@@ -1095,7 +1261,6 @@ impl Target<'_> {
             } => (
                 self.memory_buffer(&text, &path, false, cx).await?,
                 Some(old_text),
-                false,
             ),
             Content::Diff {
                 old_text,
@@ -1103,17 +1268,40 @@ impl Target<'_> {
             } => (
                 self.memory_buffer("", &path, true, cx).await?,
                 Some(old_text),
-                false,
             ),
-            Content::Placeholder { text, folded, .. } => (
-                self.memory_buffer(&text, &path, deleted, cx).await?,
-                None,
-                folded,
-            ),
+            Content::Placeholder { text, .. } => {
+                (self.memory_buffer(&text, &path, deleted, cx).await?, None)
+            }
         };
 
         let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
-        let diff = match old_text {
+        let base: Option<Option<Arc<str>>> = base.map(|old| old.map(Arc::from));
+        let head = snapshot.text();
+        let mut collapsed = collapsed;
+        // What the head is compared with: the base, or the base as `git diff -w` compares it.
+        let compared = match &base {
+            Some(Some(old)) => {
+                let compared: Arc<str> = if self.hide_whitespace && **old != *head {
+                    cx.background_spawn({
+                        let (old, head) = (old.clone(), head.clone());
+                        async move { without_whitespace_changes(&old, &head).into() }
+                    })
+                    .await
+                } else {
+                    old.clone()
+                };
+                if collapsed.is_none() && images.is_none() && !deleted {
+                    if **old == *head {
+                        collapsed = Some(Collapsed::NoChanges);
+                    } else if *compared == *head {
+                        collapsed = Some(Collapsed::WhitespaceOnly);
+                    }
+                }
+                Some(Some(compared))
+            }
+            other => other.clone(),
+        };
+        let diff = match compared {
             // A placeholder: nothing to compare, so no hunks.
             None => cx.new(|cx| {
                 BufferDiff::new_unchanged(
@@ -1123,7 +1311,7 @@ impl Target<'_> {
                     cx,
                 )
             }),
-            Some(old_text) => {
+            Some(compared) => {
                 let diff = cx.new(|cx| {
                     BufferDiff::new(
                         &snapshot.text,
@@ -1133,11 +1321,7 @@ impl Target<'_> {
                     )
                 });
                 diff.update(cx, |diff, cx| {
-                    diff.set_base_text(
-                        old_text.map(|text| Arc::from(text.as_str())),
-                        snapshot.text.clone(),
-                        cx,
-                    )
+                    diff.set_base_text(compared, snapshot.text.clone(), cx)
                 })
                 .await;
                 diff
@@ -1145,40 +1329,40 @@ impl Target<'_> {
         };
         cx.update(|_, cx| follow_language(&buffer, &diff, cx))?;
 
-        // Only the rows asked for, or each change with the lines around it.
-        let hunks_only = rows.is_some();
-        let ranges = cx.update(|_, cx| {
-            let ranges: Vec<_> = match &rows {
-                Some(rows) => rows
-                    .iter()
-                    .map(|rows| {
-                        let last = rows.end.saturating_sub(1).max(rows.start);
-                        Point::new(rows.start, 0)..Point::new(last, 0)
-                    })
-                    .collect(),
-                None => {
-                    let diff_snapshot = diff.read(cx).snapshot(cx);
-                    diff_snapshot
-                        .hunks(&snapshot)
-                        .map(|hunk| hunk.buffer_range.to_point(&snapshot))
-                        .collect()
-                }
-            };
-            if ranges.is_empty() {
-                vec![Point::zero()..snapshot.max_point()]
-            } else {
-                ranges
-            }
-        })?;
-        let key = path_key(position, path);
         let buffer_id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
+        let mut file = ShownFile::new(
+            path_key(position, path),
+            buffer.clone(),
+            buffer_id,
+            diff.clone(),
+            base,
+        );
+        let hunks_only = rows.is_some();
+        file.rows = rows;
+        file.images = images;
+        file.collapsed = collapsed.clone();
+        file.whitespace_hidden = self.hide_whitespace;
+        // A file that replaces another keeps whether it was folded and shown whole, and the
+        // cursor, if it was in it.
+        let replaced = cx.update(|_, cx| {
+            let rhs = self.editor.read(cx).rhs_editor().read(cx);
+            shown_files::read(self.editor, cx, |files| {
+                let replaced = files.get(&shown_path)?;
+                Some((rhs.is_buffer_folded(replaced.buffer_id, cx), replaced.whole))
+            })
+            .flatten()
+        })?;
+        if let Some((_, whole)) = replaced {
+            file.whole = whole;
+        }
+        let cursor_in_it = replaced.is_some()
+            && cx.update(|_, cx| {
+                shown_files::file_at_cursor(self.editor, cx).as_deref() == Some(shown_path.as_str())
+            })?;
+        let (ranges, context) = cx.update(|_, cx| shown_files::initial_ranges(&file, cx))?;
+        let key = file.key.clone();
         self.editor.update_in(cx, |editor, window, cx| {
-            let context = if hunks_only {
-                0
-            } else {
-                multibuffer_context_lines(cx)
-            };
-            editor.update_excerpts_for_path(key, buffer, ranges, context, diff, cx);
+            editor.update_excerpts_for_path(key.clone(), buffer, ranges, context, diff, cx);
             if editor.diff_view_style() == DiffViewStyle::Split {
                 editor.split(window, cx);
             }
@@ -1186,13 +1370,40 @@ impl Target<'_> {
             if hunks_only {
                 editor.update_editors(cx, |editor, cx| editor.disable_expand_excerpt_buttons(cx));
             }
+            // Otherwise the cursor would be left in the buffer that's gone.
+            if cursor_in_it {
+                let rhs = editor.rhs_editor().clone();
+                let location = rhs.read(cx).buffer().read(cx).location_for_path(&key, cx);
+                if let Some(location) = location {
+                    rhs.update(cx, |rhs, cx| {
+                        rhs.change_selections(
+                            SelectionEffects::no_scroll(),
+                            window,
+                            cx,
+                            |selections| selections.select_ranges([location..location]),
+                        )
+                    });
+                }
+            }
         })?;
-        Ok(Shown {
-            buffer_id,
-            warning: plan.warning,
-            badge: plan.badge,
-            folded,
-        })
+        update_headers(self.editor, cx, |headers| {
+            headers.statuses.insert(buffer_id, header.status);
+            if let Some(badge) = badge {
+                headers.badges.insert(buffer_id, badge);
+            }
+            if let Some(warning) = warning.clone() {
+                headers.warnings.insert(buffer_id, warning);
+            }
+            if let Some(renamed_from) = header.renamed_from {
+                headers.renamed_from.insert(buffer_id, renamed_from);
+            }
+        });
+        let fold = match replaced {
+            Some((folded, _)) => folded,
+            None => collapsed.is_some(),
+        };
+        cx.update(|window, cx| shown_files::add(self.editor, shown_path, file, fold, window, cx))?;
+        Ok(Shown { buffer_id, warning })
     }
 
     /// An in-memory buffer holding `text`: the head's text from git, or a placeholder. Language
@@ -1280,8 +1491,8 @@ fn status(file: &ChangedFile) -> FileStatus {
     })
 }
 
-/// What a changed file's header says about the change besides its status, from what git listed:
-/// a name that isn't UTF-8, a rename's old path, a submodule, a change of type or mode.
+/// What a changed file's header says about the change besides its status and a rename, from what
+/// git listed: a name that isn't UTF-8, a submodule, a change of type or mode.
 fn badge(file: &ChangedFile) -> Option<SharedString> {
     let mut notes = Vec::new();
     let paths = [file.old_path(), file.new_path()];
@@ -1291,14 +1502,6 @@ fn badge(file: &ChangedFile) -> Option<SharedString> {
         .any(|path| std::str::from_utf8(path).is_err())
     {
         notes.push("name isn't UTF-8".to_string());
-    }
-    if let Change::Renamed { .. } = file.change
-        && let Some(old_path) = file.old_path()
-    {
-        notes.push(format!(
-            "renamed from {}",
-            String::from_utf8_lossy(old_path)
-        ));
     }
     if file.is_submodule() {
         notes.push("submodule".to_string());
@@ -1352,32 +1555,49 @@ fn normalized(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// What each file's header shows beyond its path: the pull request's change (added, deleted,
-/// renamed or modified) rather than its status in the checkout, which is always clean, a badge
-/// with what the status doesn't say, and any warning.
+/// renamed or modified) rather than its status in the checkout, which is always clean, why it's
+/// collapsed, a badge with what the status doesn't say, any warning, and a rename's old path.
 #[derive(Default)]
 pub(crate) struct FileHeaders {
     pub(crate) statuses: HashMap<BufferId, FileStatus>,
+    pub(crate) collapsed: HashMap<BufferId, Collapsed>,
     pub(crate) badges: HashMap<BufferId, SharedString>,
     pub(crate) warnings: HashMap<BufferId, Warning>,
+    /// A renamed file's old path, which shows as "old →" before its new one.
+    pub(crate) renamed_from: HashMap<BufferId, SharedString>,
 }
 
 impl FileHeaders {
-    /// Moves what the header of buffer `from` shows to buffer `to`, which replaced it, leaving out
-    /// any warning: the new buffer is the checkout's, which matched.
-    fn move_to(&mut self, from: BufferId, to: BufferId) {
-        if let Some(status) = self.statuses.remove(&from) {
-            self.statuses.insert(to, status);
-        }
-        if let Some(badge) = self.badges.remove(&from) {
-            self.badges.insert(to, badge);
-        }
-        self.warnings.remove(&from);
+    /// Says why `buffer`'s file is collapsed, or that it isn't.
+    pub(crate) fn set_collapsed(&mut self, buffer: BufferId, collapsed: Option<Collapsed>) {
+        match collapsed {
+            Some(collapsed) => self.collapsed.insert(buffer, collapsed),
+            None => self.collapsed.remove(&buffer),
+        };
     }
+
+    /// Forgets what `buffer`'s header shows, once another buffer replaced it.
+    pub(crate) fn forget(&mut self, buffer: BufferId) {
+        self.statuses.remove(&buffer);
+        self.collapsed.remove(&buffer);
+        self.badges.remove(&buffer);
+        self.warnings.remove(&buffer);
+        self.renamed_from.remove(&buffer);
+    }
+}
+
+/// The key that loads a large file, as the headers name it.
+fn load_key(window: &Window, cx: &App) -> String {
+    ui::text_for_action(&ExpandFile, window, cx).unwrap_or_else(|| "alt-a".to_string())
 }
 
 impl Addon for FileHeaders {
     fn to_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn to_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn override_status_for_buffer_id(&self, buffer_id: BufferId, _: &App) -> Option<FileStatus> {
@@ -1388,18 +1608,36 @@ impl Addon for FileHeaders {
         &self,
         _: &ExcerptBoundaryInfo,
         buffer: &language::BufferSnapshot,
-        _: &Window,
-        _: &App,
+        window: &Window,
+        cx: &App,
     ) -> Option<AnyElement> {
-        let badge = self.badges.get(&buffer.remote_id());
-        let warning = self.warnings.get(&buffer.remote_id());
-        if badge.is_none() && warning.is_none() {
+        let id = buffer.remote_id();
+        let collapsed = self.collapsed.get(&id);
+        let badge = self.badges.get(&id);
+        let warning = self.warnings.get(&id);
+        let renamed_from = self.renamed_from.get(&id);
+        if collapsed.is_none() && badge.is_none() && warning.is_none() && renamed_from.is_none() {
             return None;
         }
+        let key = collapsed.map(|_| load_key(window, cx)).unwrap_or_default();
         Some(
             h_flex()
                 .flex_shrink_0()
                 .gap_2()
+                .children(collapsed.map(|collapsed| {
+                    h_flex()
+                        .id(("file-collapsed", id.to_proto()))
+                        .px_1()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(cx.theme().colors().border_variant)
+                        .child(
+                            Label::new(collapsed.label(&key))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .tooltip(Tooltip::text(collapsed.detail(&key)))
+                }))
                 .children(badge.map(|badge| {
                     Label::new(badge.clone())
                         .size(LabelSize::Small)
@@ -1407,7 +1645,7 @@ impl Addon for FileHeaders {
                 }))
                 .children(warning.map(|warning| {
                     h_flex()
-                        .id(("file-warning", buffer.remote_id().to_proto()))
+                        .id(("file-warning", id.to_proto()))
                         .gap_1()
                         .child(
                             Icon::new(IconName::Warning)
@@ -1420,6 +1658,13 @@ impl Addon for FileHeaders {
                                 .color(Color::Warning),
                         )
                         .tooltip(Tooltip::text(warning.detail.clone()))
+                }))
+                // Right before the header's own path, the new one.
+                .children(renamed_from.map(|old| {
+                    h_flex()
+                        .gap_1()
+                        .child(Label::new(old.clone()).buffer_font(cx).color(Color::Muted))
+                        .child(Label::new("→").color(Color::Muted))
                 }))
                 .into_any_element(),
         )
@@ -1497,6 +1742,7 @@ pub(crate) mod tests {
     use super::*;
 
     use repo_cache::{Git, LineCounts};
+    use review::files::Generated;
     use tempfile::TempDir;
 
     use fixtures::Entry;
@@ -1560,7 +1806,7 @@ pub(crate) mod tests {
                 version("old/a.rs", '1', REGULAR),
                 version("new/a.rs", '2', REGULAR),
             )),
-            Some("renamed from old/a.rs".into())
+            None
         );
         assert_eq!(
             badge_of(file(
@@ -1683,7 +1929,7 @@ pub(crate) mod tests {
             ..FilePlan::diff(None, from_git("text"))
         };
         let shown_from_git = FilePlan::diff(None, from_git("text"));
-        let placeholder = FilePlan::placeholder("(binary file not shown)", false, true);
+        let placeholder = FilePlan::placeholder("(binary file changed: 1 B → 2 B)", false);
 
         assert_eq!(
             swap(&shown_from_git, from_checkout.clone()),
@@ -1751,6 +1997,8 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         let files = repo.changed_files(&base, &fetched.head).unwrap();
+        let link = "https://github.com/owner/repo/pull/1".parse().unwrap();
+        let generated = linguist_generated(&repo, &fetched.head, &files, &link);
         let local = LocalPullRequest {
             repo,
             name: "repo".into(),
@@ -1758,6 +2006,7 @@ pub(crate) mod tests {
             head: fetched.head,
             head_source: fetched.head_source,
             files,
+            generated,
         };
         let checkout = checkout.then(|| local.repo.checkout(1, &local.head).unwrap());
         Copied {
@@ -1771,11 +2020,24 @@ pub(crate) mod tests {
     impl Copied {
         /// Each file's path, as shown, and plan.
         fn plans(&self) -> Vec<(String, FilePlan)> {
-            self.local
+            self.plans_loading(false)
+        }
+
+        /// Each file's path and plan, loading large files when `load_large` says.
+        fn plans_loading(&self, load_large: bool) -> Vec<(String, FilePlan)> {
+            let local = &self.local;
+            local
                 .files
                 .iter()
-                .map(|file| {
-                    let plan = plan_file(&self.local.repo, file, self.checkout.as_deref());
+                .zip(&local.generated)
+                .map(|(file, generated)| {
+                    let plan = plan_file(
+                        &local.repo,
+                        file,
+                        *generated,
+                        self.checkout.as_deref(),
+                        load_large,
+                    );
                     (file.display_path().into_owned(), plan)
                 })
                 .collect()
@@ -1809,7 +2071,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_file_with_more_than_5000_changed_lines_isnt_loaded() {
+    fn a_file_with_more_than_5000_changed_lines_isnt_loaded_until_asked() {
         let big: String = (0..5_001).map(|i| format!("line {i}\n")).collect();
         let copied = copy(&[], &[Entry::File("big.txt", big.as_bytes())], false);
 
@@ -1817,23 +2079,40 @@ pub(crate) mod tests {
             panic!("expected one file");
         };
 
+        let why = "5001 lines added and 0 deleted, more than the 5000 rozed loads at once";
         assert_eq!(
             plan.content,
             Content::Placeholder {
-                text: "(large diff not loaded: 5001 lines added and 0 deleted, more than the \
-                       5000 rozed loads at once)"
-                    .into(),
+                text: format!("(not loaded: {why})"),
                 deleted: false,
-                folded: false,
             }
         );
-        assert_eq!(plan.warning.as_ref().unwrap().label, NOT_LOADED);
+        assert_eq!(
+            plan.collapsed,
+            Some(Collapsed::Large {
+                generated: None,
+                why: why.into()
+            })
+        );
+        assert_eq!(plan.warning, None);
+
+        let [(_, loaded)] = &copied.plans_loading(true)[..] else {
+            panic!("expected one file");
+        };
+        assert_eq!(
+            loaded.content,
+            Content::Diff {
+                old_text: None,
+                new: from_git(&big)
+            }
+        );
+        assert_eq!(loaded.collapsed, None);
     }
 
     #[test]
-    fn a_file_larger_than_a_mebibyte_isnt_loaded() {
+    fn a_file_larger_than_a_mebibyte_isnt_loaded_until_asked() {
         // One line, so the line count alone wouldn't stop it.
-        let minified = "x".repeat(2 * LARGE_FILE_BYTES as usize);
+        let minified = "x".repeat(2 * 1024 * 1024);
         let copied = copy(
             &[Entry::File("bundle.min.js", b"x")],
             &[Entry::File("bundle.min.js", minified.as_bytes())],
@@ -1849,9 +2128,79 @@ pub(crate) mod tests {
         };
         assert_eq!(
             text,
-            "(large file not loaded: 2.0 MiB, more than the 1 MiB rozed loads at once)"
+            "(not loaded: 2.0 MiB, more than the 1 MiB rozed loads at once)"
         );
-        assert_eq!(plan.warning.as_ref().unwrap().label, NOT_LOADED);
+        assert!(plan.collapsed.as_ref().unwrap().is_large());
+        let [(_, loaded)] = &copied.plans_loading(true)[..] else {
+            panic!("expected one file");
+        };
+        assert!(matches!(loaded.content, Content::Diff { .. }));
+    }
+
+    #[test]
+    fn generated_files_and_lockfiles_start_collapsed_and_load() {
+        let lock = "# lock\n";
+        let copied = copy(
+            &[Entry::File("schema.pb.go", b"package a\n")],
+            &[
+                Entry::File(
+                    ".gitattributes",
+                    b"*.pb.go linguist-generated\nyarn.lock -linguist-generated\n",
+                ),
+                Entry::File("Cargo.lock", lock.as_bytes()),
+                Entry::File("schema.pb.go", b"package b\n"),
+                Entry::File("yarn.lock", lock.as_bytes()),
+            ],
+            false,
+        );
+
+        let collapsed: Vec<_> = copied
+            .plans()
+            .into_iter()
+            .map(|(path, plan)| {
+                assert!(matches!(plan.content, Content::Diff { .. }), "{path}");
+                (path, plan.collapsed)
+            })
+            .collect();
+        assert_eq!(
+            collapsed,
+            [
+                (".gitattributes".into(), None),
+                (
+                    "Cargo.lock".into(),
+                    Some(Collapsed::Generated(Generated::Lockfile))
+                ),
+                (
+                    "schema.pb.go".into(),
+                    Some(Collapsed::Generated(Generated::Attribute))
+                ),
+                // `-linguist-generated` keeps a lockfile expanded.
+                ("yarn.lock".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_large_lockfile_loads_on_request_and_stays_marked_a_lockfile() {
+        let big: String = (0..5_001).map(|i| format!("pkg-{i}\n")).collect();
+        let copied = copy(&[], &[Entry::File("Cargo.lock", big.as_bytes())], false);
+
+        let [(_, plan)] = &copied.plans()[..] else {
+            panic!("expected one file");
+        };
+        assert_eq!(
+            plan.collapsed
+                .as_ref()
+                .map(|collapsed| collapsed.label("⌥A")),
+            Some("lockfile, large: load with ⌥A".into())
+        );
+        let [(_, loaded)] = &copied.plans_loading(true)[..] else {
+            panic!("expected one file");
+        };
+        assert_eq!(
+            loaded.collapsed,
+            Some(Collapsed::Generated(Generated::Lockfile))
+        );
     }
 
     fn from_git(text: &str) -> NewSide {
@@ -2030,7 +2379,7 @@ pub(crate) mod tests {
         let missing = "f".repeat(40);
         file.new.as_mut().unwrap().oid = missing.parse().unwrap();
 
-        let plan = plan_file(&copied.local.repo, &file, None);
+        let plan = plan_file(&copied.local.repo, &file, None, None, false);
 
         let Content::Placeholder { text, .. } = &plan.content else {
             panic!("{plan:?}");
@@ -2074,13 +2423,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn binary_files_get_a_folded_placeholder() {
+    fn binary_files_say_they_changed() {
         let copied = copy(
             &[
                 Entry::File("data.bin", b"\0\x01base"),
                 Entry::File("gone.bin", b"\0\x01gone"),
             ],
-            &[Entry::File("data.bin", b"\0\x01head")],
+            &[
+                Entry::File("data.bin", b"\0\x01head!"),
+                Entry::File("new.bin", b"\0"),
+            ],
             false,
         );
         assert_eq!(
@@ -2088,14 +2440,166 @@ pub(crate) mod tests {
             vec![
                 (
                     "data.bin".into(),
-                    FilePlan::placeholder("(binary file not shown)", false, true)
+                    FilePlan::placeholder("(binary file changed: 6 B → 7 B)", false)
                 ),
                 (
                     "gone.bin".into(),
-                    FilePlan::placeholder("(binary file not shown)", true, true)
+                    FilePlan::placeholder("(binary file deleted: 6 B)", true)
+                ),
+                (
+                    "new.bin".into(),
+                    FilePlan::placeholder("(binary file added: 1 B)", false)
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn images_show_before_and_after_under_a_line_for_each() {
+        let png = crate::file_display::tests::png();
+        let summary = |bytes: &[u8]| format!("PNG image, 3 × 2, {} B", bytes.len());
+        let only_plan = |base: &[Entry], head: &[Entry]| {
+            let copied = copy(base, head, false);
+            let [(_, plan)] = &copied.plans()[..] else {
+                panic!("expected one file");
+            };
+            plan.clone()
+        };
+
+        let changed = [png.as_slice(), b"\0"].concat();
+        let modified = only_plan(
+            &[Entry::File("logo.png", &png)],
+            &[Entry::File("logo.png", &changed)],
+        );
+        assert_eq!(
+            modified.content,
+            Content::Diff {
+                old_text: Some(summary(&png)),
+                new: from_git(&summary(&changed)),
+            }
+        );
+        let images = modified.images.unwrap();
+        assert_eq!(images.old, ImageSide::new("a.png", png.clone()));
+        assert_eq!(images.new.unwrap().dimensions, Some((3, 2)));
+
+        let added = only_plan(&[], &[Entry::File("new.png", &png)]);
+        assert_eq!(
+            added.content,
+            Content::Diff {
+                old_text: None,
+                new: from_git(&summary(&png))
+            }
+        );
+        assert_eq!(added.images.unwrap().old, None);
+
+        let deleted = only_plan(&[Entry::File("gone.png", &png)], &[]);
+        assert_eq!(
+            deleted.content,
+            Content::Diff {
+                old_text: Some(summary(&png)),
+                new: NewSide::Deleted
+            }
+        );
+        assert_eq!(deleted.images.unwrap().new, None);
+
+        // A text file named like an image, such as a Git LFS pointer, is compared as text.
+        let pointer = "version https://git-lfs.github.com/spec/v1\n";
+        let lfs = only_plan(
+            &[Entry::File("lfs.png", pointer.as_bytes())],
+            &[Entry::File(
+                "lfs.png",
+                format!("{pointer}size 1\n").as_bytes(),
+            )],
+        );
+        assert!(matches!(
+            lfs.content,
+            Content::Diff {
+                new: NewSide::Git(_),
+                ..
+            }
+        ));
+        assert_eq!(lfs.images, None);
+    }
+
+    #[test]
+    fn an_svg_file_shows_its_text_and_its_images() {
+        let svg = |fill: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\">\n\
+                 <rect width=\"4\" height=\"4\" fill=\"{fill}\"/>\n</svg>\n"
+            )
+        };
+        let (old, new) = (svg("red"), svg("blue"));
+        for checkout in [false, true] {
+            let copied = copy(
+                &[Entry::File("icon.svg", old.as_bytes())],
+                &[Entry::File("icon.svg", new.as_bytes())],
+                checkout,
+            );
+            let [(_, plan)] = &copied.plans()[..] else {
+                panic!("expected one file");
+            };
+            // From git even with a checkout: an image needs no language server.
+            assert_eq!(
+                plan.content,
+                Content::Diff {
+                    old_text: Some(old.clone()),
+                    new: from_git(&new)
+                }
+            );
+            let images = plan.images.as_ref().unwrap();
+            assert_eq!(
+                images.old.as_ref().unwrap().image.format,
+                gpui::ImageFormat::Svg
+            );
+            assert_eq!(images.new.as_ref().unwrap().image.bytes, new.as_bytes());
+        }
+    }
+
+    #[test]
+    fn a_rename_shows_its_old_path_in_the_header() {
+        let source: String = (0..20).map(|i| format!("pub fn f{i}() {{}}\n")).collect();
+        let edited = format!("{source}pub fn added() {{}}\n");
+        let copied = copy(
+            &[
+                Entry::File("old/a.rs", source.as_bytes()),
+                Entry::File("old/b.rs", source.as_bytes()),
+            ],
+            &[
+                Entry::File("new/a.rs", edited.as_bytes()),
+                Entry::File("new/b.rs", source.replacen("f1()", "g1()", 1).as_bytes()),
+            ],
+            false,
+        );
+
+        let headers: Vec<_> = copied.local.files.iter().map(FileHeader::of).collect();
+        assert_eq!(
+            headers
+                .iter()
+                .map(|header| header.renamed_from.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("old/a.rs"), Some("old/b.rs")]
+        );
+        assert!(
+            headers
+                .iter()
+                .all(|header| code(header.status) == StatusCode::Renamed)
+        );
+        // With its changes, and no badge repeating the old path.
+        let plans = copied.plans();
+        assert_eq!(
+            plans[0].1,
+            FilePlan::diff(Some(source.clone()), from_git(&edited))
+        );
+        assert_eq!(plans[1].1.badge, None);
+
+        // Without a rename, no old path.
+        let modified = copy(
+            &[Entry::File("a.rs", b"a\n")],
+            &[Entry::File("a.rs", b"b\n")],
+            false,
+        );
+        assert_eq!(FileHeader::of(&modified.local.files[0]).renamed_from, None);
     }
 
     /// Pull requests in real repositories, served over `file://` as GitHub serves them.

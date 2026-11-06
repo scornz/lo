@@ -8266,6 +8266,8 @@ dependencies = [
  "github",
  "gpui",
  "http_client",
+ "image",
+ "imara-diff",
  "language",
  "log",
  "menu",

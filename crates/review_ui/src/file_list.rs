@@ -59,8 +59,9 @@ impl FileEntry {
         &self.file.path
     }
 
-    /// An entry for a file the local copy lists.
-    pub fn from_local(file: &repo_cache::ChangedFile) -> Self {
+    /// An entry for a file the local copy lists, with its `linguist-generated` attribute from the
+    /// head's `.gitattributes`.
+    pub fn from_local(file: &repo_cache::ChangedFile, linguist_generated: Option<bool>) -> Self {
         // A submodule has no line counts.
         let (additions, deletions) = file
             .lines
@@ -79,8 +80,7 @@ impl FileEntry {
                 deletions,
                 binary: file.binary,
                 size: file.size(),
-                // Read from `.gitattributes` once the list collapses generated files.
-                linguist_generated: None,
+                linguist_generated,
             },
             change: FileChange::from(&file.change),
             viewed: None,
@@ -406,8 +406,8 @@ mod tests {
             lines: None,
         };
 
-        let renamed = FileEntry::from_local(&renamed);
-        let deleted_binary = FileEntry::from_local(&deleted_binary);
+        let renamed = FileEntry::from_local(&renamed, None);
+        let deleted_binary = FileEntry::from_local(&deleted_binary, Some(true));
 
         assert_eq!(
             renamed,
@@ -428,6 +428,7 @@ mod tests {
         assert_eq!(deleted_binary.path(), "logo.png");
         assert_eq!(deleted_binary.change, FileChange::Deleted);
         assert!(deleted_binary.file.binary);
+        assert_eq!(deleted_binary.file.linguist_generated, Some(true));
         assert_eq!(deleted_binary.file.changed_lines(), 0);
         assert_eq!(FileChange::Renamed.letter(), "R");
     }
