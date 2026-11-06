@@ -1121,7 +1121,8 @@ async fn a_secondary_limit_waits_as_long_as_github_asks_then_backs_off(cx: &mut 
         log(&[
             // retry-after: 90.
             (110, "GET /pulls/1 (since)"),
-            // No retry-after: a minute, doubling.
+            // No retry-after: a minute, doubling with each secondary limit in a row, the one with
+            // a retry-after included. This is the second, so 2 minutes, then 4.
             (230, "GET /pulls/1 (since)"),
             (470, "GET /pulls/1 (since)"),
             (470, "PullRequestCheck"),

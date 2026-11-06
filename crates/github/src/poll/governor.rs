@@ -32,7 +32,8 @@ pub struct PollConfig {
     /// After a network error: the first wait before retrying, doubling up to `offline_max_wait`.
     pub offline_first_wait: Duration,
     pub offline_max_wait: Duration,
-    /// After a secondary rate limit without a `retry-after`: the first wait, doubling up to
+    /// After a secondary rate limit without a `retry-after`: the wait for the first one in a row,
+    /// doubling with each after it (those with a `retry-after` count too) up to
     /// `secondary_max_wait`. GitHub asks for at least a minute.
     pub secondary_first_wait: Duration,
     pub secondary_max_wait: Duration,
