@@ -8,6 +8,7 @@ pub mod github_layer;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
+pub mod pr_banner;
 pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;

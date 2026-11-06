@@ -29,6 +29,7 @@ use crate::account::{self, AccountDecision, Acting};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer;
+use crate::pr_banner::{self, Banners};
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
@@ -158,6 +159,8 @@ pub struct PrTab {
     viewed: HashMap<String, ViewedState>,
     revisions: Option<Revisions>,
     status: Status,
+    /// What the tab should tell about what its diff shows, under its header.
+    banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
     show_file_list: bool,
     show_threads: bool,
@@ -186,6 +189,8 @@ impl PrTab {
                 window.focus(&diff.focus_handle(cx), cx);
             }
         });
+        let banners = cx.new(|_| Banners::default());
+        let on_banners = cx.observe(&banners, |_, _, cx| cx.notify());
         Self {
             key: TabKey::new(link),
             trust,
@@ -200,13 +205,14 @@ impl PrTab {
             viewed: HashMap::new(),
             revisions: None,
             status: Status::Loading("Finding an account that can see it…".into()),
+            banners,
             diff: None,
             show_file_list: true,
             show_threads: true,
             watched: None,
             opened: Instant::now(),
             _load: None,
-            _subscriptions: vec![on_focus],
+            _subscriptions: vec![on_focus, on_banners],
         }
     }
 
@@ -250,6 +256,10 @@ impl PrTab {
 
     pub fn status(&self) -> &Status {
         &self.status
+    }
+
+    pub fn banners(&self) -> &Entity<Banners> {
+        &self.banners
     }
 
     pub fn diff(&self) -> Option<&Entity<SplittableEditor>> {
@@ -960,6 +970,7 @@ impl Render for PrTab {
             .bg(colors.editor_background)
             .child(self.render_header(cx))
             .children(self.render_status())
+            .children(pr_banner::render(self.banners.read(cx).messages()))
             .child(
                 h_flex()
                     .flex_1()
@@ -1173,6 +1184,7 @@ mod tests {
                 path: path.into(),
                 oid: "3".repeat(40).parse().unwrap(),
                 mode: FileMode::Regular,
+                size: Some(10),
             })
         };
         ChangedFile {

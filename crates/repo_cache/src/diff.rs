@@ -1,5 +1,7 @@
 //! What changed between two commits, from `git diff --raw --numstat -z`.
 
+use std::borrow::Cow;
+
 use crate::{Error, Oid};
 
 /// A file that changed between two commits.
@@ -10,7 +12,8 @@ pub struct ChangedFile {
     pub old: Option<FileVersion>,
     /// The file after. `None` when it was deleted.
     pub new: Option<FileVersion>,
-    /// Whether git considers either side binary, from its content or `.gitattributes`.
+    /// Whether git considers either side binary, from its content. rozed applies no
+    /// `.gitattributes`, so a repository can't mark a file binary or text.
     pub binary: bool,
     /// Lines added and deleted. `None` for a binary file or a submodule.
     pub lines: Option<LineCounts>,
@@ -33,11 +36,15 @@ pub enum Change {
 /// One side of a changed file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileVersion {
-    pub path: String,
+    /// The path, as git stores it: bytes, usually but not always UTF-8. A repository can hold
+    /// names in another encoding, such as Latin-1.
+    pub path: Vec<u8>,
     /// The blob, to read with [`crate::Repo::read_blob`]. For a submodule, the commit it points
     /// at, which is in another repository: never read it.
     pub oid: Oid,
     pub mode: FileMode,
+    /// The blob's size in bytes. `None` for a submodule, whose commit is in another repository.
+    pub size: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,31 +76,52 @@ impl ChangedFile {
             .any(|version| version.mode == FileMode::Submodule)
     }
 
+    /// The larger side's size in bytes, which caps what's worth loading, since a file of few lines
+    /// can still be huge. `None` for a submodule.
+    pub fn size(&self) -> Option<u64> {
+        [&self.old, &self.new]
+            .into_iter()
+            .flatten()
+            .filter_map(|version| version.size)
+            .max()
+    }
+
     /// The path to show: the new path, or the old one for a deleted file.
-    pub fn path(&self) -> &str {
+    pub fn path(&self) -> &[u8] {
         self.new
             .as_ref()
             .or(self.old.as_ref())
-            .map(|version| version.path.as_str())
+            .map(|version| version.path.as_slice())
             .unwrap_or_default()
     }
 
-    pub fn old_path(&self) -> Option<&str> {
-        self.old.as_ref().map(|version| version.path.as_str())
+    /// [`Self::path`] as text, with `U+FFFD` for bytes that aren't UTF-8.
+    pub fn display_path(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(self.path())
     }
 
-    pub fn new_path(&self) -> Option<&str> {
-        self.new.as_ref().map(|version| version.path.as_str())
+    pub fn old_path(&self) -> Option<&[u8]> {
+        self.old.as_ref().map(|version| version.path.as_slice())
+    }
+
+    pub fn new_path(&self) -> Option<&[u8]> {
+        self.new.as_ref().map(|version| version.path.as_slice())
     }
 }
 
 /// Parses `git diff -z --raw --numstat --no-abbrev`: a raw record for each file, then a numstat
-/// record for each, in the same order.
+/// record for each, in the same order. Paths are bytes; everything else is ASCII.
 pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
-    let fields = nul_fields(output)?;
-    let mut fields = fields.iter().map(String::as_str).peekable();
+    let output = output.strip_suffix(b"\0").unwrap_or(output);
+    let fields: Vec<&[u8]> = if output.is_empty() {
+        Vec::new()
+    } else {
+        output.split(|byte| *byte == 0).collect()
+    };
+    let mut fields = fields.into_iter().peekable();
     let mut files = Vec::new();
-    while let Some(header) = fields.next_if(|field| field.starts_with(':')) {
+    while let Some(header) = fields.next_if(|field| field.starts_with(b":")) {
+        let header = ascii(header)?;
         let mut path = || {
             fields
                 .next()
@@ -108,11 +136,12 @@ pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
                 (Some(path), Some(path))
             }
         };
-        let version = |path: Option<&str>, mode: Option<FileMode>, oid: &Oid| -> Option<_> {
+        let version = |path: Option<&[u8]>, mode: Option<FileMode>, oid: &Oid| -> Option<_> {
             Some(FileVersion {
-                path: path?.to_string(),
+                path: path?.to_vec(),
                 oid: oid.clone(),
                 mode: mode?,
+                size: None,
             })
         };
         let change = match raw.status {
@@ -149,33 +178,38 @@ pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
 
     let mut index = 0;
     while let Some(field) = fields.next() {
-        let mut parts = field.splitn(3, '\t');
+        let mut parts = field.splitn(3, |byte| *byte == b'\t');
         let (Some(added), Some(deleted), Some(path)) = (parts.next(), parts.next(), parts.next())
         else {
-            return Err(unexpected(&format!("--numstat line {field:?}")));
+            return Err(unexpected(&format!(
+                "--numstat line {:?}",
+                String::from_utf8_lossy(field)
+            )));
         };
+        let (added, deleted) = (ascii(added)?, ascii(deleted)?);
         let path = if path.is_empty() {
             // A rename: the old and new paths follow as fields of their own.
             let _old = fields.next();
-            fields
-                .next()
-                .ok_or_else(|| unexpected(&format!("--numstat rename {field:?}")))?
+            fields.next().ok_or_else(|| {
+                unexpected(&format!(
+                    "--numstat rename {:?}",
+                    String::from_utf8_lossy(field)
+                ))
+            })?
         } else {
             path
         };
+        let shown = String::from_utf8_lossy(path);
         let file = files
             .get_mut(index)
-            .ok_or_else(|| unexpected(&format!("--numstat line for {path} without a raw line")))?;
+            .ok_or_else(|| unexpected(&format!("--numstat line for {shown} without a raw line")))?;
         if file.path() != path {
             return Err(unexpected(&format!(
-                "--numstat line for {path} where {} was expected",
-                file.path()
+                "--numstat line for {shown} where {} was expected",
+                file.display_path()
             )));
         }
-        let submodule = [&file.old, &file.new]
-            .into_iter()
-            .flatten()
-            .any(|version| version.mode == FileMode::Submodule);
+        let submodule = file.is_submodule();
         if added == "-" && deleted == "-" {
             file.binary = true;
         } else if submodule {
@@ -184,7 +218,7 @@ pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
             let count = |count: &str| {
                 count
                     .parse()
-                    .map_err(|_| unexpected(&format!("--numstat line {field:?}")))
+                    .map_err(|_| unexpected(&format!("--numstat count {count:?} for {shown}")))
             };
             file.lines = Some(LineCounts {
                 added: count(added)?,
@@ -245,18 +279,12 @@ fn parse_mode(mode: &str) -> Result<Option<FileMode>, Error> {
     }))
 }
 
-/// Splits `-z` output into its NUL-terminated fields.
-fn nul_fields(output: &[u8]) -> Result<Vec<String>, Error> {
-    let output = output.strip_suffix(b"\0").unwrap_or(output);
-    if output.is_empty() {
-        return Ok(Vec::new());
-    }
-    output
-        .split(|byte| *byte == 0)
-        .map(|field| {
-            String::from_utf8(field.to_vec()).map_err(|_| unexpected("a path that isn't UTF-8"))
-        })
-        .collect()
+/// A field that git always writes in ASCII, such as a raw header or a count.
+fn ascii(field: &[u8]) -> Result<&str, Error> {
+    std::str::from_utf8(field)
+        .ok()
+        .filter(|field| field.is_ascii())
+        .ok_or_else(|| unexpected(&format!("field {:?}", String::from_utf8_lossy(field))))
 }
 
 fn unexpected(what: &str) -> Error {
@@ -279,6 +307,7 @@ mod tests {
             path: path.into(),
             oid: oid.parse().unwrap(),
             mode,
+            size: None,
         })
     }
 
@@ -355,10 +384,41 @@ mod tests {
                 (change, &old, &new, binary, lines)
             );
         }
-        assert_eq!(files[2].path(), "gone.txt");
-        assert_eq!(files[5].path(), "src/new.rs");
-        assert_eq!(files[5].old_path(), Some("old.rs"));
+        assert_eq!(files[2].path(), b"gone.txt");
+        assert_eq!(files[5].path(), b"src/new.rs");
+        assert_eq!(files[5].old_path(), Some(&b"old.rs"[..]));
         assert_eq!(files[0].old_path(), None);
+    }
+
+    #[test]
+    fn paths_are_bytes_whatever_they_hold() {
+        let mut output = format!(":000000 100644 {ZERO} {A} A\0").into_bytes();
+        output.extend_from_slice(b"caf\xe9.txt\0");
+        output.extend_from_slice(format!(":100644 100644 {A} {B} R090\0").as_bytes());
+        output.extend_from_slice(b"old\tname\0new\tname\0");
+        output.extend_from_slice(b"1\t0\tcaf\xe9.txt\x002\t1\t\0old\tname\0new\tname\0");
+
+        let files = parse(&output).unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path(), b"caf\xe9.txt");
+        assert_eq!(files[0].display_path(), "caf\u{fffd}.txt");
+        assert_eq!(
+            files[0].lines,
+            Some(LineCounts {
+                added: 1,
+                deleted: 0
+            })
+        );
+        assert_eq!(files[1].old_path(), Some(&b"old\tname"[..]));
+        assert_eq!(files[1].path(), b"new\tname");
+        assert_eq!(
+            files[1].lines,
+            Some(LineCounts {
+                added: 2,
+                deleted: 1
+            })
+        );
     }
 
     #[test]

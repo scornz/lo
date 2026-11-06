@@ -137,7 +137,7 @@ Not compiled in: `auto_update`, `extension_host`, `git_ui`, `git_ui_core`, `call
    project folder and no language server.
 
 With `--trust`, rozed also checks the head out, detached, as a `git worktree` at
-`~/Library/Caches/rozed/checkouts/github.com/<owner>/<repo>/pull-<n>`, trusts that folder and
+`~/Library/Caches/rozed/checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`, trusts that folder and
 nothing else, and opens it as the project's only folder. A file whose bytes there hash to the
 head's blob (`git hash-object --no-filters`, against the blob ID from `--raw`) shows the checkout's
 project buffer on the right, so rust-analyzer attaches to it, as in Zed's `file_diff_view.rs`. A
