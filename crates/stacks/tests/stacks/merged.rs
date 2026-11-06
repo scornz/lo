@@ -76,6 +76,34 @@ fn a_rebase_merged_pr_matches_on_its_commits_too() {
 }
 
 #[test]
+fn a_commit_several_merged_prs_list_belongs_to_the_oldest() {
+    // #2 was stacked on #1 by commits, so it lists a.1 too. #3 was cut from #1.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1"]).merged(false),
+            pr(2, "main", "b").commits(&["a.1", "b.1"]).merged(false),
+            pr(3, "main", "c").commits(&["a.1", "c.1"]),
+        ],
+        &["main", "  #3 shared-commits needs-rebase(#1 a.1)"],
+    );
+}
+
+#[test]
+fn a_merged_layer_links_past_its_own_commits() {
+    // #2, stacked on #1 by commits, was squash-merged; #3 was cut from #2.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1"]),
+            pr(2, "main", "m")
+                .commits(&["a.1", "m.1", "m.2"])
+                .merged(false),
+            pr(3, "main", "c").commits(&["a.1", "m.1", "m.2", "c.1"]),
+        ],
+        &["main", "  #1", "    #3 shared-commits needs-rebase(#2 m.2)"],
+    );
+}
+
+#[test]
 fn layers_above_the_rebased_layer_stay_on_it() {
     assert_forest(
         &[

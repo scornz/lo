@@ -453,24 +453,33 @@ impl<'a> Graph<'a> {
     fn links(&self) -> Vec<Option<Edge>> {
         let by = Lookups {
             position: self
-                .index(|pr| pr.native_stack.map(|entry| (entry.stack, entry.position)))
+                .index(
+                    |pr| pr.native_stack.map(|entry| (entry.stack, entry.position)),
+                    newest,
+                )
                 .into_iter()
                 .collect(),
-            head_ref: self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str())),
-            commit: self.index(|pr| match pr.state {
-                State::Open => vec![pr.head_oid.as_str()],
-                // Squashing or rebasing left all of its commits out of its base branch, so a layer
-                // cut before its last commit still has some of them.
-                State::Merged {
-                    head_in_base: false,
-                } => {
-                    let head = std::iter::once(pr.head_oid.as_str());
-                    pr.commits.iter().map(String::as_str).chain(head).collect()
-                }
-                // A merge-committed PR's head is in its base branch, so it's history like any
-                // other commit there, not a layer below.
-                State::Merged { head_in_base: true } | State::Closed => Vec::new(),
-            }),
+            head_ref: self.index(
+                |pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str()),
+                newest,
+            ),
+            commit: self.index(
+                |pr| match pr.state {
+                    State::Open => vec![pr.head_oid.as_str()],
+                    // Squashing or rebasing left all of its commits out of its base branch, so a layer
+                    // cut before its last commit still has some of them.
+                    State::Merged {
+                        head_in_base: false,
+                    } => {
+                        let head = std::iter::once(pr.head_oid.as_str());
+                        pr.commits.iter().map(String::as_str).chain(head).collect()
+                    }
+                    // A merge-committed PR's head is in its base branch, so it's history like any
+                    // other commit there, not a layer below.
+                    State::Merged { head_in_base: true } | State::Closed => Vec::new(),
+                },
+                owner,
+            ),
         };
         (0..self.prs.len())
             .map(|index| self.link(index, &by))
@@ -505,8 +514,8 @@ impl<'a> Graph<'a> {
                 .iter()
                 .rev()
                 .filter(|&oid| *oid != pr.head_oid)
-                .find_map(|oid| by.commit.get(oid.as_str()))
-                .filter(|&&below| below != index)
+                .filter_map(|oid| by.commit.get(oid.as_str()))
+                .find(|&&below| below != index)
         };
         let edge = |rule| move |&below: &usize| Edge { below, rule };
         native_stack()
@@ -634,11 +643,12 @@ impl<'a> Graph<'a> {
         cycles
     }
 
-    /// Indexes the PRs that can be below another by `key`. Where several PRs share a key, keeps
-    /// the one a rule links to: an open PR before a merged one, then the newest.
+    /// Indexes the PRs that can be below another by their `keys`. Where several PRs share a key,
+    /// keeps the one `prefer` picks.
     fn index<K: Eq + Hash, Keys: IntoIterator<Item = K>>(
         &self,
         keys: impl Fn(&'a PullRequest) -> Keys,
+        prefer: fn(&PullRequest, &PullRequest) -> bool,
     ) -> HashMap<K, usize> {
         let mut index = HashMap::with_capacity(self.prs.len());
         for (i, &pr) in self.prs.iter().enumerate() {
@@ -650,7 +660,7 @@ impl<'a> Graph<'a> {
                 index
                     .entry(key)
                     .and_modify(|best: &mut usize| {
-                        if rank(pr) > rank(self.prs[*best]) {
+                        if prefer(pr, self.prs[*best]) {
                             *best = i;
                         }
                     })
@@ -661,7 +671,22 @@ impl<'a> Graph<'a> {
     }
 }
 
-/// Orders the PRs a rule could link to, best last.
-fn rank(pr: &PullRequest) -> (bool, SystemTime, u64) {
-    (pr.state == State::Open, pr.created_at, pr.number)
+/// Whether a rule links to `pr` rather than `other`: an open PR before a merged one, then the
+/// newest.
+fn newest(pr: &PullRequest, other: &PullRequest) -> bool {
+    let rank = |pr: &PullRequest| (pr.state == State::Open, pr.created_at, pr.number);
+    rank(pr) > rank(other)
+}
+
+/// Whether a commit both list belongs to `pr` rather than `other`: an open PR's head before a
+/// merged PR's commit, then the newest open PR, or the oldest merged PR, which brought the commit
+/// in. A merged PR stacked on another by commits lists the lower one's commits too.
+fn owner(pr: &PullRequest, other: &PullRequest) -> bool {
+    let age = |pr: &PullRequest| (pr.created_at, pr.number);
+    match (pr.state == State::Open, other.state == State::Open) {
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => age(pr) > age(other),
+        (false, false) => age(pr) < age(other),
+    }
 }
