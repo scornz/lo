@@ -7,11 +7,13 @@
 //! that reports late can insert one.
 
 mod build;
+mod compare;
 
 use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
 pub use build::build_revisions;
+pub use compare::{Comparison, default_comparison};
 
 /// Something a source saw on the pull request's head branch. Each variant's doc names the GitHub
 /// data it comes from.
@@ -184,6 +186,14 @@ impl Revisions {
 
     fn position(&self, head: &str) -> Option<usize> {
         self.list.iter().position(|revision| revision.head == head)
+    }
+
+    /// The nearest revision at or before `index` that rozed can still get.
+    fn available_from(&self, index: usize) -> Option<&Revision> {
+        self.list[..=index]
+            .iter()
+            .rev()
+            .find(|revision| revision.available)
     }
 
     /// The position of the revision a marker commit points at. See [`Revisions::find`].
