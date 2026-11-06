@@ -20,7 +20,7 @@ use editor::{Addon, Editor, SplittableEditor, ToggleSplitDiff, multibuffer_conte
 use gpui::StyledImage as _;
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EntityId, Focusable as _,
-    ObjectFit, WeakEntity, Window, checkerboard, img,
+    ObjectFit, RenderImage, WeakEntity, Window, checkerboard, img, size,
 };
 use language::{Buffer, BufferId, OffsetRangeExt as _, Point};
 use multi_buffer::PathKey;
@@ -45,6 +45,8 @@ pub(crate) struct ShownFile {
     pub(crate) rows: Option<Vec<Range<u32>>>,
     /// The before and after of a changed image, which show under the file's last line.
     pub(crate) images: Option<Images>,
+    /// `images`, decoded to draw.
+    pub(crate) drawn: Option<Drawn>,
     /// Why the file shows collapsed, if it does or did.
     pub(crate) collapsed: Option<Collapsed>,
     /// Whether the whole file shows, rather than its changes with the lines around them.
@@ -71,11 +73,50 @@ impl ShownFile {
             base,
             rows: None,
             images: None,
+            drawn: None,
             collapsed: None,
             whole: false,
             whitespace_hidden: false,
             image_blocks: Vec::new(),
         }
+    }
+}
+
+/// One side of a changed image, decoded to draw, or why it can't be.
+pub(crate) type DrawnSide = Option<Result<Arc<RenderImage>, SharedString>>;
+
+/// The two sides of a changed image, decoded to draw. A side is `None` when the pull request adds
+/// or deletes the image.
+#[derive(Clone)]
+pub(crate) struct Drawn {
+    pub(crate) old: DrawnSide,
+    pub(crate) new: DrawnSide,
+}
+
+/// Decodes `images` in the background, so drawing them needs no more work.
+pub(crate) async fn decode(images: &Images, cx: &mut AsyncWindowContext) -> Drawn {
+    let Ok(renderer) = cx.update(|_, cx| cx.svg_renderer()) else {
+        let gone = || Some(Err(SharedString::from("the window closed")));
+        return Drawn {
+            old: gone(),
+            new: gone(),
+        };
+    };
+    let decode = |side: &Option<ImageSide>| {
+        let image = side.as_ref().map(|side| side.image.clone());
+        let renderer = renderer.clone();
+        cx.background_spawn(async move {
+            image.map(|image| {
+                image
+                    .to_image_data(renderer)
+                    .map_err(|error| SharedString::from(format!("{error:#}")))
+            })
+        })
+    };
+    let (old, new) = (decode(&images.old), decode(&images.new));
+    Drawn {
+        old: old.await,
+        new: new.await,
     }
 }
 
@@ -520,7 +561,7 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
         let file = files.get(path)?;
         let base = file.diff.read(cx).base_text_buffer().clone();
         Some((
-            file.images.clone(),
+            file.images.clone().zip(file.drawn.clone()),
             file.buffer.clone(),
             base,
             files.split.clone(),
@@ -538,10 +579,9 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
     .flatten()
     .unwrap_or_default();
     remove_image_blocks(old_blocks, cx);
-    let Some(images) = images else {
+    let Some((images, drawn)) = images else {
         return;
     };
-    // A folded file shows no blocks; it gets them when it's added and when the side changes.
     let rows = image_rows(&images, window.line_height());
     let mut blocks = Vec::new();
     let rhs = diff.read(cx).rhs_editor().clone();
@@ -564,7 +604,7 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
         let Some(anchor) = anchor else {
             continue;
         };
-        let (images, split) = (images.clone(), split.clone());
+        let (drawn, split) = (drawn.clone(), split.clone());
         let ids = editor.update(cx, |editor, cx| {
             editor.insert_blocks(
                 [BlockProperties {
@@ -578,7 +618,7 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
                             (Side::Both, true) => Side::After,
                             (side, _) => side,
                         };
-                        render_images(&images, side, cx)
+                        render_images(&drawn, side, cx)
                     }),
                     priority: 0,
                 }],
@@ -588,7 +628,11 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
         });
         blocks.extend(ids.into_iter().map(|id| (editor.downgrade(), id)));
     }
+    let lhs_id = lhs.map(|lhs| lhs.entity_id());
     update(diff, cx, |files, _| {
+        // What the blocks were drawn for, which `sync_side_by_side` compares with.
+        files.lhs = lhs_id;
+        files.split.store(lhs_id.is_some(), Ordering::Relaxed);
         if let Some(file) = files.files.get_mut(path) {
             file.image_blocks = blocks;
         }
@@ -614,6 +658,17 @@ fn remove_image_blocks(blocks: Vec<(WeakEntity<Editor>, CustomBlockId)>, cx: &mu
     }
 }
 
+/// A line of text in the middle of an image's panel, in place of the image.
+fn note(text: String) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(Label::new(text).size(LabelSize::Small).color(Color::Muted))
+        .into_any_element()
+}
+
 /// Which images a block shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Side {
@@ -622,64 +677,61 @@ enum Side {
     Both,
 }
 
-fn render_images(images: &Images, side: Side, cx: &mut BlockContext) -> AnyElement {
-    let height = cx.line_height * cx.height as f32;
+fn render_images(drawn: &Drawn, side: Side, cx: &mut BlockContext) -> AnyElement {
+    // Every size is explicit: the block is laid out on its own, and an image left to size itself
+    // would grow to its own height and spill over the lines below.
+    let (height, label) = (cx.line_height * cx.height as f32, cx.line_height);
     let width = (cx.max_width - cx.em_width * 4.).max(px(120.));
+    let (gap, inset) = (px(8.), px(12.));
+    let panels = if side == Side::Both { 2. } else { 1. };
+    let panel_width = ((width - gap * (panels - 1.)) / panels).max(px(60.));
+    let image_size = size(
+        (panel_width - inset).max(px(16.)),
+        (height - label - inset - px(8.)).max(px(16.)),
+    );
     let colors = cx.theme().colors();
     let (border, background, square) = (colors.border_variant, colors.panel_background, 8.);
-    let panel = |label: &'static str, image: Option<&ImageSide>| {
+    let panel = |name: &'static str, image: &DrawnSide| {
         v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .gap_0p5()
+            .w(panel_width)
+            .flex_shrink_0()
             .child(
-                Label::new(label)
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
+                div()
+                    .h(label)
+                    .child(Label::new(name).size(LabelSize::XSmall).color(Color::Muted)),
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_h_0()
+                    .w(image_size.width + inset)
+                    .h(image_size.height + inset)
                     .p_1()
+                    .overflow_hidden()
                     .rounded_sm()
                     .border_1()
                     .border_color(border)
                     .bg(checkerboard(background, square))
                     .child(match image {
-                        Some(side) => img(side.image.clone())
-                            .size_full()
+                        // The box's own ratio, or the image's would decide one of its sides.
+                        Some(Ok(image)) => img(image.clone())
+                            .w(image_size.width)
+                            .h(image_size.height)
+                            .aspect_ratio(image_size.width / image_size.height)
                             .object_fit(ObjectFit::ScaleDown)
-                            .with_fallback(|| {
-                                Label::new("(rozed can't draw this image)")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                                    .into_any_element()
-                            })
                             .into_any_element(),
-                        None => div()
-                            .size_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Label::new("(no image)")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .into_any_element(),
+                        Some(Err(error)) => note(format!("(rozed can't draw this image: {error})")),
+                        None => note("(no image)".to_string()),
                     }),
             )
     };
-    let before = || panel("Before", images.old.as_ref());
-    let after = || panel("After", images.new.as_ref());
+    let before = || panel("Before", &drawn.old);
+    let after = || panel("After", &drawn.new);
     h_flex()
         .id(cx.block_id)
         .w(width)
         .h(height)
+        .items_start()
         .py_1()
-        .gap_2()
+        .gap(gap)
         .map(|this| match side {
             Side::Before => this.child(before()),
             Side::After => this.child(after()),
@@ -695,7 +747,7 @@ mod tests {
     use std::time::Instant;
 
     use editor::SelectionEffects;
-    use gpui::{TestAppContext, VisualTestContext, size};
+    use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
     use workspace::{MultiWorkspace, Workspace};
 
@@ -1138,6 +1190,12 @@ mod tests {
         );
         assert!(diff.read_with(cx, |diff, _| diff.is_split()));
         assert!(file(&diff, "logo.png", cx, |file, _| file.images.is_some()));
+        // Decoded, ready to draw.
+        let drawn = file(&diff, "logo.png", cx, |file, _| file.drawn.clone().unwrap());
+        for side in [drawn.old, drawn.new] {
+            let image = side.unwrap().unwrap();
+            assert_eq!(image.size(0), size(3.into(), 2.into()));
+        }
         // One a side.
         assert_eq!(image_blocks(&diff, "logo.png", cx), 2);
         assert!(!is_folded(&diff, "logo.png", cx));

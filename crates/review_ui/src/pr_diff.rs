@@ -1339,6 +1339,9 @@ impl Target<'_> {
         );
         let hunks_only = rows.is_some();
         file.rows = rows;
+        if let Some(images) = &images {
+            file.drawn = Some(shown_files::decode(images, cx).await);
+        }
         file.images = images;
         file.collapsed = collapsed.clone();
         file.whitespace_hidden = self.hide_whitespace;
