@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Utc};
-use futures::AsyncReadExt as _;
 use github::{GithubClient, GithubError};
+use gpui::{App, Global};
+use http_client::HttpClient;
 use http_client::http::{HeaderMap, StatusCode};
-use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request};
 use serde::Deserialize;
 
 use crate::pr_link::PrLink;
@@ -24,6 +24,9 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
     pub head: Head,
     pub base: Base,
+    /// How many files it changes. GitHub lists no more than 3,000 of them.
+    #[serde(default)]
+    pub changed_files: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -91,40 +94,47 @@ pub enum CanSignIn {
     No,
 }
 
-/// `GET /repos/{owner}/{repo}/pulls/{number}` without signing in. It works for public
-/// repositories only and counts against GitHub's 60 requests an hour per IP address.
-pub async fn fetch_pull_request(
+/// The app's one client without an account. GitHub allows 60 requests an hour per IP address
+/// without a token, and this client keeps what GitHub last said about that limit for every tab.
+struct Anonymous {
     http: Arc<dyn HttpClient>,
+    client: GithubClient,
+}
+
+impl Global for Anonymous {}
+
+/// The app's client without an account, made anew only if the app's HTTP client changed.
+pub(crate) fn anonymous_client(cx: &mut App) -> GithubClient {
+    let http = cx.http_client();
+    if let Some(anonymous) = cx.try_global::<Anonymous>()
+        && std::ptr::addr_eq(Arc::as_ptr(&anonymous.http), Arc::as_ptr(&http))
+    {
+        return anonymous.client.clone();
+    }
+    let client = GithubClient::anonymous(http.clone());
+    cx.set_global(Anonymous {
+        http,
+        client: client.clone(),
+    });
+    client
+}
+
+/// `GET /repos/{owner}/{repo}/pulls/{number}` with `client`, the app's client without an account
+/// ([`anonymous_client`]). It works for public repositories only and counts against GitHub's 60
+/// requests an hour per IP address.
+pub async fn fetch_pull_request(
+    client: &GithubClient,
     link: &PrLink,
     can_sign_in: CanSignIn,
 ) -> anyhow::Result<PullRequest> {
-    let url = format!(
-        "https://api.github.com/repos/{}/{}/pulls/{}",
-        link.owner, link.repo, link.number
-    );
-    let request = Request::get(&url)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        // A renamed repository answers with a redirect to its new name.
-        .follow_redirects(RedirectPolicy::FollowAll)
-        .body(AsyncBody::empty())?;
-    let mut response = http
-        .send(request)
+    let path = format!("/repos/{}/{}/pulls/{}", link.owner, link.repo, link.number);
+    // A renamed repository answers with a redirect to its new name, which the client follows.
+    let response = client
+        .get_answer(&path)
         .await
         .with_context(|| format!("asking GitHub for {link}"))?;
-    let mut body = String::new();
-    response
-        .body_mut()
-        .read_to_string(&mut body)
-        .await
-        .with_context(|| format!("reading GitHub's answer for {link}"))?;
-    check_status(
-        response.status(),
-        response.headers(),
-        &body,
-        link,
-        can_sign_in,
-    )?;
+    let body = String::from_utf8_lossy(&response.body);
+    check_status(response.status, &response.headers, &body, link, can_sign_in)?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
@@ -196,7 +206,7 @@ mod tests {
 
     use futures::future::BoxFuture;
     use http_client::http::HeaderValue;
-    use http_client::{Response, Url};
+    use http_client::{AsyncBody, RedirectPolicy, Request, Response, Url};
 
     /// GitHub's answer for sharkdp/fd#2212, trimmed to the fields rozed reads and a few around
     /// them.
@@ -273,7 +283,8 @@ mod tests {
     }
 
     fn fetch(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), CanSignIn::Yes))
+        let client = GithubClient::anonymous(http);
+        futures::executor::block_on(fetch_pull_request(&client, &fd_2212(), CanSignIn::Yes))
     }
 
     fn fetch_signed_in(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
@@ -304,6 +315,7 @@ mod tests {
                         clone_url: "https://github.com/sharkdp/fd.git".into()
                     },
                 },
+                changed_files: None,
             }
         );
 
@@ -315,10 +327,11 @@ mod tests {
         assert_eq!(request.method(), "GET");
         assert_eq!(request.headers()["Accept"], "application/vnd.github+json");
         assert!(request.headers().get("Authorization").is_none());
-        assert_eq!(
+        // A renamed repository's redirect is followed.
+        assert!(matches!(
             request.extensions().get::<RedirectPolicy>(),
-            Some(&RedirectPolicy::FollowAll)
-        );
+            Some(RedirectPolicy::FollowLimit(_))
+        ));
     }
 
     #[test]
@@ -374,8 +387,10 @@ mod tests {
 
     #[test]
     fn without_an_accounts_database_it_doesnt_say_to_sign_in() {
-        let fetch =
-            |http| futures::executor::block_on(fetch_pull_request(http, &fd_2212(), CanSignIn::No));
+        let fetch = |http| {
+            let client = GithubClient::anonymous(http);
+            futures::executor::block_on(fetch_pull_request(&client, &fd_2212(), CanSignIn::No))
+        };
         let error = fetch(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
         assert_eq!(
             error.to_string(),
