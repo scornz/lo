@@ -59,6 +59,8 @@ pub struct NativeStackEntry {
 /// The rule that linked a layer to the PR below it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rule {
+    /// GitHub says it's the layer above the PR below, in a stack made with GitHub's stacks.
+    NativeStack,
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch.
     BaseBranch,
     /// Its commits contain the head commit of the PR below.
@@ -261,6 +263,13 @@ struct Graph<'a> {
     prs: Vec<&'a PullRequest>,
 }
 
+/// Each rule's lookup from what it matches to the PR below, as indexes into [`Graph::prs`].
+struct Lookups<'a> {
+    position: HashMap<NativeStackEntry, usize>,
+    head_ref: HashMap<&'a str, usize>,
+    head_oid: HashMap<&'a str, usize>,
+}
+
 /// A link from a PR to the PR below it, as an index into [`Graph::prs`].
 #[derive(Clone, Copy, Debug)]
 struct Edge {
@@ -278,37 +287,47 @@ impl<'a> Graph<'a> {
         Self { prs }
     }
 
-    /// Each PR's link to the PR below it, by the first rule that applies.
+    /// Each PR's link to the PR below it.
     fn links(&self) -> Vec<Option<Edge>> {
-        let by_head_ref = self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str()));
-        let by_head_oid = self.index(|pr| Some(pr.head_oid.as_str()));
-        self.prs
-            .iter()
-            .enumerate()
-            .map(|(index, pr)| {
-                let base_branch = by_head_ref
-                    .get(pr.base_ref.as_str())
-                    .filter(|&&below| below != index)
-                    .map(|&below| Edge {
-                        below,
-                        rule: Rule::BaseBranch,
-                    });
-                base_branch.or_else(|| {
-                    // The nearest: the latest of its commits that's another PR's head. A PR with
-                    // the same head commit isn't below it.
-                    let below = pr
-                        .commits
-                        .iter()
-                        .rev()
-                        .filter(|&oid| *oid != pr.head_oid)
-                        .find_map(|oid| by_head_oid.get(oid.as_str()))?;
-                    Some(Edge {
-                        below: *below,
-                        rule: Rule::SharedCommits,
-                    })
-                })
-            })
+        let by = Lookups {
+            position: self.index(|pr| pr.native_stack),
+            head_ref: self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str())),
+            head_oid: self.index(|pr| Some(pr.head_oid.as_str())),
+        };
+        (0..self.prs.len())
+            .map(|index| self.link(index, &by))
             .collect()
+    }
+
+    /// The link from `prs[index]` to the PR below it, by the first rule that applies.
+    fn link(&self, index: usize, by: &Lookups) -> Option<Edge> {
+        let pr = self.prs[index];
+        let native_stack = || {
+            let entry = pr.native_stack.filter(|entry| entry.position > 1)?;
+            by.position.get(&NativeStackEntry {
+                position: entry.position - 1,
+                ..entry
+            })
+        };
+        let base_branch = || {
+            by.head_ref
+                .get(pr.base_ref.as_str())
+                .filter(|&&below| below != index)
+        };
+        // The nearest: the latest of its commits that's another PR's head. A PR with the same head
+        // commit isn't below it.
+        let shared_commits = || {
+            pr.commits
+                .iter()
+                .rev()
+                .filter(|&oid| *oid != pr.head_oid)
+                .find_map(|oid| by.head_oid.get(oid.as_str()))
+        };
+        let edge = |rule| move |&below: &usize| Edge { below, rule };
+        native_stack()
+            .map(edge(Rule::NativeStack))
+            .or_else(|| base_branch().map(edge(Rule::BaseBranch)))
+            .or_else(|| shared_commits().map(edge(Rule::SharedCommits)))
     }
 
     /// Indexes the PRs by `key`. Where several PRs share a key, keeps the one a rule links to: an

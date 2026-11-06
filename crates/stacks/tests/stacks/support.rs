@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use stacks::{PullRequest, Rule, Stacks, State};
+use stacks::{NativeStackEntry, PullRequest, Rule, Stacks, State};
 
 /// An open pull request from `head` (a branch in the base repository) into `base`, with one commit,
 /// `<head>.1`, created `number` seconds after the epoch.
@@ -32,6 +32,8 @@ pub trait With: Sized {
     fn closed(self) -> Self;
     /// Makes it a PR from a fork, whose head branch isn't in the base repository.
     fn fork(self) -> Self;
+    /// Makes it the layer at `position` of GitHub stack `stack`.
+    fn native(self, stack: u64, position: u32) -> Self;
 }
 
 impl With for PullRequest {
@@ -55,6 +57,11 @@ impl With for PullRequest {
         self.head_in_base_repo = false;
         self
     }
+
+    fn native(mut self, stack: u64, position: u32) -> Self {
+        self.native_stack = Some(NativeStackEntry { stack, position });
+        self
+    }
 }
 
 /// Renders the forest one line per root branch and layer, layers indented under what they sit on,
@@ -71,6 +78,7 @@ pub fn render(stacks: &Stacks) -> String {
                 if let Some(rule) = layer.rule {
                     line.push(' ');
                     line.push_str(match rule {
+                        Rule::NativeStack => "native-stack",
                         Rule::BaseBranch => "base-branch",
                         Rule::SharedCommits => "shared-commits",
                     });
