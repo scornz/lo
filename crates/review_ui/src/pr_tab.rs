@@ -14,7 +14,7 @@ use editor::{Editor, SelectionEffects, SplittableEditor};
 use github::files::CutShort;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{HelpLink, PullRef, Target};
+use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -215,6 +215,8 @@ pub struct PrTab {
     _github_diff: Option<Task<()>>,
     /// Why the local copy failed for good, when it did before GitHub's diff showed.
     copy_failed: Option<SharedString>,
+    /// Whether GitHub's diff failed for good, or wasn't read, so it won't show.
+    github_failed: bool,
     /// The head GitHub's REST API gave for the pull request, which the local copy fetches.
     api_head: Option<String>,
     /// The head GitHub's diff was listed at, once it shows and if GitHub's links say.
@@ -277,6 +279,7 @@ impl PrTab {
             _load: None,
             _github_diff: None,
             copy_failed: None,
+            github_failed: false,
             api_head: None,
             github_head: None,
             retry_copy: None,
@@ -566,10 +569,15 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let link = self.link().clone();
-        let Ok((owner, name)) = pull_request.base.repo.owner_and_name() else {
-            return;
+        let (owner, name) = match pull_request.base.repo.owner_and_name() {
+            Ok(owner_and_name) => owner_and_name,
+            Err(error) => {
+                log::warn!("{link}: not reading GitHub's diff: {error:#}");
+                return;
+            }
         };
         let Ok(number) = i64::try_from(link.number) else {
+            log::warn!("{link}: not reading GitHub's diff: GitHub's API can't name its number");
             return;
         };
         let pull = PullRef::new(owner, name, number);
@@ -582,38 +590,64 @@ impl PrTab {
         let opened = self.opened;
         let changed_files = pull_request.changed_files;
         self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
-            let started = Instant::now();
-            match reader.read(&pull).await {
-                Ok(read) => {
-                    log::info!(
-                        "{link}: GitHub listed {} files in {:?}",
-                        read.files.len(),
-                        started.elapsed()
-                    );
-                    if read.files.is_empty() && read.cut_short.is_some() {
-                        this.update(cx, |this, cx| this.github_diff_not_read(cx))
+            let mut wait = GITHUB_FIRST_RETRY;
+            let read = loop {
+                let started = Instant::now();
+                match reader.read(&pull).await {
+                    Ok(read) => {
+                        log::info!(
+                            "{link}: GitHub listed {} files in {:?}",
+                            read.files.len(),
+                            started.elapsed()
+                        );
+                        break read;
+                    }
+                    Err(error) => {
+                        let again = github_retry_wait(&error, wait, SystemTime::now());
+                        log::warn!(
+                            "{link}: can't read GitHub's diff: {error}; {}",
+                            match again {
+                                Some(again) => format!("trying again in {again:?}"),
+                                None => "not trying again".to_string(),
+                            }
+                        );
+                        let Some(again) = again else {
+                            this.update(cx, |this, cx| this.github_diff_failed(&error, cx))
+                                .ok();
+                            return;
+                        };
+                        this.update(cx, |this, cx| this.github_diff_retried(&error, cx))
                             .ok();
-                        return;
+                        // Dropped, and so stopped, once the local copy's diff shows.
+                        cx.background_executor().timer(again).await;
+                        wait = pr_diff::next_wait(wait);
                     }
-                    if let Some(cut) = cut_text(read.files.len(), changed_files, read.cut_short) {
+                }
+            };
+            if read.files.is_empty() && read.cut_short.is_some() {
+                this.update(cx, |this, cx| this.github_diff_not_read(cx))
+                    .ok();
+                return;
+            }
+            let cut = cut_text(read.files.len(), changed_files, read.cut_short);
+            let shown = this.update(cx, |this, cx| {
+                this.banners.update(cx, |banners, cx| {
+                    banners.hide(BannerKind::GithubDiffFailed, cx);
+                    if let Some(cut) = cut {
                         log::info!("{link}: {cut}");
-                        this.update(cx, |this, cx| {
-                            this.banners.update(cx, |banners, cx| {
-                                banners.show(BannerKind::GithubDiffCut, Severity::Info, cut, cx)
-                            })
-                        })
-                        .ok();
+                        banners.show(BannerKind::GithubDiffCut, Severity::Info, cut, cx)
                     }
-                    source.head = read.head;
-                    if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await {
-                        log::warn!("{link}: can't show GitHub's diff: {error:#}");
-                    }
-                }
-                Err(error) => {
-                    log::warn!("{link}: can't read GitHub's diff: {error}");
-                    this.update(cx, |this, cx| this.github_diff_failed(&error, cx))
-                        .ok();
-                }
+                })
+            });
+            if shown.is_err() {
+                return;
+            }
+            source.head = read.head;
+            let tab = this.clone();
+            if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await
+                && tab.upgrade().is_some()
+            {
+                log::warn!("{link}: can't show GitHub's diff: {error:#}");
             }
         }));
     }
@@ -675,7 +709,27 @@ impl PrTab {
         Some(self.files.review_positions())
     }
 
-    fn github_diff_failed(&mut self, error: &github::GithubError, cx: &mut Context<Self>) {
+    /// GitHub's diff couldn't be read for a reason that may pass, and is read again soon.
+    fn github_diff_retried(&mut self, error: &GithubError, cx: &mut Context<Self>) {
+        if self.diff.is_some() {
+            return;
+        }
+        self.banners.update(cx, |banners, cx| {
+            banners.show(
+                BannerKind::GithubDiffFailed,
+                Severity::Info,
+                format!(
+                    "rozed couldn't read GitHub's diff, and tries again until the local copy's \
+                     diff is ready: {error}"
+                ),
+                cx,
+            )
+        });
+    }
+
+    /// GitHub's diff can't be read, and isn't tried again.
+    fn github_diff_failed(&mut self, error: &GithubError, cx: &mut Context<Self>) {
+        self.github_failed = true;
         if self.diff.is_some() {
             return;
         }
@@ -702,8 +756,12 @@ impl PrTab {
 
     /// GitHub's diff wasn't read, to save the requests GitHub allows without signing in.
     fn github_diff_not_read(&mut self, cx: &mut Context<Self>) {
+        self.github_failed = true;
         if self.diff.is_some() {
             return;
+        }
+        if let Some(copy_failed) = self.copy_failed.clone() {
+            self.set_status(Status::Failed(copy_failed), cx);
         }
         self.banners.update(cx, |banners, cx| {
             banners.show(
@@ -791,7 +849,7 @@ impl PrTab {
         });
         let status = if self.diff.is_some() {
             Status::Ready
-        } else if self._github_diff.is_some() {
+        } else if self._github_diff.is_some() && !self.github_failed {
             // GitHub's diff shows when it arrives, and it's all there is until a retry.
             self.copy_failed = Some(why.to_string().into());
             Status::Loading("Reading GitHub's diff…".into())
@@ -835,7 +893,8 @@ impl PrTab {
     /// Loading failed with `error`. GitHub's diff, if it shows or is on its way, stays, with a
     /// banner saying why the local copy's won't come; otherwise the tab says why it couldn't open.
     fn load_failed(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
-        let github_coming = self.diff.is_none() && self._github_diff.is_some();
+        let github_coming =
+            self.diff.is_none() && self._github_diff.is_some() && !self.github_failed;
         if self.diff.is_none() && !github_coming {
             self.set_status(Status::Failed(format!("{error:#}").into()), cx);
             return;
@@ -1388,6 +1447,31 @@ impl PrTab {
                     .size(LabelSize::Small)
                     .color(Color::Disabled),
             )
+    }
+}
+
+/// How long to wait before reading GitHub's diff again the first time. Each failure doubles it, up
+/// to 5 minutes, as for the local copy.
+const GITHUB_FIRST_RETRY: Duration = Duration::from_secs(5);
+
+/// How long to wait before reading GitHub's diff again after `error`, having waited `wait` last
+/// time, or `None` when reading it again won't help: the network, a server error, GitHub's pages
+/// not fitting together and a rate limit pass; GitHub refusing the pull request doesn't.
+fn github_retry_wait(error: &GithubError, wait: Duration, now: SystemTime) -> Option<Duration> {
+    match error {
+        GithubError::Network(_) | GithubError::Inconsistent(_) => Some(wait),
+        GithubError::Api { status, .. } if *status >= 500 => Some(wait),
+        GithubError::RateLimited {
+            retry_after, reset, ..
+        } => {
+            let until_reset = reset.map(|reset| {
+                (SystemTime::UNIX_EPOCH + Duration::from_secs(reset))
+                    .duration_since(now)
+                    .unwrap_or_default()
+            });
+            Some(retry_after.or(until_reset).unwrap_or(wait).max(wait))
+        }
+        _ => None,
     }
 }
 
@@ -2089,6 +2173,108 @@ mod tests {
             changed_files: None,
         });
         github.make_public(repo);
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_is_read_again_after_a_failure_that_may_pass(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/app", 1, 2);
+        anonymous(&github, cx);
+        let files = "/repos/acme/app/pulls/1/files?per_page=100";
+        github.answer("", files, Answer::new(502, r#"{"message":"Server Error"}"#));
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+
+        // Neither diff shows yet, and GitHub's is tried again.
+        assert_eq!(tab.read_with(cx, |tab, _| tab.diff_source()), None);
+        assert!(matches!(status(&tab, cx), Status::Loading(_)));
+        let shown = banners(&tab, cx);
+        assert!(
+            shown.iter().any(|banner| banner.starts_with(
+                "rozed couldn't read GitHub's diff, and tries again until the local copy's diff \
+                 is ready: GitHub answered 502"
+            )),
+            "{shown:#?}"
+        );
+        github.forget_answer("", files);
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.diff_source(), Some(DiffSource::GitHub));
+            assert_eq!(tab.status(), &Status::Ready);
+        });
+        let shown = banners(&tab, cx);
+        assert!(
+            !shown
+                .iter()
+                .any(|banner| banner.contains("GitHub's diff, and tries again")),
+            "{shown:#?}"
+        );
+    }
+
+    #[test]
+    fn githubs_diff_is_read_again_only_after_a_failure_that_may_pass() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let wait = Duration::from_secs(10);
+        let api = |status| GithubError::Api {
+            status,
+            message: String::new(),
+            documentation_url: None,
+            errors: Vec::new(),
+        };
+        let network = GithubError::Network(anyhow::anyhow!("offline"));
+        assert_eq!(github_retry_wait(&network, wait, now), Some(wait));
+        assert_eq!(github_retry_wait(&api(502), wait, now), Some(wait));
+        assert_eq!(github_retry_wait(&api(422), wait, now), None);
+        let not_found = GithubError::NotFound {
+            message: "Not Found".into(),
+            documentation_url: None,
+        };
+        assert_eq!(github_retry_wait(&not_found, wait, now), None);
+        // A used-up rate limit waits for its reset, or for as long as GitHub asked.
+        let limited = |reset, retry_after| GithubError::RateLimited {
+            message: String::new(),
+            secondary: false,
+            reset,
+            retry_after,
+            resource: Some("core".into()),
+        };
+        assert_eq!(
+            github_retry_wait(&limited(Some(1_600), None), wait, now),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(
+            github_retry_wait(&limited(None, Some(Duration::from_secs(60))), wait, now),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            github_retry_wait(&limited(None, None), wait, now),
+            Some(wait)
+        );
+    }
+
+    #[gpui::test]
+    async fn when_neither_diff_can_show_the_tab_says_why_the_copy_failed(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/app", 1, 2);
+        anonymous(&github, cx);
+        let files = "/repos/acme/app/pulls/1/files?per_page=100";
+        github.answer("", files, Answer::new(404, r#"{"message":"Not Found"}"#));
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.contains("the repository doesn't exist"),
+            "{message}"
+        );
     }
 
     #[gpui::test]
