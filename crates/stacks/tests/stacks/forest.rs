@@ -1,6 +1,6 @@
 //! The forest's shape when nothing links pull requests: roots, order and which PRs are layers.
 
-use stacks::{Parent, Stacks, State};
+use stacks::{Parent, Stacks};
 
 use crate::support::{With, assert_forest, pr};
 
@@ -45,10 +45,12 @@ fn stacks_on_a_root_are_in_creation_order() {
 
 #[test]
 fn closed_and_merged_prs_are_not_layers() {
-    let mut merged = pr(2, "main", "b");
-    merged.state = State::Merged { head_in_base: true };
     let stacks = assert_forest(
-        &[pr(1, "main", "a"), merged, pr(3, "main", "c").closed()],
+        &[
+            pr(1, "main", "a"),
+            pr(2, "main", "b").merged(true),
+            pr(3, "main", "c").closed(),
+        ],
         &["main", "  #1"],
     );
     assert!(stacks.layer(2).is_none());

@@ -30,6 +30,7 @@ pub trait With: Sized {
     fn commits(self, commits: &[&str]) -> Self;
     fn created(self, seconds: u64) -> Self;
     fn closed(self) -> Self;
+    fn merged(self, head_in_base: bool) -> Self;
     /// Makes it a PR from a fork, whose head branch isn't in the base repository.
     fn fork(self) -> Self;
     /// Makes it the layer at `position` of GitHub stack `stack`.
@@ -53,6 +54,11 @@ impl With for PullRequest {
         self
     }
 
+    fn merged(mut self, head_in_base: bool) -> Self {
+        self.state = State::Merged { head_in_base };
+        self
+    }
+
     fn fork(mut self) -> Self {
         self.head_in_base_repo = false;
         self
@@ -65,7 +71,8 @@ impl With for PullRequest {
 }
 
 /// Renders the forest one line per root branch and layer, layers indented under what they sit on,
-/// in each stack's walk order. A layer's line ends with the rule that linked it, if any.
+/// in each stack's walk order. A layer's line ends with the rule that linked it and any rebase it
+/// needs.
 pub fn render(stacks: &Stacks) -> String {
     let mut lines = Vec::new();
     for root in stacks.roots() {
@@ -82,6 +89,12 @@ pub fn render(stacks: &Stacks) -> String {
                         Rule::BaseBranch => "base-branch",
                         Rule::SharedCommits => "shared-commits",
                     });
+                }
+                if let Some(rebase) = &layer.needs_rebase {
+                    line.push_str(&format!(
+                        " needs-rebase(#{} {})",
+                        rebase.merged, rebase.compare_against
+                    ));
                 }
                 lines.push(line);
             }

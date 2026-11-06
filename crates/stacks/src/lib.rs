@@ -65,7 +65,9 @@ pub enum Rule {
     NativeStack,
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch.
     BaseBranch,
-    /// Its commits contain the head commit of the PR below.
+    /// Its commits contain the head commit of the PR below, the latest such commit if several do.
+    /// A PR with the same head commit isn't below it, and neither is a merged PR whose head is in
+    /// its base branch.
     SharedCommits,
 }
 
@@ -86,10 +88,24 @@ pub struct Layer {
     /// The rule that linked it to the PR below, or `None` when no rule did and it sits on its own
     /// base branch.
     pub rule: Option<Rule>,
+    /// Set when the PR its rule matched was merged in a way that left this layer on commits that
+    /// aren't in the base branch.
+    pub needs_rebase: Option<NeedsRebase>,
     /// The layers sitting on this one, oldest first.
     pub children: Vec<u64>,
     /// How many layers sit below it: 0 for a stack's bottom layer.
     pub depth: usize,
+}
+
+/// A layer sitting on a squash- or rebase-merged PR's commits, which aren't in the branch that PR
+/// merged into.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NeedsRebase {
+    /// The merged PR the layer's rule matched.
+    pub merged: u64,
+    /// The commit to compare the layer against: the merged PR's head, so changes that already
+    /// landed stay hidden.
+    pub compare_against: String,
 }
 
 /// One tree: a bottom layer sitting on a root branch, and every layer above it.
@@ -152,22 +168,9 @@ impl Stacks {
         let graph = Graph::new(prs);
         let mut links = graph.links();
         let cycles = graph.break_cycles(&mut links);
-        let placed = graph
-            .prs
-            .iter()
-            .zip(links)
-            .map(|(&pr, link)| match link {
-                Some(edge) => Placed {
-                    pr,
-                    parent: Parent::Pr(graph.prs[edge.below].number),
-                    rule: Some(edge.rule),
-                },
-                None => Placed {
-                    pr,
-                    parent: Parent::Branch(pr.base_ref.clone()),
-                    rule: None,
-                },
-            })
+        let placed = (0..graph.prs.len())
+            .filter(|&index| graph.prs[index].state == State::Open)
+            .map(|index| graph.place(index, &links))
             .collect();
         Self {
             cycles,
@@ -207,7 +210,13 @@ impl Stacks {
         let mut layers: HashMap<u64, Layer> = HashMap::with_capacity(open.len());
         let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut bottoms: BTreeMap<String, Vec<u64>> = BTreeMap::new();
-        for Placed { pr, parent, rule } in open {
+        for Placed {
+            pr,
+            parent,
+            rule,
+            needs_rebase,
+        } in open
+        {
             match &parent {
                 Parent::Pr(below) => children.entry(*below).or_default().push(pr.number),
                 Parent::Branch(branch) => {
@@ -218,6 +227,7 @@ impl Stacks {
                 number: pr.number,
                 parent,
                 rule,
+                needs_rebase,
                 children: Vec::new(),
                 depth: 0,
             };
@@ -279,9 +289,10 @@ struct Placed<'a> {
     pr: &'a PullRequest,
     parent: Parent,
     rule: Option<Rule>,
+    needs_rebase: Option<NeedsRebase>,
 }
 
-/// The PRs the rules link: the first PR with each number, leaving out the rest.
+/// The PRs the rules link: the first open or merged PR with each number.
 struct Graph<'a> {
     prs: Vec<&'a PullRequest>,
 }
@@ -305,7 +316,7 @@ impl<'a> Graph<'a> {
         let mut seen = HashSet::new();
         let prs = prs
             .iter()
-            .filter(|pr| seen.insert(pr.number) && pr.state == State::Open)
+            .filter(|pr| seen.insert(pr.number) && pr.state != State::Closed)
             .collect();
         Self { prs }
     }
@@ -315,7 +326,12 @@ impl<'a> Graph<'a> {
         let by = Lookups {
             position: self.index(|pr| pr.native_stack),
             head_ref: self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str())),
-            head_oid: self.index(|pr| Some(pr.head_oid.as_str())),
+            // A merge-committed PR's head is in its base branch, so it's history like any other
+            // commit there, not a layer below.
+            head_oid: self.index(|pr| {
+                let in_base = pr.state == State::Merged { head_in_base: true };
+                (!in_base).then_some(pr.head_oid.as_str())
+            }),
         };
         (0..self.prs.len())
             .map(|index| self.link(index, &by))
@@ -351,6 +367,46 @@ impl<'a> Graph<'a> {
             .map(edge(Rule::NativeStack))
             .or_else(|| base_branch().map(edge(Rule::BaseBranch)))
             .or_else(|| shared_commits().map(edge(Rule::SharedCommits)))
+    }
+
+    /// Where the open PR `prs[index]` sits. When its link reaches a merged PR, it sits where that
+    /// PR would, following links down to an open PR or a root branch.
+    fn place(&self, index: usize, links: &[Option<Edge>]) -> Placed<'a> {
+        let pr = self.prs[index];
+        let Some(edge) = links[index] else {
+            return Placed {
+                pr,
+                parent: Parent::Branch(pr.base_ref.clone()),
+                rule: None,
+                needs_rebase: None,
+            };
+        };
+        let mut squashed = false;
+        // `break_cycles` has run, so this ends.
+        let mut next = edge.below;
+        let parent = loop {
+            let below = self.prs[next];
+            let State::Merged { head_in_base } = below.state else {
+                break Parent::Pr(below.number);
+            };
+            squashed |= !head_in_base;
+            match links[next] {
+                Some(link) => next = link.below,
+                None => break Parent::Branch(below.base_ref.clone()),
+            }
+        };
+        // GitHub rebases a stack's layers itself when a lower one merges.
+        let merged = self.prs[edge.below];
+        let needs_rebase = (squashed && edge.rule != Rule::NativeStack).then(|| NeedsRebase {
+            merged: merged.number,
+            compare_against: merged.head_oid.clone(),
+        });
+        Placed {
+            pr,
+            parent,
+            rule: Some(edge.rule),
+            needs_rebase,
+        }
     }
 
     /// Breaks each cycle in `links` by dropping one link, and returns the cycles.
