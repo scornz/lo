@@ -248,7 +248,11 @@ pub fn changed_since_viewed(
         format!("Changed since {when} in {label}.")
     };
     let since = match comparison {
-        FileComparison::SinceViewed { from, .. } => since(&from, "you viewed it"),
+        // The comparison starts from an earlier revision when that one is gone; the note still
+        // names the one the file was viewed in.
+        FileComparison::SinceViewed { from, .. } => {
+            since(viewed_at.unwrap_or(&from), "you viewed it")
+        }
         FileComparison::SinceLastReview { from, .. } => since(&from, "your last review"),
         FileComparison::Full => "Changed since it was viewed.".to_string(),
     };
@@ -564,6 +568,20 @@ mod tests {
                 "{viewed_at:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_note_names_the_revision_the_file_was_viewed_in_even_when_its_gone() {
+        // r2 was force-pushed away, so the comparison would start from r1.
+        let mut revisions = revisions();
+        assert!(revisions.mark_unavailable("a2"));
+        assert_eq!(
+            changed_since_viewed(&revisions, Some(Dismissed), Some("a2")).as_deref(),
+            Some(
+                "Changed since you viewed it in r2. rozed can't show only what changed since \
+                 then yet, so this is the file's whole diff."
+            )
+        );
     }
 
     #[test]
