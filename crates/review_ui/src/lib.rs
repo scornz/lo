@@ -9,6 +9,7 @@ pub mod keymap;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
+pub mod poll_state;
 pub mod pr_banner;
 pub mod pr_diff;
 pub mod pr_link;

@@ -31,6 +31,7 @@ use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer::{self, Saved};
+use crate::poll_state::{self, PollNote, PollState};
 use crate::pr_banner::{self, BannerKind, Banners};
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
@@ -188,6 +189,8 @@ pub struct PrTab {
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab, until the tab closes.
     watched: Option<(Entity<Poller>, PullRef)>,
+    /// How the poller is doing, for the header.
+    poll: PollState,
     /// The trusted checkout's worktree, which goes with the last tab that uses it.
     checkout: Option<WorktreeId>,
     opened: Instant,
@@ -240,6 +243,7 @@ impl PrTab {
             show_file_list: true,
             show_threads: true,
             watched: None,
+            poll: PollState::default(),
             checkout: None,
             opened: Instant::now(),
             _load: None,
@@ -404,7 +408,7 @@ impl PrTab {
         };
         let mut text = format!(
             "Showing what rozed saved for {login} {}",
-            ago(*fetched_at, SystemTime::now())
+            poll_state::ago(*fetched_at, SystemTime::now())
         );
         text.push_str(if asking {
             ", until GitHub answers."
@@ -516,6 +520,15 @@ impl PrTab {
     /// becomes the poller's open pull request only while it's the active tab ([`sync_active`]).
     fn watch(&mut self, poller: Entity<Poller>, pull: PullRef, cx: &mut Context<Self>) {
         poller.update(cx, |poller, cx| poller.watch(pull.clone(), cx));
+        self.poll.status = poller.read(cx).status().clone();
+        self._subscriptions
+            .push(cx.observe(&poller, |this, poller, cx| {
+                let status = poller.read(cx).status().clone();
+                if this.poll.status != status {
+                    this.poll.status = status;
+                    cx.notify();
+                }
+            }));
         self._subscriptions
             .push(cx.subscribe(&poller, |this, _, event, cx| this.poll_event(event, cx)));
         self.watched = Some((poller, pull));
@@ -527,22 +540,41 @@ impl PrTab {
         };
         match event {
             PollEvent::Details { pull, details } if pull == watched => {
+                self.poll.details_at = Some(SystemTime::now());
+                self.poll_succeeded(cx);
                 self.set_details(details, cx);
             }
-            PollEvent::Summary { pull, summary }
-                if pull == watched && self.header.title.as_ref() != Some(&summary.title) =>
-            {
-                self.header.title = Some(summary.title.clone());
-                self.changed(cx);
+            PollEvent::Summary { pull, summary } if pull == watched => {
+                self.poll_succeeded(cx);
+                if self.header.title.as_ref() != Some(&summary.title) {
+                    self.header.title = Some(summary.title.clone());
+                    self.changed(cx);
+                }
             }
+            PollEvent::Check { pull, .. } if pull == watched => self.poll_succeeded(cx),
             PollEvent::Failed {
                 target: Target::Pull(pull),
                 error,
             } if pull == watched => {
                 log::warn!("polling {pull}: {error}");
+                self.poll.failure = Some(error.clone());
+                cx.notify();
             }
             _ => {}
         }
+    }
+
+    fn poll_succeeded(&mut self, cx: &mut Context<Self>) {
+        if self.poll.failure.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// What the header says about how polling the pull request goes, if anything's wrong.
+    pub fn poll_note(&self) -> Option<PollNote> {
+        let login = self.acting.as_ref()?.login()?;
+        self.watched.as_ref()?;
+        poll_state::note(login, &self.poll, SystemTime::now())
     }
 
     /// Whether this is the window's active tab. The account's poller polls the active tab's pull
@@ -555,6 +587,7 @@ impl PrTab {
         if active && !is_open {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
+                self.poll.details_at = Some(answer.fetched_at);
                 self.set_details(&answer.details, cx);
             }
         } else if !active && is_open {
@@ -738,7 +771,8 @@ impl PrTab {
                                 )
                                 .child(Label::new(acting).size(LabelSize::Small))
                             }),
-                    ),
+                    )
+                    .children(self.poll_note().map(render_poll_note)),
             )
             .child(
                 h_flex()
@@ -934,6 +968,32 @@ fn viewed_mark(viewed: Option<ViewedState>) -> Option<AnyElement> {
     }
 }
 
+/// The header's line about how polling goes, with GitHub's link to fix it if there's one.
+fn render_poll_note(note: PollNote) -> impl IntoElement {
+    let (icon, color) = match note.severity {
+        Severity::Error => (IconName::XCircle, Color::Error),
+        Severity::Warning => (IconName::Warning, Color::Warning),
+        _ => (IconName::Info, Color::Muted),
+    };
+    h_flex()
+        .id("poll-note")
+        .min_w_0()
+        .gap_1p5()
+        .child(Icon::new(icon).size(IconSize::Small).color(color))
+        .child(
+            Label::new(note.text)
+                .size(LabelSize::Small)
+                .color(color)
+                .truncate(),
+        )
+        .children(note.link.map(|link| {
+            let url = link.url().to_string();
+            Button::new("poll-note-link", link.label())
+                .label_size(LabelSize::Small)
+                .on_click(move |_, _, cx| cx.open_url(&url))
+        }))
+}
+
 /// A placeholder in the header: a name and what it says.
 fn chip(
     id: &'static str,
@@ -1005,21 +1065,6 @@ fn merge_into_twin(
     }
     workspace.activate_item(&twin, true, true, window, cx);
     true
-}
-
-/// How long before `now` `then` was, in words: "just now", "5 minutes ago", "2 hours ago".
-pub fn ago(then: SystemTime, now: SystemTime) -> String {
-    let seconds = now.duration_since(then).unwrap_or_default().as_secs();
-    let (count, unit) = match seconds {
-        0..60 => return "just now".to_string(),
-        60..3_600 => (seconds / 60, "minute"),
-        3_600..86_400 => (seconds / 3_600, "hour"),
-        _ => (seconds / 86_400, "day"),
-    };
-    match count {
-        1 => format!("a{} {unit} ago", if unit == "hour" { "n" } else { "" }),
-        count => format!("{count} {unit}s ago"),
-    }
 }
 
 /// Loads `link`'s pull request into `this`: picks the account, reads the pull request, copies it
@@ -1311,22 +1356,6 @@ mod tests {
 
     use crate::github_api::{Base, BaseRepo, Head, User};
     use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
-
-    #[test]
-    fn ages_read_in_words() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let ago = |seconds| super::ago(now - Duration::from_secs(seconds), now);
-        assert_eq!(ago(0), "just now");
-        assert_eq!(ago(59), "just now");
-        assert_eq!(ago(60), "a minute ago");
-        assert_eq!(ago(150), "2 minutes ago");
-        assert_eq!(ago(3_600), "an hour ago");
-        assert_eq!(ago(7_300), "2 hours ago");
-        assert_eq!(ago(86_400), "a day ago");
-        assert_eq!(ago(3 * 86_400 + 5), "3 days ago");
-        // A clock that went back.
-        assert_eq!(super::ago(now + Duration::from_secs(5), now), "just now");
-    }
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -2226,6 +2255,51 @@ mod tests {
         assert_eq!(cursor_row(&tab, cx), at_a);
         cx.simulate_keystrokes("ctrl-i");
         assert_eq!(cursor_row(&tab, cx), at_b);
+    }
+
+    #[gpui::test]
+    async fn the_header_says_how_polling_goes(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_seen_two_hours_ago(&github, &git, cx).await;
+        let note = |tab: &Entity<PrTab>, cx: &mut VisualTestContext| {
+            tab.read_with(cx, |tab, _| tab.poll_note().map(|note| note.text))
+        };
+        // The fake GitHub has no GraphQL API, so the poller's first poll for details fails.
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(
+            note(&tab, cx).as_deref(),
+            Some("rozed couldn't update this pull request: Not Found")
+        );
+
+        github.set_offline(true);
+        cx.executor().advance_clock(Duration::from_secs(30));
+        cx.run_until_parked();
+        let offline = note(&tab, cx).unwrap();
+        assert!(
+            offline.starts_with("Offline since just now. These details are from 2 hours ago."),
+            "{offline}"
+        );
+
+        github.set_offline(false);
+        let accounts = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.read(cx).accounts().clone()
+        });
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("rozed-bot", github::accounts::SignedOut::Refused, cx)
+        });
+        cx.executor().advance_clock(Duration::from_secs(5 * 60));
+        cx.run_until_parked();
+        assert_eq!(
+            note(&tab, cx).as_deref(),
+            Some(
+                "Signed out: GitHub refused rozed-bot's token. Sign in again from Accounts… in \
+                 the rozed menu."
+            )
+        );
     }
 
     #[gpui::test]
