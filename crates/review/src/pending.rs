@@ -5,7 +5,8 @@
 //! shows as pending on the web. GitHub keeps at most one per person per pull request.
 //! [`YourReview`] holds yours and plans each step as a [`Mutation`]: `c` adds a comment to it,
 //! starting it on the first; `C` posts one comment at once; the submit dialog submits it, or
-//! reviews without one.
+//! reviews without one. A review records the commit you looked at (design §11), so it approves or
+//! requests changes only while the revision it's recorded on is on screen.
 //!
 //! GitHub's API leaves much of this undocumented. These were checked against GitHub:
 //!
