@@ -10,6 +10,7 @@ mod http;
 mod keymap;
 mod local_copies;
 mod local_project;
+mod pr_banner;
 mod pr_diff;
 mod pr_link;
 mod rust_toolchain;
@@ -26,8 +27,8 @@ use db::kvp::KeyValueStore;
 use editor::{Editor, MultiBuffer};
 use fs::RealFs;
 use gpui::{
-    App, AppContext as _, Bounds, Context, Menu, MenuItem, Task, TaskExt as _, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Bounds, Context, Entity, Menu, MenuItem, Task, TaskExt as _,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, px, size,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
 use language::{Capability, LanguageRegistry};
@@ -40,7 +41,7 @@ use settings::Settings as _;
 use theme::ActiveTheme as _;
 use util::ResultExt as _;
 use workspace::notifications::NotifyTaskExt as _;
-use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
+use workspace::{AppState, MultiWorkspace, Pane, Workspace, WorkspaceStore};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 use crate::pr_link::PrLink;
@@ -226,6 +227,21 @@ fn main() {
         workspace::init(app_state.clone(), cx);
         command_palette::init(cx);
         accounts_ui::init(cx);
+        // Every pane shows its pull request's banners above it.
+        cx.observe_new(|workspace: &mut Workspace, window, cx| {
+            let Some(window) = window else {
+                return;
+            };
+            add_banner_bar(workspace.active_pane(), window, cx);
+            let workspace_entity = cx.entity();
+            cx.subscribe_in(&workspace_entity, window, |_, _, event, window, cx| {
+                if let workspace::Event::PaneAdded(pane) = event {
+                    add_banner_bar(pane, window, cx);
+                }
+            })
+            .detach();
+        })
+        .detach();
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
         cx.set_menus([Menu::new("rozed").items([
@@ -255,6 +271,15 @@ fn main() {
             })
         })
         .detach();
+    });
+}
+
+/// Adds the row that shows a pull request's banners to `pane`'s toolbar.
+fn add_banner_bar(pane: &Entity<Pane>, window: &mut Window, cx: &mut Context<Workspace>) {
+    pane.update(cx, |pane, cx| {
+        pane.toolbar().update(cx, |toolbar, cx| {
+            toolbar.add_item(cx.new(|_| pr_banner::BannerBar::default()), window, cx)
+        })
     });
 }
 

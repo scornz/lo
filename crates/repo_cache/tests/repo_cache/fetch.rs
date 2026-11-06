@@ -9,7 +9,7 @@ use repo_cache::{
 };
 use tempfile::TempDir;
 
-use crate::support::{Remote, Server, git, missing_objects};
+use crate::support::{Remote, Server, git, missing_objects, packs};
 
 /// A repository with `trunk` and pull request #1 on it:
 ///
@@ -119,6 +119,56 @@ fn opens_a_bare_partial_clone_on_first_use() {
         git(&git_dir, &["config", "remote.origin.url"]),
         format!("{}/owner/repo.rs.git", server.base_url())
     );
+}
+
+#[test]
+fn git_never_uses_a_repository_above_the_cache() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    // The user's own repository around the cache, such as dotfiles kept in the home folder. Its
+    // origin has pull request #1; the clone's own remote doesn't exist.
+    let home = TempDir::new().unwrap();
+    git(home.path(), &["init", "-q"]);
+    let origin = format!("{}/owner/repo.git", server.base_url());
+    git(home.path(), &["config", "remote.origin.url", &origin]);
+    let cache = RepoCache::new(
+        home.path().join("Library/Caches/rozed"),
+        Git::find().unwrap(),
+    )
+    .unwrap()
+    .with_remote_base(server.base_url());
+    let repo = cache.open("owner", "not-on-the-server", None).unwrap();
+    // Half deleted, as by a cleanup that was interrupted.
+    fs::remove_file(repo.git_dir().join("HEAD")).unwrap();
+
+    let error = repo.fetch_pull(&refs(1, "trunk")).unwrap_err();
+
+    assert!(matches!(error, Error::Git { .. }), "{error:?}");
+    assert!(
+        error.to_string().contains("not a git repository"),
+        "{error}"
+    );
+    assert!(!error.is_retryable());
+    assert_eq!(
+        git(home.path(), &["for-each-ref", "--format=%(refname)"]),
+        ""
+    );
+    assert!(repo.read_file(&pr.head, b"README.md").is_err());
+}
+
+#[test]
+fn a_clone_left_without_head_is_made_again() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    fetch(&repo, 1);
+    fs::remove_file(repo.git_dir().join("HEAD")).unwrap();
+
+    let repo = cache.open("owner", "repo", None).unwrap();
+
+    assert_eq!(fetch(&repo, 1).head, pr.head);
+    assert!(repo.git_dir().join("HEAD").is_file());
 }
 
 #[test]
@@ -244,16 +294,16 @@ fn a_force_pushed_revision_stays_readable() {
     // A garbage collection keeps every revision.
     git(repo.git_dir(), &["gc", "-q", "--prune=now"]);
     assert_eq!(
-        repo.read_file(&r1, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r1, b"feature.txt").unwrap().unwrap(),
         b"first version\n"
     );
     assert_eq!(
-        repo.read_file(&r2, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r2, b"feature.txt").unwrap().unwrap(),
         b"second version\n"
     );
     let changes = repo.changed_files(&r1, &r2).unwrap();
     assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].path(), "feature.txt");
+    assert_eq!(changes[0].path(), b"feature.txt");
     assert!(repo.is_ancestor(&pr.base, &r1).unwrap());
 }
 
@@ -280,7 +330,7 @@ fn a_revision_the_server_lost_stays_readable_once_read() {
     git(repo.git_dir(), &["gc", "-q", "--prune=now"]);
 
     assert_eq!(
-        repo.read_file(&r1, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r1, b"feature.txt").unwrap().unwrap(),
         b"first version\n"
     );
     assert_eq!(repo.changed_files(&pr.base, &r1).unwrap().len(), 1);
@@ -332,11 +382,21 @@ fn uses_the_head_githubs_api_reported() {
     // Both are pinned.
     let mut revisions = repo.pull_revisions(1).unwrap();
     revisions.sort();
-    let mut expected = vec![pr.head.clone(), pushed];
+    let mut expected = vec![pr.head.clone(), pushed.clone()];
     expected.sort();
     assert_eq!(revisions, expected);
 
-    // The same head needs no second fetch.
+    // The API's head, already fetched, isn't fetched again.
+    let before = packs(repo.git_dir());
+    let fetched = repo
+        .fetch_pull(&PullRequestRefs {
+            head: Some(pushed.clone()),
+            ..refs(1, "trunk")
+        })
+        .unwrap();
+    assert_eq!(fetched.head, pushed);
+    assert_eq!(packs(repo.git_dir()), before);
+    // Nor is anything when the API's head is refs/pull/1/head's.
     let fetched = repo
         .fetch_pull(&PullRequestRefs {
             head: Some(pr.head.clone()),
@@ -344,6 +404,7 @@ fn uses_the_head_githubs_api_reported() {
         })
         .unwrap();
     assert_eq!(fetched.head_source, HeadSource::PullRef);
+    assert_eq!(packs(repo.git_dir()), before);
 }
 
 #[test]
@@ -402,6 +463,28 @@ fn a_deleted_base_branch_falls_back_to_the_apis_base() {
     assert_eq!(fetched.base_tip, pr.head);
     assert_eq!(fetched.base_source, BaseSource::Api);
     assert_eq!(rev_parse(&repo, "refs/rozed/pull/2/base"), pr.head.as_str());
+}
+
+#[test]
+fn a_deleted_base_branch_whose_commit_github_lost_is_unavailable() {
+    let server = Server::new();
+    pull_request(&server);
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    let lost: Oid = "1234567890123456789012345678901234567890".parse().unwrap();
+
+    let error = repo
+        .fetch_pull(&PullRequestRefs {
+            base: Some(lost.clone()),
+            ..refs(1, "gone")
+        })
+        .unwrap_err();
+
+    assert!(
+        matches!(&error, Error::Unavailable { oid } if *oid == lost),
+        "{error:?}"
+    );
+    assert!(!error.is_retryable());
 }
 
 #[test]
@@ -475,7 +558,7 @@ fn fetches_a_commit_by_id_and_pins_it() {
         elsewhere.as_str()
     );
     assert_eq!(
-        repo.read_file(&elsewhere, "elsewhere.txt")
+        repo.read_file(&elsewhere, b"elsewhere.txt")
             .unwrap()
             .unwrap(),
         b"elsewhere\n"
@@ -603,6 +686,43 @@ fn many_fetches_at_once_all_succeed() {
 
     for thread in threads {
         assert_eq!(thread.join().unwrap().head, pr.head);
+    }
+}
+
+#[test]
+fn fetches_of_one_pull_request_at_once_each_get_what_they_asked_for() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    // Two windows disagree about pull request #1's base: one still has `trunk`, the other knows
+    // it was retargeted to `rel`, whose tip is another commit.
+    pr.remote.switch("rel").write("rel.txt", "release\n");
+    let rel_tip = pr.remote.commit("release");
+    pr.remote.publish("refs/heads/rel");
+    let (_dir, cache) = server.cache();
+    let cache = Arc::new(cache);
+
+    for _ in 0..5 {
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (cache, barrier) = (cache.clone(), barrier.clone());
+                let (branch, tip) = if i % 2 == 0 {
+                    ("trunk", pr.trunk_tip.clone())
+                } else {
+                    ("rel", rel_tip.clone())
+                };
+                std::thread::spawn(move || {
+                    let repo = cache.open("owner", "repo", None).unwrap();
+                    barrier.wait();
+                    let fetched = repo.fetch_pull(&refs(1, branch)).unwrap();
+                    (fetched.base_tip, tip)
+                })
+            })
+            .collect();
+        for thread in threads {
+            let (base_tip, expected) = thread.join().unwrap();
+            assert_eq!(base_tip, expected);
+        }
     }
 }
 
