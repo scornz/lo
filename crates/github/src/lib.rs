@@ -9,6 +9,7 @@ pub mod cassette;
 mod client;
 mod error;
 mod graphql;
+pub mod queries;
 mod rate_limit;
 #[cfg(any(test, feature = "test-support"))]
 pub mod record;

@@ -1,0 +1,43 @@
+# A repository's open pull requests, with what stack detection needs: branches, head commits and
+# native stack membership. A page at a time, in GitHub's default order.
+query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: String) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [OPEN], first: $first, after: $after) {
+      totalCount
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        number
+        title
+        isDraft
+        updatedAt
+        baseRefName
+        baseRefOid
+        headRefName
+        headRefOid
+        isCrossRepository
+        headRepositoryOwner {
+          __typename
+          login
+        }
+        stackEntry {
+          position
+          stack {
+            number
+            size
+            baseRefName
+          }
+        }
+      }
+    }
+  }
+}

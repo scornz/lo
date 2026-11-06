@@ -118,3 +118,116 @@ fn rest_not_found() {
         },
     );
 }
+
+/// The `github/docs` commit the vendored schema came from, from its header.
+fn schema_commit() -> Option<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("graphql/schema.graphql");
+    let schema = std::fs::read_to_string(path).ok()?;
+    let first_line = schema.lines().next()?;
+    let start = first_line.find("github/docs@")?;
+    let commit: String = first_line[start..]
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .collect();
+    Some(commit)
+}
+
+/// Like [`record`], noting the schema the queries were checked against.
+fn record_graphql<F: Future<Output = ()>>(
+    name: &str,
+    description: &str,
+    run: impl FnOnce(GithubClient) -> F,
+) {
+    record(name, description, run);
+    let path = fixtures_dir().join(name).join("cassette.json");
+    let mut info: CassetteInfo = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    info.schema = schema_commit();
+    std::fs::write(&path, serde_json::to_string_pretty(&info).unwrap() + "\n").unwrap();
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_viewer() {
+    record_graphql(
+        "graphql_viewer",
+        "The Viewer query as rozed-bot",
+        |client| async move {
+            client.viewer().await.unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_pull_request_1() {
+    record_graphql(
+        "graphql_pull_request_1",
+        "The PullRequest query for PR #1 (stack-a -> main)",
+        |client| async move {
+            client
+                .pull_request("rozed-dev", "playground", 1)
+                .await
+                .unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_pull_request_2_paged() {
+    record_graphql(
+        "graphql_pull_request_2_paged",
+        "The PullRequest query for PR #2 (stack-b -> stack-a), one file a page",
+        |client| async move {
+            client
+                .pull_request_paged("rozed-dev", "playground", 2, 1)
+                .await
+                .unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_pull_request_check_1() {
+    record_graphql(
+        "graphql_pull_request_check_1",
+        "The PullRequestCheck query for PR #1",
+        |client| async move {
+            client
+                .pull_request_check("rozed-dev", "playground", 1)
+                .await
+                .unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_open_pull_requests_paged() {
+    record_graphql(
+        "graphql_open_pull_requests_paged",
+        "The OpenPullRequests query for the playground, one PR a page",
+        |client| async move {
+            client
+                .open_pull_requests_paged("rozed-dev", "playground", 1)
+                .await
+                .unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_not_found() {
+    record_graphql(
+        "graphql_not_found",
+        "The PullRequest query for a repository that doesn't exist",
+        |client| async move {
+            client
+                .pull_request("rozed-dev", "does-not-exist", 1)
+                .await
+                .unwrap_err();
+        },
+    );
+}

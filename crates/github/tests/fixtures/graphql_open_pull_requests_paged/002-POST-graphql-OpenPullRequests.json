@@ -1,0 +1,72 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "OpenPullRequests",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "first": 1,
+      "after": "Y3Vyc29yOnYyOpHPAAAAATUMBQc="
+    },
+    "query_sha256": "82c4d11f35b2cc3d5fb5e2a98af2f95e9b2532abede9d85251142aa99ad4f902"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4997",
+      "x-ratelimit-reset": "1793960559",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "3"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4997,
+          "used": 3,
+          "resetAt": "2026-11-06T10:22:39Z"
+        },
+        "repository": {
+          "pullRequests": {
+            "totalCount": 2,
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpHPAAAAATUMBeQ="
+            },
+            "nodes": [
+              {
+                "number": 2,
+                "title": "feat: stack layer B",
+                "isDraft": false,
+                "updatedAt": "2026-11-06T08:15:08Z",
+                "baseRefName": "stack-a",
+                "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+                "headRefName": "stack-b",
+                "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 3,
+                    "size": 2,
+                    "baseRefName": "main"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

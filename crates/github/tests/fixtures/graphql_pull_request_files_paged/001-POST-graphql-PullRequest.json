@@ -1,0 +1,69 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequest",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 2,
+      "filesFirst": 1,
+      "filesAfter": null
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4998",
+      "x-ratelimit-reset": "1793960559",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "2"
+    },
+    "body": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "id": "PR_kwDOVk6v9M8AAAABNQwF5A",
+            "number": 2,
+            "title": "feat: stack layer B",
+            "url": "https://github.com/rozed-dev/playground/pull/2",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-06T08:15:08Z",
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot",
+              "avatarUrl": "https://avatars.githubusercontent.com/u/353226052?v=4"
+            },
+            "baseRefName": "stack-a",
+            "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+            "headRefName": "stack-b",
+            "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+            "isCrossRepository": false,
+            "headRepository": {
+              "nameWithOwner": "rozed-dev/playground",
+              "isFork": false
+            },
+            "files": {
+              "totalCount": 2,
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "path": "stack-b.md",
+                  "viewerViewedState": "VIEWED"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
