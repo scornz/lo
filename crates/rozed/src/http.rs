@@ -140,7 +140,8 @@ async fn send(
         let Some(next) = redirect_target(&parts.uri, response.headers())? else {
             return Ok(response);
         };
-        // 307 and 308 send the same request again. The others turn a POST into a GET.
+        // 307 and 308 send the same request again. 301, 302 and 303 send a GET (or HEAD)
+        // without a body, as reqwest does.
         let resends = matches!(
             status,
             StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
@@ -167,10 +168,10 @@ async fn send(
             loggable(&next)
         );
 
-        let becomes_get = (status == StatusCode::SEE_OTHER && parts.method != Method::HEAD)
-            || (!resends && parts.method == Method::POST);
-        if becomes_get {
-            parts.method = Method::GET;
+        if !resends {
+            if parts.method != Method::GET && parts.method != Method::HEAD {
+                parts.method = Method::GET;
+            }
             replay = Replay::Empty;
             for name in &BODY_HEADERS {
                 parts.headers.remove(name);
@@ -346,7 +347,7 @@ mod tests {
             let bytes = match body.0 {
                 Inner::Empty => Vec::new(),
                 Inner::Bytes(cursor) => cursor.into_inner().to_vec(),
-                Inner::AsyncReader(_) => panic!("the tests send no streams"),
+                Inner::AsyncReader(_) => b"<stream>".to_vec(),
             };
             let uri = parts.uri.to_string();
             let response = (self.respond)(&uri);
@@ -579,6 +580,38 @@ mod tests {
         assert_eq!(sent[1].method, Method::GET);
         assert!(sent[1].body.is_empty());
         assert!(!sent[1].headers.contains_key(header::CONTENT_TYPE));
+    }
+
+    #[test]
+    fn a_302_turns_a_streamed_put_into_a_get() {
+        let inner = Fake::new(|uri| {
+            if uri.ends_with("/upload") {
+                redirect(302, "/uploaded")
+            } else {
+                ok()
+            }
+        });
+        let request = Request::put("https://example.com/upload")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(AsyncBody::from_reader(futures::io::Cursor::new(b"data")))
+            .unwrap();
+        let response = send_through(&inner, request).unwrap();
+        assert_eq!(response.status(), 200);
+        let sent = inner.sent.lock().unwrap();
+        assert_eq!(sent[1].method, Method::GET);
+        assert!(sent[1].body.is_empty());
+        assert!(!sent[1].headers.contains_key(header::CONTENT_TYPE));
+    }
+
+    #[test]
+    fn a_307_after_a_streamed_body_is_returned() {
+        let inner = Fake::new(|_| redirect(307, "/elsewhere"));
+        let request = Request::put("https://example.com/upload")
+            .body(AsyncBody::from_reader(futures::io::Cursor::new(b"data")))
+            .unwrap();
+        let response = send_through(&inner, request).unwrap();
+        assert_eq!(response.status(), 307);
+        assert_eq!(inner.uris().len(), 1);
     }
 
     #[test]
