@@ -2,7 +2,7 @@
 
 use std::fs::{self, File};
 use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use repo_cache::{PullRequestRefs, Repo, RepoCache};
@@ -25,25 +25,50 @@ fn server() -> Server {
     server
 }
 
+/// Opens `owner/name`, fetches pull request #1, checks it out and closes it again. Returns the
+/// clone's folder.
+fn use_repo(cache: &RepoCache, name: &str) -> PathBuf {
+    let repo = open_and_check_out(cache, name);
+    repo.git_dir().to_path_buf()
+}
+
 /// Opens `owner/name`, fetches pull request #1 and checks it out.
-fn use_repo(cache: &RepoCache, name: &str) -> Repo {
+fn open_and_check_out(cache: &RepoCache, name: &str) -> Repo {
     let repo = cache.open("owner", name, None).unwrap();
-    let head = repo
-        .fetch_pull(&PullRequestRefs {
-            number: 1,
-            head: None,
-            base_branch: "trunk".into(),
-            base: None,
-        })
-        .unwrap()
-        .head;
+    let head = fetch(&repo);
     repo.checkout(1, &head).unwrap();
     repo
 }
 
-/// Makes `repo` look last opened `days` ago.
-fn last_opened_days_ago(repo: &Repo, days: u64) {
-    stamp_days_ago(repo.git_dir(), days);
+fn fetch(repo: &Repo) -> repo_cache::Oid {
+    repo.fetch_pull(&PullRequestRefs {
+        number: 1,
+        head: None,
+        base_branch: "trunk".into(),
+        base: None,
+    })
+    .unwrap()
+    .head
+}
+
+/// Makes the clone at `git_dir` look last opened `days` ago.
+fn last_opened_days_ago(git_dir: &Path, days: u64) {
+    stamp_days_ago(git_dir, days);
+}
+
+/// [`RepoCache::remove_unused`], once a lock just let go is free. A child process another test
+/// thread starts at that moment can hold a copy of the lock's file descriptor until it runs git, so
+/// this allows a moment.
+fn remove_unused_once_free(cache: &RepoCache) -> Vec<String> {
+    let mut removed = Vec::new();
+    for _ in 0..100 {
+        removed = cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+        if !removed.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    removed
 }
 
 /// Writes a last-used stamp `days` old into `dir`.
@@ -100,7 +125,7 @@ fn clear_removes_every_clone_and_checkout() {
     assert!(cache.size().unwrap() < 64 * 1024);
     // And the cache still works.
     let repo = use_repo(&cache, "old");
-    assert!(repo.git_dir().is_dir());
+    assert!(repo.is_dir());
 }
 
 #[test]
@@ -138,10 +163,10 @@ fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
 
     assert_eq!(removed, vec!["owner/old".to_string()]);
     let checkouts = dir.path().join("checkouts/github.com");
-    assert!(!old.git_dir().exists());
+    assert!(!old.exists());
     assert!(!checkouts.join("owner/old").exists());
-    assert!(new.git_dir().is_dir());
-    let head = git(new.git_dir(), &["rev-parse", "refs/rozed/pull/1/head"]);
+    assert!(new.is_dir());
+    let head = git(&new, &["rev-parse", "refs/rozed/pull/1/head"]);
     assert!(
         checkouts
             .join(format!("owner/new/pull-1/{head}/README.md"))
@@ -172,20 +197,14 @@ fn a_clone_being_written_to_is_kept() {
         cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
         Vec::<String>::new()
     );
-    assert!(old.git_dir().is_dir());
+    assert!(old.is_dir());
 
-    // Once it lets go, the clone goes. A child process another test thread starts at that moment
-    // can hold a copy of the lock's file descriptor until it runs git, so allow a moment.
+    // Once it lets go, the clone goes.
     drop(lock);
-    let mut removed = Vec::new();
-    for _ in 0..100 {
-        removed = cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
-        if !removed.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(removed, vec!["owner/old".to_string()]);
+    assert_eq!(
+        remove_unused_once_free(&cache),
+        vec!["owner/old".to_string()]
+    );
 }
 
 #[test]
@@ -223,7 +242,7 @@ fn cleanup_never_follows_a_symlinked_owner_folder() {
 
     assert!(untouched(&outside));
     // The real unused clone still goes.
-    assert!(!old.git_dir().exists());
+    assert!(!old.exists());
 }
 
 #[test]
@@ -247,7 +266,7 @@ fn cleanup_never_follows_a_symlinked_repository_or_checkouts_folder() {
     cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
 
     assert!(untouched(&outside));
-    assert!(!old.git_dir().exists());
+    assert!(!old.exists());
 }
 
 #[test]
@@ -265,5 +284,49 @@ fn cleanup_never_follows_a_symlink_above_a_clones_checkouts() {
     cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
 
     assert!(untouched(&outside));
-    assert!(!old.git_dir().exists());
+    assert!(!old.exists());
+}
+
+#[test]
+fn a_clone_still_open_is_kept() {
+    let server = server();
+    let (_dir, cache) = server.cache();
+    let open = open_and_check_out(&cache, "old");
+    last_opened_days_ago(open.git_dir(), 31);
+
+    // Another rozed's launch, while this one still shows a pull request from the clone.
+    assert_eq!(
+        cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(open.git_dir().is_dir());
+
+    let git_dir = open.git_dir().to_path_buf();
+    drop(open);
+    assert_eq!(
+        remove_unused_once_free(&cache),
+        vec!["owner/old".to_string()]
+    );
+    assert!(!git_dir.exists());
+}
+
+#[test]
+fn fetching_or_checking_out_keeps_a_clone() {
+    let server = server();
+    let (_dir, cache) = server.cache();
+    for name in ["old", "new"] {
+        // Opened a month ago, and used since.
+        let repo = cache.open("owner", name, None).unwrap();
+        last_opened_days_ago(repo.git_dir(), 31);
+        let head = fetch(&repo);
+        if name == "new" {
+            last_opened_days_ago(repo.git_dir(), 31);
+            repo.checkout(1, &head).unwrap();
+        }
+    }
+
+    assert_eq!(
+        cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
+        Vec::<String>::new()
+    );
 }

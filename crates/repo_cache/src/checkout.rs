@@ -22,6 +22,7 @@ impl Repo {
         let pull_dir = self.checkouts_dir().join(format!("pull-{number}"));
         let dir = pull_dir.join(head.as_str());
         let _lock = self.lock()?;
+        self.stamp_used()?;
         // Earlier, `pull-<n>` itself was the checkout, moved to each new head.
         if fs::symlink_metadata(pull_dir.join(".git")).is_ok() {
             self.trash(&pull_dir)?;

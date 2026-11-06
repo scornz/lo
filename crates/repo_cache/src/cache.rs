@@ -18,8 +18,8 @@ use crate::repo::Repo;
 ///   goes under rozed's own refs, `refs/rozed/...`.
 /// - `checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`: a checkout of a pull request's head,
 ///   one per head, for language servers.
-/// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone (see
-///   [`crate::lock`]).
+/// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone, and
+///   `<repo>.in-use`, held shared while it's open (see [`crate::lock`]).
 /// - `git-env/home`: the empty `HOME` git runs with.
 ///
 /// Folder names are lowercase, since GitHub's owner and repository names aren't case-sensitive.
@@ -131,11 +131,21 @@ impl RepoCache {
 
     /// The lock held while writing to `owner/repo`'s clone or its checkouts.
     fn lock_path(&self, owner: &str, repo: &str) -> PathBuf {
+        self.locks_dir(owner)
+            .join(format!("{}.lock", repo.to_ascii_lowercase()))
+    }
+
+    /// The lock every open [`Repo`] of `owner/repo` holds shared, and cleanup alone.
+    fn in_use_path(&self, owner: &str, repo: &str) -> PathBuf {
+        self.locks_dir(owner)
+            .join(format!("{}.in-use", repo.to_ascii_lowercase()))
+    }
+
+    fn locks_dir(&self, owner: &str) -> PathBuf {
         self.root
             .join("locks")
             .join(HOST)
             .join(owner.to_ascii_lowercase())
-            .join(format!("{}.lock", repo.to_ascii_lowercase()))
     }
 
     /// The clone of `owner/repo`, created on first use. Nothing is fetched yet; the first fetch
@@ -150,7 +160,7 @@ impl RepoCache {
         let git_dir = self.repo_dir(owner, repo);
         let lock_path = self.lock_path(owner, repo);
         let url = format!("{}/{owner}/{repo}.git", self.env.remote_base);
-        {
+        let in_use = {
             let _lock = RepoLock::acquire(&lock_path)?;
             if git_dir.join("HEAD").is_file() {
                 self.update_remote(&git_dir, &url)?;
@@ -164,13 +174,17 @@ impl RepoCache {
                 self.create(&git_dir, &url)?;
             }
             stamp_last_used(&git_dir, SystemTime::now())?;
-        }
+            // Taken before the write lock is let go, so cleanup, which takes that first, can't
+            // slip in between.
+            RepoLock::acquire_shared(&self.in_use_path(owner, repo))?
+        };
         Ok(Repo::new(
             self.env.clone(),
             format!("{owner}/{repo}"),
             git_dir,
             self.repo_checkouts_dir(owner, repo),
             lock_path,
+            in_use,
             token,
         ))
     }
@@ -262,9 +276,10 @@ impl RepoCache {
         Ok(())
     }
 
-    /// Removes the clones nobody opened for `max_age`, [`RepoCache::UNUSED_FOR`] at launch, with
-    /// their checkouts, and checkouts left without a clone. A clone being written to is skipped.
-    /// Returns the `owner/repo` of each clone removed.
+    /// Removes the clones nobody opened, fetched into or checked out from for `max_age`,
+    /// [`RepoCache::UNUSED_FOR`] at launch, with their checkouts, and checkouts left without a
+    /// clone. A clone being written to, or open in any rozed, is skipped. Returns the
+    /// `owner/repo` of each clone removed.
     pub fn remove_unused(&self, max_age: Duration) -> Result<Vec<String>, Error> {
         let now = SystemTime::now();
         let is_stale = |git_dir: &Path| {
@@ -286,6 +301,10 @@ impl RepoCache {
             if !is_stale(&git_dir) {
                 continue;
             }
+            // Still open in some window.
+            let Some(_in_use) = RepoLock::try_acquire(&self.in_use_path(&owner, &repo))? else {
+                continue;
+            };
             self.remove_clone(&owner, &repo)?;
             removed.push(format!("{owner}/{repo}"));
         }

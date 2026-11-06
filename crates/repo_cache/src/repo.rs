@@ -5,8 +5,9 @@ use std::fmt;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
-use crate::cache::GitEnv;
+use crate::cache::{GitEnv, stamp_last_used};
 use crate::cat_file::{CatFile, ReadError};
 use crate::diff::{self, ChangedFile};
 use crate::git::{GitCommand, Location, Token, failure_message};
@@ -43,6 +44,8 @@ struct Shared {
     checkouts_dir: PathBuf,
     /// Held while writing to the clone or its checkouts.
     lock_path: PathBuf,
+    /// Held shared while this repository is open, so cleanup leaves it alone.
+    _in_use: RepoLock,
     token: Option<Token>,
     cat_file: Mutex<Option<CatFile>>,
 }
@@ -111,6 +114,7 @@ impl Repo {
         git_dir: PathBuf,
         checkouts_dir: PathBuf,
         lock_path: PathBuf,
+        in_use: RepoLock,
         token: Option<Token>,
     ) -> Self {
         Self {
@@ -120,6 +124,7 @@ impl Repo {
                 git_dir,
                 checkouts_dir,
                 lock_path,
+                _in_use: in_use,
                 token,
                 cat_file: Mutex::new(None),
             }),
@@ -162,6 +167,7 @@ impl Repo {
         let branch = format!("refs/heads/{}", pull.base_branch);
 
         let _lock = self.lock()?;
+        self.stamp_used()?;
         let mut base_source = BaseSource::Branch;
         match self.fetch_locked(&what, &[&head_spec, &format!("+{branch}:{base_ref}")]) {
             Ok(()) => {}
@@ -245,6 +251,7 @@ impl Repo {
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.
     pub fn fetch_commit(&self, oid: &Oid) -> Result<(), Error> {
         let _lock = self.lock()?;
+        self.stamp_used()?;
         self.fetch_by_id_locked(
             &format!("commit {}", oid.short(7)),
             oid,
@@ -518,6 +525,12 @@ impl Repo {
     fn pin(&self, reference: &str, oid: &Oid) -> Result<(), Error> {
         self.run(self.git().args(["update-ref", reference, oid.as_str()]))?;
         Ok(())
+    }
+
+    /// Records that the clone was used just now, which keeps cleanup away for a while. The caller
+    /// holds the lock.
+    pub(crate) fn stamp_used(&self) -> Result<(), Error> {
+        stamp_last_used(&self.shared.git_dir, SystemTime::now())
     }
 
     /// Waits for the lock on this repository's clone and checkouts.
