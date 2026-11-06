@@ -5,14 +5,17 @@
 //! where it shows in the diff on screen, a [`Screen`]: under a line of either column, on the file's
 //! header, or only in the threads panel. GitHub keeps a thread on the pull request's latest head
 //! while its lines are unchanged, and marks it outdated once they change. An outdated thread still
-//! shows where it was written whenever the diff on screen shows that revision.
+//! shows where it was written whenever the diff on screen shows that revision. [`panel`] lists the
+//! threads the threads panel shows, by [`PanelFilter`].
 
+mod panel;
 mod place;
 
 use std::time::SystemTime;
 
 use crate::github::github_enum;
 
+pub use panel::{PanelFilter, panel};
 pub use place::{Left, Placement, Screen, place};
 
 github_enum! {
@@ -168,6 +171,19 @@ impl Thread {
         !self.resolved
     }
 
+    /// Whether the person with login `login` started it or replied in it. Logins ignore case, as
+    /// GitHub's do.
+    pub fn involves(&self, login: &str) -> bool {
+        self.comments.iter().any(|comment| {
+            (comment.author.as_deref()).is_some_and(|author| author.eq_ignore_ascii_case(login))
+        })
+    }
+
+    /// Whether it's in your pending review: its first comment isn't posted yet, so only you see it.
+    pub fn is_pending(&self) -> bool {
+        (self.comments.first()).is_some_and(|comment| comment.state == CommentState::Pending)
+    }
+
     fn lines(&self, start: Option<u32>, end: Option<u32>) -> Option<Lines> {
         if self.subject == Subject::File {
             return None;
@@ -298,6 +314,32 @@ mod tests {
             Lines::range(Line::left(2), Line::right(4)).first(),
             Line::left(2)
         );
+    }
+
+    #[test]
+    fn a_thread_whose_first_comment_is_pending_is_in_your_pending_review() {
+        let comment = |state| ThreadComment {
+            id: "PRRC_1".to_string(),
+            author: Some("alice".to_string()),
+            body: "Typo".to_string(),
+            state,
+            created_at: SystemTime::UNIX_EPOCH,
+        };
+        let pending = Thread {
+            comments: vec![comment(CommentState::Pending)],
+            ..Default::default()
+        };
+        let replied_to = Thread {
+            comments: vec![
+                comment(CommentState::Submitted),
+                comment(CommentState::Pending),
+            ],
+            ..Default::default()
+        };
+
+        assert!(pending.is_pending());
+        assert!(!replied_to.is_pending());
+        assert!(!Thread::default().is_pending());
     }
 
     #[test]
