@@ -1348,4 +1348,30 @@ mod tests {
         assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground]);
         assert_eq!(active_tab(&workspace, cx), Some(fd));
     }
+
+    #[gpui::test]
+    async fn the_window_offers_no_new_files_and_opens_editors_read_only(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+
+        // A double click in the tab bar or an empty pane, which focuses the pane, sends NewFile.
+        workspace.update_in(cx, |workspace, window, cx| {
+            window.focus(&workspace.active_pane().focus_handle(cx), cx)
+        });
+        cx.run_until_parked();
+        cx.dispatch_action(workspace::NewFile);
+        cx.run_until_parked();
+        let items = |cx: &mut VisualTestContext| {
+            workspace.read_with(cx, |workspace, cx| workspace.items(cx).count())
+        };
+        assert_eq!(items(cx), 0);
+
+        // What a file header's Open File opens.
+        let editor = workspace.update_in(cx, |workspace, window, cx| {
+            let editor = cx.new(|cx| Editor::single_line(window, cx));
+            workspace.add_item_to_active_pane(Box::new(editor.clone()), None, true, window, cx);
+            editor
+        });
+        assert_eq!(items(cx), 1);
+        assert!(editor.read_with(cx, |editor, cx| editor.read_only(cx)));
+    }
 }

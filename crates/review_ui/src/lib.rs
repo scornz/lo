@@ -11,6 +11,7 @@ pub mod open_box;
 pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
+mod read_only;
 pub mod tabs;
 pub mod trust;
 
@@ -25,7 +26,7 @@ pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, open};
 
 /// Sets up the PR tab: its keys, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
-/// their database, or `None` without one), and following which tab is active in every workspace.
+/// their database, or `None` without one), and rozed's changes to every workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
     init_workspaces(cx);
@@ -39,14 +40,16 @@ pub fn init_workspaces(cx: &mut App) {
         let Some(window) = window else {
             return;
         };
+        read_only::configure_workspace(workspace, cx);
         workspace.register_action(|workspace, _: &OpenPullRequest, window, cx| {
             OpenBox::toggle(workspace, window, cx)
         });
         let this = cx.entity();
-        cx.subscribe_in(&this, window, |workspace, _, event, _, cx| {
-            if let workspace::Event::ActiveItemChanged = event {
-                pr_tab::sync_active(workspace, cx);
-            }
+        cx.subscribe_in(&this, window, |workspace, _, event, _, cx| match event {
+            workspace::Event::ActiveItemChanged => pr_tab::sync_active(workspace, cx),
+            workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
+            workspace::Event::ItemAdded { item } => read_only::item_added(item.as_ref(), cx),
+            _ => {}
         })
         .detach();
         // In the background, every account's polling slows down.
