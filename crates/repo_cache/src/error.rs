@@ -68,7 +68,7 @@ pub enum FetchFailure {
     Certificate,
     /// The repository doesn't exist, or the account can't see it.
     RepoNotFound,
-    /// The branch or pull request ref doesn't exist.
+    /// The branch or pull request ref doesn't exist, or a commit asked for by ID doesn't.
     RefNotFound,
     /// Something else, in git's words.
     Other,
@@ -154,7 +154,11 @@ impl Error {
 fn classify_fetch(message: &str) -> FetchFailure {
     let has = |needles: &[&str]| needles.iter().any(|needle| message.contains(needle));
     let lowercase = message.to_ascii_lowercase();
-    if has(&["couldn't find remote ref"]) {
+    if has(&[
+        "couldn't find remote ref",
+        "not our ref",
+        "unadvertised object",
+    ]) {
         FetchFailure::RefNotFound
     } else if has(&["returned error: 429"])
         || ["rate limit", "abuse detection"]
@@ -264,6 +268,17 @@ mod tests {
             ),
             (
                 "fatal: couldn't find remote ref refs/pull/9/head",
+                FetchFailure::RefNotFound,
+            ),
+            // A commit GitHub no longer has, asked for by ID.
+            (
+                "fatal: remote error: upload-pack: not our ref \
+                 1234567890123456789012345678901234567890",
+                FetchFailure::RefNotFound,
+            ),
+            (
+                "error: Server does not allow request for unadvertised object \
+                 1234567890123456789012345678901234567890",
                 FetchFailure::RefNotFound,
             ),
             // Any 403 that isn't a rate limit is about the account: SSO, an IP allow list.

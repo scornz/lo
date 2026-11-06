@@ -174,7 +174,12 @@ impl Repo {
                     self.shared.name,
                     pull.base_branch
                 );
-                self.fetch_locked(&what, &[&head_spec, &format!("+{base}:{base_ref}")])?;
+                match self.fetch_locked(&what, &[&head_spec, &format!("+{base}:{base_ref}")]) {
+                    Err(Error::Fetch { message, .. }) if is_lost_commit(&message, base) => {
+                        return Err(Error::Unavailable { oid: base.clone() });
+                    }
+                    result => result?,
+                }
                 base_source = BaseSource::Api;
             }
             Err(error) => return Err(error),
@@ -250,10 +255,7 @@ impl Repo {
     fn fetch_by_id_locked(&self, what: &str, oid: &Oid, pin: &str) -> Result<(), Error> {
         if !self.has_commit(oid)? {
             match self.fetch_locked(what, &[&format!("+{oid}:{pin}")]) {
-                Err(Error::Fetch { message, .. })
-                    if message.contains("not our ref")
-                        || message.contains("unadvertised object") =>
-                {
+                Err(Error::Fetch { message, .. }) if is_lost_commit(&message, oid) => {
                     return Err(Error::Unavailable { oid: oid.clone() });
                 }
                 result => result?,
@@ -507,6 +509,13 @@ impl Repo {
             Err(Error::from_git(display, failure_message(&finished), None))
         }
     }
+}
+
+/// Whether a fetch failed with `message` because the server doesn't have commit `oid`, which was
+/// asked for by ID.
+fn is_lost_commit(message: &str, oid: &Oid) -> bool {
+    (message.contains("not our ref") || message.contains("unadvertised object"))
+        && message.contains(oid.as_str())
 }
 
 /// Where pull request `number`'s head `oid` is pinned.

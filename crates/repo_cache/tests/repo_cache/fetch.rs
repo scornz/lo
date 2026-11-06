@@ -455,6 +455,28 @@ fn a_deleted_base_branch_falls_back_to_the_apis_base() {
 }
 
 #[test]
+fn a_deleted_base_branch_whose_commit_github_lost_is_unavailable() {
+    let server = Server::new();
+    pull_request(&server);
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    let lost: Oid = "1234567890123456789012345678901234567890".parse().unwrap();
+
+    let error = repo
+        .fetch_pull(&PullRequestRefs {
+            base: Some(lost.clone()),
+            ..refs(1, "gone")
+        })
+        .unwrap_err();
+
+    assert!(
+        matches!(&error, Error::Unavailable { oid } if *oid == lost),
+        "{error:?}"
+    );
+    assert!(!error.is_retryable());
+}
+
+#[test]
 fn base_branches_whose_names_nest_dont_collide() {
     let server = Server::new();
     let pr = pull_request(&server);
