@@ -110,9 +110,7 @@ impl RepoCache {
 
     /// Where the checkouts of `owner/repo`'s pull requests live.
     fn repo_checkouts_dir(&self, owner: &str, repo: &str) -> PathBuf {
-        self.root
-            .join("checkouts")
-            .join(HOST)
+        self.checkouts_root()
             .join(owner.to_ascii_lowercase())
             .join(repo.to_ascii_lowercase())
     }
@@ -222,6 +220,199 @@ impl RepoCache {
     fn git(&self, dir: &Path) -> GitCommand {
         self.env.command(dir, None)
     }
+
+    /// How much disk space the cache takes, in bytes.
+    pub fn size(&self) -> Result<u64, Error> {
+        disk_usage(&self.root)
+    }
+
+    /// Removes every clone and checkout, for "clear cache" in settings. Each clone's lock is held
+    /// while it goes, so a fetch in progress finishes first. Close the repositories first:
+    /// a [`Repo`] whose clone is gone fails until it's opened again.
+    pub fn clear(&self) -> Result<(), Error> {
+        for (owner, repo) in self.clones()? {
+            let _lock = RepoLock::acquire(&self.lock_path(&owner, &repo))?;
+            self.remove_clone(&owner, &repo)?;
+        }
+        for dir in [
+            self.root.join("repos"),
+            self.root.join("checkouts"),
+            self.root.join("tmp"),
+        ] {
+            remove_dir_all_if_exists(&dir)?;
+        }
+        log::info!("cleared {}", self.root.display());
+        Ok(())
+    }
+
+    /// Removes the clones nobody opened for `max_age`, [`RepoCache::UNUSED_FOR`] at launch, with
+    /// their checkouts, and checkouts left without a clone. A clone being written to is skipped.
+    /// Returns the `owner/repo` of each clone removed.
+    pub fn remove_unused(&self, max_age: Duration) -> Result<Vec<String>, Error> {
+        let now = SystemTime::now();
+        let is_stale = |git_dir: &Path| {
+            last_used(git_dir).is_none_or(|used| {
+                now.duration_since(used)
+                    .is_ok_and(|unused_for| unused_for > max_age)
+            })
+        };
+        let mut removed = Vec::new();
+        for (owner, repo) in self.clones()? {
+            let git_dir = self.repo_dir(&owner, &repo);
+            if !is_stale(&git_dir) {
+                continue;
+            }
+            let Some(_lock) = RepoLock::try_acquire(&self.lock_path(&owner, &repo))? else {
+                continue;
+            };
+            // Opened while we waited? `open` stamps it under the lock.
+            if !is_stale(&git_dir) {
+                continue;
+            }
+            self.remove_clone(&owner, &repo)?;
+            removed.push(format!("{owner}/{repo}"));
+        }
+        self.remove_orphaned_checkouts()?;
+        // Temporary clones a crash left behind. A day is far longer than making one takes.
+        for entry in read_dir_if_exists(&self.root.join("tmp"))? {
+            let old = fs::symlink_metadata(&entry)
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| {
+                    now.duration_since(modified)
+                        .is_ok_and(|age| age > Duration::from_secs(24 * 60 * 60))
+                });
+            if old {
+                remove_dir_all_if_exists(&entry)?;
+            }
+        }
+        if !removed.is_empty() {
+            log::info!("removed unused clones: {}", removed.join(", "));
+        }
+        Ok(removed)
+    }
+
+    /// How long a clone can go unopened before [`RepoCache::remove_unused`] removes it at launch.
+    pub const UNUSED_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+    /// The `(owner, repo)` of every clone, as their folders name them (lowercase).
+    fn clones(&self) -> Result<Vec<(String, String)>, Error> {
+        let mut clones = Vec::new();
+        for owner in read_dir_if_exists(&self.repos_dir())? {
+            for clone in read_dir_if_exists(&owner)? {
+                let (Some(owner), Some(repo)) = (
+                    file_name(&owner),
+                    file_name(&clone)
+                        .and_then(|name| name.strip_suffix(".git").map(str::to_string)),
+                ) else {
+                    continue;
+                };
+                if check_name("owner", &owner).is_ok() && check_name("repo", &repo).is_ok() {
+                    clones.push((owner, repo));
+                }
+            }
+        }
+        clones.sort();
+        Ok(clones)
+    }
+
+    /// Removes a clone and its checkouts. The caller holds its lock.
+    fn remove_clone(&self, owner: &str, repo: &str) -> Result<(), Error> {
+        remove_dir_all_if_exists(&self.repo_checkouts_dir(owner, repo))?;
+        remove_dir_all_if_exists(&self.repo_dir(owner, repo))?;
+        remove_dir_if_empty(&self.repos_dir().join(owner));
+        remove_dir_if_empty(&self.checkouts_root().join(owner));
+        Ok(())
+    }
+
+    /// Removes the checkouts of clones that no longer exist.
+    fn remove_orphaned_checkouts(&self) -> Result<(), Error> {
+        for owner in read_dir_if_exists(&self.checkouts_root())? {
+            for checkouts in read_dir_if_exists(&owner)? {
+                let (Some(owner_name), Some(repo)) = (file_name(&owner), file_name(&checkouts))
+                else {
+                    continue;
+                };
+                if check_name("owner", &owner_name).is_err() || check_name("repo", &repo).is_err() {
+                    continue;
+                }
+                if self.repo_dir(&owner_name, &repo).exists() {
+                    continue;
+                }
+                if let Some(_lock) = RepoLock::try_acquire(&self.lock_path(&owner_name, &repo))?
+                    && !self.repo_dir(&owner_name, &repo).exists()
+                {
+                    remove_dir_all_if_exists(&checkouts)?;
+                }
+            }
+            remove_dir_if_empty(&owner);
+        }
+        Ok(())
+    }
+
+    fn checkouts_root(&self) -> PathBuf {
+        self.root.join("checkouts").join(HOST)
+    }
+}
+
+/// When the clone at `git_dir` was last opened, from its stamp, or the folder's own time if the
+/// stamp is missing.
+fn last_used(git_dir: &Path) -> Option<SystemTime> {
+    let stamp = fs::read_to_string(git_dir.join(LAST_USED_FILE))
+        .ok()
+        .and_then(|stamp| stamp.trim().parse::<u64>().ok())
+        .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
+    stamp.or_else(|| fs::metadata(git_dir).and_then(|m| m.modified()).ok())
+}
+
+/// The bytes `path` takes on disk, counting each file's allocated blocks and following no
+/// symlinks.
+fn disk_usage(path: &Path) -> Result<u64, Error> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(Error::io(format!("reading {}", path.display()))(error)),
+    };
+    let mut total = metadata.blocks() * 512;
+    if metadata.is_dir() {
+        for entry in read_dir_if_exists(path)? {
+            total += disk_usage(&entry)?;
+        }
+    }
+    Ok(total)
+}
+
+/// The entries in `dir`, or none if it doesn't exist.
+fn read_dir_if_exists(dir: &Path) -> Result<Vec<PathBuf>, Error> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(Error::io(format!("reading {}", dir.display()))(error)),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(Error::io(format!("reading {}", dir.display())))?;
+        paths.push(entry.path());
+    }
+    Ok(paths)
+}
+
+fn remove_dir_all_if_exists(dir: &Path) -> Result<(), Error> {
+    match fs::remove_dir_all(dir) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(Error::io(format!("removing {}", dir.display()))(error))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Removes `dir` if it's empty, so no empty owner folders pile up.
+fn remove_dir_if_empty(dir: &Path) {
+    let _ = fs::remove_dir(dir);
+}
+
+fn file_name(path: &Path) -> Option<String> {
+    path.file_name()?.to_str().map(str::to_string)
 }
 
 /// Fails unless `value` is safe as an owner or repository name and as a folder name: GitHub's

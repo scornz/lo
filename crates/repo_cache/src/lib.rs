@@ -34,6 +34,7 @@
 mod askpass;
 mod cache;
 mod cat_file;
+mod checkout;
 mod diff;
 mod error;
 mod git;
