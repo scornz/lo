@@ -57,9 +57,15 @@ fails when a build script calls it from outside the repo, so cargo needs mise's 
 
 ```sh
 cargo build -p rozed
-cargo run -p rozed
+cargo run -p rozed -- https://github.com/sharkdp/fd/pull/2212   # a public pull request
 cargo test --workspace
 ```
+
+`rozed <pull request link>` copies the pull request into `~/Library/Caches/rozed` (a partial clone
+per repository under `repos/`, a checkout of the head under `checkouts/`) and opens it in Zed's
+side-by-side diff with language servers on the new side. There's no trust prompt yet: rozed trusts
+the checkout of whatever pull request it's given, so only open ones you'd trust. Without a link it
+shows its own `main.rs`.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
@@ -76,7 +82,12 @@ cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 script/check-symlinks.sh
+script/check-zed-crates.sh
 ```
+
+`script/check-zed-crates.sh` fails when the set of Zed crates compiled into rozed changes. If the
+change is intended, run it with `--update`, update the crate list in `docs/spike.md`, and commit
+both.
 
 xtask is a separate workspace, so check it too when you change it:
 
@@ -145,6 +156,7 @@ submodule at it as in step 2.
 
 3. Run `cargo xtask sync-zed --seed-lock`.
 4. Build, fix what breaks, and update the patch list here.
+5. Run `script/check-zed-crates.sh` and review any Zed crates that come or go.
 
 ## Agent rules
 
