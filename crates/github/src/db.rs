@@ -198,9 +198,15 @@ impl RozedDb {
     pub async fn delete_account(&self, host: String, login: String) -> Result<()> {
         self.0
             .write(move |connection| {
-                connection.exec_bound::<(String, String)>(sql!(
-                    DELETE FROM accounts WHERE host = ?1 AND login = ?2
-                ))?((host, login))
+                connection.with_savepoint("delete_account", || {
+                    // Its owners and cached answers go with it, by their foreign keys.
+                    connection.exec_bound::<(String, String)>(sql!(
+                        DELETE FROM accounts WHERE host = ?1 AND login = ?2
+                    ))?((host.clone(), login.clone()))?;
+                    connection.exec_bound::<(String, String)>(sql!(
+                        DELETE FROM recent_prs WHERE host = ?1 AND account = ?2
+                    ))?((host, login))
+                })
             })
             .await
     }

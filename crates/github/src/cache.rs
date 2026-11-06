@@ -170,6 +170,9 @@ impl<T> Cached<T> {
     }
 }
 
+/// How many recent pull requests are kept.
+pub const RECENT_PRS: usize = 100;
+
 /// A pull request opened recently.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentPr {
@@ -385,8 +388,8 @@ impl PrCache {
             .await
     }
 
-    /// Notes that a pull request was opened, moving it to the top of the recent ones. A `None`
-    /// title keeps the one already known.
+    /// Notes that a pull request was opened, moving it to the top of the recent ones, and
+    /// forgets all but the newest [`RECENT_PRS`]. A `None` title keeps the one already known.
     pub async fn record_recent(&self, recent: RecentPr) -> Result<()> {
         let row = (
             HOST.to_string(),
@@ -409,7 +412,12 @@ impl PrCache {
                         title = coalesce(excluded.title, recent_prs.title),
                         account = excluded.account,
                         opened_at = excluded.opened_at
-                ))?(row)
+                ))?(row)?;
+                connection.exec_bound(sql!(
+                    DELETE FROM recent_prs WHERE rowid NOT IN (
+                        SELECT rowid FROM recent_prs ORDER BY opened_at DESC, rowid DESC LIMIT ?1
+                    )
+                ))?(RECENT_PRS as i64)
             })
             .await
     }
@@ -843,6 +851,40 @@ mod tests {
                     .get::<PullSummary>("other", &pull(1))
                     .unwrap()
                     .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn recent_prs_keep_the_newest_and_go_with_their_account() {
+        block_on(async {
+            let (cache, db) = cache("cache_recent_bounded").await;
+            for number in 1..=(RECENT_PRS as i64 + 5) {
+                let account = if number % 2 == 0 { "bot" } else { "other" };
+                cache
+                    .record_recent(RecentPr {
+                        pull: PullRef::new("rozed-dev", "playground", number),
+                        title: None,
+                        account: account.into(),
+                        opened_at: at(number as u64),
+                    })
+                    .await
+                    .unwrap();
+            }
+            let recent = cache.recent(1000).unwrap();
+            assert_eq!(recent.len(), RECENT_PRS);
+            assert_eq!(recent[0].pull.number, RECENT_PRS as i64 + 5);
+            assert_eq!(recent.last().unwrap().pull.number, 6);
+
+            db.delete_account(HOST.into(), "OTHER".into())
+                .await
+                .unwrap();
+            assert!(
+                cache
+                    .recent(1000)
+                    .unwrap()
+                    .iter()
+                    .all(|recent| recent.account == "bot")
             );
         });
     }
