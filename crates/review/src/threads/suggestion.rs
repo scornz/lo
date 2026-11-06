@@ -12,9 +12,10 @@ impl Lines {
 }
 
 /// A `suggestion` block holding `lines`, the selected lines' text without line endings, for the
-/// comment box to open with. Its fence is longer than any run of backticks that starts a line, so
-/// lines with fences of their own, such as Markdown's, stay inside it. No lines suggests deleting
-/// the selected ones.
+/// comment box to open with. A `\r` left at the end of a line, from a file with Windows line
+/// endings, is dropped. Its fence is longer than any run of backticks that starts a line, so lines
+/// with fences of their own, such as Markdown's, stay inside it. No lines suggests deleting the
+/// selected ones.
 pub fn suggestion_block<S: AsRef<str>>(lines: &[S]) -> String {
     let longest = (lines.iter())
         .map(|line| {
@@ -26,7 +27,8 @@ pub fn suggestion_block<S: AsRef<str>>(lines: &[S]) -> String {
     let fence = "`".repeat(longest.max(2) + 1);
     let mut block = format!("{fence}suggestion\n");
     for line in lines {
-        block.push_str(line.as_ref());
+        let line = line.as_ref();
+        block.push_str(line.strip_suffix('\r').unwrap_or(line));
         block.push('\n');
     }
     block.push_str(&fence);
@@ -65,6 +67,27 @@ mod tests {
         assert_eq!(
             suggestion_block(&["  `````", "x"]),
             "``````suggestion\n  `````\nx\n``````"
+        );
+    }
+
+    #[test]
+    fn lines_keep_no_carriage_return() {
+        // Lines of a file with Windows line endings, split on `\n` only.
+        assert_eq!(
+            suggestion_block(&["a\r", "b\r"]),
+            "```suggestion\na\nb\n```"
+        );
+    }
+
+    #[test]
+    fn a_fence_after_a_tab_counts_and_a_tilde_fence_does_not() {
+        assert_eq!(
+            suggestion_block(&["\t```", "x"]),
+            "````suggestion\n\t```\nx\n````"
+        );
+        assert_eq!(
+            suggestion_block(&["~~~", "x"]),
+            "```suggestion\n~~~\nx\n```"
         );
     }
 
