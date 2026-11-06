@@ -131,9 +131,9 @@ impl Schedule {
 struct PullState {
     schedule: Schedule,
     summary: Option<Cached<Arc<PullSummary>>>,
-    /// The check the details were last fetched at. A different check means they're stale, and
-    /// none means they must be fetched again whatever the check says.
-    check: Option<Arc<PullRequestCheckData>>,
+    /// The check the details were last fetched in full at, and when. A different check means
+    /// they're stale, and none means they must be fetched again whatever the check says.
+    check: Option<Cached<Arc<PullRequestCheckData>>>,
     /// The latest check, as [`Poller::check`] returns it and [`PollEvent::Check`] sends it.
     latest_check: Option<Arc<PullRequestCheckData>>,
     details: Option<Cached<Arc<PullRequestData>>>,
@@ -441,11 +441,11 @@ impl Poller {
         let target = Target::Pull(pull.clone());
         let check = self
             .cached::<PullRequestCheckData>(&target)
-            .map(|c| Arc::new(c.value));
+            .map(|c| c.map(Arc::new));
         let state = PullState {
             summary: self.cached::<PullSummary>(&target).map(|c| c.map(Arc::new)),
-            check: check.clone(),
-            latest_check: check,
+            latest_check: check.as_ref().map(|c| c.value.clone()),
+            check,
             ..PullState::default()
         };
         if !self.repos.contains_key(&pull.repo) {
@@ -549,10 +549,17 @@ impl Poller {
         self.repos.get(repo)?.list.clone()
     }
 
-    /// Runs a write (a comment, a review, a merge) with the account's client, in the account's
-    /// queue: after any poll in flight, and at least a second after the previous write.
+    /// Runs a write (a comment, a review, viewed marks, a merge) that changes `target`, with the
+    /// account's client, in the account's queue: after any poll in flight, ahead of waiting
+    /// polls, and at least a second after the previous write.
+    ///
+    /// Afterwards what rozed knows about `target` is out of date, whether or not the write
+    /// succeeded (a failed one may still have reached GitHub): a pull request's details are
+    /// fetched in full again, a repository's open PRs are listed again, and either is polled at
+    /// once if it's watched.
     pub fn write<T, F, Fut>(
         &mut self,
+        target: impl Into<Target>,
         request: F,
         cx: &mut Context<Self>,
     ) -> Task<Result<T, GithubError>>
@@ -561,6 +568,7 @@ impl Poller {
         F: FnOnce(GithubClient) -> Fut + 'static,
         Fut: Future<Output = Result<T, GithubError>> + 'static,
     {
+        let target = target.into();
         let login = self.login.clone();
         let client = self
             .accounts
@@ -571,13 +579,43 @@ impl Poller {
                 message: format!("{error:#}"),
             })?;
             let result = queue.write(|| request(client.clone())).await;
-            this.update(cx, |this, cx| {
+            let forget = this.update(cx, |this, cx| {
                 this.limits = client.rate_limits();
                 this.refresh_status(cx);
-            })
-            .ok();
+                this.invalidate(&target, cx)
+            });
+            if let Ok(forget) = forget
+                && let Err(error) = forget.await
+            {
+                log::warn!("writing the cache: {error:#}");
+            }
             result
         })
+    }
+
+    /// Forgets what makes `target` look current, so it's fetched again, at once if it's watched.
+    /// Returns the cache write.
+    fn invalidate(&mut self, target: &Target, cx: &mut Context<Self>) -> CacheWrite {
+        let (cache, login, key) = (self.cache.clone(), self.login.clone(), target.clone());
+        let forget = match target {
+            Target::Pull(pull) => {
+                if let Some(state) = self.pulls.get_mut(pull) {
+                    state.check = None;
+                    state.schedule.force();
+                }
+                async move { cache.remove::<PullRequestCheckData>(&login, &key).await }.boxed()
+            }
+            Target::Repo(repo) => {
+                if let Some(state) = self.repos.get_mut(repo) {
+                    state.listed = None;
+                    state.schedule.force();
+                }
+                async move { cache.remove::<ListedPulls>(&login, &key).await }.boxed()
+            }
+        };
+        self.wake();
+        cx.notify();
+        forget
     }
 
     fn wake(&self) {
@@ -659,13 +697,24 @@ impl Poller {
                 next = Some((at, job(), schedule.forced));
             }
         };
+        // In the foreground, and unless the rate limit is very low, details older than
+        // `details_max_age` are fetched again whatever the check says.
+        let wall = self.config.wall_clock.now();
+        let refresh_details =
+            self.foreground && !matches!(self.status.rate_limit, RateLimitState::OpenOnly(_));
         if let Some(open) = &self.open
             && let Some(state) = self.pulls.get(open)
         {
             consider(&state.schedule, Tier::Open, &|| Job::Open {
                 pull: open.clone(),
                 summary: state.summary.as_ref().map(|s| s.value.clone()),
-                check: state.check.clone(),
+                check: state
+                    .check
+                    .as_ref()
+                    .filter(|check| {
+                        !refresh_details || check.age_at(wall) < self.config.details_max_age
+                    })
+                    .map(|check| check.value.clone()),
                 have_details: state.details.is_some(),
             });
         }
@@ -910,7 +959,11 @@ impl Poller {
                             etag: None,
                             fetched_at: wall,
                         });
-                        state.check = Some(check.clone());
+                        state.check = Some(Cached {
+                            value: check.clone(),
+                            etag: None,
+                            fetched_at: wall,
+                        });
                         put(&mut writes, &cache, &login, Put::Details(details.clone()));
                         put(&mut writes, &cache, &login, Put::Check(check));
                         changed.then_some(details)

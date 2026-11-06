@@ -889,7 +889,8 @@ async fn in_the_background_everything_polls_every_five_minutes(cx: &mut TestAppC
     };
     assert_eq!(t.requests(), log(&[all(300), all(600)].concat()));
 
-    // Coming back polls the open PR at once, then every 20 s.
+    // Coming back polls the open PR at once, with its details, older than 5 minutes, then every
+    // 20 s.
     t.update(|poller, cx| poller.set_foreground(true, cx));
     t.run_until(630);
     assert_eq!(
@@ -897,6 +898,7 @@ async fn in_the_background_everything_polls_every_five_minutes(cx: &mut TestAppC
         log(&[
             (610, "GET /pulls/1 (since)"),
             (610, "PullRequestCheck"),
+            (610, "PullRequest"),
             (630, "GET /pulls/1 (since)"),
             (630, "PullRequestCheck"),
         ])
@@ -1000,6 +1002,8 @@ async fn a_used_up_rate_limit_pauses_polling_until_the_reset(cx: &mut TestAppCon
         log(&[
             (600, "GET /pulls/1 (since)"),
             (600, "PullRequestCheck"),
+            // Its details are older than 5 minutes.
+            (600, "PullRequest"),
             (600, "GET /pulls/2 (since)"),
             (600, "GET /pulls?state=open&per_page=100 (etag)"),
             (620, "GET /pulls/1 (since)"),
@@ -1048,6 +1052,8 @@ async fn a_secondary_limit_waits_as_long_as_github_asks_then_backs_off(cx: &mut 
             (230, "GET /pulls/1 (since)"),
             (470, "GET /pulls/1 (since)"),
             (470, "PullRequestCheck"),
+            // Its details are older than 5 minutes.
+            (470, "PullRequest"),
             (490, "GET /pulls/1 (since)"),
             (490, "PullRequestCheck"),
         ])
@@ -1232,6 +1238,7 @@ fn post_comment(
     cx: &mut gpui::Context<Poller>,
 ) -> gpui::Task<Result<serde_json::Value, github::GithubError>> {
     poller.write(
+        pr(1),
         |client| async move {
             client
                 .post::<serde_json::Value, _>(
@@ -1353,10 +1360,93 @@ async fn a_waiting_write_goes_before_the_polls_that_come_due(cx: &mut TestAppCon
             "PullRequest",
             "POST /issues/1/comments",
             "GET /pulls/2",
+            // The comment was on PR #1, so it's fetched again.
+            "GET /pulls/1 (since)",
+            "PullRequestCheck",
+            "PullRequest",
             "GET /pulls?state=open&per_page=100",
             "OpenPullRequests",
         ],
         "{requests:?}"
+    );
+}
+
+#[gpui::test]
+async fn a_write_fetches_what_it_changed_again(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::new("write_invalidates", interactions, cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    t.requests();
+    let write = t.update(post_comment);
+    t.run();
+    write.await.unwrap();
+    // At once, and in full, although the check is the same.
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (5, "POST /issues/1/comments"),
+            (5, "GET /pulls/1 (since)"),
+            (5, "PullRequestCheck"),
+            (5, "PullRequest"),
+        ])
+    );
+
+    // The cache forgets the check too, so a restart fetches the details in full.
+    let write = t.update(post_comment);
+    t.run();
+    write.await.unwrap();
+    t.requests();
+    t.restart();
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    let now = t.now();
+    assert_eq!(
+        t.requests()
+            .into_iter()
+            .filter(|(_, what)| !what.contains("/pulls?"))
+            .collect::<Vec<_>>(),
+        log(&[
+            (now, "GET /pulls/1 (since)"),
+            (now, "PullRequestCheck"),
+            (now, "PullRequest"),
+        ])
+    );
+}
+
+#[gpui::test]
+async fn the_open_prs_details_are_fetched_in_full_every_five_minutes(cx: &mut TestAppContext) {
+    let mut t = Polling::new("details_refresh", recorded(), cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(5);
+    t.requests();
+    t.run_until(620);
+    let details: Vec<u64> = t
+        .requests()
+        .into_iter()
+        .filter(|(_, what)| what == "PullRequest")
+        .map(|(secs, _)| secs)
+        .collect();
+    // Viewed marks set on github.com move nothing the check sees.
+    assert_eq!(details, [300, 600]);
+
+    // Not in the background.
+    t.update(|poller, cx| poller.set_foreground(false, cx));
+    t.run_until(1300);
+    assert!(
+        !t.requests().iter().any(|(_, what)| what == "PullRequest"),
+        "fetched details in the background"
+    );
+    // Back in the foreground, details older than 5 minutes are fetched at once.
+    t.update(|poller, cx| poller.set_foreground(true, cx));
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (1300, "GET /pulls/1 (since)"),
+            (1300, "PullRequestCheck"),
+            (1300, "PullRequest"),
+        ])
     );
 }
 
@@ -1390,6 +1480,8 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
         log(&[
             (300, "GET /pulls/1 (since)"),
             (300, "PullRequestCheck"),
+            // Its details are older than 5 minutes.
+            (300, "PullRequest"),
             (300, "GET /pulls?state=open&per_page=100 (etag)"),
         ])
     );

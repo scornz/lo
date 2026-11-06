@@ -21,6 +21,9 @@ pub struct PollConfig {
     pub watched_interval: Duration,
     /// Everything, while rozed is in the background.
     pub background_interval: Duration,
+    /// The longest the open PR's details go without being fetched in full while rozed is in the
+    /// foreground. Viewed marks set elsewhere change nothing a cheaper poll sees.
+    pub details_max_age: Duration,
     /// Below this share of a rate limit left, every interval doubles.
     pub slow_below: f64,
     /// Below this share, only the open PR is polled, at most every `open_only_interval`.
@@ -48,6 +51,7 @@ impl Default for PollConfig {
             open_interval: Duration::from_secs(20),
             watched_interval: Duration::from_secs(2 * 60),
             background_interval: Duration::from_secs(5 * 60),
+            details_max_age: Duration::from_secs(5 * 60),
             slow_below: 0.20,
             open_only_below: 0.05,
             open_only_interval: Duration::from_secs(2 * 60),
