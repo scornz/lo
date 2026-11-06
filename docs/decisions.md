@@ -133,3 +133,115 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   directories, then the same extension, then path order. JS and TS extensions match each other.
 - **"More than 5,000 changed lines" means additions plus deletions,** strictly more; generated and
   large are reported separately so a large lockfile is both collapsed and loaded on a key.
+
+## Spike results (PR #4)
+
+- **rozed never applies a repository's own Zed settings** (`.zed/settings.json`, tasks, debug
+  configs), trusted or not. A trusted checkout's local settings merge over rozed's forced layer, so a
+  PR could otherwise pick its own language-server binary. Trust means "run this repo's language
+  servers", not "let this repo configure rozed". Fixed on PR #4.
+- **PR checkouts are kept out of macOS Recent Items.** Zed adds every visible worktree there, and
+  on this desktop the update blocks quitting. Fixed on PR #4.
+- **rust-analyzer is downloaded from GitHub for now,** with build scripts, proc macros,
+  check-on-save and dependencies off. Design §2 prefers an installed copy; milestone 10 decides
+  how to find one that doesn't follow the repo's `rust-toolchain.toml` (rustup would install it).
+- **Live GitHub fixtures are only read, never force-pushed.** The classifier treats force-pushes as
+  destructive, and local test repos prove force-push survival just as well.
+
+## Stacks (PR #7 and its review)
+
+- **Trunk branches are never a layer.** The caller passes the repo's trunks (the default branch plus
+  protected or ruleset-covered branches); a PR whose head is a trunk (a deploy PR
+  `production <- main`, a back-merge `develop <- main`) is never anyone's parent, by any rule.
+  Without this one such PR swallows the whole tree. Roots list trunks first, in the given order.
+- **The base-branch check uses the base branch's live tip** (`baseRef.target.oid`, null once
+  deleted), not `baseRefOid`, which is stale on most open PRs. The tip check applies only when the
+  upper PR is open.
+- **A squash- or rebase-merged lower layer is matched by any of its commits,** the newest one the
+  layer contains, and the layer is compared against that commit. The common flow (the lower layer
+  got review fixes after the upper was cut) then still finds the link and hides what landed. Open
+  lower layers keep design §4's rule: B must contain A's latest commit.
+- **Each layer says which base branch "Make this a GitHub stack" must set** (`retarget_to`), instead
+  of the converter inferring it from the linking rule.
+- **Merged PRs' `head_in_base` comes from GraphQL:** the head is one of `mergeCommit`'s parents or
+  equals it. Callers pass open PRs plus recently merged ones and the merged PRs whose head branch is
+  an open PR's base, following merged layers down to a trunk; a helper lists the branches still to
+  look up. A shared commit belongs to the oldest merged PR that lists it.
+- **A closed middle layer of a GitHub stack doesn't split it:** the layer above links to the nearest
+  lower position still present.
+- **Duplicates prefer open, then merged, then closed;** cycles list only open PRs.
+- **App wiring for the GitHub layer moves to milestone 5.** PR 3b keeps polling and the cache inside
+  the `github` crate, because the app's PR loading lives on the spike's branch and the local copy's,
+  which 3b doesn't sit on. Milestone 5's first task joins them.
+- **The database lives in `0-dev` for debug builds and `0-stable` for release,** keyed on the build
+  profile, because Zed's release channel reads `stable` in every rozed build.
+- **`gh` accounts whose token comes from an environment variable aren't offered for import.** That's
+  how a wrapper injects a token for one shell, not a stored account (and on this machine, it would
+  be the user's own account).
+- **Trust is opt-in until milestone 10's gate exists.** The spike trusted every PR checkout, and a
+  trusted checkout runs the PR's code (`.cargo/config.toml` wrappers through rust-analyzer's cargo
+  calls, `.zed/settings.json` binary paths, rustup auto-installing a pinned toolchain). Without
+  trust, rozed makes no checkout, starts no language server, and reads both sides from git.
+- **Untrusted and trusted alike, the right side's text comes from git.** A trusted checkout's file is
+  used for the language server only when its bytes match the head blob; otherwise rozed shows git's
+  content with a warning. APFS folds case and Unicode forms, so `Lib.rs` and `lib.rs` collide on
+  disk, and `.gitattributes` filters change checked-out bytes.
+- **Even in a trusted repo, rozed hardens what it runs:** a forced allowlist of language servers
+  (only those rozed ships support for), no project-local Zed settings, no interactive login shell
+  in the checkout (the project gets rozed's own environment), and `RUSTC_WRAPPER`,
+  `RUSTC_WORKSPACE_WRAPPER`, `RUSTUP_TOOLCHAIN` and friends pinned for rust-analyzer. Design §7
+  accepts that trusted repos' language servers may run repo code; these keep a PR's files from
+  choosing *which* programs run. Milestone 10 also evaluates a macOS sandbox profile for language
+  servers.
+- **No changed file is ever dropped from the diff.** Anything rozed can't render gets a placeholder
+  saying why. Submodule bumps show "Subproject commit a → b", and mode-only and line-ending-only
+  changes get a badge.
+- **Git runs with an allowlisted environment** (not inherited and then patched), plus
+  `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.attributesFile=/dev/null`,
+  `protocol.allow=never` with `https` allowed, and `GIT_NO_REPLACE_OBJECTS=1`.
+- **Cache refs are keyed by PR, not branch name** (`refs/rozed/pull/<n>/base`), the fetched head is
+  checked against the head SHA GitHub reported, and repo copies are keyed by the API's canonical
+  `owner/repo` (repository ID once the GitHub layer is wired in). Writes to a repo copy hold a
+  per-repo lock.
+
+## GitHub client (PR #5 and its review)
+
+- **The token only goes to GitHub's API hosts.** The client refuses absolute URLs to any host but
+  `api.github.com` and `uploads.github.com`; images and links found in responses are fetched by a
+  separate path (milestone 8) that decides per host.
+- **Only "not found" means an account can't see a repo.** Rate limits, SSO, OAuth-app restrictions
+  and server errors are reported with GitHub's link, so the UI can explain them (design §3, §11).
+- **Open PRs are read newest first** (`CREATED_AT DESC`), so the 1,000-PR cap drops the oldest, not
+  the newest.
+- **The device flow opens only `https://github.com/login/device`,** and help links open only when
+  they're `https` on `github.com`; server-supplied numbers are clamped; transient errors keep the
+  flow polling until its deadline.
+- **Removing an account always removes it,** even when its token is already gone, and tells the user
+  that revoking the grant happens on GitHub (rozed has no client secret to revoke it).
+- **Debug builds that opt into the Keychain use their own item names** (`rozed-dev://…`), so they
+  never touch a release build's tokens.
+- **A 401 is handled in one place:** the client's hook marks the account signed out, after one
+  re-import from `gh` for accounts that came from `gh`.
+
+## Moved code (PR #9)
+
+- **Lines of only punctuation (`}`, `});`) don't count toward a move's 3 lines,** though they can sit
+  inside one. Design §5 says 3 non-blank lines; without this, runs of closing braces show as moves.
+  git's `--color-moved` has a similar floor.
+- **Code deleted and re-added in the same place isn't a move,** so a re-indent or wrapping code in
+  a block shows as an ordinary change rather than a move to the same spot.
+- **A moved block may contain edits** if at least two thirds of its lines match and no more than 2
+  edited lines come in a row; an inserted or removed line splits it into two moves.
+- **Lines repeated all over a PR don't start a lineup** (deleted × added count above 64), which keeps
+  detection linear on generated or repetitive diffs.
+- **The latest revision is always the PR's current head** (`headRefOid`), passed in, never inferred
+  from inexact times. Heads outside the current commits sort before the latest force-push's result.
+  Without this a late review or a skewed clock made a stale head "latest" and said "Nothing new".
+- **Revisions start where the PR opened:** heads older than the newest head pushed at or before
+  `createdAt` are dropped, so pushes made before the PR existed aren't r1.
+- **A review's commit is a revision** (it was the head when the reviewer looked). Only submitted
+  reviews count; pending ones have no time and are ignored.
+- **A branch re-created at another SHA counts as forced unless ancestry says otherwise,** and a check
+  suite whose previous SHA isn't a known head or current commit (a backport on another branch) never
+  names a revision's previous head.
+- **Revision building is O(n log n),** with a head → position index, so 20,000 pushes stay fast.

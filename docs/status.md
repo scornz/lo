@@ -14,10 +14,13 @@ Kept current by the overseer session. A fresh session should be able to resume f
   run). Window verified on screen. The independent review found real gaps (Zed's open/save keys and
   untrusted language servers, redirects past the HTTP guard, lockfile pins, xtask bootstrapping,
   untested forced settings); fixes are in progress on the same branch.
-- 2b (`feat/spike`, on `build/zed-workspace`): PR diff with rust-analyzer, network check,
-  `docs/spike.md`. In progress.
-- 3a (`feat/github-client`, on `build/zed-workspace`): `github` crate, typed GraphQL, accounts,
-  device flow, `gh` import, sign-in UI. In progress.
+- PR #4 (2b, `feat/spike`): the spike's acceptance criteria are met (diff, rust-analyzer, network
+  check, crate list with a CI check, numbers in `docs/spike.md`). The review's trust and diff
+  findings are being fixed on the branch; its git findings went to milestone 4.
+- Milestone 4 (`feat/repo-cache`, on `feat/spike`): `repo_cache` crate. In progress.
+- PR #5 (3a, `feat/github-client`): `github` crate, typed GraphQL, accounts, device flow, `gh`
+  import, Accounts modal. Verified on screen; security review running.
+- 3b (`feat/github-polling`, on `feat/github-client`): polling scheduler and cache. In progress.
 - Early logic, no Zed compile: `feat/stacks-logic` (Task 7.1) and `feat/review-order` (Task 5.1),
   both on `build/zed-workspace`.
 - Research for milestone 6 (push boundaries, markers, viewed marks, `git merge-tree`) running;
@@ -34,10 +37,12 @@ it. Merge them bottom to top.
 | [#1](https://github.com/scornz/rozed/pull/1) `chore: bootstrap the repository` | `chore/bootstrap` | `main` | Reviewed and verified. Ready. |
 | [#2](https://github.com/scornz/rozed/pull/2) `docs: plan the spike…` | `docs/status` | `chore/bootstrap` | The project docs; keeps getting commits. Merge any time after #1. |
 | [#3](https://github.com/scornz/rozed/pull/3) `build: build rozed on Zed's crates` | `build/zed-workspace` | `chore/bootstrap` | Reviewed; review fixes in (16 commits); verified on screen; green. Ready after #1. |
-| [#4](https://github.com/scornz/rozed/pull/4) `feat: open a pull request in Zed's side-by-side diff` | `feat/spike` | `build/zed-workspace` | In progress. |
-| [#5](https://github.com/scornz/rozed/pull/5) `feat(github): sign in to GitHub and call its API` | `feat/github-client` | `build/zed-workspace` | In progress. |
+| [#4](https://github.com/scornz/rozed/pull/4) `feat: open a pull request in Zed's side-by-side diff` | `feat/spike` | `build/zed-workspace` | Works (fd#2212 side by side, rust-analyzer hovers, GitHub-only network). Review found that trusting every checkout lets a PR run code; fixes in progress (opt-in trust, right side from git, ignore `.zed`, server allowlist, no login shell). |
+| [#5](https://github.com/scornz/rozed/pull/5) `feat(github): sign in to GitHub and call its API` | `feat/github-client` | `build/zed-workspace` | Green; 94 github tests; sign-in, restart, remove and gh import verified on screen. Security review running. |
 | [#6](https://github.com/scornz/rozed/pull/6) `feat(review): order files for review…` | `feat/review-order` | `build/zed-workspace` | Reviewed; 60 tests; green. Ready after #3. |
-| [#7](https://github.com/scornz/rozed/pull/7) `feat(stacks): find stacks…` | `feat/stacks-logic` | `build/zed-workspace` | Awaiting hand-back and review. |
+| [#8](https://github.com/scornz/rozed/pull/8) `feat(review): build revisions and choose what to compare` | `feat/revisions-logic` | `feat/review-order` | Review found a stale-head "Nothing new" bug and ordering issues; fixes in progress. |
+| [#9](https://github.com/scornz/rozed/pull/9) `feat(diff_extras): detect moved blocks of code` | `feat/moved-code` | `build/zed-workspace` | Reviewed; 56 tests; 1.6 ms on a 21,000-line diff; green. Ready after #3. |
+| [#7](https://github.com/scornz/rozed/pull/7) `feat(stacks): find stacks…` | `feat/stacks-logic` | `build/zed-workspace` | Reviewed; review fixes in (trunks, live base tip, squash-merged matching, `retarget_to`); 82 tests; green. Ready after #3. |
 
 #4–#7 all sit on #3 and don't depend on each other, except where noted when they land. Whichever
 merges second resolves `Cargo.lock` and `crates/rozed` conflicts by merging `origin/main`.

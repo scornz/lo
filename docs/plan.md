@@ -492,12 +492,10 @@ Two PRs, stacked on the spike:
 
 **Depends on:** 3.7
 
-- Wire the spike's PR loading to the `github` crate when an account can see the repo (falling back
-  to unauthenticated for public repos), so `cargo run -p rozed -- <private PR url>` opens a PR from
-  `rozed-dev/playground` signed in as the bot.
-- **Verify:** open `rozed-dev/playground#2` on screen; leave it open for a minute and confirm from
-  the debug log that polls are conditional and 304s are counted as free.
-- Open PR 3b. **Done when:** checks are green and the private PR opens.
+- Open PR 3b with the polling scheduler and the cache, tested in the `github` crate. Wiring PR
+  loading in the app to the `github` crate moves to milestone 5's first task, where the spike's
+  diff, `repo_cache` and `github` first meet.
+- **Done when:** checks are green and the polling and cache tests cover the cases above.
 
 ---
 
@@ -554,8 +552,8 @@ One PR: `feat(repo_cache): keep a partial clone of each repository` — branch
 - Replace the spike's local-copy module in `crates/rozed` with `repo_cache`, passing the account's
   token when one can see the repo.
 - **Verify:** `sharkdp/fd#2212` and `rozed-dev/playground#2` (private, as `rozed-bot`) open as
-  before; force-push `stack-b` in `rozed-dev/playground` with the bot's token, reopen, and the old
-  revision is still under `refs/rozed/pull/2/revs/`.
+  before, with the head pinned under `refs/rozed/pull/2/revs/`. Force-push survival is proved by
+  Task 4.2's tests on local repos; nothing force-pushes to GitHub.
 
 ---
 
@@ -649,3 +647,55 @@ PR: `feat(diff_extras): detect moved blocks of code` — branch `feat/moved-code
 - Tests: within a file, across files, re-indented, with an inner edit, too short (2 lines), blank
   lines not counting, two candidate destinations (the longer wins), a deleted block added twice
   (one move), and a 20,000-line diff in under 100 ms in release mode (or a reasonable debug bound).
+
+### Task 9.1: Why a PR can't merge, and approve and ship (`crates/review`)
+
+PR: `feat(review): explain merge blocks and plan approve and ship` — branch `feat/merge-logic`,
+stacked on `feat/revisions-logic`. Design §9 "Merge status", "Merging", "Approve and ship", §11
+"Acting on what you saw".
+
+- Input: a merge snapshot the GitHub layer fills from GraphQL and REST: state, draft, `mergeable`,
+  `mergeStateStatus`, `reviewDecision`, reviews by user, review requests (with `asCodeOwner`),
+  required approving review count and whether code-owner review is required (from branch rules),
+  required checks with state and URL (and checks that haven't reported), unresolved thread count,
+  whether conversation resolution is required, whether the base requires a merge queue, whether the
+  PR is in the queue, auto-merge state, the repo's allowed merge methods, the viewer's permissions
+  (`viewerDidAuthor`, can approve, can merge, can merge as admin, can enable auto-merge), whether the
+  viewer's approval would count (write access, code owner of which paths), the head SHA GitHub has,
+  and the head SHA on screen.
+- `blockers(snapshot)`: every reason it can't merge (missing approvals with which code owners,
+  changes requested and by whom, each required check failed/running/missing with its URL,
+  unresolved conversations, conflicts, out of date, draft, other rules), each marked as something
+  waiting will fix (running or missing checks, others' approvals) or not. If GitHub says blocked and
+  nothing explains it, an "unexplained" blocker that links to the PR.
+- `merge_action(snapshot)`: merge with a method, add to the merge queue, or not possible.
+- `approve_and_ship(snapshot)`: the exact plan one confirmation lists: stop before anything if the
+  head moved since what's on screen; approve (skipped on your own PRs or when already approved by
+  you); then merge, add to queue, turn on auto-merge (only waiting blockers left after your
+  approval), or stop after approving with the blockers. `approve` uses the on-screen SHA.
+- Tests for every outcome of approve and ship, every blocker kind, queue vs direct merge, own PRs,
+  and the moved-head stop.
+- Read GitHub's schema for exact field and enum names (it's vendored on `feat/github-client` at
+  `crates/github/graphql/schema.graphql`).
+
+### Task 7.2: Planning "Make this a GitHub stack" (`crates/stacks`)
+
+PR: `feat(stacks): plan turning a chain into a GitHub stack` — branch `feat/stack-conversion`,
+stacked on `feat/stacks-logic`. Design §4 "Turning chains into GitHub stacks", §9 "Stacks", §11
+"Conversion fails partway"; research `research/github-api.md` (Stacks API).
+
+- `plan_conversion(stacks, layer, facts)`: the path to convert runs from the stack's bottom layer up
+  through `layer`, then on up while each layer has exactly one open child (a fork in the tree ends
+  it). The plan lists every base-branch change (`retarget_to` from 7.1, in bottom-to-top order) and
+  then the stack to create, bottom to top. With the path already a native stack, nothing to do; with
+  its lower part already a native stack, the plan adds the rest to that stack (`POST
+  /stacks/{n}/add`) instead of creating one.
+- Not offered, with the reason, when: the path has fewer than 2 PRs, any PR in it is from a fork,
+  is in a merge queue, or is in a different native stack, or the repo doesn't have stacks (the
+  caller says so after a 404).
+- `rollback(plan, done)`: given which steps succeeded, the steps that put base branches back, in
+  reverse order, and what can't be undone (a created stack can be unstacked; say so).
+- `merge_one_layer_at_a_time(stacks, layer)`, for chains that can't become a GitHub stack: merge the
+  bottom PR, then point the next at the root branch and mark it "needs rebase" (design §9 "Stacks").
+- Tests for every branch above, including trees, partial native stacks and rollback after each
+  failing step.
