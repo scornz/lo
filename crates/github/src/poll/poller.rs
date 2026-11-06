@@ -67,7 +67,7 @@ pub enum PollEvent {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PollStatus {
     pub rate_limit: RateLimitState,
-    /// Set while GitHub can't be reached.
+    /// Set while GitHub can't be reached, or the account's token can't be read.
     pub offline: Option<Offline>,
     /// GitHub refused the account's token, so nothing is polled until it signs in again.
     pub signed_out: bool,
@@ -98,7 +98,8 @@ pub struct PullRequestAnswer {
 #[derive(Default)]
 struct Schedule {
     last_polled: Option<Instant>,
-    /// How many times it was asked to be polled at once: opened, or rozed came to the foreground.
+    /// How many times it was asked to be polled at once: opened, rozed came to the foreground, or
+    /// a write changed it.
     forced: u64,
     /// `forced` as it was when the last poll to finish was chosen. A poll asked for while another
     /// was in flight is still owed when that one finishes.
