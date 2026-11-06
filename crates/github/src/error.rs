@@ -180,6 +180,17 @@ impl GithubError {
         }
     }
 
+    /// Whether waiting may fix it, with nothing for the user to do: [`Self::is_retryable`], a
+    /// rate limit, or a server error or `429` from GitHub. A refused token, single sign-on, an
+    /// organization's restriction or "not found" isn't.
+    pub fn is_waitable(&self) -> bool {
+        match self {
+            Self::RateLimited { .. } => true,
+            Self::Api { status, .. } => *status >= 500 || *status == 429,
+            _ => self.is_retryable(),
+        }
+    }
+
     /// The error for an unsuccessful REST response, or a GraphQL one that failed before running.
     pub fn from_response(status: u16, headers: &HeaderMap, body: &[u8]) -> Self {
         #[derive(Deserialize, Default)]
@@ -415,7 +426,9 @@ pub fn is_connection_failure(error: &anyhow::Error) -> bool {
 /// Whether a request was sent, or about to be, and got no answer: it timed out (reqwest's
 /// `operation timed out`, or the OS's), or its connection went away under it (hyper-util's
 /// `client error (SendRequest)`, a reset or a closed connection), as with a pooled connection
-/// that died while the Mac slept.
+/// that died while the Mac slept, or a proxy couldn't open the tunnel to GitHub (reqwest's
+/// `unsuccessful tunnel`, which a proxy that can't reach GitHub answers with, or `unexpected eof
+/// while tunneling`).
 fn is_lost_answer(error: &anyhow::Error) -> bool {
     use std::io::ErrorKind;
     error.chain().any(|cause| {
@@ -432,7 +445,10 @@ fn is_lost_answer(error: &anyhow::Error) -> bool {
             return true;
         }
         let text = cause.to_string();
-        text == "operation timed out" || text == "client error (SendRequest)"
+        text == "operation timed out"
+            || text == "client error (SendRequest)"
+            || text == "unsuccessful tunnel"
+            || text == "unexpected eof while tunneling"
     })
 }
 
@@ -484,6 +500,27 @@ mod tests {
         let proxy =
             anyhow::anyhow!("proxy authentication required").context("client error (Connect)");
         assert!(!network(proxy).is_retryable());
+        // A proxy that can't open the tunnel, as when it can't reach GitHub itself.
+        let tunnel = || anyhow::anyhow!("unsuccessful tunnel").context("client error (Connect)");
+        assert!(network(tunnel()).is_retryable());
+        assert!(!network(tunnel()).is_unreachable());
+        // Waiting fixes a server error or a rate limit, not a refusal.
+        let api = |status| GithubError::Api {
+            status,
+            message: "x".into(),
+            documentation_url: None,
+            errors: Vec::new(),
+        };
+        assert!(api(502).is_waitable());
+        assert!(api(429).is_waitable());
+        assert!(!api(403).is_waitable());
+        assert!(
+            !GithubError::SsoRequired {
+                message: "x".into(),
+                url: None
+            }
+            .is_waitable()
+        );
         // Any answer.
         assert!(
             !GithubError::NotFound {
