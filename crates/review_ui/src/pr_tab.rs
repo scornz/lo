@@ -507,8 +507,8 @@ impl PrTab {
             )
         } else {
             format!(
-                "GitHub answered, but rozed couldn't load the pull request: {why:#}. This is the \
-                 local copy's diff, read-only; rozed keeps trying."
+                "rozed couldn't load the pull request from GitHub: {why:#}. This is the local \
+                 copy's diff, read-only; rozed keeps trying."
             )
         };
         self.set_status(Status::Offline(text.into()), cx);
@@ -3434,7 +3434,7 @@ mod tests {
             panic!("expected the local copy: {:?}", status(&tab, cx));
         };
         assert!(
-            message.starts_with("GitHub answered, but rozed couldn't load the pull request: "),
+            message.starts_with("rozed couldn't load the pull request from GitHub: "),
             "{message}"
         );
         assert!(message.contains("502"), "{message}");
@@ -3453,6 +3453,38 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(5));
         cx.run_until_parked();
         assert_eq!(status(&tab, cx), Status::Ready);
+    }
+
+    #[gpui::test]
+    async fn a_proxy_that_starts_refusing_is_reported_rather_than_waited_out(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+
+        // The network's back, behind a proxy that wants a password: waiting won't fix that, so
+        // the next check loads, and the tab says why it still shows the copy.
+        github.set_offline(false);
+        github.set_proxy_refusing(true);
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+
+        let Status::Offline(message) = status(&tab, cx) else {
+            panic!("expected the local copy: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.starts_with("rozed couldn't load the pull request from GitHub: "),
+            "{message}"
+        );
+        assert!(
+            message.contains("proxy authentication required"),
+            "{message}"
+        );
+        tab.read_with(cx, |tab, _| assert!(tab.diff().is_some()));
     }
 
     #[gpui::test]

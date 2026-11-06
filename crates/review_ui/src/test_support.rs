@@ -106,6 +106,8 @@ struct State {
     offline: bool,
     /// Whether every request connects and then times out, as on a slow connection.
     timing_out: bool,
+    /// Whether a proxy refuses every request, wanting a password.
+    proxy_refusing: bool,
     /// Tokens whose requests can't connect, though others' can.
     cut_off: Vec<String>,
     /// Requests to these paths wait until they're let go, each with what lets it go.
@@ -153,6 +155,11 @@ impl FakeGithub {
     /// Whether every request times out after connecting, as on a slow connection.
     pub fn set_timing_out(&self, timing_out: bool) {
         self.0.lock().timing_out = timing_out;
+    }
+
+    /// Whether a proxy refuses every request, as one that wants a password does.
+    pub fn set_proxy_refusing(&self, refusing: bool) {
+        self.0.lock().proxy_refusing = refusing;
     }
 
     /// Makes `token`'s requests fail to connect, while other tokens' get answers.
@@ -214,6 +221,13 @@ impl FakeGithub {
                 "the network is down",
             )
             .into());
+        }
+        if state.proxy_refusing {
+            return Err(anyhow::anyhow!("proxy authentication required")
+                .context("client error (Connect)")
+                .context(format!(
+                    "error sending request for url (https://api.github.com{path})"
+                )));
         }
         if state.timing_out {
             return Err(anyhow::anyhow!("operation timed out").context(format!(

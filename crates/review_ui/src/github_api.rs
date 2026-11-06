@@ -138,9 +138,10 @@ pub async fn fetch_pull_request(
 /// How long the check that GitHub answers waits for an answer.
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Whether GitHub's API answers at all, with any status, within [`ANSWER_TIMEOUT`]: `GET
-/// /rate_limit` without signing in, which doesn't count against any rate limit. For telling when
-/// GitHub can be reached again. `executor`'s clock bounds the wait too, whatever the client does
+/// Whether it's worth loading from GitHub again: `GET /rate_limit` without signing in, which
+/// doesn't count against any rate limit, got an answer with any status within
+/// [`ANSWER_TIMEOUT`], or failed in a way waiting won't fix, such as a proxy that refuses it,
+/// which loading then reports. `executor`'s clock bounds the wait too, whatever the client does
 /// with the request's own timeout.
 pub async fn github_answers(http: Arc<dyn HttpClient>, executor: BackgroundExecutor) -> bool {
     let request = Request::get("https://api.github.com/rate_limit")
@@ -155,7 +156,10 @@ pub async fn github_answers(http: Arc<dyn HttpClient>, executor: BackgroundExecu
     let timer = executor.timer(ANSWER_TIMEOUT).fuse();
     futures::pin_mut!(send, timer);
     futures::select_biased! {
-        answer = send => answer.is_ok(),
+        answer = send => match answer {
+            Ok(_) => true,
+            Err(error) => !GithubError::Network(error).is_retryable(),
+        },
         _ = timer => false,
     }
 }
