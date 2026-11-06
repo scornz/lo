@@ -3,11 +3,11 @@
 //! A revision's base is the merge base of its head with the base branch's tip as it was when the
 //! revision was pushed. Today's tip gives the same merge base as long as the branch only moved
 //! forward since and doesn't contain the pull request's commits, which is the usual case. It
-//! doesn't for a pull request merged with a merge commit, whose base branch now holds every
-//! revision, nor for a stacked or retargeted pull request, whose base branch was force-pushed or
-//! replaced. [`base_tip_at`] picks the tip then from what GitHub and rozed saw.
+//! doesn't for a pull request merged with a merge commit or by a fast-forward, whose base branch
+//! now holds its revisions, nor for a stacked or retargeted pull request, whose base branch was
+//! force-pushed or replaced. [`base_tip_at`] picks the tip then from what GitHub and rozed saw.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::{PushedAt, sha};
 
@@ -42,7 +42,9 @@ pub enum BaseRecord {
     },
     /// A `BaseRefForcePushedEvent`: `afterCommit` and `createdAt`, a few seconds after the push, on
     /// whichever branch the pull request targeted then. `after` is `None` when GitHub no longer has
-    /// the commit. Exact for that moment, though normal pushes after it go unrecorded.
+    /// the commit. Exact for that moment, though normal pushes after it go unrecorded. It's taken
+    /// as [`EVENT_LAG`] before `createdAt`, so a layer pushed just after the one below it, as
+    /// stacking tools do, sees the push below.
     ForcePush {
         after: Option<String>,
         at: SystemTime,
@@ -57,6 +59,37 @@ pub enum BaseRecord {
     },
 }
 
+/// How long after a push GitHub makes its timeline event, at most: the activity API's time is
+/// 1–4 s before the event's.
+pub const EVENT_LAG: Duration = Duration::from_secs(5);
+
+/// How a pull request merged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Merge {
+    /// The commit GitHub names as merging it (`mergeCommit`): a merge commit, the squashed or last
+    /// rebased commit, or the head itself, when the head was pushed to the base branch.
+    pub commit: String,
+    /// That commit's parents (`mergeCommit.parents`), its first two.
+    pub parents: Vec<String>,
+    /// The pull request's head when it merged (`headRefOid`).
+    pub head: String,
+}
+
+impl Merge {
+    /// Whether it merged with a merge commit of the base and the head: its first parent was the
+    /// base branch's tip just before.
+    fn with_merge_commit(&self) -> bool {
+        matches!(self.parents.as_slice(), [_, second] if *second == self.head)
+    }
+
+    /// Whether the base branch now holds the pull request's commits, as it does after a merge
+    /// commit or a fast-forward, so its tip now is no revision's base. A squash or rebase merge
+    /// makes new commits instead.
+    fn holds_the_pull_request(&self) -> bool {
+        self.commit == self.head || self.parents.len() > 1
+    }
+}
+
 /// What's known of a pull request's base branches over time, for [`base_tip_at`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BaseHistory {
@@ -64,10 +97,8 @@ pub struct BaseHistory {
     pub branch: String,
     /// Its tip now, as the local copy last fetched it.
     pub tip: Option<String>,
-    /// The parents of the commit that merged the pull request (`mergeCommit.parents`), or none
-    /// when it isn't merged. A merge with a merge commit has two, the first being the base
-    /// branch's tip just before the merge; a squash or rebase merge's commit has one.
-    pub merge_parents: Vec<String>,
+    /// How the pull request merged, when it did.
+    pub merge: Option<Merge>,
     /// The pull request's retargets, in any order.
     pub retargets: Vec<Retarget>,
     /// Where base branches pointed, oldest first where times tie.
@@ -90,10 +121,15 @@ pub enum BaseTipSource {
     /// The first parent of the merge commit that merged the pull request into the branch it
     /// targeted then, which only moved forward since.
     MergeParent,
+    /// The branch's tip just before the push that merged the pull request into it, from the
+    /// activity API: the push's `before`. The branch only moved forward since.
+    BeforeMerge,
     /// The activity API's latest push to the branch at or before the revision's. Exact.
     Activity,
     /// The branch's tip now, since it only moved forward after the revision, as far as any source
-    /// says. Its merge base with the revision's head is the same as the tip then.
+    /// says, and doesn't hold the pull request's commits. Its merge base with the revision's head
+    /// is the same as the tip then. For a branch the pull request no longer targets, its latest
+    /// push the activity API read.
     Now,
     /// The latest force-push of the branch at or before the revision, from its timeline event.
     /// The branch can have moved forward after it.
@@ -101,9 +137,9 @@ pub enum BaseTipSource {
     /// A tip rozed saw at or before the revision's push. The branch can have moved forward after
     /// it.
     Seen,
-    /// The pull request's base branch's tip now, though it was force-pushed or the pull request
-    /// retargeted after the revision, and nothing says where its base was then. Its base can be
-    /// wrong, so the caller says so.
+    /// The branch's tip now, or the pull request's base branch's when that isn't known, though
+    /// the branch was force-pushed after the revision, or now holds the pull request's commits,
+    /// and nothing says where it was then. Its base can be wrong, so the caller says so.
     Uncertain,
 }
 
@@ -112,14 +148,16 @@ pub enum BaseTipSource {
 ///
 /// - **The branch then.** Retargets after the push name the branch the pull request targeted
 ///   then. A push no source dates is taken as the latest.
-/// - **Merged with a merge commit:** the merge commit's first parent, when the push targeted the
-///   branch it merged into and that branch only moved forward since.
+/// - **Merged,** into the branch the push targeted, when that branch only moved forward since:
+///   with a merge commit (its second parent the head), its first parent; otherwise the `before`
+///   of the activity API's push that merged it (whose `after` is the merge commit or the head).
 /// - **From the activity API:** its latest push to the branch at or before the revision's, which
 ///   is exact.
-/// - **Moving forward only:** the branch's tip now, when the push targeted today's base branch and
-///   no source says it was force-pushed, deleted or re-created since.
+/// - **Moving forward only:** the branch's tip now, when no source says it was force-pushed,
+///   deleted or re-created since, and it doesn't hold the pull request's commits. For a branch
+///   the pull request no longer targets, that's its latest push the activity API read.
 /// - **Otherwise,** the latest force-push event or tip rozed saw at or before the push, and failing
-///   those, today's tip, flagged [`BaseTipSource::Uncertain`].
+///   those, the branch's tip now, flagged [`BaseTipSource::Uncertain`].
 pub fn base_tip_at(history: &BaseHistory, pushed_at: PushedAt) -> Option<BaseTip> {
     let at = match pushed_at {
         PushedAt::Exact(at) | PushedAt::By(at) => Some(at),
@@ -133,18 +171,29 @@ pub fn base_tip_at(history: &BaseHistory, pushed_at: PushedAt) -> Option<BaseTip
             source,
         })
     };
-    let forward_only = today && !moved_back_after(history, branch, at);
-    if forward_only && let [first, _, ..] = history.merge_parents.as_slice() {
-        return tip(first, BaseTipSource::MergeParent);
+    let forward_only = !moved_back_after(history, branch, at);
+    // A merge is into today's base branch.
+    let merge = history.merge.as_ref().filter(|_| today);
+    if forward_only && let Some(merge) = merge {
+        if merge.with_merge_commit() {
+            return tip(&merge.parents[0], BaseTipSource::MergeParent);
+        }
+        if let Some(before) = before_merge(history, branch, merge) {
+            return tip(before, BaseTipSource::BeforeMerge);
+        }
     }
-    if let Some(after) = latest(history, branch, at, |record| match record {
-        BaseRecord::Activity { after, .. } => Some(after.as_deref().and_then(sha)),
-        _ => None,
-    }) {
+    if let Some(after) = latest(history, branch, at, activity_tip) {
         return tip(after, BaseTipSource::Activity);
     }
-    let now = history.tip.as_deref().and_then(sha);
-    if forward_only && let Some(now) = now {
+    let now = match today {
+        true => history.tip.as_deref().and_then(sha),
+        false => latest(history, branch, None, activity_tip),
+    };
+    let holds_the_pull_request = merge.is_some_and(Merge::holds_the_pull_request);
+    if forward_only
+        && !holds_the_pull_request
+        && let Some(now) = now
+    {
         return tip(now, BaseTipSource::Now);
     }
     if let Some(after) = latest(history, branch, at, |record| match record {
@@ -159,7 +208,35 @@ pub fn base_tip_at(history: &BaseHistory, pushed_at: PushedAt) -> Option<BaseTip
     }) {
         return tip(seen, BaseTipSource::Seen);
     }
-    now.and_then(|now| tip(now, BaseTipSource::Uncertain))
+    (now.or(history.tip.as_deref().and_then(sha)))
+        .and_then(|now| tip(now, BaseTipSource::Uncertain))
+}
+
+/// The tip an activity API's push left, or `Some(None)` for a deletion.
+fn activity_tip(record: &BaseRecord) -> Option<Option<&str>> {
+    match record {
+        BaseRecord::Activity { after, .. } => Some(after.as_deref().and_then(sha)),
+        _ => None,
+    }
+}
+
+/// The branch's tip just before the activity API's push that merged the pull request into it.
+fn before_merge<'a>(history: &'a BaseHistory, branch: &str, merge: &Merge) -> Option<&'a str> {
+    (history.records.iter())
+        .filter_map(|record| match record {
+            BaseRecord::Activity {
+                branch: pushed,
+                before,
+                after: Some(after),
+                at,
+                ..
+            } if pushed == branch && (*after == merge.commit || *after == merge.head) => {
+                Some((*at, before.as_deref().and_then(sha)?))
+            }
+            _ => None,
+        })
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, before)| before)
 }
 
 /// The base branch the pull request targeted at `at`: the branch the first retarget after it
@@ -179,15 +256,16 @@ fn branch_at(history: &BaseHistory, at: Option<SystemTime>) -> &str {
 fn record_branch<'a>(history: &'a BaseHistory, record: &'a BaseRecord) -> &'a str {
     match record {
         BaseRecord::Activity { branch, .. } | BaseRecord::Seen { branch, .. } => branch,
-        BaseRecord::ForcePush { at, .. } => branch_at(history, Some(*at)),
+        BaseRecord::ForcePush { .. } => branch_at(history, Some(record_time(record))),
     }
 }
 
+/// When a record's tip was there from: a force-push event's push was up to [`EVENT_LAG`] before
+/// it.
 fn record_time(record: &BaseRecord) -> SystemTime {
     match record {
-        BaseRecord::Activity { at, .. }
-        | BaseRecord::ForcePush { at, .. }
-        | BaseRecord::Seen { at, .. } => *at,
+        BaseRecord::Activity { at, .. } | BaseRecord::Seen { at, .. } => *at,
+        BaseRecord::ForcePush { at, .. } => at.checked_sub(EVENT_LAG).unwrap_or(*at),
     }
 }
 
@@ -347,10 +425,18 @@ mod tests {
         assert_eq!(found(&history, pushed(1)), tip("m9", BaseTipSource::Now));
     }
 
+    fn merged(commit: &str, parents: &[&str], head: &str) -> Option<Merge> {
+        Some(Merge {
+            commit: commit.into(),
+            parents: parents.iter().map(|parent| parent.to_string()).collect(),
+            head: head.into(),
+        })
+    }
+
     #[test]
     fn a_pull_request_merged_with_a_merge_commit_takes_its_first_parent() {
         let mut history = into_main(vec![push("main", "m1", "m2", 5)]);
-        history.merge_parents = vec!["m8".into(), "h3".into()];
+        history.merge = merged("mc", &["m8", "h3"], "h3");
 
         assert_eq!(
             found(&history, pushed(10)),
@@ -359,11 +445,66 @@ mod tests {
     }
 
     #[test]
-    fn a_squash_or_rebase_merge_has_no_merge_parent_to_take() {
-        let mut history = into_main(vec![]);
-        history.merge_parents = vec!["m8".into()];
+    fn a_squash_or_rebase_merge_takes_the_tip_before_the_merge_or_today_s() {
+        // Squashed, or rebased, into new commits: the activity API's merge says where main was.
+        for merge in [merged("sq", &["m8"], "h3"), merged("rb3", &["rb2"], "h3")] {
+            let commit = merge.as_ref().unwrap().commit.clone();
+            let mut history = into_main(vec![
+                push("main", "m1", "m2", 5),
+                push("main", "m8", &commit, 50),
+            ]);
+            history.merge = merge.clone();
+            assert_eq!(
+                found(&history, pushed(10)),
+                tip("m8", BaseTipSource::BeforeMerge)
+            );
 
-        assert_eq!(found(&history, pushed(10)), tip("m9", BaseTipSource::Now));
+            // Without it, main doesn't hold the pull request's commits, so today's tip does.
+            let mut history = into_main(vec![]);
+            history.merge = merge;
+            assert_eq!(found(&history, pushed(10)), tip("m9", BaseTipSource::Now));
+        }
+    }
+
+    #[test]
+    fn a_fast_forward_takes_the_tip_before_it_and_without_it_is_uncertain() {
+        // The head itself was pushed to main, so main holds every revision.
+        let mut history = into_main(vec![
+            push("main", "m1", "m2", 5),
+            push("main", "m2", "m8", 30),
+            push("main", "m8", "h3", 50),
+        ]);
+        history.merge = merged("h3", &["h2"], "h3");
+        assert_eq!(
+            found(&history, pushed(10)),
+            tip("m8", BaseTipSource::BeforeMerge)
+        );
+
+        // Past the pushes read, today's tip would make every revision's diff empty.
+        let mut history = into_main(vec![]);
+        history.merge = merged("h3", &["h2"], "h3");
+        assert_eq!(
+            found(&history, pushed(10)),
+            tip("m9", BaseTipSource::Uncertain)
+        );
+    }
+
+    #[test]
+    fn a_fast_forwarded_head_that_is_a_merge_commit_is_no_merge_parent() {
+        // The author merged main into the branch, and the head was then pushed to main: the
+        // head's first parent is the pull request's own commit.
+        let mut history = into_main(vec![push("main", "m8", "h3", 50)]);
+        history.merge = merged("h3", &["h2", "m7"], "h3");
+
+        assert_eq!(
+            found(&history, pushed(10)),
+            tip("m8", BaseTipSource::BeforeMerge)
+        );
+        history.records.clear();
+        assert_eq!(
+            found(&history, pushed(10)),
+            tip("m9", BaseTipSource::Uncertain)
+        );
     }
 
     #[test]
@@ -372,7 +513,7 @@ mod tests {
             push("main", "m1", "m2", 5),
             force("main", "m2", "n1", 30),
         ]);
-        history.merge_parents = vec!["m8".into(), "h3".into()];
+        history.merge = merged("mc", &["m8", "h3"], "h3");
 
         assert_eq!(
             found(&history, pushed(10)),
@@ -518,6 +659,29 @@ mod tests {
         assert_eq!(found(&history, pushed(5)), tip("a1", BaseTipSource::Seen));
         assert_eq!(found(&history, pushed(15)), tip("b1", BaseTipSource::Seen));
         assert_eq!(found(&history, pushed(25)), tip("m1", BaseTipSource::Seen));
+    }
+
+    #[test]
+    fn an_old_base_that_only_moved_forward_is_its_latest_tip_read() {
+        // Retargeted from a busy `develop` at minute 100; its pushes were read back to minute 50
+        // only.
+        let mut history = into_main(vec![
+            push("develop", "d1", "d2", 50),
+            push("develop", "d2", "d3", 90),
+        ]);
+        history.retargets = vec![retarget("develop", "main", 100)];
+
+        assert_eq!(found(&history, pushed(20)), tip("d3", BaseTipSource::Now));
+        assert_eq!(
+            found(&history, pushed(60)),
+            tip("d2", BaseTipSource::Activity)
+        );
+        // Force-pushed since, it's uncertain, with its own latest tip.
+        history.records.push(force("develop", "d3", "e1", 95));
+        assert_eq!(
+            found(&history, pushed(20)),
+            tip("e1", BaseTipSource::Uncertain)
+        );
     }
 
     #[test]

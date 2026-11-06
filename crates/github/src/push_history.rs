@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use review::revisions::{BaseHistory, BaseRecord, PushRecord, Retarget};
+use review::revisions::{BaseHistory, BaseRecord, Merge, PushRecord, Retarget};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -348,10 +348,13 @@ impl PushHistory {
     /// `tip` the base branch's tip as the local copy last fetched it. Tips rozed saw itself, such
     /// as the heads of the pull request below in a stack, can be added to its records.
     pub fn base_history(&self, tip: Option<&str>) -> BaseHistory {
-        let merge_parents = match &self.merge_commit {
-            Some(commit) if self.merged => commit.parents.clone(),
-            _ => Vec::new(),
-        };
+        let merge = (self.merge_commit.as_ref())
+            .filter(|_| self.merged)
+            .map(|commit| Merge {
+                commit: commit.oid.clone(),
+                parents: commit.parents.clone(),
+                head: self.head.clone(),
+            });
         let mut records = Vec::new();
         for activity in &self.base_activity {
             for entry in activity.entries() {
@@ -373,7 +376,7 @@ impl PushHistory {
         BaseHistory {
             branch: self.base_branch.clone(),
             tip: tip.map(str::to_string),
-            merge_parents,
+            merge,
             retargets: (self.retargets.iter())
                 .map(|retarget| Retarget {
                     from: retarget.from.clone(),

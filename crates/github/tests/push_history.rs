@@ -739,3 +739,55 @@ fn a_head_branch_with_more_pushes_since_it_opened_than_rozed_reads_is_truncated(
         _ => false,
     }));
 }
+
+/// fd#2202's answers, merged as `edit` says instead of with a merge commit.
+fn merged_otherwise(edit: impl Fn(&mut serde_json::Value)) -> PushHistory {
+    let (_, interactions) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_fd_2202")).unwrap();
+    let interactions = interactions.into_iter().map(|(_, mut interaction)| {
+        if interaction.request.operation.is_some() {
+            let pull = &mut interaction.response.body.as_mut().unwrap()["data"]["repository"]
+                ["pullRequest"];
+            edit(&mut pull["mergeCommit"]);
+        }
+        interaction
+    });
+    let http = Arc::new(ReplayHttpClient::from_interactions("merged", interactions).unwrap());
+    block_on(client(http).push_history(&PullRef::new("sharkdp", "fd", 2202), BOT, None)).unwrap()
+}
+
+#[test]
+fn a_squash_or_rebase_merge_takes_master_before_the_merge_and_a_fast_forward_without_it_is_uncertain()
+ {
+    let bases = |history: &PushHistory| -> Vec<(String, BaseTipSource)> {
+        let base = history.base_history(Some(&sha(9)));
+        revisions(history, &[])
+            .iter()
+            .map(|revision| {
+                let tip = base_tip_at(&base, revision.pushed_at).unwrap();
+                (tip.commit[..7].to_string(), tip.source)
+            })
+            .collect()
+    };
+    // `master`'s push that merged it went from 5e10274 to the merge commit, 8b14e8d.
+    let squashed = merged_otherwise(|commit| {
+        commit["parents"]["nodes"] =
+            serde_json::json!([{"oid": "5e10274e350b5c20407dcfa6d42be6971242b377"}]);
+    });
+    let before = ("5e10274".to_string(), BaseTipSource::BeforeMerge);
+    assert_eq!(bases(&squashed), [before.clone(), before]);
+
+    // Fast-forwarded: its merge commit is its head, and `master` now holds every revision.
+    // `master`'s pushes read reach back to when they were pushed, so each base is exact.
+    let mut fast_forwarded = merged_otherwise(|commit| {
+        commit["oid"] = "31f36c873e1065755830f947c05db158348d586d".into();
+        commit["parents"]["nodes"] =
+            serde_json::json!([{"oid": "4feccf0ae8840cad866647eaf76127bab756ccfd"}]);
+    });
+    let exact = ("5e10274".to_string(), BaseTipSource::Activity);
+    assert_eq!(bases(&fast_forwarded), [exact.clone(), exact]);
+    // Without them, today's tip would make every revision's diff empty: it's uncertain.
+    fast_forwarded.base_activity.clear();
+    let uncertain = (sha(9)[..7].to_string(), BaseTipSource::Uncertain);
+    assert_eq!(bases(&fast_forwarded), [uncertain.clone(), uncertain]);
+}

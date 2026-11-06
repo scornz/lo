@@ -41,7 +41,9 @@ mod viewed;
 use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
-pub use base::{BaseHistory, BaseRecord, BaseTip, BaseTipSource, Retarget, base_tip_at};
+pub use base::{
+    BaseHistory, BaseRecord, BaseTip, BaseTipSource, EVENT_LAG, Merge, Retarget, base_tip_at,
+};
 pub use build::build_revisions;
 pub use compare::{Comparison, default_comparison};
 pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
