@@ -63,9 +63,10 @@ cargo run -p rozed -- --trust https://github.com/sharkdp/fd/pull/2212   # with r
 cargo test --workspace
 ```
 
-`rozed <pull request link>` copies the pull request into a partial clone per repository under
-`~/Library/Caches/rozed/repos/` and shows it in Zed's side-by-side diff, both sides read from git,
-with no language server. `--trust` also checks the head out under `checkouts/` and runs
+`rozed <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
+while it copies the pull request into a partial clone per repository under
+`~/Library/Caches/rozed/repos/`. Then the copy's diff of whole files replaces it in Zed's
+side-by-side diff, at the same file and line, both sides read from git, with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
 `docs/spike.md`, "Trust risks"). Without `--trust`, no language server can start at all. Milestone
@@ -139,6 +140,11 @@ Zed").
 3. `project: let an app keep worktrees out of Recent Items`. Adds
    `WorktreeStore::keep_out_of_recent_documents`, so rozed's checkouts never reach macOS's Recent
    Items. Adding them there also kept rozed from quitting on some desktops.
+4. `editor: keep a split diff's expand buttons hidden when it splits again`. Adds
+   `SplittableEditor::disable_expand_excerpt_buttons`, which also hides them on the left editor
+   that `split()` makes when the diff widens or its style changes, and
+   `Editor::expand_excerpt_buttons_disabled`. GitHub's diff of a pull request shows hunks only,
+   and its excerpts must never expand.
 
 ### Cargo settings copied from Zed
 
@@ -165,6 +171,14 @@ Each Zed release gets its own branch, `rozed/v<version>`. Patch branches are app
 force-push or delete one, because older rozed commits pin commits on it. To rewrite a patch on the
 same Zed release, push a new branch with a suffix, such as `rozed/v1.27.0-2`, and point the
 submodule at it as in step 2.
+
+To see what a release breaks first, run `script/zed-latest.sh --tag v<version>` (under `mise exec
+--`). In a worktree of its own, it replays the patches onto the release, then runs `cargo xtask
+sync-zed --seed-lock`, `rustup toolchain install`, `cargo fetch`, `cargo fmt --check`, `cargo
+build`, `cargo clippy` and `cargo test`. It reports each patch that no longer applies and each
+failing step's first errors, and pushes nothing. The `weekly-zed` workflow runs it against Zed's
+latest release every week and keeps one issue labelled `zed-update` open, with the latest report,
+while that release breaks rozed.
 
 1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
    above in order, and push the branch to `scornz/zed`.

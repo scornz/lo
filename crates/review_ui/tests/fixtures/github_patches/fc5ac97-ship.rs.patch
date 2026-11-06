@@ -1,0 +1,50 @@
+@@ -285,8 +285,8 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
+ /// - It stops, with the blockers, when something waiting won't fix blocks the merge.
+ /// - It does nothing more when auto-merge is on.
+ /// - It merges with the preferred method, or joins the queue on a branch that requires one, only
+-///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and
+-///   nothing rozed sees blocks it. Those are the states in which GitHub's rules are met, so approve
++///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, or `BEHIND`
++///   on a queue branch) and nothing rozed sees blocks it. Those are the states in which GitHub's rules are met, so approve
+ ///   and ship never merges past a rule, even for an admin GitHub would let bypass one.
+ /// - Otherwise only things waiting will fix block it, and it turns on auto-merge, or merge when
+ ///   ready on a queue branch. When rozed's explanation of a `BLOCKED` is only partial, auto-merge
+@@ -397,12 +397,18 @@ fn ship(snapshot: &MergeSnapshot) -> Ship {
+ }
+ 
+ /// Whether GitHub reports the pull request can merge: the merge states `gh pr merge` also merges
+-/// on. In each, the base branch's rules are met, so merging never relies on an admin's bypass.
++/// on. In each, the base branch's rules are met, so merging never relies on an admin's bypass. On
++/// a branch that requires a merge queue, `BEHIND` lets it join the queue too: GitHub reports it
++/// only when nothing else blocks, and the queue tests each pull request on the latest base.
+ fn github_lets_it_merge(snapshot: &MergeSnapshot) -> bool {
+-    matches!(
+-        snapshot.merge_state,
+-        MergeStateStatus::Clean | MergeStateStatus::HasHooks | MergeStateStatus::Unstable
+-    )
++    match snapshot.merge_state {
++        MergeStateStatus::Clean | MergeStateStatus::HasHooks | MergeStateStatus::Unstable => true,
++        MergeStateStatus::Behind => snapshot.queue.required,
++        MergeStateStatus::Blocked
++        | MergeStateStatus::Dirty
++        | MergeStateStatus::Draft
++        | MergeStateStatus::Unknown => false,
++    }
+ }
+ 
+ /// The snapshot as rozed expects GitHub to report it after you approve the head on screen. It's
+@@ -1515,6 +1521,14 @@ mod tests {
+         assert_eq!(after_approving(&after, &the_plan(&snapshot)), Ship::Enqueue);
+     }
+ 
++    #[test]
++    fn it_joins_the_queue_when_github_reports_only_that_the_head_is_behind() {
++        let snapshot = with_queue(reviewing());
++        let after = approved(snapshot.clone(), "APPROVED", "BEHIND");
++
++        assert_eq!(after_approving(&after, &the_plan(&snapshot)), Ship::Enqueue);
++    }
++
+     #[test]
+     fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_rozed_cannot_see() {
+         // Copilot opened it, or a ruleset requires a reviewer for these files: GitHub still needs

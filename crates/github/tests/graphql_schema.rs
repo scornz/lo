@@ -47,7 +47,7 @@ fn graphql_schema_validates_every_query() {
             queries += 1;
         }
     }
-    assert!(queries >= 4, "found only {queries} queries");
+    assert!(queries >= 6, "found only {queries} queries");
 }
 
 #[test]

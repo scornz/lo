@@ -1,0 +1,6 @@
+{
+  "description": "markFileAsViewed on PR #2 with a path the pull request doesn't have, reading the PullRequest query before and after; PR #2's one file stays unviewed",
+  "recorded_at": "2026-11-06T16:04:35Z",
+  "repo": "rozed-dev/playground",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

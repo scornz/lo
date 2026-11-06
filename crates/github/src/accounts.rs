@@ -432,7 +432,7 @@ impl Accounts {
         if self.is_signed_out(login) {
             return Task::ready(None);
         }
-        if let Some(current) = self.clients.get(&key(login)).map(GithubClient::token)
+        if let Some(current) = self.clients.get(&key(login)).and_then(GithubClient::token)
             && current != token
         {
             return Task::ready(Some(current));
@@ -935,7 +935,7 @@ mod tests {
             .update(cx, |accounts, cx| accounts.client("ROZED-BOT", cx))
             .await
             .unwrap();
-        assert_eq!(client.token().expose(), "gho_FAKE");
+        assert_eq!(client.token().unwrap().expose(), "gho_FAKE");
     }
 
     #[gpui::test]
@@ -1191,7 +1191,7 @@ mod tests {
         add_with(&accounts, "a", "gho_NEW", AccountSource::DeviceFlow, cx).await;
         accounts.read_with(cx, |accounts, _| assert!(!accounts.is_signed_out("a")));
         a.get::<serde_json::Value>(REPO).await.unwrap();
-        assert_eq!(a.token().expose(), "gho_NEW");
+        assert_eq!(a.token().unwrap().expose(), "gho_NEW");
     }
 
     /// A fake `gh` that prints the token in `token` next to it for `a`, counting its runs.
@@ -1251,7 +1251,7 @@ esac
         // retried with it.
         a.get::<serde_json::Value>(REPO).await.unwrap();
         assert_eq!(gh.runs(), 1);
-        assert_eq!(other.token().expose(), "gho_FRESH");
+        assert_eq!(other.token().unwrap().expose(), "gho_FRESH");
         assert_eq!(
             store.fake.state.lock().keys.get(&server_for("a")),
             Some(&b"gho_FRESH".to_vec())

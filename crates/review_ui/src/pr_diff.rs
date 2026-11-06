@@ -14,18 +14,24 @@
 //! that aren't UTF-8 (shown with U+FFFD), and changes to line endings alone.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 use buffer_diff::BufferDiff;
+use editor::display_map::{DisplayRow, DisplaySnapshot, ToDisplayPoint as _};
 use editor::{
-    Addon, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer, SplittableEditor,
-    multibuffer_context_lines,
+    Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
+    SelectionEffects, SplittableEditor, multibuffer_context_lines,
 };
+use futures::FutureExt as _;
+use futures::channel::{mpsc, oneshot};
 use git::status::{FileStatus, StatusCode, TrackedStatus};
-use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
+use gpui::{
+    AnyElement, App, AppContext as _, AsyncWindowContext, Entity, Task, WeakEntity, Window,
+};
 use language::{
     Buffer, BufferId, Capability, DiskState, File, LanguageRegistry, LineEnding,
     OffsetRangeExt as _, Point, ReplicaId, Rope, TextBuffer,
@@ -40,16 +46,17 @@ use workspace::Workspace;
 use workspace::notifications::NotificationId;
 
 use repo_cache::{
-    Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, PullRequestRefs, Repo, RepoCache,
-    Token,
+    Change, ChangedFile, FileMode, FileVersion, HeadSource, Oid, Progress, PullRequestRefs, Repo,
+    RepoCache, Token,
 };
 
+use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
 use crate::github_api::PullRequest;
 use crate::github_layer::Saved;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::PrTab;
+use crate::pr_tab::{DiffSource, PrTab};
 use crate::trust;
 
 /// Whether the pull request gets a checkout and language servers. The caller decides.
@@ -63,10 +70,11 @@ pub enum Trust {
 }
 
 /// Copies the pull request locally, signed in with `token` for a private repository, and shows
-/// it in `tab`'s diff, from git first. When `trust` asks for a checkout, it's made in the
-/// background, and each file whose checkout copy matches the head switches to the checkout's
-/// project buffer when it's ready, or a banner says why there's none. `launched` is when the tab
-/// opened, for timing.
+/// the local copy's diff in `tab`, from git first. While it copies, the tab shows git's progress,
+/// and a fetch that fails for a reason that may pass is tried again, with a banner saying why.
+/// When `trust` asks for a checkout, it's made in the background once the diff shows, and each
+/// file whose checkout copy matches the head switches to the checkout's project buffer when it's
+/// ready, or a banner says why there's none. `launched` is when the tab opened, for timing.
 #[allow(clippy::too_many_arguments)]
 pub async fn open(
     tab: WeakEntity<PrTab>,
@@ -84,36 +92,25 @@ pub async fn open(
         pull_request.base.branch,
         launched.elapsed()
     );
-
     // Waits for the launch check, which finds git.
     let cache = cx.update(|_, cx| local_copies::cache(cx))?.await?;
-    let started = Instant::now();
-    let local = Arc::new(
-        cx.background_spawn({
-            let (link, pull_request) = (link.clone(), pull_request.clone());
-            async move { copy(&cache, &link, &pull_request, token) }
-        })
-        .await
-        .with_context(|| format!("copying {link} locally"))?,
+    let copy_once = |progress, cx: &mut AsyncWindowContext| {
+        let (cache, link, pull_request, token) = (
+            cache.clone(),
+            link.clone(),
+            pull_request.clone(),
+            token.clone(),
+        );
+        cx.background_spawn(async move { copy(&cache, &link, &pull_request, token, progress) })
+    };
+    let local = copy_with_retries(&tab, &link, copy_once, cx).await?;
+    let title = format!(
+        "{link}: {}",
+        crate::window_title::without_bidi(&pull_request.title)
     );
-    log::info!(
-        "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
-        started.elapsed(),
-        local.files.len(),
-        local.base,
-        local.head
-    );
-    show(
-        tab,
-        workspace,
-        link,
-        &pull_request.title,
-        local,
-        SystemTime::now(),
-        true,
-        trust,
-        launched,
-        cx,
+    let polled_at = SystemTime::now();
+    show_local_copy(
+        tab, workspace, link, title, local, polled_at, trust, launched, cx,
     )
     .await
 }
@@ -164,14 +161,19 @@ pub async fn open_offline(
         "{link}: offline, so showing the local copy's head {head}, {} changed files",
         local.files.len()
     );
-    show(
+    let title = format!(
+        "{link}: {}",
+        crate::window_title::without_bidi(&details.title)
+    );
+    let local = Arc::new(local);
+    let polled_at = saved.fetched_at;
+    show_local_copy(
         tab,
         workspace,
         link,
-        &details.title,
-        Arc::new(local),
-        saved.fetched_at,
-        false,
+        title,
+        local,
+        polled_at,
         Trust::Untrusted,
         launched,
         cx,
@@ -180,81 +182,227 @@ pub async fn open_offline(
     Ok(true)
 }
 
-/// Shows `local`, the pull request titled `pr_title` in the local copy, whose head GitHub gave
-/// at `polled_at`, in `tab`'s diff: just now `from_github`, or as rozed saved it. With [`Trust::Checkout`], each file then switches to the
-/// trusted checkout's project buffer.
+/// How long to wait before trying a failed copy again the first time. Each failure doubles it, up
+/// to [`LAST_RETRY`].
+const FIRST_RETRY: Duration = Duration::from_secs(5);
+const LAST_RETRY: Duration = Duration::from_secs(5 * 60);
+
+/// How many times a copy that fails for a reason rozed doesn't know is tried before rozed stops
+/// and offers to try again. One that fails on the network, or on a rate limit, is tried for as long
+/// as the tab is open.
+const UNKNOWN_TRIES: usize = 5;
+
+/// Copies the pull request locally with `copy_once`, which starts one try and sends git's
+/// progress, showing that progress in `tab`. A copy that fails for a reason that may pass, such as
+/// the network, is tried again, waiting longer each time, while a banner in the tab says why. One
+/// that keeps failing for a reason rozed doesn't know stops after [`UNKNOWN_TRIES`] until the
+/// banner's button asks for another try. Any other failure is returned.
+pub(crate) async fn copy_with_retries(
+    tab: &WeakEntity<PrTab>,
+    link: &PrLink,
+    mut copy_once: impl FnMut(
+        mpsc::UnboundedSender<CopyProgress>,
+        &mut AsyncWindowContext,
+    ) -> Task<anyhow::Result<LocalPullRequest>>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<Arc<LocalPullRequest>> {
+    let mut wait = FIRST_RETRY;
+    let mut unknown = 0;
+    loop {
+        let started = Instant::now();
+        let (progress, mut updates) = mpsc::unbounded();
+        // git reports progress from a thread of its own, so the updates are read on a timer:
+        // awaiting them would wake this task from that thread.
+        let mut copying = copy_once(progress, cx).fuse();
+        let copied = loop {
+            let mut tick = cx.background_executor().timer(PROGRESS_EVERY).fuse();
+            futures::select_biased! {
+                copied = copying => break copied,
+                _ = tick => {
+                    if let Some(update) = latest(&mut updates) {
+                        tab.update(cx, |tab, cx| tab.copy_progress(&update, cx))?;
+                    }
+                }
+            }
+        };
+        let error = match copied {
+            Ok(local) => {
+                log::info!(
+                    "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
+                    started.elapsed(),
+                    local.files.len(),
+                    local.base,
+                    local.head
+                );
+                tab.update(cx, |tab, cx| tab.copy_retried(None, cx))?;
+                return Ok(Arc::new(local));
+            }
+            Err(error) => error,
+        };
+        let Some(retry) = retry(&error) else {
+            return Err(error.context(format!("copying {link} locally")));
+        };
+        let why = format!("{error:#}");
+        if retry == Retry::Few {
+            unknown += 1;
+            if unknown >= UNKNOWN_TRIES {
+                log::warn!(
+                    "{link}: copying it locally failed {unknown} times: {why}; waiting to be asked \
+                     to try again"
+                );
+                let (asked, asking) = oneshot::channel();
+                tab.update(cx, |tab, cx| tab.copy_stopped(&why, unknown, asked, cx))?;
+                // The tab dropped the button's sender: it closed, or loads anew.
+                if asking.await.is_err() {
+                    return Err(error.context(format!("copying {link} locally")));
+                }
+                log::info!("{link}: trying to copy it locally again, as asked");
+                (unknown, wait) = (0, FIRST_RETRY);
+                continue;
+            }
+        }
+        log::warn!("{link}: copying it locally: {why}; trying again in {wait:?}");
+        count_down(tab, &why, wait, cx).await?;
+        wait = next_wait(wait);
+    }
+}
+
+/// The wait before the next try, after waiting `wait` before this one: twice as long, up to
+/// [`LAST_RETRY`].
+pub(crate) fn next_wait(wait: Duration) -> Duration {
+    (wait * 2).min(LAST_RETRY)
+}
+
+/// Says in `tab`'s banner that the copy failed for `why` and counts `wait` down, a second at a
+/// time. It ends when `wait` is up on the executor's clock or the wall clock, whichever comes
+/// first: the executor's timers don't run while the Mac sleeps.
+async fn count_down(
+    tab: &WeakEntity<PrTab>,
+    why: &str,
+    wait: Duration,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let executor = cx.background_executor().clone();
+    let (started, started_at) = (executor.now(), SystemTime::now());
+    loop {
+        let waited = executor
+            .now()
+            .duration_since(started)
+            .max(started_at.elapsed().unwrap_or_default());
+        let left = wait.saturating_sub(waited);
+        if left.is_zero() {
+            break;
+        }
+        tab.update(cx, |tab, cx| tab.copy_retried(Some((why, Some(left))), cx))?;
+        executor.timer(left.min(Duration::from_secs(1))).await;
+    }
+    tab.update(cx, |tab, cx| tab.copy_retried(Some((why, None)), cx))?;
+    Ok(())
+}
+
+/// How often the tab shows how far a copy has got.
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+
+/// The latest of the updates `updates` has waiting, if any: of a burst, only the latest is worth
+/// showing.
+fn latest(updates: &mut mpsc::UnboundedReceiver<CopyProgress>) -> Option<CopyProgress> {
+    let mut latest = None;
+    while let Ok(update) = updates.try_recv() {
+        latest = Some(update);
+    }
+    latest
+}
+
+/// How often a failed copy is tried again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Retry {
+    /// For as long as it takes: the network failed, or GitHub is limiting requests, which passes.
+    Always,
+    /// A few times: the fetch failed for a reason rozed doesn't know.
+    Few,
+}
+
+/// Whether a failed copy may work if tried again, and how often to try: a fetch that failed on
+/// the network, on a rate limit, or for a reason rozed doesn't know.
+fn retry(error: &anyhow::Error) -> Option<Retry> {
+    use repo_cache::{Error, FetchFailure};
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<Error>()? {
+            Error::Fetch {
+                failure: FetchFailure::Network | FetchFailure::RateLimited,
+                ..
+            } => Some(Retry::Always),
+            Error::Fetch {
+                failure: FetchFailure::Other,
+                ..
+            } => Some(Retry::Few),
+            _ => None,
+        })
+}
+
+/// Shows the local copy's diff of the pull request in `tab`, of the head GitHub gave at
+/// `polled_at`. While the tab shows GitHub's diff, the local copy's is built out of sight and
+/// replaces it once every file is in, scrolled to the same file and line; otherwise it shows at
+/// once and fills in as files load.
 #[allow(clippy::too_many_arguments)]
-async fn show(
+pub(crate) async fn show_local_copy(
     tab: WeakEntity<PrTab>,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
-    pr_title: &str,
+    title: String,
     local: Arc<LocalPullRequest>,
     polled_at: SystemTime,
-    from_github: bool,
     trust: Trust,
     launched: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
-    // The tab lists the files, and says where each goes in the diff.
-    let positions = tab.update(cx, |tab, cx| {
-        tab.copied(&local.files, &local.head, polled_at, from_github, cx)
-    })?;
-
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let banners = tab.read_with(cx, |tab, _| tab.banners().clone())?;
-    banners.update(cx, |banners, cx| {
-        if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
-            banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
-        }
-        if trust == Trust::Checkout {
-            banners.show(
-                BannerKind::CheckingOut,
-                Severity::Info,
-                format!(
-                    "Checking {link} out for language servers. Until it's ready, every file \
-                     shows from git."
-                ),
-                cx,
-            );
-        }
-    });
-
-    let title = format!("{link}: {}", crate::window_title::without_bidi(pr_title));
-    let multi_buffer = cx.new(|cx| {
-        let mut multi_buffer = MultiBuffer::new(Capability::ReadOnly).with_title(title.clone());
-        multi_buffer.set_all_diff_hunks_expanded(cx);
-        multi_buffer
-    });
-    let editor = workspace.update_in(cx, |_, window, cx| {
-        let workspace_entity = cx.entity();
-        cx.new(|cx| {
-            let editor = SplittableEditor::new(
-                EditorSettings::get_global(cx).diff_view_style,
-                multi_buffer.clone(),
-                project.clone(),
-                workspace_entity,
-                window,
-                cx,
-            );
-            // Hides the controls for staging and restoring hunks.
-            editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
-            editor.rhs_editor().update(cx, |editor, cx| {
-                editor.set_show_bookmarks(false, cx);
-                editor.set_show_breakpoints(false, cx);
-                // Keeps the clone open, so no cleanup removes it or its checkout while the tab
-                // shows it.
-                editor.register_addon(OpenClone {
-                    _repo: local.repo.clone(),
-                });
-            });
-            editor
+    // What the banners say about this diff, once it shows.
+    let show_banners = |cx: &mut AsyncWindowContext| {
+        banners.update(cx, |banners, cx| {
+            if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
+                banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
+            }
+            if trust == Trust::Checkout {
+                banners.show(
+                    BannerKind::CheckingOut,
+                    Severity::Info,
+                    format!(
+                        "Checking {link} out for language servers. Until it's ready, every file \
+                         shows from git."
+                    ),
+                    cx,
+                );
+            }
         })
+    };
+
+    let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, cx)?;
+    editor.update(cx, |editor, cx| {
+        editor.rhs_editor().update(cx, |editor, _| {
+            // Keeps the clone open, so no cleanup removes it or its checkout while the tab
+            // shows it.
+            editor.register_addon(OpenClone {
+                _repo: local.repo.clone(),
+            });
+        })
+    });
+    // The tab lists the files and says where each goes in the diff, at once, or with GitHub's
+    // diff on screen, once this one replaces it, so the list always matches the diff shown.
+    let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
+        if tab.diff_source() == Some(DiffSource::GitHub) {
+            return (true, tab.positions_of(&local.files));
+        }
+        let positions = tab.copied(&local.files, &local.head, polled_at, cx);
+        tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
+        (false, positions)
     })?;
-    tab.update_in(cx, |tab, window, cx| {
-        tab.show_diff(editor.clone(), window, cx)
-    })?;
+    if !replacing {
+        show_banners(cx);
+    }
 
     let target = Target {
         repo_name: &local.name,
@@ -271,6 +419,9 @@ async fn show(
     let mut not_shown = 0;
     let mut not_loaded = 0;
     for (index, file) in local.files.iter().enumerate() {
+        tab.update(cx, |tab, cx| {
+            tab.loading_diff(index + 1, local.files.len(), cx)
+        })?;
         let plan = cx
             .background_spawn({
                 let repo = local.repo.clone();
@@ -279,12 +430,16 @@ async fn show(
             })
             .await;
         let position = positions[index];
-        let shown = match target.add_file(position, file, plan.clone(), cx).await {
+        let (path, deleted) = (file.display_path(), file.new.is_none());
+        let shown = match target
+            .add_file(position, &path, deleted, plan.clone(), cx)
+            .await
+        {
             Ok(shown) => Ok((shown, plan)),
             Err(error) => {
                 let plan = FilePlan::failed(&error);
                 target
-                    .add_file(position, file, plan.clone(), cx)
+                    .add_file(position, &path, deleted, plan.clone(), cx)
                     .await
                     .map(|shown| (shown, plan))
             }
@@ -341,6 +496,20 @@ async fn show(
             }
         });
     });
+    tab.update_in(cx, |tab, window, cx| {
+        if replacing {
+            tab.copied(&local.files, &local.head, polled_at, cx);
+            tab.switch_diff(editor.clone(), &local.head, window, cx);
+        }
+        tab.diff_loaded(cx);
+    })?;
+    if replacing {
+        show_banners(cx);
+        log::info!(
+            "{link}: switched from GitHub's diff to the local copy's {:?} after launch",
+            launched.elapsed()
+        );
+    }
     if not_shown > 0 {
         let message = match not_shown {
             1 => format!("{link}: 1 file couldn't be shown. Its header says why."),
@@ -406,7 +575,15 @@ async fn show(
                     headers.warnings.insert(*buffer_id, warning);
                 });
             }
-            Swap::ToCheckout(plan) => match target.add_file(positions[index], file, plan, cx).await
+            Swap::ToCheckout(plan) => match target
+                .add_file(
+                    positions[index],
+                    &file.display_path(),
+                    file.new.is_none(),
+                    plan,
+                    cx,
+                )
+                .await
             {
                 Ok(shown) => update_headers(&editor, cx, |headers| {
                     headers.move_to(*buffer_id, shown.buffer_id);
@@ -426,6 +603,192 @@ async fn show(
         launched.elapsed()
     );
     Ok(())
+}
+
+/// A new, empty side-by-side diff of `title`, read-only and without the controls for staging and
+/// restoring hunks.
+pub(crate) fn new_diff_editor(
+    workspace: &WeakEntity<Workspace>,
+    project: &Entity<Project>,
+    title: &str,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<(Entity<MultiBuffer>, Entity<SplittableEditor>)> {
+    let multi_buffer = cx.new(|cx| {
+        let mut multi_buffer = MultiBuffer::new(Capability::ReadOnly).with_title(title.to_string());
+        multi_buffer.set_all_diff_hunks_expanded(cx);
+        multi_buffer
+    });
+    let editor = workspace.update_in(cx, |_, window, cx| {
+        let workspace_entity = cx.entity();
+        cx.new(|cx| {
+            let editor = SplittableEditor::new(
+                EditorSettings::get_global(cx).diff_view_style,
+                multi_buffer.clone(),
+                project.clone(),
+                workspace_entity,
+                window,
+                cx,
+            );
+            editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
+            editor.rhs_editor().update(cx, |editor, cx| {
+                editor.set_show_bookmarks(false, cx);
+                editor.set_show_breakpoints(false, cx);
+            });
+            editor
+        })
+    })?;
+    Ok((multi_buffer, editor))
+}
+
+/// Where a diff is scrolled to: the file and line at the top of the view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffPosition {
+    /// The file's path in the pull request.
+    pub path: String,
+    /// The row, from 0, in the head's version of the file: the line's number less one.
+    pub row: u32,
+    /// How many rows below the top of the view the row shows: the rows of its file's header, or
+    /// a fraction above zero when the row is scrolled partly out of view.
+    pub below_top: f64,
+}
+
+/// The file and line at the top of `diff`'s view, or the first one below it when a file's header,
+/// or a deleted line, is at the top.
+pub fn scroll_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<DiffPosition> {
+    let editor = diff.read(cx).rhs_editor().clone();
+    editor.update(cx, |editor, cx| {
+        let top = editor.scroll_position(cx).y.max(0.);
+        let display = editor.display_snapshot(cx);
+        let top_row = DisplayPoint::new(DisplayRow(top.floor() as u32), 0);
+        let point = display.display_point_to_point(top_row, Bias::Right);
+        let (path, point) = file_point(&display, point)?;
+        let shown_at = f64::from(point.1.to_display_point(&display).row().0);
+        Some(DiffPosition {
+            path,
+            row: point.0.row,
+            below_top: shown_at - top,
+        })
+    })
+}
+
+/// The file and point that `point` of `display`'s multibuffer shows, with the multibuffer's point
+/// for it, or the first file's line below it. A deleted line is a row of its base's buffer, which
+/// has no file, so it gives the start of the file's next line.
+fn file_point(display: &DisplaySnapshot, mut point: Point) -> Option<(String, (Point, Point))> {
+    let buffer_snapshot = display.buffer_snapshot();
+    loop {
+        if let Some((buffer, buffer_point)) = buffer_snapshot.point_to_buffer_point(point)
+            && let Some(file) = buffer.file()
+        {
+            return Some((file.path().as_unix_str().to_string(), (buffer_point, point)));
+        }
+        if point.row >= buffer_snapshot.max_point().row {
+            return None;
+        }
+        point = Point::new(point.row + 1, 0);
+    }
+}
+
+/// Scrolls `diff` so `position`'s file and line show where they did, or the nearest line of that
+/// file it shows. Returns whether `diff` has the file.
+pub fn scroll_to(
+    diff: &Entity<SplittableEditor>,
+    position: &DiffPosition,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let editor = diff.read(cx).rhs_editor().clone();
+    let multi_buffer = editor.read(cx).buffer().clone();
+    let buffer = multi_buffer.read(cx).all_buffers_iter().find(|buffer| {
+        buffer
+            .read(cx)
+            .file()
+            .is_some_and(|file| file.path().as_unix_str() == position.path)
+    });
+    let Some(anchor) = buffer.and_then(|buffer| {
+        multi_buffer
+            .read(cx)
+            .buffer_point_to_anchor(&buffer, Point::new(position.row, 0), cx)
+    }) else {
+        return false;
+    };
+    editor.update(cx, |editor, cx| {
+        let display = editor.display_snapshot(cx);
+        let row = f64::from(anchor.to_display_point(&display).row().0);
+        editor.set_scroll_position(
+            gpui::point(0., (row - position.below_top).max(0.)),
+            window,
+            cx,
+        );
+    });
+    true
+}
+
+/// Where a diff's cursor is: a file, and a point in the head's version of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffCursor {
+    pub path: String,
+    pub point: Point,
+}
+
+/// Where `diff`'s cursor is, when it shows in the view.
+pub fn cursor_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<DiffCursor> {
+    let editor = diff.read(cx).rhs_editor().clone();
+    editor.update(cx, |editor, cx| {
+        let display = editor.display_snapshot(cx);
+        let head = editor.selections.newest::<Point>(&display).head();
+        let row = head.to_display_point(&display).row().0;
+        let top = editor.scroll_position(cx).y.max(0.);
+        // Unknown until the editor is laid out, when it counts as in view.
+        let in_view = editor.visible_line_count().is_none_or(|lines| {
+            let row = f64::from(row);
+            row >= top.floor() && row < top + lines
+        });
+        if !in_view {
+            return None;
+        }
+        let (path, (point, _)) = file_point(&display, head)?;
+        Some(DiffCursor { path, point })
+    })
+}
+
+/// Puts `diff`'s cursor at `cursor`, or the nearest point of its file the diff shows, without
+/// scrolling. Returns whether `diff` has the file.
+pub fn put_cursor(
+    diff: &Entity<SplittableEditor>,
+    cursor: &DiffCursor,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let editor = diff.read(cx).rhs_editor().clone();
+    let multi_buffer = editor.read(cx).buffer().clone();
+    let Some(anchor) = buffer_anchor(&multi_buffer, &cursor.path, cursor.point, cx) else {
+        return false;
+    };
+    editor.update(cx, |editor, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+            selections.select_anchor_ranges([anchor..anchor])
+        });
+    });
+    true
+}
+
+/// The anchor in `multi_buffer` at `point` of the file at `path`.
+fn buffer_anchor(
+    multi_buffer: &Entity<MultiBuffer>,
+    path: &str,
+    point: Point,
+    cx: &App,
+) -> Option<multi_buffer::Anchor> {
+    let buffer = multi_buffer.read(cx).all_buffers_iter().find(|buffer| {
+        buffer
+            .read(cx)
+            .file()
+            .is_some_and(|file| file.path().as_unix_str() == path)
+    })?;
+    multi_buffer
+        .read(cx)
+        .buffer_point_to_anchor(&buffer, point, cx)
 }
 
 /// Checks the head out, trusts that checkout and nothing else, and opens it as a folder of
@@ -543,8 +906,36 @@ impl Addon for OpenClone {
     }
 }
 
+/// How far copying a pull request locally has got.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CopyProgress {
+    /// git is fetching, and said this.
+    Fetching(Progress),
+    /// Listing the files the pull request changes, which downloads what git needs to count lines.
+    Listing,
+}
+
+impl CopyProgress {
+    /// What the tab's status line says.
+    pub(crate) fn text(&self) -> String {
+        match self {
+            Self::Fetching(progress) => {
+                let stage = progress.stage.to_lowercase();
+                match (progress.percent(), progress.total) {
+                    (Some(percent), Some(total)) => {
+                        format!("Copying it locally: {stage}, {percent}% of {total}…")
+                    }
+                    _ => format!("Copying it locally: {stage}, {}…", progress.done),
+                }
+            }
+            Self::Listing => "Copying it locally: listing the changed files…".to_string(),
+        }
+    }
+}
+
 /// A pull request in the local copy.
-struct LocalPullRequest {
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct LocalPullRequest {
     repo: Repo,
     /// The repository's canonical name, GitHub's, which starts each file's full path.
     name: String,
@@ -631,6 +1022,7 @@ fn copy(
     link: &PrLink,
     pull_request: &PullRequest,
     token: Option<Token>,
+    progress: mpsc::UnboundedSender<CopyProgress>,
 ) -> anyhow::Result<LocalPullRequest> {
     // The repository's canonical name, not the link's, so a renamed one keeps its clone.
     let (owner, name) = pull_request.base.repo.owner_and_name()?;
@@ -645,14 +1037,16 @@ fn copy(
     };
     let fetched = repo
         .with_progress({
-            let link = link.clone();
-            move |progress| {
+            let (link, progress) = (link.clone(), progress.clone());
+            move |update| {
                 log::debug!(
                     "{link}: {} {}/{}",
-                    progress.stage,
-                    progress.done,
-                    progress.total.map_or("?".into(), |total| total.to_string())
-                )
+                    update.stage,
+                    update.done,
+                    update.total.map_or("?".into(), |total| total.to_string())
+                );
+                // The tab may have closed.
+                progress.unbounded_send(CopyProgress::Fetching(update)).ok();
             }
         })
         .fetch_pull(&PullRequestRefs {
@@ -690,6 +1084,7 @@ fn copy(
                 pull_request.base.branch
             )
         })?;
+    progress.unbounded_send(CopyProgress::Listing).ok();
     let files = repo.changed_files(&base, &fetched.head)?;
     Ok(LocalPullRequest {
         repo,
@@ -715,23 +1110,30 @@ const LARGE_FILE_LINES: u32 = 5_000;
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
 /// The trusted checkout a pull request's project buffers come from.
-struct Checkout {
+pub(crate) struct Checkout {
     dir: PathBuf,
     worktree_id: WorktreeId,
 }
 
-/// What one changed file shows, worked out from git before anything goes on screen.
+/// What one changed file shows, worked out before anything goes on screen: from git, or from
+/// GitHub's patch.
 #[derive(Clone, Debug, PartialEq)]
-struct FilePlan {
-    content: Content,
+pub(crate) struct FilePlan {
+    pub(crate) content: Content,
     /// Shown in the file's header.
-    warning: Option<Warning>,
+    pub(crate) warning: Option<Warning>,
     /// What the file's header says about the change besides its status.
-    badge: Option<SharedString>,
+    pub(crate) badge: Option<SharedString>,
+    /// The head's rows that show, when only they're known, as from GitHub's patch: each range
+    /// shows as it is, and can't be expanded. `None` shows each change with the lines around it.
+    pub(crate) rows: Option<Vec<Range<u32>>>,
+    /// GitHub's hunks, which Zed's diff of the two sides must lie inside. When it doesn't, adding
+    /// the file fails with [`OutsideGithubsHunks`] and shows nothing.
+    pub(crate) hunks: Option<Vec<HunkRows>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Content {
+pub(crate) enum Content {
     /// The two sides, compared.
     Diff {
         /// The base's text. `None` when the pull request adds the file.
@@ -751,7 +1153,7 @@ enum Content {
 
 /// Where the right side's text comes from.
 #[derive(Clone, Debug, PartialEq)]
-enum NewSide {
+pub(crate) enum NewSide {
     /// The head's text, read from git.
     Git(String),
     /// The checkout's project buffer, whose bytes hash to the head's blob.
@@ -762,9 +1164,9 @@ enum NewSide {
 
 /// A note in a file's header: a short label, and the reason in its tooltip.
 #[derive(Clone, Debug, PartialEq)]
-struct Warning {
-    label: SharedString,
-    detail: SharedString,
+pub(crate) struct Warning {
+    pub(crate) label: SharedString,
+    pub(crate) detail: SharedString,
 }
 
 /// The header label of a file rozed couldn't show.
@@ -774,15 +1176,17 @@ const NOT_SHOWN: &str = "Not shown";
 const NOT_LOADED: &str = "Not loaded";
 
 impl FilePlan {
-    fn diff(old_text: Option<String>, new: NewSide) -> Self {
+    pub(crate) fn diff(old_text: Option<String>, new: NewSide) -> Self {
         Self {
             content: Content::Diff { old_text, new },
             warning: None,
             badge: None,
+            rows: None,
+            hunks: None,
         }
     }
 
-    fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
+    pub(crate) fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
         Self {
             content: Content::Placeholder {
                 text: text.into(),
@@ -791,11 +1195,29 @@ impl FilePlan {
             },
             warning: None,
             badge: None,
+            rows: None,
+            hunks: None,
+        }
+    }
+
+    /// Shows only `rows` of the head, as they are.
+    pub(crate) fn with_rows(self, rows: Vec<Range<u32>>) -> Self {
+        Self {
+            rows: Some(rows),
+            ..self
+        }
+    }
+
+    /// Shows the file only if Zed's diff of it lies inside GitHub's `hunks`.
+    pub(crate) fn inside(self, hunks: Vec<HunkRows>) -> Self {
+        Self {
+            hunks: Some(hunks),
+            ..self
         }
     }
 
     /// A placeholder that says why the file can't be shown, in its text and its header.
-    fn failed(error: &anyhow::Error) -> Self {
+    pub(crate) fn failed(error: &anyhow::Error) -> Self {
         Self {
             warning: Some(Warning {
                 label: NOT_SHOWN.into(),
@@ -962,35 +1384,36 @@ fn text(bytes: Vec<u8>) -> String {
 }
 
 /// Where the changed files go.
-struct Target<'a> {
+pub(crate) struct Target<'a> {
     /// The repository's name, which starts each file's full path.
-    repo_name: &'a str,
-    project: &'a Entity<Project>,
-    checkout: Option<&'a Checkout>,
-    languages: &'a Arc<LanguageRegistry>,
-    editor: &'a Entity<SplittableEditor>,
+    pub(crate) repo_name: &'a str,
+    pub(crate) project: &'a Entity<Project>,
+    pub(crate) checkout: Option<&'a Checkout>,
+    pub(crate) languages: &'a Arc<LanguageRegistry>,
+    pub(crate) editor: &'a Entity<SplittableEditor>,
 }
 
 /// A file added to the diff.
-struct Shown {
-    buffer_id: BufferId,
-    warning: Option<Warning>,
-    badge: Option<SharedString>,
-    folded: bool,
+pub(crate) struct Shown {
+    pub(crate) buffer_id: BufferId,
+    pub(crate) warning: Option<Warning>,
+    pub(crate) badge: Option<SharedString>,
+    pub(crate) folded: bool,
 }
 
 impl Target<'_> {
-    /// Adds one changed file to the diff, at `position` in the tab's order.
-    async fn add_file(
+    /// Adds one changed file to the diff, at `position` in the tab's order. `path` is its path
+    /// as shown: a name that isn't UTF-8 shows with U+FFFD, and its badge says so.
+    pub(crate) async fn add_file(
         &self,
         position: usize,
-        file: &ChangedFile,
+        path: &str,
+        deleted: bool,
         plan: FilePlan,
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Shown> {
-        // A name that isn't UTF-8 shows with U+FFFD, and its badge says so.
-        let path = RelPath::from_unix_str(file.display_path().as_ref())?.into_arc();
-        let deleted = file.new.is_none();
+        let path = RelPath::from_unix_str(path)?.into_arc();
+        let (rows, hunks) = (plan.rows, plan.hunks);
         let (buffer, old_text, folded) = match plan.content {
             Content::Diff {
                 old_text,
@@ -1068,14 +1491,33 @@ impl Target<'_> {
                 diff
             }
         };
+        if let Some(hunks) = &hunks {
+            diff.read_with(cx, |diff, cx| {
+                api_diff::check_hunks(&diff.snapshot(cx), &snapshot, hunks)
+            })
+            .map_err(OutsideGithubsHunks)?;
+        }
         cx.update(|_, cx| follow_language(&buffer, &diff, cx))?;
 
+        // Only the rows asked for, or each change with the lines around it.
+        let hunks_only = rows.is_some();
         let ranges = cx.update(|_, cx| {
-            let diff_snapshot = diff.read(cx).snapshot(cx);
-            let ranges: Vec<_> = diff_snapshot
-                .hunks(&snapshot)
-                .map(|hunk| hunk.buffer_range.to_point(&snapshot))
-                .collect();
+            let ranges: Vec<_> = match &rows {
+                Some(rows) => rows
+                    .iter()
+                    .map(|rows| {
+                        let last = rows.end.saturating_sub(1).max(rows.start);
+                        Point::new(rows.start, 0)..Point::new(last, 0)
+                    })
+                    .collect(),
+                None => {
+                    let diff_snapshot = diff.read(cx).snapshot(cx);
+                    diff_snapshot
+                        .hunks(&snapshot)
+                        .map(|hunk| hunk.buffer_range.to_point(&snapshot))
+                        .collect()
+                }
+            };
             if ranges.is_empty() {
                 vec![Point::zero()..snapshot.max_point()]
             } else {
@@ -1085,16 +1527,19 @@ impl Target<'_> {
         let key = path_key(position, path);
         let buffer_id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
         self.editor.update_in(cx, |editor, window, cx| {
-            editor.update_excerpts_for_path(
-                key,
-                buffer,
-                ranges,
-                multibuffer_context_lines(cx),
-                diff,
-                cx,
-            );
+            let context = if hunks_only {
+                0
+            } else {
+                multibuffer_context_lines(cx)
+            };
+            editor.update_excerpts_for_path(key, buffer, ranges, context, diff, cx);
             if editor.diff_view_style() == DiffViewStyle::Split {
                 editor.split(window, cx);
+            }
+            // The rows between the ones asked for aren't the file's, so they never show, even
+            // on a left side made when the diff splits again.
+            if hunks_only {
+                editor.disable_expand_excerpt_buttons(cx);
             }
         })?;
         Ok(Shown {
@@ -1265,10 +1710,10 @@ fn normalized(bytes: &[u8]) -> Vec<u8> {
 /// renamed or modified) rather than its status in the checkout, which is always clean, a badge
 /// with what the status doesn't say, and any warning.
 #[derive(Default)]
-struct FileHeaders {
-    statuses: HashMap<BufferId, FileStatus>,
-    badges: HashMap<BufferId, SharedString>,
-    warnings: HashMap<BufferId, Warning>,
+pub(crate) struct FileHeaders {
+    pub(crate) statuses: HashMap<BufferId, FileStatus>,
+    pub(crate) badges: HashMap<BufferId, SharedString>,
+    pub(crate) warnings: HashMap<BufferId, Warning>,
 }
 
 impl FileHeaders {
@@ -1403,7 +1848,7 @@ impl File for GitFile {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use repo_cache::{Git, LineCounts};
@@ -1515,6 +1960,71 @@ mod tests {
     }
 
     #[test]
+    fn copying_says_how_far_git_has_got() {
+        let fetching = |stage: &str, done, total| {
+            CopyProgress::Fetching(Progress {
+                stage: stage.into(),
+                done,
+                total,
+            })
+            .text()
+        };
+        assert_eq!(
+            fetching("Receiving objects", 555, Some(1234)),
+            "Copying it locally: receiving objects, 44% of 1234…"
+        );
+        assert_eq!(
+            fetching("Enumerating objects", 12, None),
+            "Copying it locally: enumerating objects, 12…"
+        );
+        assert_eq!(
+            CopyProgress::Listing.text(),
+            "Copying it locally: listing the changed files…"
+        );
+    }
+
+    #[test]
+    fn only_a_fetch_that_may_work_later_is_tried_again() {
+        let fetch = |failure| {
+            anyhow::Error::new(repo_cache::Error::Fetch {
+                what: "pull request #1".into(),
+                failure,
+                message: "fatal: unable to access".into(),
+            })
+            .context("reading the files")
+        };
+        use repo_cache::FetchFailure;
+        assert_eq!(retry(&fetch(FetchFailure::Network)), Some(Retry::Always));
+        assert_eq!(
+            retry(&fetch(FetchFailure::RateLimited)),
+            Some(Retry::Always)
+        );
+        assert_eq!(retry(&fetch(FetchFailure::Other)), Some(Retry::Few));
+        assert_eq!(retry(&fetch(FetchFailure::Auth)), None);
+        assert_eq!(retry(&fetch(FetchFailure::RepoNotFound)), None);
+        assert_eq!(
+            retry(&anyhow::Error::new(repo_cache::Error::DiskFull)),
+            None
+        );
+        assert_eq!(
+            retry(&anyhow::anyhow!(
+                "sharkdp/fd#2212 shares no history with its base branch master"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn each_wait_doubles_up_to_five_minutes() {
+        let waits: Vec<u64> =
+            std::iter::successors(Some(FIRST_RETRY), |wait| Some(next_wait(*wait)))
+                .take(9)
+                .map(|wait| wait.as_secs())
+                .collect();
+        assert_eq!(waits, [5, 10, 20, 40, 80, 160, 300, 300, 300]);
+    }
+
+    #[test]
     fn a_head_github_no_longer_has_gets_a_banner() {
         let link: PrLink = "https://github.com/sharkdp/fd/pull/2212".parse().unwrap();
         let oid = |c: char| -> Oid { c.to_string().repeat(40).parse().unwrap() };
@@ -1586,14 +2096,14 @@ mod tests {
     }
 
     /// A pull request copied locally from a fixture, with a checkout when asked for.
-    struct Copied {
-        _fixture: fixtures::Fixture,
-        _cache: TempDir,
-        local: LocalPullRequest,
-        checkout: Option<PathBuf>,
+    pub(crate) struct Copied {
+        pub(crate) _fixture: fixtures::Fixture,
+        pub(crate) _cache: TempDir,
+        pub(crate) local: LocalPullRequest,
+        pub(crate) checkout: Option<PathBuf>,
     }
 
-    fn copy(base: &[Entry], head: &[Entry], checkout: bool) -> Copied {
+    pub(crate) fn copy(base: &[Entry], head: &[Entry], checkout: bool) -> Copied {
         let fixture = fixtures::pull_request(base, head);
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path(), Git::find().unwrap())
@@ -1961,7 +2471,7 @@ mod tests {
     }
 
     /// Pull requests in real repositories, served over `file://` as GitHub serves them.
-    mod fixtures {
+    pub(crate) mod fixtures {
         use std::ffi::{OsStr, OsString};
         use std::io::Write as _;
         use std::os::unix::ffi::OsStrExt as _;

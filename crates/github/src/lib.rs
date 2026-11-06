@@ -13,8 +13,10 @@ pub mod credentials;
 pub mod db;
 pub mod device_flow;
 mod error;
+pub mod files;
 pub mod gh_import;
 mod graphql;
+pub mod patch;
 pub mod poll;
 mod pulls;
 pub mod queries;
@@ -25,6 +27,7 @@ pub mod record;
 pub mod replay;
 mod token;
 mod user;
+pub mod viewed;
 
 pub use client::{
     API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RestResponse,

@@ -70,6 +70,10 @@ pub struct FakePull {
     pub head: String,
     pub base_branch: String,
     pub base: String,
+    /// GitHub's list of the files the pull request changes, each with its patch.
+    pub files: Vec<serde_json::Value>,
+    /// How many files GitHub says the pull request changes, when it's more than it lists.
+    pub changed_files: Option<usize>,
 }
 
 /// An answer to one request: its status, headers and body.
@@ -112,6 +116,8 @@ struct State {
     cut_off: Vec<String>,
     /// Requests to these paths wait until they're let go, each with what lets it go.
     held: HashMap<String, Vec<oneshot::Sender<()>>>,
+    /// How many requests without a token GitHub still allows this hour, when it says.
+    anonymous_left: Option<u32>,
     /// Each request, as `GET /path as token`.
     requests: Vec<String>,
 }
@@ -135,6 +141,27 @@ impl FakeGithub {
             .push(repo.to_ascii_lowercase());
     }
 
+    /// Moves pull request `number` of `repo` to `head`, without changing its files' links, as
+    /// when a push lands between GitHub's answer for the pull request and its file list.
+    pub fn set_head(&self, repo: &str, number: u64, head: &str) {
+        let mut state = self.0.lock();
+        for pull in &mut state.pulls {
+            if pull.repo.eq_ignore_ascii_case(repo) && pull.number == number {
+                pull.head = head.to_string();
+            }
+        }
+    }
+
+    /// Says pull request `number` of `repo` changes `count` files, more than GitHub lists.
+    pub fn set_changed_files(&self, repo: &str, number: u64, count: usize) {
+        let mut state = self.0.lock();
+        for pull in &mut state.pulls {
+            if pull.repo.eq_ignore_ascii_case(repo) && pull.number == number {
+                pull.changed_files = Some(count);
+            }
+        }
+    }
+
     pub fn make_public(&self, repo: &str) {
         self.0.lock().public.push(repo.to_ascii_lowercase());
     }
@@ -145,6 +172,12 @@ impl FakeGithub {
             .lock()
             .answers
             .insert((token.to_string(), path.to_string()), answer);
+    }
+
+    /// Allows `left` more requests without a token this hour, and says how many are left in each
+    /// answer to one, as GitHub does.
+    pub fn limit_anonymous(&self, left: u32) {
+        self.0.lock().anonymous_left = Some(left);
     }
 
     /// Whether every request fails as if the network were down: no connection can be made.
@@ -234,6 +267,28 @@ impl FakeGithub {
                 "error sending request for url (https://api.github.com{path})"
             )));
         }
+        let Some(left) = state.anonymous_left.filter(|_| token.is_empty()) else {
+            return self.answer_for(&state, path, token);
+        };
+        let reset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            + 3_600;
+        let answer = match left.checked_sub(1) {
+            Some(left) => {
+                state.anonymous_left = Some(left);
+                self.answer_for(&state, path, token)?
+            }
+            None => Answer::new(403, r#"{"message":"API rate limit exceeded"}"#),
+        };
+        Ok(answer
+            .header("x-ratelimit-limit", "60")
+            .header("x-ratelimit-remaining", left.saturating_sub(1).to_string())
+            .header("x-ratelimit-reset", reset.to_string())
+            .header("x-ratelimit-resource", "core"))
+    }
+
+    fn answer_for(&self, state: &State, path: &str, token: &str) -> anyhow::Result<Answer> {
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
         }
@@ -241,6 +296,7 @@ impl FakeGithub {
         let Some(rest) = path.strip_prefix("/repos/") else {
             return Ok(not_found());
         };
+        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
         let segments: Vec<&str> = rest.split('/').collect();
         let (owner, repo) = match segments.as_slice() {
             [owner, repo, ..] => (*owner, *repo),
@@ -283,9 +339,52 @@ impl FakeGithub {
                 };
                 Ok(Answer::new(200, pull_json(pull).to_string()))
             }
+            [_, _, "pulls", number, "files"] => {
+                let Some(pull) = state.pulls.iter().find(|pull| {
+                    pull.repo.eq_ignore_ascii_case(&canonical) && number.parse() == Ok(pull.number)
+                }) else {
+                    return Ok(not_found());
+                };
+                Ok(files_page(pull, query))
+            }
             _ => Ok(not_found()),
         }
     }
+}
+
+/// One page of `pull`'s files, as `query` (`per_page` and `page`) asks, with a `Link` header to
+/// the next page as GitHub gives it: a full URL.
+fn files_page(pull: &FakePull, query: &str) -> Answer {
+    let param = |name: &str| {
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+            .and_then(|value| value.parse::<usize>().ok())
+    };
+    let per_page = param("per_page").unwrap_or(30);
+    let page = param("page").unwrap_or(1);
+    let start = (page - 1) * per_page;
+    let files: Vec<_> = pull
+        .files
+        .iter()
+        .skip(start)
+        .take(per_page)
+        .cloned()
+        .collect();
+    let mut answer = Answer::new(200, serde_json::Value::from(files).to_string());
+    if start + per_page < pull.files.len() {
+        answer = answer.header(
+            "link",
+            format!(
+                "<https://api.github.com/repos/{}/pulls/{}/files?per_page={per_page}&page={}>; \
+                 rel=\"next\"",
+                pull.repo,
+                pull.number,
+                page + 1
+            ),
+        );
+    }
+    answer
 }
 
 /// GitHub's REST view of `pull`.
@@ -300,6 +399,7 @@ fn pull_json(pull: &FakePull) -> serde_json::Value {
         "created_at": "2026-11-01T10:00:00Z",
         "updated_at": "2026-11-02T10:00:00Z",
         "head": { "ref": "feature", "sha": pull.head },
+        "changed_files": pull.changed_files.unwrap_or(pull.files.len()),
         "base": {
             "ref": pull.base_branch,
             "sha": pull.base,
@@ -550,6 +650,7 @@ impl GitServer {
             None,
             None,
         );
+        let files = pull_files(&git_dir, repo, &base_commit, &head_commit);
         FakePull {
             repo: repo.to_string(),
             old_names: Vec::new(),
@@ -558,8 +659,59 @@ impl GitServer {
             head: head_commit,
             base_branch: "main".into(),
             base: base_commit,
+            files,
+            changed_files: None,
         }
     }
+}
+
+/// GitHub's list of the files changed from `base` to `head`, with their patches, as git makes
+/// them. A removed file's links name the base, as GitHub's do.
+fn pull_files(git_dir: &Path, repo: &str, base: &str, head: &str) -> Vec<serde_json::Value> {
+    let statuses = git(git_dir, &["diff", "--name-status", base, head], None, None);
+    statuses
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(status, path)| {
+            let status = match status {
+                "A" => "added",
+                "D" => "removed",
+                _ => "modified",
+            };
+            let diff = git(
+                git_dir,
+                &["diff", "-U3", "--no-color", base, head, "--", path],
+                None,
+                None,
+            );
+            let patch = diff
+                .find("\n@@ ")
+                .map(|start| diff[start + 1..].to_string());
+            let count = |prefix: char| {
+                patch.as_deref().map_or(0, |patch| {
+                    patch
+                        .lines()
+                        .filter(|line| line.starts_with(prefix))
+                        .count()
+                })
+            };
+            let (additions, deletions) = (count('+'), count('-'));
+            let at = if status == "removed" { base } else { head };
+            serde_json::json!({
+                "filename": path,
+                "status": status,
+                "additions": additions,
+                "deletions": deletions,
+                "changes": additions + deletions,
+                "patch": patch,
+                "blob_url": format!("https://github.com/{repo}/blob/{at}/{path}"),
+                "raw_url": format!("https://github.com/{repo}/raw/{at}/{path}"),
+                "contents_url": format!(
+                    "https://api.github.com/repos/{repo}/contents/{path}?ref={at}"
+                ),
+            })
+        })
+        .collect()
 }
 
 /// Writes a commit holding exactly `files`, and returns its ID.
