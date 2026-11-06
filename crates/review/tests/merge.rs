@@ -287,7 +287,6 @@ fn a_dependency_bump_pushed_to_while_you_read_it_stops_before_approving() {
 
 fn checkout_change() -> MergeSnapshot {
     MergeSnapshot {
-        reviews: vec![review("sam", "COMMENTED", OLD_HEAD, &[])],
         review_requests: vec![
             code_owner("acme/payments"),
             code_owner("acme/platform"),
@@ -376,6 +375,30 @@ fn once_the_other_team_approved_your_approval_merges_it() {
     assert_eq!(
         approve_and_ship(&snapshot),
         plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+    );
+}
+
+#[test]
+fn a_code_owner_who_only_commented_is_waited_on_rather_than_merged_past() {
+    // The platform team's owner left a comment. GitHub dropped the team's request, and a comment
+    // isn't an opinionated review, so nothing in the snapshot names the owner GitHub still needs.
+    let mut snapshot = checkout_change();
+    snapshot.review_requests.remove(1);
+    let plan = the_plan(&snapshot);
+    let mut after = approved_by_you(&snapshot, "REVIEW_REQUIRED", "BLOCKED");
+    after.reviews.last_mut().unwrap().on_behalf_of = vec!["acme/payments".to_string()];
+    after.review_requests.remove(0);
+
+    assert_eq!(plan.likely, Ship::Merge(MergeMethod::Squash));
+    assert_eq!(
+        after_approving(&after, &plan),
+        Ship::AutoMerge {
+            method: MergeMethod::Squash,
+            waiting_on: vec![Blocker::Approvals(MissingApprovals {
+                more: 0,
+                code_owners: vec![],
+            })],
+        }
     );
 }
 
@@ -581,29 +604,43 @@ fn your_pull_request_with_ci_done_merges_without_approving() {
 
 // Pull requests that can't merge for reasons waiting won't fix.
 
+/// Every reason a conflicting draft can have at once. Being merged or closed, a block nothing
+/// explains, GitHub working out mergeability and a check nothing will report can't happen beside
+/// these, so other tests cover them.
 #[test]
-fn a_pull_request_with_everything_wrong_lists_every_reason() {
+fn a_conflicting_draft_lists_every_other_reason_it_cannot_merge() {
+    let signatures = UnmetRule {
+        description: "Commits must have verified signatures".to_string(),
+        url: None,
+        waiting: false,
+    };
+    let deployment = UnmetRule {
+        description: "Deployment to staging must succeed".to_string(),
+        url: Some("https://github.com/acme/shop/deployments/staging".to_string()),
+        waiting: true,
+    };
     let snapshot = MergeSnapshot {
         draft: true,
+        out_of_date: true,
         reviews: vec![
             review("ana", "CHANGES_REQUESTED", OLD_HEAD, &[]),
             review("lee", "APPROVED", HEAD, &[]),
         ],
+        review_requests: vec![code_owner("acme/platform")],
         rules: ReviewRules {
             required_approvals: 2,
+            code_owner_review: true,
             conversation_resolution: true,
             ..Default::default()
         },
         required_checks: vec![
             check_run("build", "COMPLETED", Some("TIMED_OUT")),
             check_run("e2e", "WAITING", None),
+            check_run("test", "IN_PROGRESS", None),
+            commit_status("license/cla", "EXPECTED"),
         ],
         unresolved_threads: 5,
-        unmet_rules: vec![UnmetRule {
-            description: "Commits must have verified signatures".to_string(),
-            url: None,
-            waiting: false,
-        }],
+        unmet_rules: vec![deployment.clone(), signatures.clone()],
         viewer: you(),
         methods: ALL_METHODS,
         ..pull_request(
@@ -618,21 +655,21 @@ fn a_pull_request_with_everything_wrong_lists_every_reason() {
     let expected = vec![
         Blocker::Draft,
         Blocker::Conflicts,
+        Blocker::OutOfDate,
         Blocker::ChangesRequested {
             by: vec!["ana".to_string()],
         },
         Blocker::Check(check_run("build", "COMPLETED", Some("TIMED_OUT"))),
         Blocker::Conversations { unresolved: 5 },
-        Blocker::Rule(UnmetRule {
-            description: "Commits must have verified signatures".to_string(),
-            url: None,
-            waiting: false,
-        }),
+        Blocker::Rule(signatures),
         Blocker::Approvals(MissingApprovals {
             more: 1,
-            code_owners: vec![],
+            code_owners: vec![Reviewer::Team("acme/platform".to_string())],
         }),
         Blocker::Check(check_run("e2e", "WAITING", None)),
+        Blocker::Check(check_run("test", "IN_PROGRESS", None)),
+        Blocker::Check(commit_status("license/cla", "EXPECTED")),
+        Blocker::Rule(deployment),
     ];
     assert_eq!(blockers(&snapshot), expected);
     assert_eq!(
@@ -643,6 +680,7 @@ fn a_pull_request_with_everything_wrong_lists_every_reason() {
             partial: false,
         }
     );
+    assert_eq!(approve_and_ship(&snapshot), ApproveAndShip::Draft);
 }
 
 #[test]
