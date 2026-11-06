@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use github::GithubError;
-use review::revisions::ViewedState;
+use review::revisions::{FileComparison, Revisions, ViewedState, viewed_file_comparison};
 
 /// GitHub's viewed marks, and the ones rozed is setting.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -159,9 +159,40 @@ pub fn write_failed(toggle: &Toggle, login: &str, error: &GithubError) -> String
     format!("Couldn't {what}: {why}. It shows GitHub's mark again.")
 }
 
+/// What the diff says about a file GitHub says changed since it was viewed, given the head this
+/// Mac recorded when it was marked viewed. `None` for any other file.
+///
+/// Comparing two revisions arrives with the revision picker, so for now the diff always shows the
+/// file's whole change; the note says since when it changed.
+pub fn changed_since_viewed(
+    revisions: &Revisions,
+    state: Option<ViewedState>,
+    viewed_at: Option<&str>,
+) -> Option<String> {
+    let comparison = viewed_file_comparison(revisions, state?, viewed_at, None)?;
+    let since = |from: &str, when: &str| {
+        let label = revisions
+            .label(from)
+            .unwrap_or_else(|| from.chars().take(7).collect());
+        format!("Changed since {when} in {label}.")
+    };
+    let since = match comparison {
+        FileComparison::SinceViewed { from, .. } => since(&from, "you viewed it"),
+        FileComparison::SinceLastReview { from, .. } => since(&from, "your last review"),
+        FileComparison::Full => "Changed since it was viewed.".to_string(),
+    };
+    Some(format!(
+        "{since} rozed can't show only what changed since then yet, so this is the file's whole \
+         diff."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use github::GraphQlError;
+    use review::revisions::{PushRecord, build_revisions};
 
     use super::*;
 
@@ -336,6 +367,59 @@ mod tests {
         ];
         for (toggle, error, expected) in cases {
             assert_eq!(write_failed(toggle, "rozed-bot", &error), expected);
+        }
+    }
+
+    fn at(minute: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + minute * 60)
+    }
+
+    /// r1 to r3, heads `a1` to `a3`.
+    fn revisions() -> Revisions {
+        let pushed = |before: Option<&str>, after: &str, minute| PushRecord::Activity {
+            before: before.map(str::to_string),
+            after: after.to_string(),
+            at: at(minute),
+            forced: false,
+        };
+        build_revisions(
+            &[
+                pushed(None, "a1", 10),
+                pushed(Some("a1"), "a2", 20),
+                pushed(Some("a2"), "a3", 30),
+            ],
+            &["a1", "a2", "a3"].map(String::from),
+            "a3",
+            SystemTime::UNIX_EPOCH,
+        )
+    }
+
+    #[test]
+    fn a_file_that_changed_since_it_was_viewed_says_since_when() {
+        assert_eq!(
+            changed_since_viewed(&revisions(), Some(Dismissed), Some("a1")).as_deref(),
+            Some(
+                "Changed since you viewed it in r1. rozed can't show only what changed since \
+                 then yet, so this is the file's whole diff."
+            )
+        );
+        // Without a usable record: viewed elsewhere, or recorded at the latest revision.
+        for viewed_at in [None, Some("a3"), Some("ffff")] {
+            assert_eq!(
+                changed_since_viewed(&revisions(), Some(Dismissed), viewed_at).as_deref(),
+                Some(
+                    "Changed since it was viewed. rozed can't show only what changed since then \
+                     yet, so this is the file's whole diff."
+                ),
+                "{viewed_at:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_files_say_nothing() {
+        for state in [None, Some(Viewed), Some(Unviewed)] {
+            assert_eq!(changed_since_viewed(&revisions(), state, Some("a1")), None);
         }
     }
 }

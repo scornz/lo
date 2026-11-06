@@ -36,7 +36,7 @@ use crate::github_layer;
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
-use crate::viewed_marks::{Toggle, ViewedMarks, write_failed};
+use crate::viewed_marks::{Toggle, ViewedMarks, changed_since_viewed, write_failed};
 
 actions!(
     review_ui,
@@ -539,6 +539,18 @@ impl PrTab {
         Some(self.files.at_review_position(position)?.path().to_string())
     }
 
+    /// What the diff says about the current file when GitHub says it changed since it was viewed:
+    /// since when, from the revision this Mac recorded when it was marked viewed.
+    pub fn changed_since_viewed(&self, cx: &App) -> Option<String> {
+        let path = self.current_path(cx)?;
+        let none = Revisions::default();
+        changed_since_viewed(
+            self.revisions.as_ref().unwrap_or(&none),
+            self.marks.state(&path),
+            self.viewed_at.get(&path).map(String::as_str),
+        )
+    }
+
     /// The diff's cursor head, on its right side.
     fn diff_cursor(&self, cx: &App) -> Option<Anchor> {
         let diff = self.diff.as_ref()?.read(cx);
@@ -911,6 +923,38 @@ impl PrTab {
         )
     }
 
+    /// The note above the diff while the current file changed since it was viewed.
+    fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let note = self.changed_since_viewed(cx)?;
+        let path = self.current_path(cx)?;
+        let colors = cx.theme().colors();
+        Some(
+            h_flex()
+                .id("changed-since-viewed")
+                .w_full()
+                .flex_shrink_0()
+                .px_3()
+                .py_1()
+                .gap_2()
+                .border_b_1()
+                .border_color(colors.border_variant)
+                .bg(colors.panel_background)
+                .child(
+                    Icon::new(IconName::FileDiff)
+                        .size(IconSize::Small)
+                        .color(Color::Warning),
+                )
+                .child(Label::new(path).size(LabelSize::Small))
+                .child(
+                    Label::new(note)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .truncate(),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let order = match self.files.order() {
@@ -1013,7 +1057,7 @@ impl PrTab {
                                     .color(Color::Deleted),
                             )
                         })
-                        .children(viewed_mark(entry.viewed)),
+                        .children(viewed_mark(row, entry.viewed)),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.files.select_row(row);
@@ -1062,8 +1106,8 @@ fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     }
 }
 
-/// How the file list shows a file's viewed mark.
-fn viewed_mark(viewed: Option<ViewedState>) -> Option<AnyElement> {
+/// How the file list shows the viewed mark of the file at `row`.
+fn viewed_mark(row: usize, viewed: Option<ViewedState>) -> Option<AnyElement> {
     match viewed? {
         ViewedState::Viewed => Some(
             Icon::new(IconName::Check)
@@ -1072,9 +1116,16 @@ fn viewed_mark(viewed: Option<ViewedState>) -> Option<AnyElement> {
                 .into_any_element(),
         ),
         ViewedState::Dismissed => Some(
-            Label::new("changed")
-                .size(LabelSize::XSmall)
-                .color(Color::Warning)
+            div()
+                .id(("pr-file-changed", row))
+                .child(
+                    Label::new("changed")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Warning),
+                )
+                .tooltip(Tooltip::text(
+                    "Changed since viewed: a push changed it after it was marked viewed",
+                ))
                 .into_any_element(),
         ),
         ViewedState::Unviewed => None,
@@ -1263,7 +1314,14 @@ impl Render for PrTab {
                     .when(self.show_file_list, |this| {
                         this.child(self.render_file_list(cx))
                     })
-                    .child(div().flex_1().min_w_0().h_full().child(diff))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .children(self.render_changed_since_viewed(cx))
+                            .child(div().flex_1().min_h_0().w_full().child(diff)),
+                    )
                     .when(self.show_threads, |this| {
                         this.child(self.render_threads(cx))
                     }),
@@ -2071,6 +2129,71 @@ mod tests {
         assert!(has_viewed_toast(&workspace, cx));
         assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
         assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn a_file_that_changed_since_it_was_viewed_says_so_when_opened(cx: &mut TestAppContext) {
+        const VIEWED_AT: &str = "1111111111111111111111111111111111111111";
+        let (_, tab, _, cx) = three_files(
+            "changed_since_viewed",
+            &[("b.rs", VIEWED_AT)],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "DISMISSED"),
+                ("c.rs", "VIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        let note =
+            |cx: &mut VisualTestContext| tab.read_with(cx, |tab, cx| tab.changed_since_viewed(cx));
+        assert_eq!(note(cx), None, "a.rs is current, and unviewed");
+
+        // The list shows b.rs changed since viewed; opening it says since when.
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("b.rs", Some(ViewedState::Dismissed))
+        );
+        cx.simulate_keystrokes("] f");
+        assert_eq!(
+            note(cx).as_deref(),
+            Some(
+                "Changed since it was viewed. rozed can't show only what changed since then yet, \
+                 so this is the file's whole diff."
+            ),
+            "the head this Mac recorded isn't a revision the tab knows"
+        );
+
+        // With the revision this Mac recorded among the pull request's, it's named.
+        tab.update(cx, |tab, _| {
+            let at = |secs: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + secs);
+            tab.revisions = Some(build_revisions(
+                &[
+                    PushRecord::Polled {
+                        head: VIEWED_AT.into(),
+                        at: at(0),
+                    },
+                    PushRecord::Polled {
+                        head: HEAD.into(),
+                        at: at(60),
+                    },
+                ],
+                &[],
+                HEAD,
+                SystemTime::UNIX_EPOCH,
+            ));
+        });
+        assert_eq!(
+            note(cx).as_deref(),
+            Some(
+                "Changed since you viewed it in r1. rozed can't show only what changed since \
+                 then yet, so this is the file's whole diff."
+            )
+        );
+
+        // A viewed file says nothing.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(note(cx), None);
     }
 
     #[gpui::test]
