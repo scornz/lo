@@ -732,8 +732,8 @@ PR tab; `crates/rozed` keeps startup, windows and menus. This is the first miles
 GitHub layer, the local copy and the review model together.
 
 **Base:** an integration branch, `integration/pr-tab`, made only of merges of `feat/repo-cache`
-(the spike and the local copy), `feat/github-polling` (the GitHub layer) and `feat/merge-logic`
-(the review model: review order, revisions, merge logic). It gets no commits of its own besides
+(the spike and the local copy), `feat/github-polling` (the GitHub layer) and `feat/revisions-logic`
+(the review model: review order and revisions). It gets no commits of its own besides
 conflict resolutions, and is updated by merging those branches again when they move. Milestone 5's
 PRs target it, so each PR's diff shows only its own change.
 
@@ -782,6 +782,78 @@ Five PRs, in order (5c and 5d can run in parallel once 5b is open):
 
 - With no PR open, the window lists PRs opened recently across all accounts (`recent_prs`), opened
   with `enter`.
+- When several accounts can see a repo, ask once per owner which to use and remember it (design §3
+  "Which account"); 5a takes the first account.
+- The window title names the open PR (it reads "empty project" after 5a).
+- The command palette lists none of Zed's file actions (new, open, save), matching the keymap filter.
 
 **Milestone done when:** all five PRs are green, every key above works on screen, and both test PRs
 open from a clean state.
+
+### Task 10.1: The syntax index (`crates/symbol_index`)
+
+PR: `feat(symbol_index): index definitions and references by name` — branch `feat/symbol-index`,
+stacked on `feat/syntax-diff` (it reuses that branch's tree-sitter workspace dependencies). Design §7
+"Syntax-based, on every repo".
+
+- Per file: run the language's tree-sitter tags query (`tree-sitter-tags`, from the same
+  tree-sitter git revision Zed pins) over its bytes, giving definitions (name, kind, range, the
+  enclosing definition) and references (name, range). Results are keyed by blob ID and reusable
+  across commits, so a new commit re-indexes only the blobs it changed.
+- Tags queries for Rust, TypeScript/TSX, JavaScript, Python and Go, vendored from each grammar's own
+  `queries/tags.scm` at Zed's grammar versions (licenses noted in `THIRD_PARTY_NOTICES.md`). The
+  caller passes the `tree_sitter::Language` and query, so the app can supply Zed's grammars.
+- `Index` over a commit's files: `definitions(name, from_path, from_text)` ranked per design §7
+  (same file first, then same directory, then files a matching import names, then the rest, each
+  group in path order); `references(name)`; `symbols_in(path)` for the outline.
+- Import matching is a small per-language heuristic (Rust `use`/`mod`, JS/TS `import`/`require`,
+  Python `import`/`from`, Go `import`) that maps the requesting file's imports to candidate paths.
+- Budgets: skip files over a size limit and generated files; index thousands of files quickly
+  (measure on a real repo's files, e.g. this repo's own Rust and a TypeScript project).
+- Tests: definitions and references in each language, the ranking with collisions, reuse by blob
+  ID, the size skip, and timing.
+
+### Task 6.2: Rebase-aware comparison (`crates/repo_cache`)
+
+PR: `feat(repo_cache): compare revisions across a rebase` — branch `feat/rebase-compare`, stacked on
+`feat/repo-cache`. Design §6 "Rebase-aware comparison"; research `research/revisions.md` §5.
+
+- `compare_revisions(old: (base, head), new: (base, head))`: when the bases differ, replay the old
+  revision's changes onto the new base with `git merge-tree --write-tree --merge-base=<old base>
+  <new base> <old head>`, then diff that tree against the new head, so only the author's changes
+  show. When the bases match, a plain `diff old head..new head`. A conflict (exit 1) falls back to
+  the plain comparison and says so, with the conflicted paths; any other failure is an error.
+- Returns the same `ChangedFile` list the app already renders, plus where each side's text comes
+  from (a tree ID for the replayed side), so `read_file` works on it.
+- Works in the bare partial clone (merge-tree fetches blobs lazily; batch when possible) and never
+  writes refs for the replayed tree beyond a pin that keeps it alive while shown.
+- A stacked layer whose lower layer got a new push uses the same function with the lower layer's
+  old and new heads as bases.
+- Tests on real temp repos: a rebase onto a moved base with one extra change shows only that change;
+  a conflicting rebase falls back with the paths; same base is a plain diff; a stacked layer after
+  its lower layer's force-push; renames across the rebase.
+
+### Task 8.1: Threads and the pending review (`crates/review`)
+
+PR: `feat(review): place review threads and keep a pending review` — branch `feat/threads-logic`,
+stacked on `feat/merge-logic`. Design §8.
+
+- Thread placement: given a thread (path, `line`/`startLine`, `originalLine`/`originalStartLine`,
+  `diffSide`, `isOutdated`, `isResolved`, the commit it was written on) and the comparison on screen
+  (two revisions), say where it shows: on a line of either side, or "outdated" in the threads panel
+  only. A thread shows where it was written when viewing that revision (design §8 "Outdated
+  threads"). Unresolved threads start open, resolved ones collapsed.
+- Commentable lines: which lines GitHub accepts a comment on for a comparison (read GitHub's docs:
+  lines in the diff's hunks, either side, and single- vs multi-line rules), so the UI can offer a
+  file-level comment otherwise.
+- The pending review model: comments added locally collect into GitHub's pending review (create it
+  on the first comment, add to it after), `C` posts one comment at once, the submit dialog's choices
+  (Comment, Approve, Request changes; only Comment on your own PR), and the count of pending
+  comments.
+- Suggestions: `suggestion_block(selected_lines)` builds the ```` ```suggestion ```` block, new side
+  only.
+- Unsent text: a small store keyed by (account, PR, place) holding drafts until posted (the app
+  persists it).
+- Tests for placement across revisions (written on r1, viewed at r3 with and without the line
+  changing), multi-line threads, commentable lines, the pending review's lifecycle, suggestions and
+  own-PR choices.

@@ -89,6 +89,15 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Cache versions come from each stored type's shape** (a hash checked by a snapshot test), not a
   hand-bumped string.
 
+- **Pull requests are polled with `If-Modified-Since` their summary's `updated_at`.** Checked live: an
+  unrelated push changes a PR's ETag but still answers `If-Modified-Since` with a free 304. The
+  open-PR list has no `Last-Modified`, so each of its pages is polled with its own ETag.
+- **Writes invalidate what they touched whatever their outcome,** since a failed write may still have
+  reached GitHub. The 5-minute full refresh of the open PR runs only in the foreground and not below
+  5% of the limit.
+- **GraphQL-generated cache types are versioned by their query text;** rozed's own types by a hash of
+  their JSON schema. A snapshot test pins every version.
+
 ## Local copy
 
 - **rozed runs the `git` CLI with an isolated environment** (`GIT_CONFIG_GLOBAL=/dev/null`,
@@ -96,8 +105,9 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   touched; ignoring it also stops `insteadOf` rewrites and helpers from changing how rozed fetches.
 - **Every fetched PR head is pinned at `refs/rozed/pull/<n>/revs/<sha>`,** so force-pushed revisions
   survive `gc` (design §3).
-- **git 2.40 or newer is required,** for `git merge-tree --write-tree --merge-base` (rebase-aware
-  comparison, design §6). macOS's `/usr/bin/git` is 2.54.
+- **git 2.41 or newer is required:** `merge-tree --write-tree --merge-base` needs 2.40 (rebase-aware
+  comparison, design §6), and `--attr-source`, which keeps a PR's `.gitattributes` from changing
+  checked-out bytes, needs 2.41 (`attr.tree` needs 2.43). macOS's `/usr/bin/git` is 2.54.
 
 - **Base branches are fetched per PR** (`refs/rozed/pull/<n>/base`, tips pinned under `bases/<sha>`),
   never under a branch-name ref; arbitrary commits pin at `refs/rozed/commits/<sha>`.
@@ -105,6 +115,26 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   Sync`, and the app calls each step from a background task.
 - **A merged PR's diff needs its merge commit's first parent as the base** (the base tip already
   contains it); milestone 6 handles merged PRs.
+
+- **The token goes to git only through a credential helper scoped to `https://github.com`,** not a
+  `GIT_ASKPASS` that answers any prompt, and redirects are off (`http.followRedirects=false`), so
+  neither a proxy's password prompt nor a redirected host can get it.
+- **Every git command names its repository** (`--git-dir`, plus `--work-tree` for checkouts), so git
+  never discovers a repository above the cache; clones are deleted by moving them aside under the
+  lock first, and a clone without `HEAD` is treated as garbage.
+- **Paths are bytes:** a file name that isn't UTF-8 is shown with a badge, never failing the PR.
+- **Clones get incremental repacks at launch,** and checkouts unused for a while are removed on their
+  own, so repos reviewed every day stay fast and small.
+- **Checkouts are keyed by head** (`pull-<n>/<sha>`), so two windows or processes on one PR never
+  move each other's checkout.
+- **The diff never waits for a checkout:** the git-only view shows first, and a trusted checkout
+  swaps in project buffers when ready, or a banner says why it failed.
+
+- **rozed's clones pin `core.precomposeUnicode=false`,** since `git init` on a Mac turns it on and git
+  then reads a decomposed file name as its composed twin.
+- **Busy clones are repacked in the background after launch** (geometric on git 2.52+, full before,
+  because geometric repack mishandled promisor packs until 2.52), and files over 1 MiB are left
+  unloaded like files over 5,000 changed lines.
 
 ## Building on Zed (PR #3 and its review)
 
@@ -308,3 +338,97 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Milestone 5 builds on an integration branch** (`integration/pr-tab`) made only of merges of the
   open PR branches it needs, so its PRs' diffs show only their own change while the lower PRs wait
   to merge. When the lower PRs land on `main`, the milestone's PRs are retargeted to `main`.
+
+- **`integration/pr-tab` merges `feat/revisions-logic`, not `feat/merge-logic`;** the merge logic
+  joins it when milestone 9 needs it.
+- **`⌘O` arrives with 5a** (without clipboard prefill until milestone 12), since a second PR in the
+  same window needs a way in; launching without a link opens it.
+- **Every editor the workspace opens is read-only,** which closes "Open File" and any other path into
+  an ordinary editor tab.
+- **Default panel keys:** `⌘B` file list, `⌘⌥B` threads, `alt-o` review/path order. Milestone 12's
+  keymap and `?` sheet revisit all keys.
+- **A PR opened anonymously (public repo, no account) doesn't poll and isn't added to recent PRs.**
+
+- **rozed never opens a path it didn't create:** dropped files and folders are swallowed everywhere
+  (the PR tab, empty panes, the window), and every palette action that opens, creates, saves or adds
+  a window is captured, not just unbound. Without `--trust`, every language's servers are forced off
+  as a second line, since Zed treats invisible worktrees as trusted.
+- **Opening a PR goes cache first:** cached details show at once and offline, with a banner of their
+  age; the account check and fetch follow. A failed tab retries when its link is opened again.
+- **A remembered account that's signed out or unreadable is reported, never swapped for another;**
+  when no account can be used and GitHub explained why, the tab says so with GitHub's link rather
+  than opening anonymously.
+- **The poller watches a PR only once GitHub confirmed it exists, and only the active tab is its
+  "open" PR.** A tab's poll state (signed out, rate-limited, offline) shows in its header.
+- **A trusted checkout's worktree and language servers stop when the last tab using them closes**
+  (design §11).
+
+- **GitHub's diff shows hunks only, at their real line numbers, with expanding blocked** until the
+  local copy's diff replaces it at the same file and line; if the local copy is ready first, GitHub's
+  never shows. A retryable copy failure retries after 5 s, doubling to 5 minutes, with a banner.
+- **The PR tab owns and draws its banners** under its header (checking out, checkout failed, head
+  mismatch, retrying), since its diff editor is created and replaced while the tab is open.
+
+- **Viewed marks belong to each user and need only read access,** so `e` works on any PR the
+  account can see. The local record of where each file was marked lives in `viewed_files` (per
+  account and PR); clearing the cache keeps it, removing the account removes it.
+- **`e` moves to the next unviewed file in review order, wrapping;** `]f`/`[f` and `]c`/`[c` stop at
+  the ends and always follow the diff's (review) order. On a failed write only the mark reverts.
+
+## Syntax-aware diff (PR #14)
+
+- **difftastic's structural diff is ported (MIT, from commit `87aad1ae`),** with its notice in every
+  ported file and in `THIRD_PARTY_NOTICES.md`. It depends only on `tree-sitter` at Zed's pin: a
+  Myers line diff stands in for imara-diff, and a bucket queue for the radix heap.
+- **Files with parse errors fall back to the normal diff,** as difftastic does, alongside "no
+  grammar" and "too large" (1 MB, a 3M-vertex graph).
+- **A comment from the syntax-aware view lands only on the exact line it was written beside;** if
+  GitHub won't take a comment there, the UI offers a file-level comment instead of moving it.
+- **Sliders are ported** (difftastic's "prefer the inner/outer delimiter" fix-up), so wrapping code in
+  a new block marks only the wrapper.
+
+## Code features
+
+- **The syntax index is its own crate (`symbol_index`),** beside the seven in design §2's table: it
+  depends only on tree-sitter, so it's tested without compiling Zed, and both the app and rozed's
+  language-server mode use it.
+
+- **The index uses each grammar's own `tags.scm`, plus small rozed additions appended after it**
+  (consts, fields, type references, components and the like), since the vendored queries miss
+  much; the vendored tag wins when both match. JavaScript is parsed with the TSX grammar, as Zed does.
+- **Files over 1 MB, `linguist-generated` files, minified files and files with a "generated" header
+  are skipped.** Ranking is same file, same directory, an import's target, then the rest; import
+  matching is a per-language heuristic over the asking file's text, never reading project manifests.
+- **`tree-sitter-tags` needs `thiserror` 2.0.18 where Zed's lock has 2.0.17,** so rozed's lock moves
+  that one crate; a `--seed-lock` after a Zed bump lets cargo raise it again.
+
+## Merging (PR #12 and its review)
+
+- **Approve and ship acts on GitHub's verdict, not rozed's prediction.** It approves first, then
+  re-reads the PR and merges or joins the queue only if GitHub reports `CLEAN`, `HAS_HOOKS` or
+  `UNSTABLE`. If GitHub still blocks it, it turns on auto-merge when every remaining blocker is one
+  waiting fixes, and otherwise stops and shows why. rozed's prediction only words the confirmation
+  ("will likely merge" or "will likely wait"). Since it merges only on those states, approve and ship
+  never bypasses a rule, even for an admin; the admin override stays in the merge panel, behind
+  typing the PR's number (design §9).
+- **GitHub's own decision wins over rozed's model:** an `APPROVED` or `CHANGES_REQUESTED` review
+  decision stays unless the viewer's approval is provably what changes it (they were the only
+  requester).
+- **Auto-merge and later pushes.** The snapshot records whether stale approvals are dismissed. When
+  they aren't, the confirmation warns that a later push could merge with this approval, and while
+  rozed runs it turns auto-merge off when it sees a newer head than the one approved, and says so.
+- **Approve and ship does nothing on a draft** and refuses an empty head SHA.
+- **A required check that never reported is a wait only while something on the head can still report
+  it;** otherwise it blocks. A deployment waiting for a reviewer is its own kind of wait. Every check
+  under a required name must pass.
+- **Merge methods:** rebase isn't offered when the branch requires signed commits; a remembered
+  method that's no longer allowed falls back to GitHub's default for the viewer.
+- **The stale-approval warning, and turning auto-merge off after a push,** apply when a push wouldn't
+  need a new approval: stale approvals aren't dismissed and the latest push needn't be approved by
+  someone else, or no reviews are required at all. Neither applies to your own PR, or once someone
+  else turned auto-merge on.
+- **On a queue branch, `BEHIND` may join the queue** (the queue rebases); a direct merge still needs
+  `CLEAN`, `HAS_HOOKS` or `UNSTABLE`. When GitHub says `CLEAN` but rozed sees a blocker waiting won't
+  fix (a stale failed check), approve and ship stops rather than merges.
+- **"rozed may not see every rule" shows on any partly explained block** until the GitHub layer
+  confirms it read the branch's rules (milestone 9 wires `sees_every_rule`).
