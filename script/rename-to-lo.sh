@@ -23,8 +23,10 @@
 # already on GitHub in the test org: rozed-dev/playground's description and pull requests, as the
 # GitHub cassettes recorded them, and the bot's review that script/e2e/fixtures.sh looks up.
 #
-# Running it again changes nothing more. On a branch that predates the rename, run it, commit,
-# then merge origin/main.
+# Running it again changes nothing more. On a branch that predates the rename, merge origin/main
+# first, then run it: the merge brings main's renamed lines, git moves files the branch added in
+# crates/rozed/ to crates/lo/, and the script renames what's left, the branch's own lines. Run
+# before the merge, it would conflict wherever main's hand pass changed a line it renamed.
 set -euo pipefail
 
 usage() {
