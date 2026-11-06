@@ -69,13 +69,15 @@ rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
 `docs/spike.md`, "Trust risks"). Without `--trust`, no language server can start at all. Milestone
 10's trust prompt replaces the flag. Each pull request opens in its own tab; `cmd-o` opens another
-from its link, and without a link rozed starts there.
+from its link. With none open, the window lists the pull requests opened recently, where enter
+opens one, and rozed starts there without a link.
 
 The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
 repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git
 in, and without signing in when none can and GitHub gave no other reason, which works for public
-repositories.
+repositories. When several accounts can see it, rozed asks once per owner which to use. Offline, a
+pull request whose head the local copy has shows its diff from the copy.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
