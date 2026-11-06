@@ -24,7 +24,8 @@ These bind every change (design §1).
 ## Layout
 
 - `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
-  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`).
+  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`), plus
+  `symbol_index`, the syntax-based symbol index (design §7).
 - `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
   Cargo workspace, with its own `Cargo.lock`, so it runs even when rozed's workspace can't resolve
   (an empty `third_party/zed`, or a Zed update that needs a new patch).
@@ -158,6 +159,14 @@ Each Zed release gets its own branch, `rozed/v<version>`. Patch branches are app
 force-push or delete one, because older rozed commits pin commits on it. To rewrite a patch on the
 same Zed release, push a new branch with a suffix, such as `rozed/v1.27.0-2`, and point the
 submodule at it as in step 2.
+
+To see what a release breaks first, run `script/zed-latest.sh --tag v<version>` (under `mise exec
+--`). In a worktree of its own, it replays the patches onto the release, then runs `cargo xtask
+sync-zed --seed-lock`, `rustup toolchain install`, `cargo fetch`, `cargo fmt --check`, `cargo
+build`, `cargo clippy` and `cargo test`. It reports each patch that no longer applies and each
+failing step's first errors, and pushes nothing. The `weekly-zed` workflow runs it against Zed's
+latest release every week and keeps one issue labelled `zed-update` open, with the latest report,
+while that release breaks rozed.
 
 1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
    above in order, and push the branch to `scornz/zed`.
