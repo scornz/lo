@@ -2,6 +2,7 @@
 //! (design §5, §10 "Window").
 
 pub mod account;
+pub mod api_diff;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;

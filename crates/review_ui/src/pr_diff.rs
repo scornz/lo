@@ -14,15 +14,17 @@
 //! that aren't UTF-8 (shown with U+FFFD), and changes to line endings alone.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context as _;
 use buffer_diff::BufferDiff;
+use editor::display_map::{DisplayRow, ToDisplayPoint as _};
 use editor::{
-    Addon, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer, SplittableEditor,
-    multibuffer_context_lines,
+    Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
+    SplittableEditor, multibuffer_context_lines,
 };
 use git::status::{FileStatus, StatusCode, TrackedStatus};
 use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
@@ -48,7 +50,7 @@ use crate::github_api::PullRequest;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::PrTab;
+use crate::pr_tab::{DiffSource, PrTab};
 use crate::trust;
 
 /// Whether the pull request gets a checkout and language servers. The caller decides.
@@ -62,10 +64,10 @@ pub enum Trust {
 }
 
 /// Copies the pull request locally, signed in with `token` for a private repository, and shows
-/// it in `tab`'s diff, from git first. When `trust` asks for a checkout, it's made in the
-/// background, and each file whose checkout copy matches the head switches to the checkout's
-/// project buffer when it's ready, or a banner says why there's none. `launched` is when the tab
-/// opened, for timing.
+/// the local copy's diff in `tab`, from git first. When `trust` asks for a checkout, it's made in
+/// the background once the diff shows, and each file whose checkout copy matches the head switches
+/// to the checkout's project buffer when it's ready, or a banner says why there's none.
+/// `launched` is when the tab opened, for timing.
 #[allow(clippy::too_many_arguments)]
 pub async fn open(
     tab: WeakEntity<PrTab>,
@@ -102,9 +104,24 @@ pub async fn open(
         local.base,
         local.head
     );
-    // The tab lists the files, and says where each goes in the diff.
-    let positions = tab.update(cx, |tab, cx| tab.copied(&local.files, &local.head, cx))?;
+    let title = format!("{link}: {}", pull_request.title);
+    show_local_copy(tab, workspace, link, title, local, trust, launched, cx).await
+}
 
+/// Shows the local copy's diff of the pull request in `tab`. While the tab shows GitHub's diff,
+/// the local copy's is built out of sight and replaces it once every file is in, scrolled to the
+/// same file and line; otherwise it shows at once and fills in as files load.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn show_local_copy(
+    tab: WeakEntity<PrTab>,
+    workspace: WeakEntity<Workspace>,
+    link: PrLink,
+    title: String,
+    local: Arc<LocalPullRequest>,
+    trust: Trust,
+    launched: Instant,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let banners = tab.read_with(cx, |tab, _| tab.banners().clone())?;
@@ -125,39 +142,25 @@ pub async fn open(
         }
     });
 
-    let title = format!("{link}: {}", pull_request.title);
-    let multi_buffer = cx.new(|cx| {
-        let mut multi_buffer = MultiBuffer::new(Capability::ReadOnly).with_title(title.clone());
-        multi_buffer.set_all_diff_hunks_expanded(cx);
-        multi_buffer
-    });
-    let editor = workspace.update_in(cx, |_, window, cx| {
-        let workspace_entity = cx.entity();
-        cx.new(|cx| {
-            let editor = SplittableEditor::new(
-                EditorSettings::get_global(cx).diff_view_style,
-                multi_buffer.clone(),
-                project.clone(),
-                workspace_entity,
-                window,
-                cx,
-            );
-            // Hides the controls for staging and restoring hunks.
-            editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
-            editor.rhs_editor().update(cx, |editor, cx| {
-                editor.set_show_bookmarks(false, cx);
-                editor.set_show_breakpoints(false, cx);
-                // Keeps the clone open, so no cleanup removes it or its checkout while the tab
-                // shows it.
-                editor.register_addon(OpenClone {
-                    _repo: local.repo.clone(),
-                });
+    let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, cx)?;
+    editor.update(cx, |editor, cx| {
+        editor.rhs_editor().update(cx, |editor, _| {
+            // Keeps the clone open, so no cleanup removes it or its checkout while the tab
+            // shows it.
+            editor.register_addon(OpenClone {
+                _repo: local.repo.clone(),
             });
-            editor
         })
-    })?;
-    tab.update_in(cx, |tab, window, cx| {
-        tab.show_diff(editor.clone(), window, cx)
+    });
+    // The tab lists the files and says where each goes in the diff, at once, or with GitHub's
+    // diff on screen, once this one replaces it, so the list always matches the diff shown.
+    let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
+        if tab.diff_source() == Some(DiffSource::GitHub) {
+            return (true, tab.positions_of(&local.files));
+        }
+        let positions = tab.copied(&local.files, &local.head, cx);
+        tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
+        (false, positions)
     })?;
 
     let target = Target {
@@ -183,12 +186,16 @@ pub async fn open(
             })
             .await;
         let position = positions[index];
-        let shown = match target.add_file(position, file, plan.clone(), cx).await {
+        let (path, deleted) = (file.display_path(), file.new.is_none());
+        let shown = match target
+            .add_file(position, &path, deleted, plan.clone(), cx)
+            .await
+        {
             Ok(shown) => Ok((shown, plan)),
             Err(error) => {
                 let plan = FilePlan::failed(&error);
                 target
-                    .add_file(position, file, plan.clone(), cx)
+                    .add_file(position, &path, deleted, plan.clone(), cx)
                     .await
                     .map(|shown| (shown, plan))
             }
@@ -245,6 +252,19 @@ pub async fn open(
             }
         });
     });
+    tab.update_in(cx, |tab, window, cx| {
+        if replacing {
+            tab.copied(&local.files, &local.head, cx);
+            tab.switch_diff(editor.clone(), window, cx);
+        }
+        tab.diff_loaded(cx);
+    })?;
+    if replacing {
+        log::info!(
+            "{link}: switched from GitHub's diff to the local copy's {:?} after launch",
+            launched.elapsed()
+        );
+    }
     if not_shown > 0 {
         let message = match not_shown {
             1 => format!("{link}: 1 file couldn't be shown. Its header says why."),
@@ -306,7 +326,15 @@ pub async fn open(
                     headers.warnings.insert(*buffer_id, warning);
                 });
             }
-            Swap::ToCheckout(plan) => match target.add_file(positions[index], file, plan, cx).await
+            Swap::ToCheckout(plan) => match target
+                .add_file(
+                    positions[index],
+                    &file.display_path(),
+                    file.new.is_none(),
+                    plan,
+                    cx,
+                )
+                .await
             {
                 Ok(shown) => update_headers(&editor, cx, |headers| {
                     headers.move_to(*buffer_id, shown.buffer_id);
@@ -326,6 +354,107 @@ pub async fn open(
         launched.elapsed()
     );
     Ok(())
+}
+
+/// A new, empty side-by-side diff of `title`, read-only and without the controls for staging and
+/// restoring hunks.
+pub(crate) fn new_diff_editor(
+    workspace: &WeakEntity<Workspace>,
+    project: &Entity<Project>,
+    title: &str,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<(Entity<MultiBuffer>, Entity<SplittableEditor>)> {
+    let multi_buffer = cx.new(|cx| {
+        let mut multi_buffer = MultiBuffer::new(Capability::ReadOnly).with_title(title.to_string());
+        multi_buffer.set_all_diff_hunks_expanded(cx);
+        multi_buffer
+    });
+    let editor = workspace.update_in(cx, |_, window, cx| {
+        let workspace_entity = cx.entity();
+        cx.new(|cx| {
+            let editor = SplittableEditor::new(
+                EditorSettings::get_global(cx).diff_view_style,
+                multi_buffer.clone(),
+                project.clone(),
+                workspace_entity,
+                window,
+                cx,
+            );
+            editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
+            editor.rhs_editor().update(cx, |editor, cx| {
+                editor.set_show_bookmarks(false, cx);
+                editor.set_show_breakpoints(false, cx);
+            });
+            editor
+        })
+    })?;
+    Ok((multi_buffer, editor))
+}
+
+/// Where a diff is scrolled to: the file and line at the top of the view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffPosition {
+    /// The file's path in the pull request.
+    pub path: String,
+    /// The row, from 0, in the head's version of the file: the line's number less one.
+    pub row: u32,
+    /// How many rows below the top of the view the row shows: the rows of its file's header, or
+    /// a fraction above zero when the row is scrolled partly out of view.
+    pub below_top: f64,
+}
+
+/// The file and line at the top of `diff`'s view, or the first one below it when a file's header
+/// is at the top.
+pub fn scroll_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<DiffPosition> {
+    let editor = diff.read(cx).rhs_editor().clone();
+    editor.update(cx, |editor, cx| {
+        let top = editor.scroll_position(cx).y.max(0.);
+        let display = editor.display_snapshot(cx);
+        let top_row = DisplayPoint::new(DisplayRow(top.floor() as u32), 0);
+        let point = display.display_point_to_point(top_row, Bias::Right);
+        let shown_at = f64::from(point.to_display_point(&display).row().0);
+        let (buffer, buffer_point) = display.buffer_snapshot().point_to_buffer_point(point)?;
+        Some(DiffPosition {
+            path: buffer.file()?.path().as_unix_str().to_string(),
+            row: buffer_point.row,
+            below_top: shown_at - top,
+        })
+    })
+}
+
+/// Scrolls `diff` so `position`'s file and line show where they did, or the nearest line of that
+/// file it shows. Returns whether `diff` has the file.
+pub fn scroll_to(
+    diff: &Entity<SplittableEditor>,
+    position: &DiffPosition,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let editor = diff.read(cx).rhs_editor().clone();
+    let multi_buffer = editor.read(cx).buffer().clone();
+    let buffer = multi_buffer.read(cx).all_buffers_iter().find(|buffer| {
+        buffer
+            .read(cx)
+            .file()
+            .is_some_and(|file| file.path().as_unix_str() == position.path)
+    });
+    let Some(anchor) = buffer.and_then(|buffer| {
+        multi_buffer
+            .read(cx)
+            .buffer_point_to_anchor(&buffer, Point::new(position.row, 0), cx)
+    }) else {
+        return false;
+    };
+    editor.update(cx, |editor, cx| {
+        let display = editor.display_snapshot(cx);
+        let row = f64::from(anchor.to_display_point(&display).row().0);
+        editor.set_scroll_position(
+            gpui::point(0., (row - position.below_top).max(0.)),
+            window,
+            cx,
+        );
+    });
+    true
 }
 
 /// Checks the head out, trusts that checkout and nothing else, and opens it as a folder of
@@ -444,7 +573,7 @@ impl Addon for OpenClone {
 }
 
 /// A pull request in the local copy.
-struct LocalPullRequest {
+pub(crate) struct LocalPullRequest {
     repo: Repo,
     /// The repository's canonical name, GitHub's, which starts each file's full path.
     name: String,
@@ -549,23 +678,27 @@ const LARGE_FILE_LINES: u32 = 5_000;
 const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
 /// The trusted checkout a pull request's project buffers come from.
-struct Checkout {
+pub(crate) struct Checkout {
     dir: PathBuf,
     worktree_id: WorktreeId,
 }
 
-/// What one changed file shows, worked out from git before anything goes on screen.
+/// What one changed file shows, worked out before anything goes on screen: from git, or from
+/// GitHub's patch.
 #[derive(Clone, Debug, PartialEq)]
-struct FilePlan {
-    content: Content,
+pub(crate) struct FilePlan {
+    pub(crate) content: Content,
     /// Shown in the file's header.
-    warning: Option<Warning>,
+    pub(crate) warning: Option<Warning>,
     /// What the file's header says about the change besides its status.
-    badge: Option<SharedString>,
+    pub(crate) badge: Option<SharedString>,
+    /// The head's rows that show, when only they're known, as from GitHub's patch: each range
+    /// shows as it is, and can't be expanded. `None` shows each change with the lines around it.
+    pub(crate) rows: Option<Vec<Range<u32>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Content {
+pub(crate) enum Content {
     /// The two sides, compared.
     Diff {
         /// The base's text. `None` when the pull request adds the file.
@@ -585,7 +718,7 @@ enum Content {
 
 /// Where the right side's text comes from.
 #[derive(Clone, Debug, PartialEq)]
-enum NewSide {
+pub(crate) enum NewSide {
     /// The head's text, read from git.
     Git(String),
     /// The checkout's project buffer, whose bytes hash to the head's blob.
@@ -596,9 +729,9 @@ enum NewSide {
 
 /// A note in a file's header: a short label, and the reason in its tooltip.
 #[derive(Clone, Debug, PartialEq)]
-struct Warning {
-    label: SharedString,
-    detail: SharedString,
+pub(crate) struct Warning {
+    pub(crate) label: SharedString,
+    pub(crate) detail: SharedString,
 }
 
 /// The header label of a file rozed couldn't show.
@@ -608,15 +741,16 @@ const NOT_SHOWN: &str = "Not shown";
 const NOT_LOADED: &str = "Not loaded";
 
 impl FilePlan {
-    fn diff(old_text: Option<String>, new: NewSide) -> Self {
+    pub(crate) fn diff(old_text: Option<String>, new: NewSide) -> Self {
         Self {
             content: Content::Diff { old_text, new },
             warning: None,
             badge: None,
+            rows: None,
         }
     }
 
-    fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
+    pub(crate) fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
         Self {
             content: Content::Placeholder {
                 text: text.into(),
@@ -625,11 +759,20 @@ impl FilePlan {
             },
             warning: None,
             badge: None,
+            rows: None,
+        }
+    }
+
+    /// Shows only `rows` of the head, as they are.
+    pub(crate) fn with_rows(self, rows: Vec<Range<u32>>) -> Self {
+        Self {
+            rows: Some(rows),
+            ..self
         }
     }
 
     /// A placeholder that says why the file can't be shown, in its text and its header.
-    fn failed(error: &anyhow::Error) -> Self {
+    pub(crate) fn failed(error: &anyhow::Error) -> Self {
         Self {
             warning: Some(Warning {
                 label: NOT_SHOWN.into(),
@@ -796,35 +939,36 @@ fn text(bytes: Vec<u8>) -> String {
 }
 
 /// Where the changed files go.
-struct Target<'a> {
+pub(crate) struct Target<'a> {
     /// The repository's name, which starts each file's full path.
-    repo_name: &'a str,
-    project: &'a Entity<Project>,
-    checkout: Option<&'a Checkout>,
-    languages: &'a Arc<LanguageRegistry>,
-    editor: &'a Entity<SplittableEditor>,
+    pub(crate) repo_name: &'a str,
+    pub(crate) project: &'a Entity<Project>,
+    pub(crate) checkout: Option<&'a Checkout>,
+    pub(crate) languages: &'a Arc<LanguageRegistry>,
+    pub(crate) editor: &'a Entity<SplittableEditor>,
 }
 
 /// A file added to the diff.
-struct Shown {
-    buffer_id: BufferId,
-    warning: Option<Warning>,
-    badge: Option<SharedString>,
-    folded: bool,
+pub(crate) struct Shown {
+    pub(crate) buffer_id: BufferId,
+    pub(crate) warning: Option<Warning>,
+    pub(crate) badge: Option<SharedString>,
+    pub(crate) folded: bool,
 }
 
 impl Target<'_> {
-    /// Adds one changed file to the diff, at `position` in the tab's order.
-    async fn add_file(
+    /// Adds one changed file to the diff, at `position` in the tab's order. `path` is its path
+    /// as shown: a name that isn't UTF-8 shows with U+FFFD, and its badge says so.
+    pub(crate) async fn add_file(
         &self,
         position: usize,
-        file: &ChangedFile,
+        path: &str,
+        deleted: bool,
         plan: FilePlan,
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Shown> {
-        // A name that isn't UTF-8 shows with U+FFFD, and its badge says so.
-        let path = RelPath::from_unix_str(file.display_path().as_ref())?.into_arc();
-        let deleted = file.new.is_none();
+        let path = RelPath::from_unix_str(path)?.into_arc();
+        let rows = plan.rows;
         let (buffer, old_text, folded) = match plan.content {
             Content::Diff {
                 old_text,
@@ -904,12 +1048,25 @@ impl Target<'_> {
         };
         cx.update(|_, cx| follow_language(&buffer, &diff, cx))?;
 
+        // Only the rows asked for, or each change with the lines around it.
+        let hunks_only = rows.is_some();
         let ranges = cx.update(|_, cx| {
-            let diff_snapshot = diff.read(cx).snapshot(cx);
-            let ranges: Vec<_> = diff_snapshot
-                .hunks(&snapshot)
-                .map(|hunk| hunk.buffer_range.to_point(&snapshot))
-                .collect();
+            let ranges: Vec<_> = match &rows {
+                Some(rows) => rows
+                    .iter()
+                    .map(|rows| {
+                        let last = rows.end.saturating_sub(1).max(rows.start);
+                        Point::new(rows.start, 0)..Point::new(last, 0)
+                    })
+                    .collect(),
+                None => {
+                    let diff_snapshot = diff.read(cx).snapshot(cx);
+                    diff_snapshot
+                        .hunks(&snapshot)
+                        .map(|hunk| hunk.buffer_range.to_point(&snapshot))
+                        .collect()
+                }
+            };
             if ranges.is_empty() {
                 vec![Point::zero()..snapshot.max_point()]
             } else {
@@ -919,16 +1076,18 @@ impl Target<'_> {
         let key = path_key(position, path);
         let buffer_id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
         self.editor.update_in(cx, |editor, window, cx| {
-            editor.update_excerpts_for_path(
-                key,
-                buffer,
-                ranges,
-                multibuffer_context_lines(cx),
-                diff,
-                cx,
-            );
+            let context = if hunks_only {
+                0
+            } else {
+                multibuffer_context_lines(cx)
+            };
+            editor.update_excerpts_for_path(key, buffer, ranges, context, diff, cx);
             if editor.diff_view_style() == DiffViewStyle::Split {
                 editor.split(window, cx);
+            }
+            // The rows between the ones asked for aren't the file's, so they never show.
+            if hunks_only {
+                editor.update_editors(cx, |editor, cx| editor.disable_expand_excerpt_buttons(cx));
             }
         })?;
         Ok(Shown {
@@ -1099,10 +1258,10 @@ fn normalized(bytes: &[u8]) -> Vec<u8> {
 /// renamed or modified) rather than its status in the checkout, which is always clean, a badge
 /// with what the status doesn't say, and any warning.
 #[derive(Default)]
-struct FileHeaders {
-    statuses: HashMap<BufferId, FileStatus>,
-    badges: HashMap<BufferId, SharedString>,
-    warnings: HashMap<BufferId, Warning>,
+pub(crate) struct FileHeaders {
+    pub(crate) statuses: HashMap<BufferId, FileStatus>,
+    pub(crate) badges: HashMap<BufferId, SharedString>,
+    pub(crate) warnings: HashMap<BufferId, Warning>,
 }
 
 impl FileHeaders {
@@ -1237,7 +1396,7 @@ impl File for GitFile {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use repo_cache::{Git, LineCounts};
@@ -1420,14 +1579,14 @@ mod tests {
     }
 
     /// A pull request copied locally from a fixture, with a checkout when asked for.
-    struct Copied {
-        _fixture: fixtures::Fixture,
-        _cache: TempDir,
-        local: LocalPullRequest,
-        checkout: Option<PathBuf>,
+    pub(crate) struct Copied {
+        pub(crate) _fixture: fixtures::Fixture,
+        pub(crate) _cache: TempDir,
+        pub(crate) local: LocalPullRequest,
+        pub(crate) checkout: Option<PathBuf>,
     }
 
-    fn copy(base: &[Entry], head: &[Entry], checkout: bool) -> Copied {
+    pub(crate) fn copy(base: &[Entry], head: &[Entry], checkout: bool) -> Copied {
         let fixture = fixtures::pull_request(base, head);
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path(), Git::find().unwrap())
@@ -1795,7 +1954,7 @@ mod tests {
     }
 
     /// Pull requests in real repositories, served over `file://` as GitHub serves them.
-    mod fixtures {
+    pub(crate) mod fixtures {
         use std::ffi::{OsStr, OsString};
         use std::io::Write as _;
         use std::os::unix::ffi::OsStrExt as _;

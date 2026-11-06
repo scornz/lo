@@ -11,7 +11,7 @@ use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{PullRef, Target};
+use github::{GithubClient, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -26,10 +26,11 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 use workspace::{ItemNavHistory, Workspace};
 
 use crate::account::{self, AccountDecision, Acting};
+use crate::api_diff::{self, FilesReader, GithubDiff};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer;
-use crate::pr_banner::{self, Banners};
+use crate::pr_banner::{self, BannerKind, Banners};
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
@@ -137,6 +138,15 @@ pub enum Status {
     Failed(SharedString),
 }
 
+/// Where the diff the tab shows comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffSource {
+    /// GitHub's patches: changed lines only, until the local copy is ready (design §11).
+    GitHub,
+    /// The local copy: whole files.
+    LocalCopy,
+}
+
 /// Sent when what the tab's title shows changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrTabEvent {
@@ -162,12 +172,15 @@ pub struct PrTab {
     /// What the tab should tell about what its diff shows, under its header.
     banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
+    diff_source: Option<DiffSource>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab.
     watched: Option<(Entity<Poller>, PullRef)>,
     opened: Instant,
     _load: Option<Task<()>>,
+    /// Reads and shows GitHub's diff, until the local copy's replaces it.
+    _github_diff: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -207,11 +220,13 @@ impl PrTab {
             status: Status::Loading("Finding an account that can see it…".into()),
             banners,
             diff: None,
+            diff_source: None,
             show_file_list: true,
             show_threads: true,
             watched: None,
             opened: Instant::now(),
             _load: None,
+            _github_diff: None,
             _subscriptions: vec![on_focus, on_banners],
         }
     }
@@ -258,12 +273,21 @@ impl PrTab {
         &self.status
     }
 
+    pub(crate) fn workspace(&self) -> &WeakEntity<Workspace> {
+        &self.workspace
+    }
+
     pub fn banners(&self) -> &Entity<Banners> {
         &self.banners
     }
 
     pub fn diff(&self) -> Option<&Entity<SplittableEditor>> {
         self.diff.as_ref()
+    }
+
+    /// Where the diff shown comes from, once one shows.
+    pub fn diff_source(&self) -> Option<DiffSource> {
+        self.diff_source
     }
 
     pub fn is_file_list_shown(&self) -> bool {
@@ -343,10 +367,7 @@ impl PrTab {
         head: &Oid,
         cx: &mut Context<Self>,
     ) -> Vec<usize> {
-        let mut list = FileList::new(files.iter().map(FileEntry::from_local).collect());
-        list.set_order(self.files.order());
-        list.set_viewed(&self.viewed);
-        self.files = list;
+        self.list(files.iter().map(FileEntry::from_local).collect());
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let now = SystemTime::now();
@@ -365,19 +386,172 @@ impl PrTab {
         self.files.review_positions()
     }
 
-    /// Shows `editor` as the tab's diff.
+    /// Where each of the local copy's `files` goes in its diff, by its index in `files`, without
+    /// listing them yet.
+    pub(crate) fn positions_of(&self, files: &[ChangedFile]) -> Vec<usize> {
+        FileList::new(files.iter().map(FileEntry::from_local).collect()).review_positions()
+    }
+
+    /// Lists `entries` in place of the files listed so far, in the same order and keeping the
+    /// selected file.
+    fn list(&mut self, entries: Vec<FileEntry>) {
+        let mut list = FileList::new(entries);
+        list.set_order(self.files.order());
+        list.set_viewed(&self.viewed);
+        if let Some(selected) = self.files.selected() {
+            list.select_path(selected.path());
+        }
+        self.files = list;
+    }
+
+    /// Reads GitHub's diff of the pull request with `reader` and shows it until the local copy's
+    /// diff is ready.
+    pub(crate) fn load_github_diff(
+        &mut self,
+        reader: FilesReader,
+        pull_request: &PullRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let link = self.link().clone();
+        let Ok((owner, name)) = pull_request.base.repo.owner_and_name() else {
+            return;
+        };
+        let Ok(number) = i64::try_from(link.number) else {
+            return;
+        };
+        let pull = PullRef::new(owner, name, number);
+        let source = GithubDiff {
+            link: link.clone(),
+            title: format!("{link}: {}", pull_request.title),
+            repo_name: name.to_string(),
+        };
+        let opened = self.opened;
+        self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
+            let started = Instant::now();
+            match reader.read(&pull).await {
+                Ok(files) => {
+                    log::info!(
+                        "{link}: GitHub listed {} files in {:?}",
+                        files.len(),
+                        started.elapsed()
+                    );
+                    if let Err(error) = api_diff::show(this, source, files, opened, cx).await {
+                        log::warn!("{link}: can't show GitHub's diff: {error:#}");
+                    }
+                }
+                Err(error) => {
+                    log::warn!("{link}: can't read GitHub's diff: {error}");
+                    this.update(cx, |this, cx| this.github_diff_failed(&error, cx))
+                        .ok();
+                }
+            }
+        }));
+    }
+
+    /// Shows GitHub's diff of `files` until the local copy's diff is ready, as
+    /// [`Self::load_github_diff`] does once it has read them.
+    #[cfg(test)]
+    pub(crate) fn show_github_files(
+        &mut self,
+        source: GithubDiff,
+        files: Vec<github::files::PullFile>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opened = self.opened;
+        self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
+            let link = source.link.clone();
+            if let Err(error) = api_diff::show(this, source, files, opened, cx).await {
+                log::warn!("{link}: can't show GitHub's diff: {error:#}");
+            }
+        }));
+    }
+
+    /// GitHub's diff is ready to show in `editor`, which lists `entries`. Unless the local copy's
+    /// diff got there first, lists them and shows it, and returns where each file goes in it.
+    pub(crate) fn show_github_diff(
+        &mut self,
+        entries: Vec<FileEntry>,
+        editor: Entity<SplittableEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<usize>> {
+        if self.diff.is_some() {
+            return None;
+        }
+        self.list(entries);
+        self.show_diff(editor, DiffSource::GitHub, window, cx);
+        Some(self.files.review_positions())
+    }
+
+    fn github_diff_failed(&mut self, error: &github::GithubError, cx: &mut Context<Self>) {
+        if self.diff.is_some() {
+            return;
+        }
+        self.banners.update(cx, |banners, cx| {
+            banners.show(
+                BannerKind::GithubDiffFailed,
+                Severity::Info,
+                format!(
+                    "rozed couldn't read GitHub's diff, so the diff shows once the local copy is \
+                     ready: {error}"
+                ),
+                cx,
+            )
+        });
+    }
+
+    /// Every file is in the local copy's diff.
+    pub(crate) fn diff_loaded(&mut self, cx: &mut Context<Self>) {
+        self.set_status(Status::Ready, cx);
+    }
+
+    /// Shows `editor` as the tab's diff, from `source`. The local copy's diff stops GitHub's from
+    /// loading.
     pub(crate) fn show_diff(
         &mut self,
         editor: Entity<SplittableEditor>,
+        source: DiffSource,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
         self.diff = Some(editor.clone());
+        self.diff_source = Some(source);
+        if source == DiffSource::LocalCopy {
+            self._github_diff = None;
+            self.banners.update(cx, |banners, cx| {
+                banners.hide(BannerKind::GithubDiffFailed, cx)
+            });
+        }
         if focused && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
         }
         cx.notify();
+    }
+
+    /// Replaces GitHub's diff with the local copy's, `editor`, at the same file and line.
+    pub(crate) fn switch_diff(
+        &mut self,
+        editor: Entity<SplittableEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let position = self
+            .diff
+            .as_ref()
+            .and_then(|diff| pr_diff::scroll_position(diff, cx));
+        self.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
+        if let Some(position) = position
+            && !pr_diff::scroll_to(&editor, &position, window, cx)
+        {
+            log::warn!(
+                "{}: the local copy's diff has no {}, so it starts at the top",
+                self.link(),
+                position.path
+            );
+        }
     }
 
     /// Watches the pull request with its account's poller, which shows what's cached at once and
@@ -621,18 +795,34 @@ impl PrTab {
     }
 
     fn render_status(&self) -> Option<AnyElement> {
-        let (icon, color, text) = match &self.status {
-            Status::Ready => return None,
-            Status::Loading(step) => (IconName::ArrowCircle, Color::Muted, step.clone()),
-            Status::Failed(error) => (IconName::Warning, Color::Error, error.clone()),
+        let step = match &self.status {
+            Status::Ready => None,
+            Status::Loading(step) => Some((IconName::ArrowCircle, Color::Muted, step.clone())),
+            Status::Failed(error) => Some((IconName::Warning, Color::Error, error.clone())),
         };
+        let github = self.diff_source == Some(DiffSource::GitHub);
+        if step.is_none() && !github {
+            return None;
+        }
         Some(
             h_flex()
                 .px_3()
                 .py_1()
                 .gap_2()
-                .child(Icon::new(icon).size(IconSize::Small).color(color))
-                .child(Label::new(text).size(LabelSize::Small).color(color))
+                .justify_between()
+                .child(h_flex().gap_2().children(step.map(|(icon, color, text)| {
+                    h_flex()
+                        .gap_2()
+                        .child(Icon::new(icon).size(IconSize::Small).color(color))
+                        .child(Label::new(text).size(LabelSize::Small).color(color))
+                })))
+                .when(github, |this| {
+                    this.child(
+                        Label::new("GitHub's diff: changed lines only")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -888,7 +1078,7 @@ async fn load(
 
     // Signed in, the account's poller shows what's cached at once and keeps it up to date, and
     // its client and token read the pull request and copy it.
-    let (pull_request, token) = match (&acting, &layer) {
+    let (pull_request, token, reader) = match (&acting, &layer) {
         (Acting::Account(login), Some(layer)) => {
             let number = i64::try_from(link.number)?;
             let pull = PullRef::new(&link.owner, &link.repo, number);
@@ -903,12 +1093,20 @@ async fn load(
                 .read(|| github_api::fetch_as(&client, login, &link))
                 .await?;
             let token = repo_cache::Token::new(client.token().expose());
-            (pull_request, Some(token))
+            let reader = FilesReader {
+                client: client.clone(),
+                queue: Some(queue),
+            };
+            (pull_request, Some(token), reader)
         }
         _ => {
             let http = cx.update(|_, cx| cx.http_client())?;
+            let reader = FilesReader {
+                client: GithubClient::anonymous(http.clone()),
+                queue: None,
+            };
             match github_api::fetch_pull_request(http, &link).await {
-                Ok(pull_request) => (pull_request, None),
+                Ok(pull_request) => (pull_request, None, reader),
                 Err(error) => {
                     let problems = account::problems(found.as_ref());
                     if problems.is_empty() {
@@ -923,6 +1121,10 @@ async fn load(
         }
     };
     this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
+    // GitHub's diff shows while the local copy loads.
+    this.update_in(cx, |this, window, cx| {
+        this.load_github_diff(reader, &pull_request, window, cx)
+    })?;
 
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
     pr_diff::open(
@@ -960,9 +1162,22 @@ impl Render for PrTab {
             (Some(diff), _) => diff.clone().into_any_element(),
             (None, _) => div().size_full().into_any_element(),
         };
+        let github = self.diff_source == Some(DiffSource::GitHub);
         v_flex()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            // GitHub's diff has only the changed lines, so its excerpts can't grow.
+            .when(github, |this| {
+                this.capture_action(|_: &editor::actions::ExpandExcerpts, _, cx| {
+                    cx.stop_propagation()
+                })
+                .capture_action(|_: &editor::actions::ExpandExcerptsUp, _, cx| {
+                    cx.stop_propagation()
+                })
+                .capture_action(
+                    |_: &editor::actions::ExpandExcerptsDown, _, cx| cx.stop_propagation(),
+                )
+            })
             .on_action(cx.listener(Self::toggle_file_list))
             .on_action(cx.listener(Self::toggle_threads))
             .on_action(cx.listener(Self::toggle_file_order))
@@ -1091,7 +1306,13 @@ mod tests {
     use repo_cache::{Change, FileMode, FileVersion, LineCounts};
     use workspace::MultiWorkspace;
 
+    use std::sync::Arc;
+
+    use github::files::{FileStatus, PullFile};
+
     use crate::github_api::{Base, BaseRepo, Head, User};
+    use crate::pr_diff::DiffPosition;
+    use crate::pr_diff::tests::fixtures::Entry;
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -1467,6 +1688,189 @@ mod tests {
         assert!(!has_box(cx));
         assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground]);
         assert_eq!(active_tab(&workspace, cx), Some(fd));
+    }
+
+    /// `count` lines, "`name` 1" to "`name` `count`", with line `changed` as "`name` `changed`
+    /// changed".
+    fn numbered(name: &str, count: u32, changed: Option<u32>) -> String {
+        (1..=count)
+            .map(|line| match changed {
+                Some(changed) if changed == line => format!("{name} {line} changed\n"),
+                _ => format!("{name} {line}\n"),
+            })
+            .collect()
+    }
+
+    /// GitHub's entry for `name`, whose line `line` changed as [`numbered`] changes it, with three
+    /// lines around it, as GitHub's patches have.
+    fn github_file(name: &str, line: u32) -> PullFile {
+        let start = line - 3;
+        let (filename, name) = (name, name.trim_end_matches(".txt"));
+        let mut patch = format!("@@ -{start},7 +{start},7 @@");
+        for unchanged in start..line {
+            patch.push_str(&format!("\n {name} {unchanged}"));
+        }
+        patch.push_str(&format!("\n-{name} {line}\n+{name} {line} changed"));
+        for unchanged in line + 1..=line + 3 {
+            patch.push_str(&format!("\n {name} {unchanged}"));
+        }
+        PullFile {
+            filename: filename.to_string(),
+            status: FileStatus::Modified,
+            additions: 1,
+            deletions: 1,
+            changes: 2,
+            patch: Some(patch),
+            previous_filename: None,
+        }
+    }
+
+    const PULL: &str = "https://github.com/owner/repo/pull/1";
+
+    fn show_github_files(tab: &Entity<PrTab>, files: Vec<PullFile>, cx: &mut VisualTestContext) {
+        tab.update_in(cx, |tab, window, cx| {
+            let source = GithubDiff {
+                link: link(PULL),
+                title: format!("{PULL}: Change a and b"),
+                repo_name: "repo".into(),
+            };
+            tab.show_github_files(source, files, window, cx)
+        });
+        cx.run_until_parked();
+    }
+
+    /// Shows the local copy's diff of a pull request that changes line 50 of a.txt and line 60 of
+    /// b.txt, each 100 lines long. The local copy lasts as long as what's returned.
+    fn show_local_copy(
+        tab: &Entity<PrTab>,
+        cx: &mut VisualTestContext,
+    ) -> (pr_diff::tests::fixtures::Fixture, tempfile::TempDir) {
+        let (a, b) = (numbered("a", 100, None), numbered("b", 100, None));
+        let (new_a, new_b) = (numbered("a", 100, Some(50)), numbered("b", 100, Some(60)));
+        let base = [
+            Entry::File("a.txt", a.as_bytes()),
+            Entry::File("b.txt", b.as_bytes()),
+        ];
+        let head = [
+            Entry::File("a.txt", new_a.as_bytes()),
+            Entry::File("b.txt", new_b.as_bytes()),
+        ];
+        let pr_diff::tests::Copied {
+            _fixture: fixture,
+            _cache: cache,
+            local,
+            ..
+        } = pr_diff::tests::copy(&base, &head, false);
+        let local = Arc::new(local);
+        tab.update_in(cx, |tab, window, cx| {
+            let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
+            cx.spawn_in(window, async move |tab, cx| {
+                let title = format!("{link}: Change a and b");
+                pr_diff::show_local_copy(
+                    tab,
+                    workspace,
+                    link,
+                    title,
+                    local,
+                    Trust::Untrusted,
+                    Instant::now(),
+                    cx,
+                )
+                .await
+                .unwrap()
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+        (fixture, cache)
+    }
+
+    fn shown_text(diff: &Entity<SplittableEditor>, cx: &mut VisualTestContext) -> String {
+        diff.read_with(cx, |diff, cx| diff.rhs_editor().read(cx).text(cx))
+    }
+
+    fn scrolled_to(
+        diff: &Entity<SplittableEditor>,
+        cx: &mut VisualTestContext,
+    ) -> Option<DiffPosition> {
+        cx.update(|_, cx| pr_diff::scroll_position(diff, cx))
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_shows_first_then_the_local_copys_at_the_same_line(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+
+        show_github_files(
+            &tab,
+            vec![github_file("a.txt", 50), github_file("b.txt", 60)],
+            cx,
+        );
+
+        let github = tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.diff_source(), Some(DiffSource::GitHub));
+            tab.diff().unwrap().clone()
+        });
+        let text = shown_text(&github, cx);
+        // Only the hunks show: line 47 to line 53 of a.txt, and 57 to 63 of b.txt.
+        assert!(
+            text.contains("a 50 changed") && text.contains("b 60 changed"),
+            "{text}"
+        );
+        assert!(text.contains("a 47\n") && text.contains("b 63"), "{text}");
+        assert!(!text.contains("a 46\n") && !text.contains("b 64"), "{text}");
+        let paths: Vec<_> = tab.read_with(cx, |tab, _| {
+            tab.files()
+                .rows()
+                .map(|entry| entry.path().to_string())
+                .collect()
+        });
+        assert_eq!(paths, ["a.txt", "b.txt"]);
+
+        // Reading b.txt's change, line 60, at the top of the view.
+        let position = DiffPosition {
+            path: "b.txt".into(),
+            row: 59,
+            below_top: 0.,
+        };
+        cx.update(|window, cx| assert!(pr_diff::scroll_to(&github, &position, window, cx)));
+        assert_eq!(scrolled_to(&github, cx), Some(position.clone()));
+
+        let _local_copy = show_local_copy(&tab, cx);
+
+        let local = tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.diff_source(), Some(DiffSource::LocalCopy));
+            assert_eq!(tab.status(), &Status::Ready);
+            tab.diff().unwrap().clone()
+        });
+        assert_ne!(local, github);
+        let scrolled = scrolled_to(&local, cx).unwrap();
+        assert_eq!((scrolled.path.as_str(), scrolled.row), ("b.txt", 59));
+        assert_eq!(scrolled.below_top, 0.);
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_never_replaces_the_local_copys(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+
+        let _local_copy = show_local_copy(&tab, cx);
+        let local = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        // Whole files: the local copy has the lines GitHub's patches leave out.
+        let text = shown_text(&local, cx);
+        assert!(text.contains("a 48\n"), "{text:?}");
+        show_github_files(
+            &tab,
+            vec![github_file("a.txt", 50), github_file("b.txt", 60)],
+            cx,
+        );
+
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.diff_source(), Some(DiffSource::LocalCopy));
+            assert_eq!(tab.diff(), Some(&local));
+        });
     }
 
     #[gpui::test]

@@ -16,6 +16,8 @@ pub enum BannerKind {
     CheckingOut,
     /// The trusted checkout failed, so everything shows from git.
     CheckoutFailed,
+    /// GitHub's diff couldn't be read, so nothing shows until the local copy is ready.
+    GithubDiffFailed,
 }
 
 /// One banner: its kind, how serious it is, and what it says.
