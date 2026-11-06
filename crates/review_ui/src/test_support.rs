@@ -101,6 +101,14 @@ impl FakeGithub {
             .insert((token.to_string(), path.to_string()), answer);
     }
 
+    /// Stops answering `path` asked with `token` as [`Self::answer`] said.
+    pub fn forget_answer(&self, token: &str, path: &str) {
+        self.0
+            .lock()
+            .answers
+            .remove(&(token.to_string(), path.to_string()));
+    }
+
     /// The requests made since the last call, as `GET /path as token`.
     pub fn requests(&self) -> Vec<String> {
         std::mem::take(&mut self.0.lock().requests)

@@ -66,7 +66,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 
 /// Opens `link`'s pull request in a tab of `workspace`, or switches to its tab if it's open. A new
 /// tab starts loading: it picks the account, reads the pull request from GitHub, copies it
-/// locally and shows its diff.
+/// locally and shows its diff. A tab that failed to load tries again.
 pub fn open(
     workspace: &mut Workspace,
     link: PrLink,
@@ -77,7 +77,7 @@ pub fn open(
     open_with(workspace, link, trust, window, cx, PrTab::load)
 }
 
-/// [`open`], with `start` run on a new tab instead of loading it.
+/// [`open`], with `start` run on a new tab, or on a tab that failed, instead of loading it.
 pub fn open_with(
     workspace: &mut Workspace,
     link: PrLink,
@@ -90,8 +90,16 @@ pub fn open_with(
     let keys: Vec<TabKey> = tabs.iter().map(|tab| tab.read(cx).key.clone()).collect();
     if let Some(index) = find_tab(&keys, &link) {
         let tab = tabs[index].clone();
-        log::info!("{link} is already open; switching to its tab");
         workspace.activate_item(&tab, true, true, window, cx);
+        if matches!(tab.read(cx).status, Status::Failed(_)) {
+            log::info!("{link} failed to open before; trying again");
+            tab.update(cx, |tab, cx| {
+                tab.start_again(cx);
+                start(tab, window, cx);
+            });
+        } else {
+            log::info!("{link} is already open; switching to its tab");
+        }
         return tab;
     }
     log::info!("opening {link}");
@@ -235,6 +243,16 @@ impl PrTab {
                 .ok();
             }
         }));
+    }
+
+    /// Forgets why the tab failed, before it loads again.
+    fn start_again(&mut self, cx: &mut Context<Self>) {
+        self.acting = None;
+        self.help_links.clear();
+        self.set_status(
+            Status::Loading("Finding an account that can see it…".into()),
+            cx,
+        );
     }
 
     pub fn key(&self) -> &TabKey {
@@ -1109,7 +1127,7 @@ mod tests {
     use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
     use repo_cache::{Change, FileMode, FileVersion, LineCounts};
-    use workspace::{MultiWorkspace, SaveIntent};
+    use workspace::MultiWorkspace;
 
     use crate::github_api::{Base, BaseRepo, Head, User};
     use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
@@ -1246,18 +1264,6 @@ mod tests {
         });
         cx.run_until_parked();
         tab
-    }
-
-    /// Closes `tab`, as its close button does.
-    fn close(workspace: &Entity<Workspace>, tab: &Entity<PrTab>, cx: &mut VisualTestContext) {
-        let pane = workspace
-            .read_with(cx, |workspace, _| workspace.pane_for(tab))
-            .unwrap();
-        pane.update_in(cx, |pane, window, cx| {
-            pane.close_item_by_id(tab.entity_id(), SaveIntent::Skip, window, cx)
-        })
-        .detach();
-        cx.run_until_parked();
     }
 
     fn status(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Status {
@@ -1449,15 +1455,16 @@ mod tests {
         );
 
         // Signed out, it isn't swapped either.
-        close(&workspace, &tab, cx);
         accounts.update(cx, |accounts, cx| {
             accounts.mark_signed_out("work", github::accounts::SignedOut::Refused, cx)
         });
-        let tab = open_loaded(&workspace, "github.com/acme/api/pull/12", cx);
+        let reopened = open_loaded(&workspace, "github.com/acme/api/pull/12", cx);
+        assert_eq!(reopened, tab);
         let Status::Failed(message) = status(&tab, cx) else {
             panic!("the tab opened: {:?}", status(&tab, cx));
         };
         assert!(message.contains("work is signed out"), "{message}");
+        assert_eq!(help_links(&tab, cx), Vec::<String>::new());
     }
 
     #[gpui::test]
@@ -1726,8 +1733,60 @@ mod tests {
         cx.simulate_keystrokes("enter");
 
         assert!(!has_box(cx));
-        assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground]);
-        assert_eq!(active_tab(&workspace, cx), Some(fd));
+        assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground.clone()]);
+        assert_eq!(active_tab(&workspace, cx), Some(fd.clone()));
+
+        // A link that isn't open opens and loads in a new tab.
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        public_pull(&github, &git, "sharkdp/bat", 3000);
+        anonymous(&github, cx);
+        cx.simulate_keystrokes("cmd-o");
+        cx.simulate_input("https://github.com/sharkdp/bat/pull/3000/files");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        let all = tabs(&workspace, cx);
+        assert_eq!(all.len(), 3);
+        // Zed adds a tab after the active one, fd's.
+        let bat = all[1].clone();
+        assert_eq!(bat.read_with(cx, |tab, _| tab.link().repo.clone()), "bat");
+        assert_eq!(active_tab(&workspace, cx), Some(bat.clone()));
+        assert_eq!(status(&bat, cx), Status::Ready);
+        assert_eq!(
+            bat.read_with(cx, |tab, cx| tab.tab_content_text(0, cx)),
+            "bat#3000 Pull request 3000"
+        );
+    }
+
+    #[gpui::test]
+    async fn a_tab_that_failed_tries_again_when_its_link_is_opened_again(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        public_pull(&github, &git, "sharkdp/fd", 2212);
+        anonymous(&github, cx);
+        github.answer(
+            "",
+            "/repos/sharkdp/fd/pulls/2212",
+            Answer::new(502, "Bad gateway"),
+        );
+        let tab = open_loaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        assert!(matches!(status(&tab, cx), Status::Failed(_)));
+
+        // GitHub's back, and the user opens the link again, by another spelling.
+        github.forget_answer("", "/repos/sharkdp/fd/pulls/2212");
+        let reopened = open_loaded(&workspace, "github.com/SharkDP/fd/pull/2212/files", cx);
+
+        assert_eq!(reopened, tab);
+        assert_eq!(tabs(&workspace, cx), vec![tab.clone()]);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        tab.read_with(cx, |tab, _| assert_eq!(tab.files().len(), 3));
+
+        // A tab that opened only switches.
+        github.requests();
+        open_loaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        assert_eq!(github.requests(), Vec::<String>::new());
     }
 
     /// Drags `path` from Finder and drops it at the middle of the window.
