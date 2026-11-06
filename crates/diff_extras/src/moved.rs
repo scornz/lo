@@ -174,6 +174,9 @@ struct Entry {
 /// Consecutive deleted or added lines: lines a move can line up with one another.
 struct Run {
     file: usize,
+    /// Where the run sits among the file's unchanged lines: one more than how many come before it.
+    /// A deleted run and an added run of a file with the same place are a change in place.
+    place: i64,
     /// The run's lines that aren't blank, as indices into [`Side::lines`].
     lines: Range<usize>,
 }
@@ -213,6 +216,7 @@ impl Side {
                 if side.lines.len() > start {
                     side.runs.push(Run {
                         file,
+                        place: i64::from(lines[first].number) - first as i64,
                         lines: start..side.lines.len(),
                     });
                 }
@@ -312,7 +316,12 @@ impl Finder<'_> {
         let index = self.old.index(texts);
         let mut seeds = Vec::new();
         for (new, line) in self.new.lines.iter().enumerate() {
+            let new_run = &self.new.runs[line.run];
             for &old in index.get(line.id) {
+                let old_run = &self.old.runs[self.old.lines[old].run];
+                if (old_run.file, old_run.place) == (new_run.file, new_run.place) {
+                    continue;
+                }
                 seeds.push(Seed {
                     old_run: self.old.lines[old].run,
                     new_run: line.run,
