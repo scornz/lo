@@ -161,3 +161,209 @@ fn partial_data_keeps_the_errors_and_their_type() {
     assert_eq!(response.data.unwrap().repository, None);
     assert_eq!(response.errors[0].r#type.as_deref(), Some("NOT_FOUND"));
 }
+
+/// Synthetic GraphQL answers, for what GitHub can't be made to do on demand.
+mod synthetic {
+    use std::sync::Arc;
+
+    use github::cassette::{Interaction, RecordedRequest, RecordedResponse};
+    use github::replay::ReplayHttpClient;
+    use serde_json::{Value, json};
+
+    pub fn replay(answers: Vec<(&str, Value, Value)>) -> Arc<ReplayHttpClient> {
+        Arc::new(
+            ReplayHttpClient::from_interactions(
+                "synthetic",
+                answers
+                    .into_iter()
+                    .map(|(operation, variables, data)| Interaction {
+                        request: RecordedRequest {
+                            method: "POST".into(),
+                            url: "https://api.github.com/graphql".into(),
+                            operation: Some(operation.into()),
+                            variables: Some(variables),
+                            ..Default::default()
+                        },
+                        response: RecordedResponse {
+                            status: 200,
+                            headers: Default::default(),
+                            body: Some(json!({ "data": data })),
+                            body_text: None,
+                        },
+                    }),
+            )
+            .unwrap(),
+        )
+    }
+
+    /// The variables of PR #2's page of one file after `after`.
+    pub fn files_after(after: Option<&str>) -> Value {
+        json!({"owner": "o", "name": "r", "number": 2, "filesFirst": 1, "filesAfter": after})
+    }
+
+    /// PR #2 at `head`, with a page of files.
+    pub fn pr_page(head: &str, files: &[&str], has_next: bool, end_cursor: Option<&str>) -> Value {
+        json!({"repository": {"pullRequest": {
+            "id": "PR_x", "number": 2, "title": "t", "url": "https://github.com/o/r/pull/2",
+            "state": "OPEN", "isDraft": false, "updatedAt": "2026-11-06T08:15:08Z",
+            "author": null, "baseRefName": "main", "baseRefOid": "b".repeat(40),
+            "headRefName": "topic", "headRefOid": head, "isCrossRepository": false,
+            "headRepository": null,
+            "files": {
+                "totalCount": 2,
+                "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                "nodes": files.iter().map(|path| json!({"path": path, "viewerViewedState": "UNVIEWED"})).collect::<Vec<_>>(),
+            },
+        }}})
+    }
+
+    /// The variables of a page of one open PR after `after`.
+    pub fn open_after(after: Option<&str>) -> Value {
+        json!({"owner": "o", "name": "r", "first": 1, "after": after})
+    }
+
+    /// A page of open PRs, numbered `numbers`.
+    pub fn open_page(numbers: &[i64], has_next: bool, end_cursor: Option<&str>) -> Value {
+        let nodes: Vec<Value> = numbers
+            .iter()
+            .map(|number| {
+                json!({
+                    "number": number, "title": "t", "isDraft": false,
+                    "updatedAt": "2026-11-06T08:15:08Z", "baseRefName": "main",
+                    "baseRefOid": "b".repeat(40), "headRefName": format!("pr-{number}"),
+                    "headRefOid": "c".repeat(40), "isCrossRepository": false,
+                    "headRepositoryOwner": null, "stackEntry": null,
+                })
+            })
+            .collect();
+        json!({
+            "rateLimit": null,
+            "repository": {"pullRequests": {
+                "totalCount": 3,
+                "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                "nodes": nodes,
+            }},
+        })
+    }
+}
+
+fn client_for(http: &std::sync::Arc<ReplayHttpClient>) -> GithubClient {
+    GithubClient::new(http.clone(), Token::new("gho_FAKE"))
+}
+
+#[test]
+fn files_without_a_cursor_to_go_on_from_stop() {
+    use synthetic::*;
+    let http = replay(vec![(
+        "PullRequest",
+        files_after(None),
+        pr_page("a", &["one"], true, None),
+    )]);
+    let error = block_on(client_for(&http).pull_request_paged("o", "r", 2, 1)).unwrap_err();
+    assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
+    assert_eq!(http.seen().len(), 1);
+}
+
+#[test]
+fn a_page_of_files_that_repeats_stops_the_paging() {
+    use synthetic::*;
+    let http = replay(vec![
+        (
+            "PullRequest",
+            files_after(None),
+            pr_page("a", &["one"], true, Some("c1")),
+        ),
+        (
+            "PullRequest",
+            files_after(Some("c1")),
+            pr_page("a", &["two"], true, Some("c1")),
+        ),
+    ]);
+    let error = block_on(client_for(&http).pull_request_paged("o", "r", 2, 1)).unwrap_err();
+    assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
+    assert_eq!(http.seen().len(), 2);
+}
+
+#[test]
+fn files_are_read_again_when_a_push_lands_between_pages() {
+    use synthetic::*;
+    let (old, new) = ("a".repeat(40), "d".repeat(40));
+    let http = replay(vec![
+        (
+            "PullRequest",
+            files_after(None),
+            pr_page(&old, &["one"], true, Some("c1")),
+        ),
+        (
+            "PullRequest",
+            files_after(None),
+            pr_page(&new, &["one-new"], true, Some("c1")),
+        ),
+        (
+            "PullRequest",
+            files_after(Some("c1")),
+            pr_page(&new, &["two-new"], false, Some("c2")),
+        ),
+    ]);
+    let pr = block_on(client_for(&http).pull_request_paged("o", "r", 2, 1)).unwrap();
+    assert_eq!(pr.head_ref_oid, new);
+    let files: Vec<_> = pr
+        .files
+        .unwrap()
+        .nodes
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|file| file.path)
+        .collect();
+    // Never the old head's first page with the new head's second.
+    assert_eq!(files, ["one-new", "two-new"]);
+    assert_eq!(http.seen().len(), 4);
+}
+
+#[test]
+fn open_pull_requests_without_a_cursor_to_go_on_from_stop() {
+    use synthetic::*;
+    let http = replay(vec![(
+        "OpenPullRequests",
+        open_after(None),
+        open_page(&[3], true, None),
+    )]);
+    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap_err();
+    assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
+}
+
+#[test]
+fn open_pull_requests_that_repeat_stop_the_paging() {
+    use synthetic::*;
+    let http = replay(vec![
+        (
+            "OpenPullRequests",
+            open_after(None),
+            open_page(&[3], true, Some("c1")),
+        ),
+        (
+            "OpenPullRequests",
+            open_after(Some("c1")),
+            open_page(&[2], true, Some("c1")),
+        ),
+    ]);
+    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap_err();
+    assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
+    assert_eq!(http.seen().len(), 2);
+}
+
+#[test]
+fn null_pull_requests_dont_make_the_list_look_capped() {
+    use synthetic::*;
+    // GitHub leaves out a PR it can't show (a null node); the list isn't capped for it.
+    let mut page = open_page(&[3, 2], false, Some("c1"));
+    page["repository"]["pullRequests"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::Null);
+    let http = replay(vec![("OpenPullRequests", open_after(None), page)]);
+    let list = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap();
+    assert_eq!(list.pull_requests.len(), 2);
+    assert!(!list.is_truncated());
+}

@@ -4,6 +4,8 @@
 //! module of Rust types for it from `graphql/schema.graphql`. Generated fields GitHub deprecates
 //! carry `#[deprecated]`, so after a schema refresh CI's clippy fails on any use of one.
 
+use std::collections::HashSet;
+
 use graphql_client::GraphQLQuery;
 
 use crate::client::GithubClient;
@@ -19,6 +21,9 @@ type GitObjectID = String;
 pub const PAGE_SIZE: i64 = 100;
 /// The most open pull requests rozed reads from one repository.
 pub const MAX_OPEN_PULL_REQUESTS: usize = 1000;
+/// How many times a pull request's files are read again from the start when its head moves
+/// while they're paged through.
+const MAX_RESTARTS: usize = 2;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -67,14 +72,68 @@ pub type OpenPullRequest = open_pull_requests::OpenPullRequestsRepositoryPullReq
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenPullRequestList {
     pub pull_requests: Vec<OpenPullRequest>,
-    /// How many are open, which is more than `pull_requests` holds when it was capped.
+    /// How many are open, which is more than `pull_requests` holds when it was capped, or when
+    /// GitHub left some out as null.
     pub total_count: i64,
+    /// Whether reading stopped at [`MAX_OPEN_PULL_REQUESTS`] with more left.
+    pub truncated: bool,
 }
 
 impl OpenPullRequestList {
     /// Whether there were more open pull requests than [`MAX_OPEN_PULL_REQUESTS`].
     pub fn is_truncated(&self) -> bool {
-        usize::try_from(self.total_count).unwrap_or(usize::MAX) > self.pull_requests.len()
+        self.truncated
+    }
+}
+
+/// Follows a connection's pages, refusing a cursor that doesn't move the paging on.
+struct Pager {
+    what: &'static str,
+    cursors: HashSet<String>,
+    /// Pages read so far, and the most there can be.
+    pages: usize,
+    max_pages: usize,
+}
+
+impl Pager {
+    /// For `total` items read `page_size` a page. A page more than the count needs is allowed,
+    /// since the count can grow while paging.
+    fn new(what: &'static str, total: i64, page_size: i64) -> Self {
+        let total = usize::try_from(total).unwrap_or(0);
+        let page_size = usize::try_from(page_size).unwrap_or(1).max(1);
+        Self {
+            what,
+            cursors: HashSet::new(),
+            pages: 1,
+            max_pages: total.div_ceil(page_size) + 1,
+        }
+    }
+
+    /// The cursor to read the next page after, or `None` when the last page has been read.
+    fn next(
+        &mut self,
+        has_next_page: bool,
+        end_cursor: Option<String>,
+    ) -> Result<Option<String>, GithubError> {
+        if !has_next_page {
+            return Ok(None);
+        }
+        let what = self.what;
+        let cursor = end_cursor.ok_or_else(|| {
+            GithubError::Inconsistent(format!("more {what} were left, but no cursor for them"))
+        })?;
+        if !self.cursors.insert(cursor.clone()) {
+            return Err(GithubError::Inconsistent(format!(
+                "a page of {what} came back again"
+            )));
+        }
+        self.pages += 1;
+        if self.pages > self.max_pages {
+            return Err(GithubError::Inconsistent(format!(
+                "more pages of {what} than their count allows"
+            )));
+        }
+        Ok(Some(cursor))
     }
 }
 
@@ -102,7 +161,9 @@ impl GithubClient {
             .await
     }
 
-    /// [`Self::pull_request`], reading `page_size` files a page.
+    /// [`Self::pull_request`], reading `page_size` files a page. If the head moves while the
+    /// files are paged through, they're read again from the start, so they all belong to one
+    /// revision.
     pub async fn pull_request_paged(
         &self,
         owner: &str,
@@ -110,7 +171,7 @@ impl GithubClient {
         number: i64,
         page_size: i64,
     ) -> Result<PullRequestData, GithubError> {
-        let fetch = |after: Option<String>| {
+        let fetch = |after: Option<String>| async move {
             self.graphql::<PullRequest>(pull_request::Variables {
                 owner: owner.to_string(),
                 name: name.to_string(),
@@ -118,31 +179,43 @@ impl GithubClient {
                 files_first: page_size,
                 files_after: after,
             })
-        };
-        let missing = || not_found(format!("pull request {owner}/{name}#{number}"));
-        let mut pull_request = fetch(None)
             .await?
             .repository
             .and_then(|repository| repository.pull_request)
-            .ok_or_else(missing)?;
-        let Some(files) = pull_request.files.as_mut() else {
-            return Ok(pull_request);
+            .ok_or_else(|| not_found(format!("pull request {owner}/{name}#{number}")))
         };
-        while files.page_info.has_next_page {
-            let next = fetch(files.page_info.end_cursor.clone())
-                .await?
-                .repository
-                .and_then(|repository| repository.pull_request)
-                .ok_or_else(missing)?
-                .files
-                .ok_or_else(|| GithubError::Decode("a page of files went missing".into()))?;
-            files
-                .nodes
-                .get_or_insert_with(Vec::new)
-                .extend(next.nodes.unwrap_or_default());
-            files.page_info = next.page_info;
+        'restart: for _ in 0..=MAX_RESTARTS {
+            let mut pull_request = fetch(None).await?;
+            let Some(files) = pull_request.files.as_mut() else {
+                return Ok(pull_request);
+            };
+            let mut pager = Pager::new("files", files.total_count, page_size);
+            while let Some(after) = pager.next(
+                files.page_info.has_next_page,
+                files.page_info.end_cursor.clone(),
+            )? {
+                let page = fetch(Some(after)).await?;
+                if page.head_ref_oid != pull_request.head_ref_oid {
+                    log::info!(
+                        "{owner}/{name}#{number} was pushed to while its files were read; \
+                         reading them again"
+                    );
+                    continue 'restart;
+                }
+                let next = page
+                    .files
+                    .ok_or_else(|| GithubError::Decode("a page of files went missing".into()))?;
+                files
+                    .nodes
+                    .get_or_insert_with(Vec::new)
+                    .extend(next.nodes.unwrap_or_default());
+                files.page_info = next.page_info;
+            }
+            return Ok(pull_request);
         }
-        Ok(pull_request)
+        Err(GithubError::Inconsistent(format!(
+            "{owner}/{name}#{number} kept being pushed to while its files were read"
+        )))
     }
 
     /// The cheap check for whether a pull request changed.
@@ -182,7 +255,9 @@ impl GithubClient {
         let mut list = OpenPullRequestList {
             pull_requests: Vec::new(),
             total_count: 0,
+            truncated: false,
         };
+        let mut pager = None;
         let mut after = None;
         loop {
             let page = self
@@ -199,11 +274,20 @@ impl GithubClient {
             list.total_count = page.total_count;
             list.pull_requests
                 .extend(page.nodes.unwrap_or_default().into_iter().flatten());
-            if !page.page_info.has_next_page || list.pull_requests.len() >= MAX_OPEN_PULL_REQUESTS {
+            let pager = pager.get_or_insert_with(|| {
+                let capped = page.total_count.min(MAX_OPEN_PULL_REQUESTS as i64);
+                Pager::new("open pull requests", capped, page_size)
+            });
+            if list.pull_requests.len() >= MAX_OPEN_PULL_REQUESTS {
+                list.truncated = page.page_info.has_next_page
+                    || list.pull_requests.len() > MAX_OPEN_PULL_REQUESTS;
                 list.pull_requests.truncate(MAX_OPEN_PULL_REQUESTS);
                 return Ok(list);
             }
-            after = page.page_info.end_cursor;
+            match pager.next(page.page_info.has_next_page, page.page_info.end_cursor)? {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(list),
+            }
         }
     }
 }

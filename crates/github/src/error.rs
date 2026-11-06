@@ -69,6 +69,11 @@ pub enum GithubError {
     #[error("{}", graphql_messages(.errors))]
     GraphQl { errors: Vec<GraphQlError> },
 
+    /// GitHub's pages didn't fit together: a cursor that doesn't move on, or a pull request that
+    /// kept changing while its pages were read. Trying again later may work.
+    #[error("GitHub's pages didn't fit together: {0}")]
+    Inconsistent(String),
+
     /// A request to somewhere other than GitHub's API. rozed sends its token nowhere else, so
     /// it never sent this one.
     #[error(
