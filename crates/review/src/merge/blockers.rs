@@ -356,6 +356,23 @@ mod tests {
     }
 
     #[test]
+    fn every_check_under_a_required_name_must_pass() {
+        // A check run and a commit status both named `build`: GitHub requires both.
+        let snapshot = MergeSnapshot {
+            required_checks: vec![
+                check("build", CheckState::Passed),
+                check("build", CheckState::Failed),
+            ],
+            ..blocked()
+        };
+
+        assert_eq!(
+            blockers(&snapshot),
+            [Blocker::Check(check("build", CheckState::Failed))]
+        );
+    }
+
+    #[test]
     fn a_check_that_has_not_reported_is_a_wait_while_something_on_the_head_can_report_it() {
         let snapshot = MergeSnapshot {
             required_checks: vec![check("e2e", CheckState::Missing)],

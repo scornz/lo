@@ -129,8 +129,11 @@ pub struct MergeSnapshot {
     pub review_requests: Vec<ReviewRequest>,
     /// What the base branch's rules require of reviews and conversations.
     pub rules: ReviewRules,
-    /// The checks the base branch's rules require, one per name, as they stand on the head. A
-    /// required check that hasn't reported is [`CheckState::Missing`].
+    /// The checks the base branch's rules require, as they stand on the head: one entry for each
+    /// check run and commit status under a required name, since GitHub requires every one of them
+    /// to pass, such as a check run and a commit status both named `build`. A required name with
+    /// nothing the rule accepts reported under it, such as a check pinned to an app that didn't
+    /// run, is one entry, [`CheckState::Missing`].
     pub required_checks: Vec<RequiredCheck>,
     /// Whether something on the head can still report a check: a check suite or check run on it
     /// hasn't completed. A required check that hasn't reported is a wait only while something can
@@ -234,10 +237,11 @@ impl ReviewRules {
     }
 }
 
-/// A check the base branch's rules require.
+/// A check run or commit status under a name the base branch's rules require, or the name alone
+/// when nothing has reported under it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequiredCheck {
-    /// The check run's `name`, or the commit status's `context`.
+    /// The check run's `name`, or the commit status's `context`. Several entries can share it.
     pub name: String,
     /// Where it stands on the head.
     pub state: CheckState,

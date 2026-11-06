@@ -246,6 +246,27 @@ fn a_dependency_bump_whose_tests_failed_stops_after_approving() {
 }
 
 #[test]
+fn a_failing_status_beside_a_passing_check_run_of_the_same_name_blocks_it() {
+    let mut snapshot = dependency_bump();
+    snapshot.required_checks[1] = check_run("test (ubuntu)", "COMPLETED", Some("SUCCESS"));
+    snapshot.required_checks[2] = check_run("test (macos)", "COMPLETED", Some("SUCCESS"));
+    snapshot
+        .required_checks
+        .push(commit_status("build", "FAILURE"));
+
+    assert_eq!(
+        blockers(&snapshot),
+        [
+            Blocker::Check(commit_status("build", "FAILURE")),
+            Blocker::Approvals(MissingApprovals {
+                more: 1,
+                code_owners: vec![],
+            }),
+        ]
+    );
+}
+
+#[test]
 fn a_dependency_bump_pushed_to_while_you_read_it_stops_before_approving() {
     let snapshot = MergeSnapshot {
         head: "a91f03b6c8e0a2c4e6a8c0e2a4c6e8a0c2e4a6c8".to_string(),
