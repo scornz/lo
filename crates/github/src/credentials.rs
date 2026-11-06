@@ -8,16 +8,19 @@
 //!
 //! Debug builds use a file because macOS asks for Keychain access again after every unsigned
 //! rebuild. Zed's own development file isn't private (`std::fs::write` leaves it at 0644), so
-//! rozed has its own: mode 600 in a mode 700 folder, written atomically.
+//! rozed has its own: mode 600 in a mode 700 folder, written atomically through a new temporary
+//! file, under a lock that other rozed processes respect too.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use credentials_provider::CredentialsProvider;
@@ -115,14 +118,31 @@ impl CredentialsProvider for KeychainCredentialsProvider {
 /// Tokens in a JSON file only its owner can read.
 pub struct FileCredentialsProvider {
     path: PathBuf,
-    /// Serializes read-modify-write cycles within this process.
+    /// Serializes read-modify-write cycles within this process. A lock on a file beside the
+    /// tokens serializes them between processes.
     lock: Mutex<()>,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 struct StoredCredential {
     username: String,
     password: String,
+}
+
+impl fmt::Debug for StoredCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredCredential")
+            .field("username", &self.username)
+            .field("password", &"redacted")
+            .finish()
+    }
+}
+
+/// Why the token file couldn't be loaded.
+enum LoadError {
+    /// It isn't the JSON rozed writes.
+    Corrupt,
+    Other(anyhow::Error),
 }
 
 impl FileCredentialsProvider {
@@ -137,14 +157,52 @@ impl FileCredentialsProvider {
         &self.path
     }
 
-    fn load(&self) -> Result<BTreeMap<String, StoredCredential>> {
+    fn dir(&self) -> Result<&Path> {
+        self.path
+            .parent()
+            .context("the credentials file has no folder")
+    }
+
+    fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Creates the private folder, and takes the lock that every rozed process takes before
+    /// changing the file. It's released when the returned file is dropped.
+    fn lock_between_processes(&self) -> Result<File> {
+        let dir = self.dir()?;
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("making {} private", dir.display()))?;
+        let path = dir.join(format!(".{}.lock", self.file_name()));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            // A link planted at the lock's path fails to open rather than being followed.
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+        Ok(file)
+    }
+
+    fn try_load(&self) -> Result<BTreeMap<String, StoredCredential>, LoadError> {
         let metadata = match fs::metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(BTreeMap::new());
             }
             Err(error) => {
-                return Err(error).with_context(|| format!("reading {}", self.path.display()));
+                return Err(LoadError::Other(
+                    anyhow::Error::from(error).context(format!("reading {}", self.path.display())),
+                ));
             }
         };
         let mode = metadata.permissions().mode() & 0o777;
@@ -154,51 +212,70 @@ impl FileCredentialsProvider {
                 self.path.display()
             );
             fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))
-                .with_context(|| format!("making {} private", self.path.display()))?;
+                .with_context(|| format!("making {} private", self.path.display()))
+                .map_err(LoadError::Other)?;
         }
-        let bytes =
-            fs::read(&self.path).with_context(|| format!("reading {}", self.path.display()))?;
-        // Never include the contents in the error: they're tokens.
-        serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow::anyhow!("{} isn't valid JSON", self.path.display()))
+        let bytes = fs::read(&self.path)
+            .with_context(|| format!("reading {}", self.path.display()))
+            .map_err(LoadError::Other)?;
+        serde_json::from_slice(&bytes).map_err(|_| LoadError::Corrupt)
     }
 
+    fn load(&self) -> Result<BTreeMap<String, StoredCredential>> {
+        self.try_load().map_err(|error| match error {
+            // Never include the contents in the error: they're tokens.
+            LoadError::Corrupt => anyhow::anyhow!("{} isn't valid JSON", self.path.display()),
+            LoadError::Other(error) => error,
+        })
+    }
+
+    /// Loads the tokens to change them. A file that isn't valid JSON can't be fixed by hand
+    /// from rozed, and would block every change, so it's moved aside, still private, and rozed
+    /// starts again from no tokens.
+    fn load_for_change(&self) -> Result<BTreeMap<String, StoredCredential>> {
+        match self.try_load() {
+            Ok(credentials) => Ok(credentials),
+            Err(LoadError::Other(error)) => Err(error),
+            Err(LoadError::Corrupt) => {
+                let seconds = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs())
+                    .unwrap_or_default();
+                let aside = self
+                    .dir()?
+                    .join(format!("{}.corrupt-{seconds}", self.file_name()));
+                fs::rename(&self.path, &aside)
+                    .with_context(|| format!("moving {} aside", self.path.display()))?;
+                log::warn!(
+                    "{} wasn't valid JSON; moved it to {} and started without tokens",
+                    self.path.display(),
+                    aside.display()
+                );
+                Ok(BTreeMap::new())
+            }
+        }
+    }
+
+    /// Replaces the file with `credentials`, through a new temporary file that's created
+    /// exclusively, with a random name and mode 600, so nothing already at its path is followed
+    /// or reused. Call it holding the lock.
     fn save(&self, credentials: &BTreeMap<String, StoredCredential>) -> Result<()> {
-        let dir = self
-            .path
-            .parent()
-            .context("the credentials file has no folder")?;
-        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("making {} private", dir.display()))?;
-        let temp = dir.join(format!(
-            ".{}.{}.tmp",
-            self.path
-                .file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_default(),
-            std::process::id()
-        ));
+        let dir = self.dir()?;
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&temp)?;
-            // `mode` applies only when the file is created; make sure of it.
-            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            let mut file = tempfile::Builder::new()
+                .prefix(&format!(".{}.", self.file_name()))
+                .suffix(".tmp")
+                .permissions(fs::Permissions::from_mode(0o600))
+                .tempfile_in(dir)?;
             file.write_all(&serde_json::to_vec_pretty(credentials)?)?;
-            file.sync_all()?;
-            fs::rename(&temp, &self.path)?;
+            file.as_file().sync_all()?;
+            file.persist(&self.path)?;
+            // Make the rename itself durable.
+            File::open(dir)?.sync_all()?;
             anyhow::Ok(())
         })();
-        if result.is_err() {
-            fs::remove_file(&temp).ok();
-        }
         result.with_context(|| format!("writing {}", self.path.display()))
     }
-
     pub fn read(&self, url: &str) -> Result<Option<(String, Vec<u8>)>> {
         let _lock = self.lock.lock();
         Ok(self
@@ -211,7 +288,8 @@ impl FileCredentialsProvider {
         let password = String::from_utf8(password.to_vec())
             .map_err(|_| anyhow::anyhow!("a token must be text"))?;
         let _lock = self.lock.lock();
-        let mut credentials = self.load()?;
+        let _other_processes = self.lock_between_processes()?;
+        let mut credentials = self.load_for_change()?;
         credentials.insert(
             url.to_string(),
             StoredCredential {
@@ -224,7 +302,8 @@ impl FileCredentialsProvider {
 
     pub fn delete(&self, url: &str) -> Result<()> {
         let _lock = self.lock.lock();
-        let mut credentials = self.load()?;
+        let _other_processes = self.lock_between_processes()?;
+        let mut credentials = self.load_for_change()?;
         if credentials.remove(url).is_some() {
             self.save(&credentials)?;
         }
@@ -315,12 +394,14 @@ mod tests {
         );
         assert_eq!(reopened.read("rozed://github.com/b").unwrap(), None);
 
-        // No temporary files are left behind.
-        let names: Vec<_> = fs::read_dir(path.parent().unwrap())
+        // No temporary files are left behind, only the lock other processes take.
+        let mut names: Vec<_> = fs::read_dir(path.parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        assert_eq!(names, ["credentials.json"]);
+        names.sort();
+        assert_eq!(names, [".credentials.json.lock", "credentials.json"]);
+        assert_eq!(mode(&path.with_file_name(".credentials.json.lock")), 0o600);
     }
 
     #[test]
@@ -344,6 +425,103 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let error = FileCredentialsProvider::new(path).read("x").unwrap_err();
         assert!(!format!("{error:#}").contains("SECRET"), "{error:#}");
+    }
+
+    #[test]
+    fn a_link_planted_where_the_temporary_file_goes_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        // Where the temporary file used to go, a link to a file of the user's.
+        let target = dir.path().join("elsewhere.txt");
+        fs::write(&target, "untouched").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        let planted = dir
+            .path()
+            .join(format!(".credentials.json.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&target, &planted).unwrap();
+
+        let store = FileCredentialsProvider::new(path.clone());
+        store
+            .write("rozed://github.com/a", "a", b"gho_FAKE")
+            .unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
+        assert_eq!(mode(&target), 0o644);
+        assert!(store.read("rozed://github.com/a").unwrap().is_some());
+    }
+
+    #[test]
+    fn two_stores_on_one_file_keep_each_others_tokens() {
+        // As two rozed processes would: each has its own store, with its own in-process lock.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        let writers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let store = FileCredentialsProvider::new(path.clone());
+                std::thread::spawn(move || {
+                    for index in 0..40 {
+                        store
+                            .write(
+                                &format!("rozed://github.com/{name}{index}"),
+                                name,
+                                b"gho_FAKE",
+                            )
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let store = FileCredentialsProvider::new(path);
+        let missing: Vec<String> = ["a", "b"]
+            .into_iter()
+            .flat_map(|name| (0..40).map(move |index| format!("rozed://github.com/{name}{index}")))
+            .filter(|url| store.read(url).unwrap().is_none())
+            .collect();
+        assert_eq!(missing, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_corrupt_file_is_set_aside_rather_than_blocking_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        fs::write(&path, "gho_FAKE_SECRET not json").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let store = FileCredentialsProvider::new(path.clone());
+        store.delete("rozed://github.com/a").unwrap();
+        store
+            .write("rozed://github.com/a", "a", b"gho_FAKE")
+            .unwrap();
+        assert!(store.read("rozed://github.com/a").unwrap().is_some());
+        // The unreadable file is kept, privately, for the user to look at.
+        let aside: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("credentials.json.corrupt-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(
+            fs::read_to_string(&aside[0]).unwrap(),
+            "gho_FAKE_SECRET not json"
+        );
+        assert_eq!(mode(&aside[0]), 0o600);
+    }
+
+    #[test]
+    fn a_stored_credential_never_shows_its_token() {
+        let stored = StoredCredential {
+            username: "a".into(),
+            password: "gho_SECRET".into(),
+        };
+        let debug = format!("{stored:?}");
+        assert!(!debug.contains("SECRET"), "{debug}");
     }
 
     #[gpui::test]
