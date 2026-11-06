@@ -85,6 +85,22 @@ impl RestResponse {
     }
 }
 
+/// What a conditional request asks about: changes since an ETag, or since a time.
+#[derive(Clone, Copy, Debug)]
+enum Condition<'a> {
+    None,
+    /// `If-None-Match`. Any change to the response's body changes its ETag.
+    ETag(&'a str),
+    /// `If-Modified-Since`, an HTTP date such as a response's `Last-Modified`.
+    ModifiedSince(&'a str),
+}
+
+impl<'a> Condition<'a> {
+    fn etag(etag: Option<&'a str>) -> Self {
+        etag.map_or(Self::None, Self::ETag)
+    }
+}
+
 /// The answer to a conditional request.
 #[derive(Debug, PartialEq)]
 pub enum Conditional<T> {
@@ -166,7 +182,7 @@ impl GithubClient {
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
-        etag: Option<&str>,
+        condition: Condition<'_>,
     ) -> Result<Request<AsyncBody>, GithubError> {
         let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
             .map_err(|_| GithubError::Decode("the token isn't a valid header value".into()))?;
@@ -181,7 +197,14 @@ impl GithubClient {
             .when(body.is_some(), |builder| {
                 builder.header("Content-Type", "application/json")
             })
-            .when_some(etag, |builder, etag| builder.header("If-None-Match", etag))
+            .when_some(
+                match condition {
+                    Condition::None => None,
+                    Condition::ETag(etag) => Some(("If-None-Match", etag)),
+                    Condition::ModifiedSince(time) => Some(("If-Modified-Since", time)),
+                },
+                |builder, (name, value)| builder.header(name, value),
+            )
             .follow_redirects(RedirectPolicy::FollowLimit(MAX_REDIRECTS))
             .timeout(TIMEOUT)
             .body(body.map(AsyncBody::from).unwrap_or_default())
@@ -229,9 +252,20 @@ impl GithubClient {
         body: Option<Vec<u8>>,
         etag: Option<&str>,
     ) -> Result<RestResponse, GithubError> {
+        self.send_if(method, path, body, Condition::etag(etag))
+            .await
+    }
+
+    async fn send_if(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        condition: Condition<'_>,
+    ) -> Result<RestResponse, GithubError> {
         let token = self.token();
         let result = self
-            .send_with(&token, method.clone(), path, body.clone(), etag)
+            .send_with(&token, method.clone(), path, body.clone(), condition)
             .await;
         let Some(hook) = &self.on_unauthorized else {
             return result;
@@ -243,7 +277,8 @@ impl GithubClient {
             return result;
         };
         self.set_token(new_token.clone());
-        self.send_with(&new_token, method, path, body, etag).await
+        self.send_with(&new_token, method, path, body, condition)
+            .await
     }
 
     async fn send_with(
@@ -252,9 +287,9 @@ impl GithubClient {
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
-        etag: Option<&str>,
+        condition: Condition<'_>,
     ) -> Result<RestResponse, GithubError> {
-        let request = self.request(token, method, path, body, etag)?;
+        let request = self.request(token, method, path, body, condition)?;
         let response = self.execute(request).await?;
         if response.status.is_success() || response.status == StatusCode::NOT_MODIFIED {
             Ok(response)
@@ -278,7 +313,31 @@ impl GithubClient {
         path: &str,
         etag: Option<&str>,
     ) -> Result<Conditional<T>, GithubError> {
-        let response = self.send(Method::GET, path, None, etag).await?;
+        self.get_if(path, Condition::etag(etag)).await
+    }
+
+    /// A GET that's free when nothing changed since `since`, an HTTP date such as an earlier
+    /// answer's `Last-Modified`: sends it as `If-Modified-Since`, and returns
+    /// [`Conditional::NotModified`] on a `304`. Unlike an ETag, which changes with anything in the
+    /// body, this asks only whether the resource itself was updated.
+    pub async fn get_modified_since<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        since: Option<&str>,
+    ) -> Result<Conditional<T>, GithubError> {
+        self.get_if(
+            path,
+            since.map_or(Condition::None, Condition::ModifiedSince),
+        )
+        .await
+    }
+
+    async fn get_if<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        condition: Condition<'_>,
+    ) -> Result<Conditional<T>, GithubError> {
+        let response = self.send_if(Method::GET, path, None, condition).await?;
         if response.status == StatusCode::NOT_MODIFIED {
             return Ok(Conditional::NotModified);
         }
@@ -455,6 +514,40 @@ mod tests {
             seen.header("user-agent"),
             Some(concat!("rozed/", env!("CARGO_PKG_VERSION")))
         );
+        assert_eq!(seen.header("if-none-match"), None);
+    }
+
+    #[test]
+    fn a_get_modified_since_a_time_sends_it() {
+        let date = "Fri, 06 Nov 2026 08:15:07 GMT";
+        let mut since = RecordedRequest {
+            method: "GET".into(),
+            url: "https://api.github.com/repos/o/r/pulls/1".into(),
+            ..Default::default()
+        };
+        since.if_modified_since = Some(date.into());
+        let http = Arc::new(
+            ReplayHttpClient::from_interactions(
+                "test",
+                [Interaction {
+                    request: since,
+                    response: RecordedResponse {
+                        status: 304,
+                        headers: Default::default(),
+                        body: None,
+                        body_text: None,
+                    },
+                }],
+            )
+            .unwrap(),
+        );
+        let answer = futures::executor::block_on(
+            client(&http).get_modified_since::<serde_json::Value>("/repos/o/r/pulls/1", Some(date)),
+        )
+        .unwrap();
+        assert_eq!(answer, Conditional::NotModified);
+        let seen = &http.seen()[0];
+        assert_eq!(seen.header("if-modified-since"), Some(date));
         assert_eq!(seen.header("if-none-match"), None);
     }
 

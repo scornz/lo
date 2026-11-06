@@ -139,11 +139,13 @@ fn recorded_request(
     url: &Url,
     body: &[u8],
     if_none_match: Option<String>,
+    if_modified_since: Option<String>,
 ) -> RecordedRequest {
     let mut request = RecordedRequest {
         method: method.to_string(),
         url: url.to_string(),
         if_none_match,
+        if_modified_since,
         ..Default::default()
     };
     if let Some(graphql) = cassette::graphql_body(url, body) {
@@ -221,13 +223,20 @@ impl HttpClient for RecordingHttpClient {
             let mut request_body = Vec::new();
             body.read_to_end(&mut request_body).await?;
             let url = Url::parse(&parts.uri.to_string())?;
-            let if_none_match = parts
-                .headers
-                .get("if-none-match")
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string);
-            let recorded =
-                recorded_request(parts.method.as_str(), &url, &request_body, if_none_match);
+            let header = |name: &str| {
+                parts
+                    .headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string)
+            };
+            let recorded = recorded_request(
+                parts.method.as_str(),
+                &url,
+                &request_body,
+                header("if-none-match"),
+                header("if-modified-since"),
+            );
 
             let request = Request::from_parts(parts, AsyncBody::from(request_body));
             let response = this.0.inner.send(request).await?;
@@ -311,6 +320,7 @@ mod tests {
         let request = Request::get("https://api.github.com/user")
             .header("Authorization", format!("token {FAKE_TOKEN}"))
             .header("If-None-Match", "W/\"old\"")
+            .header("If-Modified-Since", "Fri, 06 Nov 2026 08:15:07 GMT")
             .body(AsyncBody::empty())
             .unwrap();
         assert_eq!(send(&client, request).unwrap(), r#"{"login":"rozed-bot"}"#);
@@ -329,6 +339,10 @@ mod tests {
             interaction.request.if_none_match.as_deref(),
             Some("W/\"old\"")
         );
+        assert_eq!(
+            interaction.request.if_modified_since.as_deref(),
+            Some("Fri, 06 Nov 2026 08:15:07 GMT")
+        );
         let headers: Vec<_> = interaction.response.headers.keys().cloned().collect();
         assert_eq!(headers, ["content-type", "etag", "x-ratelimit-remaining"]);
         let file = std::fs::read_to_string(cassette.join(name)).unwrap();
@@ -338,6 +352,7 @@ mod tests {
         let replay = ReplayHttpClient::from_dir(&cassette).unwrap();
         let request = Request::get("https://api.github.com/user")
             .header("If-None-Match", "W/\"old\"")
+            .header("If-Modified-Since", "Fri, 06 Nov 2026 08:15:07 GMT")
             .body(AsyncBody::empty())
             .unwrap();
         let response = futures::executor::block_on(replay.send(request)).unwrap();
@@ -462,7 +477,7 @@ mod tests {
     fn graphql_requests_record_their_operation() {
         let body = br#"{"query":"query Viewer { viewer { login } }","operationName":"Viewer","variables":{}}"#;
         let url = Url::parse("https://api.github.com/graphql").unwrap();
-        let request = recorded_request("POST", &url, body, None);
+        let request = recorded_request("POST", &url, body, None, None);
         assert_eq!(request.operation.as_deref(), Some("Viewer"));
         assert_eq!(request.variables, Some(serde_json::json!({})));
         assert_eq!(

@@ -10,6 +10,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
@@ -18,10 +19,10 @@ use sqlez_macros::sql;
 use crate::client::API_VERSION;
 use crate::credentials::HOST;
 use crate::db::RozedDb;
-use crate::pulls::{PullRef, PullSummary, Target};
+use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
 use crate::queries::{
-    OpenPullRequestList, PullRequestCheckData, PullRequestData, open_pull_requests, pull_request,
-    pull_request_check,
+    MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
+    open_pull_requests, pull_request, pull_request_check,
 };
 
 /// Something the cache can hold.
@@ -29,45 +30,119 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     /// The name its rows are stored under.
     const NAME: &'static str;
 
-    /// Changes whenever the stored shape does: for a GraphQL answer, with its query's text.
-    fn version() -> String;
+    /// Everything the shape of its stored JSON depends on: the JSON schema of a type rozed
+    /// defines ([`schema_shape`]), the text of the GraphQL query a generated type comes from, and
+    /// anything else that changes what a stored answer means.
+    fn shape() -> String;
+
+    /// The version its rows are written in: a hash of its [`Self::shape`]. A row in another
+    /// version reads as missing, so a change to the shape can't be misread or kept forever
+    /// behind an unchanged ETag.
+    fn version() -> String {
+        let hash = format!("{:x}", Sha256::digest(Self::shape().as_bytes()));
+        hash[..16].to_string()
+    }
 }
 
-/// The version of a GraphQL answer: a hash of the query's text.
-fn query_version(query: &str) -> String {
-    let hash = format!("{:x}", Sha256::digest(query.as_bytes()));
-    hash[..16].to_string()
+/// The shape of a type rozed defines: its JSON schema, with keys sorted, and without
+/// documentation or type names, which change nothing that's stored.
+pub fn schema_shape<T: JsonSchema>() -> String {
+    let mut schema = schemars::schema_for!(T).to_value();
+    strip_annotations(&mut schema);
+    canonical(&schema)
+}
+
+/// Removes the schema's titles and descriptions, leaving property names alone.
+fn strip_annotations(schema: &mut serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            map.remove("title");
+            map.remove("description");
+            for (key, value) in map.iter_mut() {
+                match (key.as_str(), value) {
+                    // Maps from a property's or a definition's name to its schema.
+                    ("properties" | "$defs" | "definitions", serde_json::Value::Object(named)) => {
+                        named.values_mut().for_each(strip_annotations);
+                    }
+                    (_, value) => strip_annotations(value),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_annotations),
+        _ => {}
+    }
+}
+
+/// JSON with every object's keys sorted, whatever order the map kept them in.
+fn canonical(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let entries: Vec<String> = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::from(key.as_str()),
+                        canonical(value)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", entries.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
 }
 
 impl CacheEntry for PullSummary {
     const NAME: &'static str = "pull";
 
-    fn version() -> String {
-        format!("rest {API_VERSION} 1")
+    fn shape() -> String {
+        format!("REST {API_VERSION}\n{}", schema_shape::<Self>())
+    }
+}
+
+impl CacheEntry for ListedPulls {
+    const NAME: &'static str = "pulls";
+
+    fn shape() -> String {
+        format!(
+            "REST {API_VERSION}, {PAGE_SIZE} a page\n{}",
+            schema_shape::<Self>()
+        )
     }
 }
 
 impl CacheEntry for PullRequestData {
     const NAME: &'static str = pull_request::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(pull_request::QUERY)
+    fn shape() -> String {
+        pull_request::QUERY.to_string()
     }
 }
 
 impl CacheEntry for PullRequestCheckData {
     const NAME: &'static str = pull_request_check::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(pull_request_check::QUERY)
+    fn shape() -> String {
+        pull_request_check::QUERY.to_string()
     }
 }
 
 impl CacheEntry for OpenPullRequestList {
     const NAME: &'static str = open_pull_requests::OPERATION_NAME;
 
-    fn version() -> String {
-        query_version(open_pull_requests::QUERY)
+    fn shape() -> String {
+        format!(
+            "{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page",
+            schema_shape::<Self>(),
+            open_pull_requests::QUERY
+        )
     }
 }
 
@@ -95,6 +170,9 @@ impl<T> Cached<T> {
     }
 }
 
+/// How many recent pull requests are kept.
+pub const RECENT_PRS: usize = 100;
+
 /// A pull request opened recently.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentPr {
@@ -104,6 +182,14 @@ pub struct RecentPr {
     /// The account it was opened with.
     pub account: String,
     pub opened_at: SystemTime,
+}
+
+/// An answer encoded for the cache, from [`PrCache::row`].
+pub struct Row {
+    query: &'static str,
+    version: String,
+    json: String,
+    etag: Option<String>,
 }
 
 /// The cache, over rozed's database. Clones share the connection.
@@ -174,7 +260,15 @@ impl PrCache {
                 fetched_at: from_secs(fetched_at),
             })),
             Err(error) => {
-                log::warn!("ignoring a cached {} for {target:?}: {error}", T::NAME);
+                // serde's message can quote the JSON, which holds private repositories' titles
+                // and paths: log only what kind of error it was, and where.
+                log::warn!(
+                    "ignoring a cached {} for {target:?}: {:?} error at line {}, column {}",
+                    T::NAME,
+                    error.classify(),
+                    error.line(),
+                    error.column()
+                );
                 Ok(None)
             }
         }
@@ -189,34 +283,71 @@ impl PrCache {
         etag: Option<&str>,
         fetched_at: SystemTime,
     ) -> Result<()> {
-        let json = serde_json::to_string(value).context("encoding a cache entry")?;
+        let row = Self::row(value, etag)?;
+        self.put_together(account, target, vec![row], fetched_at)
+            .await
+    }
+
+    /// An answer ready for [`Self::put_together`].
+    pub fn row<T: CacheEntry>(value: &T, etag: Option<&str>) -> Result<Row> {
+        Ok(Row {
+            query: T::NAME,
+            version: T::version(),
+            json: serde_json::to_string(value).context("encoding a cache entry")?,
+            etag: etag.map(str::to_string),
+        })
+    }
+
+    /// Stores answers about one target that only make sense together, such as details and the
+    /// check they were fetched at: all of them, or, if any fails, none.
+    pub async fn put_together(
+        &self,
+        account: &str,
+        target: &Target,
+        rows: Vec<Row>,
+        fetched_at: SystemTime,
+    ) -> Result<()> {
         let repo = target.repo();
-        let row = (
+        let key = (
             HOST.to_string(),
             account.to_string(),
             repo.owner.clone(),
             repo.name.clone(),
             target.number(),
-            T::NAME.to_string(),
-            T::version(),
-            json,
-            etag.map(str::to_string),
-            to_secs(fetched_at),
         );
+        let fetched_at = to_secs(fetched_at);
         self.db
             .connection()
             .write(move |connection| {
-                connection.exec_bound(sql!(
-                    INSERT INTO pr_cache(
-                        host, account, owner, repo, number, query, version, json, etag, fetched_at
-                    )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-                    ON CONFLICT(host, account, owner, repo, number, query) DO UPDATE SET
-                        version = excluded.version,
-                        json = excluded.json,
-                        etag = excluded.etag,
-                        fetched_at = excluded.fetched_at
-                ))?(row)
+                connection.with_savepoint("put_together", || {
+                    for row in rows {
+                        let (host, account, owner, repo, number) = key.clone();
+                        connection.exec_bound(sql!(
+                            INSERT INTO pr_cache(
+                                host, account, owner, repo, number, query, version, json, etag,
+                                fetched_at
+                            )
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                            ON CONFLICT(host, account, owner, repo, number, query) DO UPDATE SET
+                                version = excluded.version,
+                                json = excluded.json,
+                                etag = excluded.etag,
+                                fetched_at = excluded.fetched_at
+                        ))?((
+                            host,
+                            account,
+                            owner,
+                            repo,
+                            number,
+                            row.query.to_string(),
+                            row.version,
+                            row.json,
+                            row.etag,
+                            fetched_at,
+                        ))?;
+                    }
+                    Ok(())
+                })
             })
             .await
     }
@@ -265,8 +396,8 @@ impl PrCache {
             .await
     }
 
-    /// Notes that a pull request was opened, moving it to the top of the recent ones. A `None`
-    /// title keeps the one already known.
+    /// Notes that a pull request was opened, moving it to the top of the recent ones, and
+    /// forgets all but the newest [`RECENT_PRS`]. A `None` title keeps the one already known.
     pub async fn record_recent(&self, recent: RecentPr) -> Result<()> {
         let row = (
             HOST.to_string(),
@@ -289,7 +420,12 @@ impl PrCache {
                         title = coalesce(excluded.title, recent_prs.title),
                         account = excluded.account,
                         opened_at = excluded.opened_at
-                ))?(row)
+                ))?(row)?;
+                connection.exec_bound(sql!(
+                    DELETE FROM recent_prs WHERE rowid NOT IN (
+                        SELECT rowid FROM recent_prs ORDER BY opened_at DESC, rowid DESC LIMIT ?1
+                    )
+                ))?(RECENT_PRS as i64)
             })
             .await
     }
@@ -324,10 +460,11 @@ mod tests {
     use super::*;
 
     use futures::executor::block_on;
+    use schemars::JsonSchema;
     use serde::Deserialize;
 
     use crate::db::{Account, AccountSource};
-    use crate::pulls::RepoRef;
+    use crate::pulls::{PullBranch, RepoRef};
 
     fn account(login: &str) -> Account {
         Account {
@@ -480,7 +617,7 @@ mod tests {
     }
 
     /// The same rows as [`PullSummary`], in a newer shape.
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
     struct NewerSummary {
         title: String,
         mergeable: bool,
@@ -489,8 +626,8 @@ mod tests {
     impl CacheEntry for NewerSummary {
         const NAME: &'static str = "pull";
 
-        fn version() -> String {
-            "rest 2022-11-28 2".into()
+        fn shape() -> String {
+            schema_shape::<Self>()
         }
     }
 
@@ -503,9 +640,69 @@ mod tests {
     impl CacheEntry for Mismatched {
         const NAME: &'static str = "pull";
 
-        fn version() -> String {
-            PullSummary::version()
+        fn shape() -> String {
+            PullSummary::shape()
         }
+    }
+
+    /// A summary as it might be written one day, and the same with a field added.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Before {
+        /// The title.
+        title: String,
+        head: PullBranch,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct After {
+        /// The title, documented differently.
+        title: String,
+        head: PullBranch,
+        mergeable_state: Option<String>,
+    }
+
+    #[test]
+    fn a_shape_is_its_fields_and_their_types() {
+        assert_ne!(schema_shape::<Before>(), schema_shape::<After>());
+        // Documentation isn't shape, and neither is the order of keys.
+        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[schemars(rename = "Before")]
+        struct Undocumented {
+            title: String,
+            head: PullBranch,
+        }
+        assert_eq!(schema_shape::<Before>(), schema_shape::<Undocumented>());
+        // A field renamed in the JSON is a different shape.
+        #[derive(Serialize, Deserialize, JsonSchema)]
+        struct Renamed {
+            #[serde(rename = "name")]
+            title: String,
+            head: PullBranch,
+        }
+        assert_ne!(schema_shape::<Before>(), schema_shape::<Renamed>());
+    }
+
+    /// Every version, as of the last change to what the cache stores. When this fails, a stored
+    /// shape changed: rows written in the old one will read as missing and be fetched again.
+    /// Check that's what the change means, then update the versions here.
+    #[test]
+    fn versions_follow_the_stored_shapes() {
+        assert_eq!(
+            [
+                (PullSummary::NAME, PullSummary::version()),
+                (ListedPulls::NAME, ListedPulls::version()),
+                (PullRequestData::NAME, PullRequestData::version()),
+                (PullRequestCheckData::NAME, PullRequestCheckData::version()),
+                (OpenPullRequestList::NAME, OpenPullRequestList::version()),
+            ],
+            [
+                ("pull", "b2f1fdde71669374".to_string()),
+                ("pulls", "7c1cc8e8b3c05b05".to_string()),
+                ("PullRequest", "2f6a282f3dfcbf15".to_string()),
+                ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
+                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -535,6 +732,66 @@ mod tests {
                     .unwrap()
                     .value,
                 newer
+            );
+        });
+    }
+
+    /// A row the database refuses, once [`refuse_rows`] has run.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Refused(u32);
+
+    impl CacheEntry for Refused {
+        const NAME: &'static str = "refused";
+
+        fn shape() -> String {
+            schema_shape::<Self>()
+        }
+    }
+
+    async fn refuse_rows(db: &RozedDb) {
+        db.connection()
+            .write(|connection| {
+                connection.exec(
+                    "CREATE TRIGGER refuse BEFORE INSERT ON pr_cache WHEN NEW.query = 'refused' \
+                     BEGIN SELECT RAISE(ABORT, 'refused'); END",
+                )?()
+            })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn answers_stored_together_are_all_stored_or_none() {
+        block_on(async {
+            let (cache, db) = cache("cache_together").await;
+            cache
+                .put("bot", &pull(1), &summary("old"), None, at(1000))
+                .await
+                .unwrap();
+            refuse_rows(&db).await;
+            let rows = vec![
+                PrCache::row(&summary("new"), None).unwrap(),
+                PrCache::row(&Refused(1), None).unwrap(),
+            ];
+            cache
+                .put_together("bot", &pull(1), rows, at(2000))
+                .await
+                .unwrap_err();
+            let kept = cache.get::<PullSummary>("bot", &pull(1)).unwrap().unwrap();
+            assert_eq!(
+                (kept.value.title.as_str(), kept.fetched_at),
+                ("old", at(1000))
+            );
+
+            let rows = vec![PrCache::row(&summary("new"), Some("\"e\"")).unwrap()];
+            cache
+                .put_together("bot", &pull(1), rows, at(2000))
+                .await
+                .unwrap();
+            let stored = cache.get::<PullSummary>("bot", &pull(1)).unwrap().unwrap();
+            assert_eq!(
+                (stored.value.title.as_str(), stored.etag.as_deref()),
+                ("new", Some("\"e\""))
             );
         });
     }
@@ -602,6 +859,40 @@ mod tests {
                     .get::<PullSummary>("other", &pull(1))
                     .unwrap()
                     .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn recent_prs_keep_the_newest_and_go_with_their_account() {
+        block_on(async {
+            let (cache, db) = cache("cache_recent_bounded").await;
+            for number in 1..=(RECENT_PRS as i64 + 5) {
+                let account = if number % 2 == 0 { "bot" } else { "other" };
+                cache
+                    .record_recent(RecentPr {
+                        pull: PullRef::new("rozed-dev", "playground", number),
+                        title: None,
+                        account: account.into(),
+                        opened_at: at(number as u64),
+                    })
+                    .await
+                    .unwrap();
+            }
+            let recent = cache.recent(1000).unwrap();
+            assert_eq!(recent.len(), RECENT_PRS);
+            assert_eq!(recent[0].pull.number, RECENT_PRS as i64 + 5);
+            assert_eq!(recent.last().unwrap().pull.number, 6);
+
+            db.delete_account(HOST.into(), "OTHER".into())
+                .await
+                .unwrap();
+            assert!(
+                cache
+                    .recent(1000)
+                    .unwrap()
+                    .iter()
+                    .all(|recent| recent.account == "bot")
             );
         });
     }

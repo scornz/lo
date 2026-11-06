@@ -3270,6 +3270,7 @@ dependencies = [
  "paths",
  "regex",
  "reqwest_client",
+ "schemars",
  "serde",
  "serde_json",
  "serde_urlencoded",

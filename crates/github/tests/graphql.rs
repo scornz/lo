@@ -2,7 +2,9 @@
 //! (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3.
 
 use futures::executor::block_on;
-use github::queries::{FileViewedState, PullRequestState};
+use github::queries::{
+    FileViewedState, MergeStateStatus, PullRequestCheckData, PullRequestState, StatusState,
+};
 use github::replay::ReplayHttpClient;
 use github::{GithubClient, GithubError, Token};
 
@@ -85,10 +87,49 @@ fn pull_request_check() {
     assert_eq!(check.changed_files, 1);
     // Joining a stack moved the timeline but not the PR's own updatedAt.
     assert!(check.timeline_items.updated_at > check.updated_at);
-    // The query asks for its own cost, which lands in the account's rate limits.
+    // What the UI shows without the details: the playground has no checks, required reviews,
+    // review threads or merge queue, and PR #1 can merge.
+    assert_eq!(check.status_check_rollup, None);
+    assert_eq!(check.review_decision, None);
+    assert_eq!(check.merge_state_status, MergeStateStatus::CLEAN);
+    assert_eq!(check.unresolved_threads(), 0);
+    assert_eq!(check.merge_queue_entry, None);
+    // The query asks for its own cost, which lands in the account's rate limits. Everything
+    // above still costs a single point.
     let limits = client.rate_limits();
     assert_eq!(limits.last_graphql_cost, Some(1));
     assert!(limits.graphql().is_some());
+}
+
+#[test]
+fn a_check_counts_its_unresolved_threads() {
+    let check: PullRequestCheckData = serde_json::from_value(serde_json::json!({
+        "updatedAt": "2026-11-06T08:15:07Z",
+        "state": "OPEN",
+        "isDraft": false,
+        "baseRefName": "main",
+        "baseRefOid": "6ce218eb1930c49db64d5744c76a6739d4525e82",
+        "headRefOid": "b046244d9569964088e952243e5e557312322488",
+        "reviewDecision": "CHANGES_REQUESTED",
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": {"state": "PENDING"},
+        "mergeQueueEntry": {"state": "QUEUED", "position": 2},
+        "timelineItems": {"updatedAt": "2026-11-06T08:15:21Z", "totalCount": 2},
+        "commits": {"totalCount": 1},
+        "reviews": {"totalCount": 1},
+        "reviewThreads": {
+            "totalCount": 3,
+            "nodes": [{"isResolved": false}, {"isResolved": true}, {"isResolved": false}]
+        },
+        "comments": {"totalCount": 0},
+        "changedFiles": 1
+    }))
+    .unwrap();
+    assert_eq!(check.unresolved_threads(), 2);
+    assert_eq!(
+        check.status_check_rollup.map(|rollup| rollup.state),
+        Some(StatusState::PENDING)
+    );
 }
 
 #[test]
