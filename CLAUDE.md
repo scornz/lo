@@ -62,9 +62,10 @@ cargo run -p rozed -- --trust https://github.com/sharkdp/fd/pull/2212   # with r
 cargo test --workspace
 ```
 
-`rozed <pull request link>` copies the pull request into a partial clone per repository under
-`~/Library/Caches/rozed/repos/` and shows it in Zed's side-by-side diff, both sides read from git,
-with no language server. `--trust` also checks the head out under `checkouts/` and runs
+`rozed <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
+while it copies the pull request into a partial clone per repository under
+`~/Library/Caches/rozed/repos/`. Then the copy's diff of whole files replaces it in Zed's
+side-by-side diff, at the same file and line, both sides read from git, with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
 `docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Each pull request
