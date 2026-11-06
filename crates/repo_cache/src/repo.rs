@@ -736,6 +736,16 @@ impl Repo {
         RepoLock::acquire(&self.shared.lock_path)
     }
 
+    /// Whether the clone was opened to read offline: it never writes or downloads.
+    pub(crate) fn is_offline(&self) -> bool {
+        self.shared.access == Access::ReadOffline
+    }
+
+    /// The version of the git that runs the clone's commands.
+    pub(crate) fn git_version(&self) -> crate::GitVersion {
+        self.shared.env.git.version()
+    }
+
     /// A git command on the clone, signed in when the repository has a token.
     pub(crate) fn git(&self) -> GitCommand {
         self.git_at(Location::Clone(&self.shared.git_dir))
@@ -802,7 +812,7 @@ fn branch_base_ref(number: u64, branch: &str) -> String {
 }
 
 /// The variable that stops git downloading what a partial clone lacks.
-const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
+pub(crate) const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
 
 /// The blobs on either side of `git diff --raw -z --no-renames` output, without submodules'
 /// commits or the all-zero ID of a side that isn't there. Each entry is its metadata, then its

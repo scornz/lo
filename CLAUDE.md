@@ -74,6 +74,11 @@ point at its own programs, so only pass `--trust` for a pull request whose code 
 from its link. With none open, the window lists the pull requests opened recently, where enter
 opens one, and rozed starts there without a link.
 
+In the diff, generated files, lockfiles and files over 5,000 changed lines or 1 MiB start collapsed,
+each header saying why. `alt-a` opens or loads the file at the cursor and switches it between its
+changes and its whole text, `alt-v` shows the diff inline or side by side, `alt-w` hides changes to
+whitespace alone, and `tab` moves the cursor to the other side.
+
 The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
 repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git

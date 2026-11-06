@@ -24,15 +24,14 @@ use repo_cache::{Git, RepoCache};
 use tempfile::TempDir;
 use workspace::{MultiWorkspace, Workspace};
 
-/// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
-/// keymap, and rozed's changes to every workspace.
+/// Sets the app up as rozed does: the command palette, the editor, Zed's keymap with the tab's
+/// keys over it, and rozed's changes to every workspace.
 pub fn init(cx: &mut TestAppContext) {
     crate::trust::tests::init_test(cx);
     cx.update(|cx| {
         command_palette_hooks::init(cx);
         editor::init(cx);
         crate::init_workspaces(cx);
-        crate::keymap::load(cx);
     });
 }
 

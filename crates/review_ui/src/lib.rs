@@ -5,10 +5,12 @@ pub mod account;
 pub mod account_picker;
 pub mod api_diff;
 pub mod diff_cursor;
+mod file_display;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
-pub mod keymap;
+mod image_preview;
+mod keymap;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
@@ -17,8 +19,10 @@ pub mod pr_banner;
 pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
+mod preview_pool;
 mod read_only;
 pub mod recent_prs;
+mod shown_files;
 pub mod tabs;
 #[cfg(test)]
 mod test_support;
@@ -31,12 +35,13 @@ use github::db::RozedDb;
 use gpui::{App, Context, Entity, Task, Window};
 use workspace::Workspace;
 
+pub use image_preview::{HELPER_FLAG as PREVIEW_HELPER_FLAG, serve_helper as serve_preview_helper};
 pub use open_box::{OpenBox, OpenPullRequest};
 pub use pr_diff::Trust;
 pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, PrTabEvent, open};
 
-/// Sets up the PR tab: its keys, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
+/// Sets up the PR tab: Zed's keys and its own, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
 /// their database, or `None` without one), and rozed's changes to every workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
@@ -46,6 +51,8 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
 /// [`init`] without the GitHub layer, for tests: pull requests open without signing in. Call it
 /// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
+    // Of two bindings for a key in the same place, the later one wins: rozed's.
+    keymap::load(cx);
     pr_tab::bind_keys(cx);
     account_picker::bind_keys(cx);
     recent_prs::bind_keys(cx);
