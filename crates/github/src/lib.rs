@@ -14,6 +14,7 @@ pub mod device_flow;
 mod error;
 pub mod gh_import;
 mod graphql;
+pub mod poll;
 pub mod queries;
 mod rate_limit;
 #[cfg(any(test, feature = "test-support"))]
