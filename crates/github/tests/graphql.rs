@@ -272,6 +272,27 @@ fn marking_a_file_of_a_pull_request_that_doesnt_exist_fails() {
     assert!(message.contains(MISSING_PULL_REQUEST), "{message}");
 }
 
+#[test]
+fn marking_a_path_the_pull_request_doesnt_have_is_refused() {
+    let (client, _) = client("graphql_mark_file_as_viewed_unlisted_path");
+    let (id, before) = pr_2_marks(&client);
+
+    let error =
+        block_on(client.mark_file_as_viewed(&id, "not-in-this-pull-request.md")).unwrap_err();
+
+    let GithubError::GraphQl { errors } = &error else {
+        panic!("expected GitHub's refusal, got {error:?}");
+    };
+    assert_eq!(errors[0].r#type.as_deref(), Some("UNPROCESSABLE"));
+    assert_eq!(errors[0].message, "Filepath must be part of pull request");
+    // PR #2's one file is still unviewed.
+    assert_eq!(
+        before,
+        [("stack-b.md".to_string(), FileViewedState::UNVIEWED)]
+    );
+    assert_eq!(pr_2_marks(&client).1, before);
+}
+
 /// A pull request node ID that names nothing.
 const MISSING_PULL_REQUEST: &str = "PR_kwDOVk6v9M8AAAAAAAAAAA";
 

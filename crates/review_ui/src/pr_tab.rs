@@ -2,7 +2,7 @@
 //! threads (design §10 "Window"). rozed's window has one tab per pull request, and opening a pull
 //! request that's already open switches to its tab.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Instant, SystemTime};
 
@@ -573,7 +573,8 @@ impl PrTab {
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
         self.node_id = Some(details.id.clone());
-        let marks_changed = self.marks.set_github(viewed);
+        let listed_changed = self.marks.set_listed(listed_paths(details));
+        let marks_changed = self.marks.set_github(viewed) || listed_changed;
         // A change of title makes the workspace report the active item changed, which comes back
         // here through `set_active`, so only a real change is reported.
         if header == self.header && !marks_changed {
@@ -835,6 +836,12 @@ impl PrTab {
         diff_cursor::shown_file(self.diff.as_ref()?, cx)
     }
 
+    /// The path GitHub knows the listed file at `path` by ([`ViewedMarks::github_path`]).
+    fn github_path(&self, path: &str) -> Option<String> {
+        let previous = self.files.entry(path)?.file.previous_path.as_deref();
+        self.marks.github_path(path, previous)
+    }
+
     /// Where `path`'s file starts in the diff, once it's there.
     fn location_in_diff(&self, path: &str, cx: &App) -> Option<Anchor> {
         let diff = self.diff.as_ref()?;
@@ -848,11 +855,12 @@ impl PrTab {
     /// the file, and since when, from the revision this Mac recorded when it was marked viewed.
     pub fn changed_since_viewed(&self, cx: &mut App) -> Option<(String, String)> {
         let (_, path) = self.shown_file(cx)?;
+        let github_path = self.github_path(&path)?;
         let none = Revisions::default();
         let note = changed_since_viewed(
             self.revisions.as_ref().unwrap_or(&none),
-            self.marks.state(&path),
-            self.viewed_at.get(&path).map(String::as_str),
+            self.marks.state(&github_path),
+            self.viewed_at.get(&github_path).map(String::as_str),
         )?;
         Some((path, note))
     }
@@ -980,15 +988,25 @@ impl PrTab {
             );
             return;
         };
+        let Some(github_path) = self.github_path(&path) else {
+            self.toast(
+                format!(
+                    "GitHub doesn't list {path} in this pull request, so rozed can't mark it \
+                     viewed. GitHub and the local copy see this file's change differently."
+                ),
+                cx,
+            );
+            return;
+        };
         // GitHub marks a file as of the pull request's latest head (`markFileAsViewed` takes no
         // commit), so a file is marked only while that's the head on screen. A push inside the
         // poll interval can still slip through.
-        let marks = self.marks.state(&path) != Some(ViewedState::Viewed);
+        let marks = self.marks.state(&github_path) != Some(ViewedState::Viewed);
         if marks && self.newer_head().is_some() {
             self.newer_push_toast(&path, cx);
             return;
         }
-        let toggle = self.marks.toggle(&path);
+        let toggle = self.marks.toggle(&github_path);
         self.files.set_viewed(&self.marks.shown());
         if toggle.mark {
             // Only to a file the diff shows; the others are still loading.
@@ -1018,15 +1036,15 @@ impl PrTab {
                 }
             }
         }
-        let mark = toggle.mark;
+        let (mark, github_path) = (toggle.mark, toggle.path.clone());
         let write = poller.update(cx, |poller, cx| {
             poller.write(
                 pull,
                 move |client: GithubClient| async move {
                     if mark {
-                        client.mark_file_as_viewed(&node_id, &path).await
+                        client.mark_file_as_viewed(&node_id, &github_path).await
                     } else {
-                        client.unmark_file_as_viewed(&node_id, &path).await
+                        client.unmark_file_as_viewed(&node_id, &github_path).await
                     }
                 },
                 cx,
@@ -1489,6 +1507,18 @@ struct ToastLog(Vec<(NotificationId, String, Option<String>)>);
 impl gpui::Global for ToastLog {}
 
 /// GitHub's viewed mark as rozed's review model has it.
+/// Every path GitHub lists for the pull request, when its details list them all: GitHub caps a
+/// pull request's files, and leaves out what it couldn't show.
+fn listed_paths(details: &PullRequestData) -> Option<HashSet<String>> {
+    let files = details.files.as_ref()?;
+    let nodes = files.nodes.as_ref()?;
+    let listed: HashSet<String> = nodes
+        .iter()
+        .map(|node| Some(node.as_ref()?.path.clone()))
+        .collect::<Option<_>>()?;
+    (i64::try_from(nodes.len()).ok() == Some(files.total_count)).then_some(listed)
+}
+
 fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     match state {
         FileViewedState::VIEWED => Some(ViewedState::Viewed),
@@ -3187,6 +3217,73 @@ mod tests {
             "sharkdp/fd#2212"
         );
         assert_eq!(active_tab(&workspace, cx), Some(reopened));
+    }
+
+    #[gpui::test]
+    async fn e_wont_mark_a_file_github_doesnt_list(cx: &mut TestAppContext) {
+        // GitHub lists every file of the pull request, and not c.rs.
+        let (_, tab, github, cx) = three_files(
+            "e_unlisted",
+            &[],
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        go_to(&tab, "c.rs", cx);
+
+        cx.simulate_keystrokes("e");
+
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(marks(&tab, cx)[2], mark("c.rs", None));
+        assert_eq!(
+            toasts(cx),
+            [
+                "GitHub doesn't list c.rs in this pull request, so rozed can't mark it viewed. \
+              GitHub and the local copy see this file's change differently."
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn e_marks_a_renamed_file_at_the_path_github_lists(cx: &mut TestAppContext) {
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("new.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        // The local copy sees a rename; GitHub lists the file by its old path.
+        let (_, tab, github, _, cx) = signed_in_diff(
+            "e_renamed",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("old.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let mut renamed = changed("new.rs", Change::Renamed { similarity: 90 });
+        renamed.old.as_mut().unwrap().path = "old.rs".into();
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified), renamed], &head, cx);
+        });
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("new.rs", Some(ViewedState::Unviewed))
+        );
+        go_to(&tab, "new.rs", cx);
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        cx.run_until_parked();
+
+        assert_eq!(github.github.mutations()[0].1["path"], "old.rs");
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("new.rs", Some(ViewedState::Viewed))
+        );
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("old.rs".to_string(), HEAD.to_string())])
+        );
     }
 
     #[gpui::test]

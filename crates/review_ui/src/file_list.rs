@@ -204,11 +204,21 @@ impl FileList {
             .filter(|entry| entry.viewed != Some(ViewedState::Viewed))
     }
 
-    /// Takes GitHub's viewed marks, by path. Files GitHub doesn't list keep no mark.
+    /// Takes GitHub's viewed marks, by path. A rename GitHub lists by its old path shows that
+    /// path's mark. Files GitHub doesn't list keep no mark.
     pub fn set_viewed(&mut self, viewed: &HashMap<String, ViewedState>) {
         for entry in &mut self.entries {
-            entry.viewed = viewed.get(entry.path()).copied();
+            let previous = entry.file.previous_path.as_deref();
+            entry.viewed = viewed
+                .get(&entry.file.path)
+                .or_else(|| viewed.get(previous?))
+                .copied();
         }
+    }
+
+    /// The entry for `path`.
+    pub fn entry(&self, path: &str) -> Option<&FileEntry> {
+        self.entries.iter().find(|entry| entry.path() == path)
     }
 
     /// The selected row, in the list's order.
@@ -483,6 +493,23 @@ mod tests {
             Some("Cargo.lock")
         );
         assert_eq!(list.at_review_position(5), None);
+    }
+
+    #[test]
+    fn a_renamed_file_shows_the_mark_github_keeps_at_its_old_path() {
+        use ViewedState::*;
+        let mut entries = list(&["new.rs", "other.rs"]).entries;
+        entries[0].file.previous_path = Some("old.rs".into());
+        let mut list = FileList::new(entries);
+        let marks: HashMap<String, ViewedState> = [("old.rs", Viewed), ("other.rs", Unviewed)]
+            .into_iter()
+            .map(|(path, state)| (path.to_string(), state))
+            .collect();
+
+        list.set_viewed(&marks);
+
+        assert_eq!(list.entry("new.rs").unwrap().viewed, Some(Viewed));
+        assert_eq!(list.entry("other.rs").unwrap().viewed, Some(Unviewed));
     }
 
     fn version(path: &str) -> Option<FileVersion> {

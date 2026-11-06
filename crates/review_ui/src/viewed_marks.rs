@@ -4,7 +4,7 @@
 //! `e` marks the current file viewed, or clears the mark of a file that's viewed. The new mark
 //! shows at once. If the write fails, the file shows GitHub's mark again and a toast says why.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use github::GithubError;
 use review::revisions::{FileComparison, Revisions, ViewedState, viewed_file_comparison};
@@ -14,6 +14,9 @@ use review::revisions::{FileComparison, Revisions, ViewedState, viewed_file_comp
 pub struct ViewedMarks {
     /// GitHub's marks for the account acting, by path, as last read.
     github: HashMap<String, ViewedState>,
+    /// Every path GitHub lists for the pull request, when it listed them all. GitHub caps a pull
+    /// request's files, and leaves out what it can't show.
+    listed: Option<HashSet<String>>,
     /// Marks set in rozed whose write hasn't finished, by path.
     pending: HashMap<String, Pending>,
     /// Counts the toggles, so a write that finishes after a later toggle of the same file doesn't
@@ -78,6 +81,34 @@ impl ViewedMarks {
         true
     }
 
+    /// Takes the paths GitHub lists for the pull request, or `None` when it didn't list them all.
+    /// Returns whether they changed.
+    pub fn set_listed(&mut self, listed: Option<HashSet<String>>) -> bool {
+        if listed == self.listed {
+            return false;
+        }
+        self.listed = listed;
+        true
+    }
+
+    /// The path GitHub knows a file by, which its mark and the writes use, for a file the local
+    /// copy lists at `path`: `path`, or, for a rename GitHub lists by its old path, `previous`.
+    /// `None` when GitHub listed every file and neither is among them: GitHub refuses a mark on
+    /// a path it doesn't list. While its list is partial, any path may be on it.
+    pub fn github_path(&self, path: &str, previous: Option<&str>) -> Option<String> {
+        let lists = |path: &str| match &self.listed {
+            Some(listed) => listed.contains(path),
+            None => self.github.contains_key(path),
+        };
+        if lists(path) {
+            return Some(path.to_string());
+        }
+        if let Some(previous) = previous.filter(|previous| lists(previous)) {
+            return Some(previous.to_string());
+        }
+        self.listed.is_none().then(|| path.to_string())
+    }
+
     /// Whether a write for `path` hasn't finished.
     pub fn is_pending(&self, path: &str) -> bool {
         self.pending.contains_key(path)
@@ -138,6 +169,18 @@ pub fn write_failed(toggle: &Toggle, login: &str, error: &GithubError) -> String
         GithubError::Unauthorized { .. } => format!("{login} is signed out"),
         GithubError::TokenUnavailable(_) => format!("{login}'s token couldn't be read"),
         GithubError::NotFound { .. } => format!("{login} can't see this pull request"),
+        GithubError::GraphQl { errors }
+            if errors
+                .iter()
+                .any(|error| error.r#type.as_deref() == Some("UNPROCESSABLE")) =>
+        {
+            let messages: Vec<&str> = errors.iter().map(|error| error.message.as_str()).collect();
+            format!(
+                "GitHub doesn't list {} in this pull request ({})",
+                toggle.path,
+                messages.join("; ")
+            )
+        }
         GithubError::GraphQl { errors } => {
             let messages: Vec<&str> = errors.iter().map(|error| error.message.as_str()).collect();
             let forbidden = errors
@@ -298,6 +341,43 @@ mod tests {
         assert!(viewed.set_github(marks(&[("a", Unviewed)])));
     }
 
+    fn listed(paths: &[&str]) -> Option<HashSet<String>> {
+        Some(paths.iter().map(|path| path.to_string()).collect())
+    }
+
+    #[test]
+    fn a_file_is_marked_by_the_path_github_lists_it_at() {
+        let mut viewed = github(&[("a", Unviewed), ("old", Viewed)]);
+        viewed.set_listed(listed(&["a", "old", "unknown-state"]));
+
+        assert_eq!(viewed.github_path("a", None).as_deref(), Some("a"));
+        // GitHub may list a state rozed doesn't know.
+        assert_eq!(
+            viewed.github_path("unknown-state", None).as_deref(),
+            Some("unknown-state")
+        );
+        // A rename GitHub lists by its old path.
+        assert_eq!(
+            viewed.github_path("new", Some("old")).as_deref(),
+            Some("old")
+        );
+        // GitHub listed every file, and not this one.
+        assert_eq!(viewed.github_path("b", None), None);
+        assert_eq!(viewed.github_path("b", Some("c")), None);
+    }
+
+    #[test]
+    fn while_githubs_list_is_partial_any_file_may_be_on_it() {
+        let mut viewed = github(&[("a", Unviewed), ("old", Viewed)]);
+        viewed.set_listed(None);
+
+        assert_eq!(viewed.github_path("b", None).as_deref(), Some("b"));
+        assert_eq!(
+            viewed.github_path("new", Some("old")).as_deref(),
+            Some("old")
+        );
+    }
+
     fn toggle(path: &str, mark: bool) -> Toggle {
         Toggle {
             path: path.into(),
@@ -355,6 +435,19 @@ mod tests {
                 forbidden,
                 "Couldn't mark src/main.rs viewed: rozed-bot isn't allowed to (Resource not \
                  accessible by integration). It shows GitHub's mark again.",
+            ),
+            (
+                &marking,
+                GithubError::GraphQl {
+                    errors: vec![GraphQlError {
+                        message: "Filepath must be part of pull request".into(),
+                        r#type: Some("UNPROCESSABLE".into()),
+                        path: vec![],
+                        extensions: None,
+                    }],
+                },
+                "Couldn't mark src/main.rs viewed: GitHub doesn't list src/main.rs in this pull \
+                 request (Filepath must be part of pull request). It shows GitHub's mark again.",
             ),
             (
                 &marking,

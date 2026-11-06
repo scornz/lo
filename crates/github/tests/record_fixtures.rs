@@ -296,6 +296,43 @@ fn graphql_mark_file_as_viewed_not_found() {
     );
 }
 
+/// A path PR #2 doesn't have.
+const NOT_IN_PR_2: &str = "not-in-this-pull-request.md";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_mark_file_as_viewed_unlisted_path() {
+    record_graphql(
+        "graphql_mark_file_as_viewed_unlisted_path",
+        "markFileAsViewed on PR #2 with a path the pull request doesn't have, reading the \
+         PullRequest query before and after; PR #2's one file stays unviewed",
+        |client| async move {
+            let state = || async {
+                let pr = client
+                    .pull_request("rozed-dev", "playground", 2)
+                    .await
+                    .unwrap();
+                let files: Vec<(String, FileViewedState)> = pr
+                    .files
+                    .unwrap()
+                    .nodes
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .map(|file| (file.path, file.viewer_viewed_state))
+                    .collect();
+                (pr.id, files)
+            };
+            let unviewed = vec![(PR_2_FILE.to_string(), FileViewedState::UNVIEWED)];
+            let (id, before) = state().await;
+            assert_eq!(before, unviewed, "start from an unviewed file");
+            let answer = client.mark_file_as_viewed(&id, NOT_IN_PR_2).await;
+            eprintln!("markFileAsViewed on {NOT_IN_PR_2}: {answer:?}");
+            assert_eq!(state().await.1, unviewed, "PR #2's one file stays unviewed");
+        },
+    );
+}
+
 /// What a conditional GET returned: its ETag, after checking it was a `200`.
 fn modified<T: std::fmt::Debug>(answer: Conditional<T>) -> Option<String> {
     match answer {
