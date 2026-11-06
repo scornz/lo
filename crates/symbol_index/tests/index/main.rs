@@ -4,3 +4,4 @@ mod lookup;
 mod queries;
 mod store;
 mod support;
+mod timing;
