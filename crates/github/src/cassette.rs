@@ -100,7 +100,8 @@ impl RecordedResponse {
 }
 
 /// The response headers a cassette keeps. Everything else, such as cookies and request IDs, is
-/// dropped when recording.
+/// dropped when recording. So is the recording token's scopes (`x-oauth-scopes`), but on an
+/// answer to `GET /user`, where they're what rozed reads ([`SCOPES_KEPT_FOR`]).
 pub const KEPT_HEADERS: &[&str] = &[
     "content-type",
     "etag",
@@ -108,10 +109,8 @@ pub const KEPT_HEADERS: &[&str] = &[
     "link",
     "location",
     "retry-after",
-    "x-accepted-oauth-scopes",
     "x-github-api-version-selected",
     "x-github-sso",
-    "x-oauth-scopes",
     "x-poll-interval",
     "x-ratelimit-limit",
     "x-ratelimit-remaining",
@@ -119,6 +118,10 @@ pub const KEPT_HEADERS: &[&str] = &[
     "x-ratelimit-resource",
     "x-ratelimit-used",
 ];
+
+/// The path whose answers keep `x-oauth-scopes`: `GET /user`, which rozed asks to learn a
+/// token's scopes.
+pub const SCOPES_KEPT_FOR: &str = "/user";
 
 /// What a GraphQL request body holds, as `graphql_client` builds it.
 #[derive(Debug, Deserialize)]

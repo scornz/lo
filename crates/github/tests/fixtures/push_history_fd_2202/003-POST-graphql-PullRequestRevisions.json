@@ -18,8 +18,6 @@
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "x-accepted-oauth-scopes": "repo",
-      "x-oauth-scopes": "delete_repo, read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
       "x-ratelimit-remaining": "4984",
       "x-ratelimit-reset": "1794004451",

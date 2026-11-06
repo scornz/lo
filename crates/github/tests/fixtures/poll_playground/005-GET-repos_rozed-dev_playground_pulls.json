@@ -8,9 +8,7 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "etag": "\"ebd09b76bd2b87fa4a6e33bb938e983eeaaf257ca8361966998b9b05d75644f4\"",
-      "x-accepted-oauth-scopes": "",
       "x-github-api-version-selected": "2022-11-28",
-      "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
       "x-ratelimit-remaining": "4988",
       "x-ratelimit-reset": "1793972985",
