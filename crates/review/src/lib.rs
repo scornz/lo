@@ -4,3 +4,4 @@
 //! here.
 
 pub mod files;
+pub mod revisions;
