@@ -1,16 +1,55 @@
 //! Which pull request or repository something is about, and GitHub's REST view of a pull request.
 
+use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A repository on github.com. GitHub matches owners and names case-insensitively; so does
-/// rozed's database, but these compare as written, so callers should be consistent.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A repository on github.com. Owners and names match ignoring (ASCII) case, as on GitHub and
+/// in rozed's database, and show as written.
+#[derive(Clone, Debug)]
 pub struct RepoRef {
     pub owner: String,
     pub name: String,
+}
+
+/// A name's bytes as compared: GitHub's owners and repository names are ASCII.
+fn folded(name: &str) -> impl Iterator<Item = u8> + '_ {
+    name.bytes().map(|byte| byte.to_ascii_lowercase())
+}
+
+impl PartialEq for RepoRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner.eq_ignore_ascii_case(&other.owner) && self.name.eq_ignore_ascii_case(&other.name)
+    }
+}
+
+impl Eq for RepoRef {}
+
+impl Hash for RepoRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for name in [&self.owner, &self.name] {
+            folded(name).for_each(|byte| state.write_u8(byte));
+            // Keeps "a/bc" and "ab/c" apart.
+            state.write_u8(b'/');
+        }
+    }
+}
+
+impl Ord for RepoRef {
+    fn cmp(&self, other: &Self) -> Ordering {
+        folded(&self.owner)
+            .cmp(folded(&other.owner))
+            .then_with(|| folded(&self.name).cmp(folded(&other.name)))
+    }
+}
+
+impl PartialOrd for RepoRef {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl RepoRef {
@@ -210,5 +249,29 @@ impl ListedPulls {
     /// Whether both list the same pull requests, the same way, whatever their ETags.
     pub fn lists_the_same(&self, other: &Self) -> bool {
         self.pulls().eq(other.pulls())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::{BTreeSet, HashSet};
+
+    #[test]
+    fn owners_and_names_match_ignoring_case() {
+        let written = PullRef::new("rozed-dev", "playground", 1);
+        let shouted = PullRef::new("Rozed-Dev", "PLAYGROUND", 1);
+        assert_eq!(written, shouted);
+        assert_eq!(BTreeSet::from([written.clone(), shouted.clone()]).len(), 1);
+        assert_eq!(HashSet::from([written.clone(), shouted.clone()]).len(), 1);
+        // As written, for showing.
+        assert_eq!(shouted.to_string(), "Rozed-Dev/PLAYGROUND#1");
+        assert_ne!(written, PullRef::new("rozed-dev", "playground", 2));
+        assert_ne!(
+            RepoRef::new("rozed-dev", "playground"),
+            RepoRef::new("rozed", "dev-playground")
+        );
+        assert!(RepoRef::new("A", "b") < RepoRef::new("a", "C"));
     }
 }
