@@ -5,6 +5,7 @@
 
 mod forced_settings;
 mod http;
+mod trust;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -93,6 +94,8 @@ fn main() {
 
     app.run(move |cx| {
         cx.set_global(app_db);
+        // Before any project exists, so every project tracks trust.
+        trust::init(cx);
         release_channel::init(AppVersion::load(version(), None, None), cx);
         gpui_tokio::init(cx);
         settings::init(cx);
@@ -285,7 +288,9 @@ fn open_window(app_state: Arc<AppState>, cx: &mut App) -> anyhow::Result<()> {
                 app_state.fs.clone(),
                 None,
                 project::LocalProjectFlags {
-                    init_worktree_trust: false,
+                    // Zed's worktree trust: no language server or `.zed/settings.json` until
+                    // rozed trusts the worktree (see `trust`).
+                    init_worktree_trust: true,
                     watch_global_configs: true,
                 },
                 cx,

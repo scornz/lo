@@ -18,7 +18,9 @@ pub const FORCED_SETTINGS: &str = r#"{
   // No AI features. This also keeps the multi-workspace sidebar off.
   "disable_ai": true,
   // If Zed's extension host is ever started, it mustn't install anything from Zed's servers.
-  "auto_install_extensions": { "html": false }
+  "auto_install_extensions": { "html": false },
+  // Only rozed decides which worktrees are trusted to run language servers (`crate::trust`).
+  "session": { "trust_all_worktrees": false }
 }"#;
 
 pub fn apply(cx: &mut App) {
