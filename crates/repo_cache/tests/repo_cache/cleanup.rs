@@ -102,6 +102,8 @@ fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
     assert!(new.git_dir().is_dir());
     assert!(checkouts.join("owner/new/pull-1/README.md").is_file());
     assert!(!dir.path().join("checkouts/github.com/someone").exists());
+    // Each was moved aside, then deleted, leaving nothing behind.
+    assert_eq!(fs::read_dir(dir.path().join("tmp")).unwrap().count(), 0);
 
     // Nothing else is stale now.
     assert_eq!(

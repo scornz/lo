@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::cache::GitEnv;
 use crate::cat_file::{CatFile, ReadError};
 use crate::diff::{self, ChangedFile};
-use crate::git::{GitCommand, Token, failure_message};
+use crate::git::{GitCommand, Location, Token, failure_message};
 use crate::lock::RepoLock;
 use crate::oid::{self, Oid};
 use crate::progress::{Progress, ProgressFn};
@@ -414,7 +414,7 @@ impl Repo {
     fn check_branch_name(&self, name: &str) -> Result<(), Error> {
         let valid = !name.starts_with('-')
             && self
-                .git()
+                .git_at(Location::Nowhere)
                 .args(["check-ref-format", &format!("refs/heads/{name}")])
                 .finish(None)?
                 .status
@@ -478,14 +478,22 @@ impl Repo {
         RepoLock::acquire(&self.shared.lock_path)
     }
 
-    /// A git command in the clone, signed in when the repository has a token.
+    /// A git command on the clone, signed in when the repository has a token.
     pub(crate) fn git(&self) -> GitCommand {
-        self.git_in(&self.shared.git_dir)
+        self.git_at(Location::Clone(&self.shared.git_dir))
     }
 
-    /// A git command in `dir`, a checkout of the clone, signed in like [`Self::git`].
-    pub(crate) fn git_in(&self, dir: &Path) -> GitCommand {
-        self.shared.env.command(dir, self.shared.token.as_ref())
+    /// A git command on the repository at `location`, such as a checkout of the clone, signed in
+    /// like [`Self::git`].
+    pub(crate) fn git_at(&self, location: Location<'_>) -> GitCommand {
+        self.shared
+            .env
+            .command(location, self.shared.token.as_ref())
+    }
+
+    /// Moves `path`, in the cache, out of the way and deletes it.
+    pub(crate) fn trash(&self, path: &Path) -> Result<(), Error> {
+        self.shared.env.trash(path)
     }
 
     /// Runs `command`. Its errors say when a download failed, since any command can download

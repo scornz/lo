@@ -264,4 +264,13 @@ fn hashes_a_checkouts_files_as_git_would() {
     for path in ["../repo.git/HEAD", "/etc/passwd", ""] {
         assert!(f.repo.hash_checkout_file(&dir, path).is_err(), "{path}");
     }
+    // Nor in a folder that isn't one of the clone's checkouts, such as another repository.
+    let error = f
+        .repo
+        .hash_checkout_file(&f.remote.work, "README.md")
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("isn't a valid checkout"),
+        "{error}"
+    );
 }

@@ -122,6 +122,56 @@ fn opens_a_bare_partial_clone_on_first_use() {
 }
 
 #[test]
+fn git_never_uses_a_repository_above_the_cache() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    // The user's own repository around the cache, such as dotfiles kept in the home folder. Its
+    // origin has pull request #1; the clone's own remote doesn't exist.
+    let home = TempDir::new().unwrap();
+    git(home.path(), &["init", "-q"]);
+    let origin = format!("{}/owner/repo.git", server.base_url());
+    git(home.path(), &["config", "remote.origin.url", &origin]);
+    let cache = RepoCache::new(
+        home.path().join("Library/Caches/rozed"),
+        Git::find().unwrap(),
+    )
+    .unwrap()
+    .with_remote_base(server.base_url());
+    let repo = cache.open("owner", "not-on-the-server", None).unwrap();
+    // Half deleted, as by a cleanup that was interrupted.
+    fs::remove_file(repo.git_dir().join("HEAD")).unwrap();
+
+    let error = repo.fetch_pull(&refs(1, "trunk")).unwrap_err();
+
+    assert!(matches!(error, Error::Git { .. }), "{error:?}");
+    assert!(
+        error.to_string().contains("not a git repository"),
+        "{error}"
+    );
+    assert!(!error.is_retryable());
+    assert_eq!(
+        git(home.path(), &["for-each-ref", "--format=%(refname)"]),
+        ""
+    );
+    assert!(repo.read_file(&pr.head, "README.md").is_err());
+}
+
+#[test]
+fn a_clone_left_without_head_is_made_again() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    fetch(&repo, 1);
+    fs::remove_file(repo.git_dir().join("HEAD")).unwrap();
+
+    let repo = cache.open("owner", "repo", None).unwrap();
+
+    assert_eq!(fetch(&repo, 1).head, pr.head);
+    assert!(repo.git_dir().join("HEAD").is_file());
+}
+
+#[test]
 fn refuses_names_that_could_leave_the_cache() {
     let server = Server::new();
     let (_dir, cache) = server.cache();

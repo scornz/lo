@@ -123,6 +123,10 @@ impl Error {
         if message.contains("No space left on device") {
             return Error::DiskFull;
         }
+        // The clone itself is gone or broken, which no fetch fixes; opening it again makes it anew.
+        if message.contains("fatal: not a git repository") {
+            return Error::Git { command, message };
+        }
         let fetching = what.is_some() || message.contains("promisor remote");
         if !fetching {
             return Error::Git { command, message };

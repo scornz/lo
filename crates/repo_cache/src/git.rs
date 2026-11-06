@@ -19,6 +19,10 @@
 //!   canonical name.
 //! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
 //!   a repository's own `.gitattributes`), no replace refs, and literal pathspecs.
+//! - Every command names its repository (`--git-dir`, and `--work-tree` for a checkout), and git
+//!   never looks for one in the cache's folder or above it (`GIT_CEILING_DIRECTORIES`). A clone
+//!   that's half deleted is an error, never a reason to use some repository further up, such as
+//!   dotfiles kept in the home folder, with its own remote and config.
 //! - HTTPS only. [`crate::RepoCache::with_remote_base`] allows another protocol for tests.
 //! - `LC_ALL=C`, so the messages rozed reads are in English.
 //!
@@ -234,15 +238,17 @@ impl Git {
         self.version
     }
 
-    /// A git command with rozed's environment (see the module docs), running in `dir`. `home` is
-    /// the empty folder git gets as its `HOME`. With `auth`, git signs in with its token when the
-    /// remote asks, and only then.
+    /// A git command with rozed's environment (see the module docs), working on the repository
+    /// at `location`, which git is always told so it never looks for one. `home` is the empty
+    /// folder git gets as its `HOME`, and git never looks for a repository in `ceiling` or above
+    /// it. With `auth`, git signs in with its token when the remote asks, and only then.
     ///
     /// `config` is extra `name=value` config, which wins over rozed's own: tests allow `file://`.
     pub(crate) fn command(
         &self,
-        dir: &Path,
+        location: Location<'_>,
         home: &Path,
+        ceiling: &Path,
         auth: Option<Auth<'_>>,
         config: &[String],
     ) -> GitCommand {
@@ -251,14 +257,30 @@ impl Git {
             .env_clear()
             .envs(self.inherited.iter().map(|(name, value)| (name, value)))
             .env("HOME", home)
+            .env("GIT_CEILING_DIRECTORIES", ceiling)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_LITERAL_PATHSPECS", "1")
             .env("LC_ALL", "C")
-            .current_dir(dir)
             .stdin(Stdio::null());
+        match location {
+            Location::Nowhere => {
+                command.current_dir(home);
+            }
+            Location::Clone(git_dir) => {
+                command.current_dir(home).arg(git_dir_arg(git_dir));
+            }
+            Location::Checkout { git_dir, work_tree } => {
+                let mut work_tree_arg = OsString::from("--work-tree=");
+                work_tree_arg.push(work_tree);
+                command
+                    .current_dir(work_tree)
+                    .arg(git_dir_arg(git_dir))
+                    .arg(work_tree_arg);
+            }
+        }
         command.args([
             // No credential helper, prompt or redirect: only rozed's helper, added below for the
             // remote's URL, gives git a credential.
@@ -320,6 +342,26 @@ impl Git {
             args: Vec::new(),
         }
     }
+}
+
+/// The repository a git command works on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Location<'a> {
+    /// None, for `git init` and the commands that need no repository.
+    Nowhere,
+    /// A bare clone.
+    Clone(&'a Path),
+    /// A checkout of a clone: its git dir, under the clone's `worktrees/`, and its folder.
+    Checkout {
+        git_dir: &'a Path,
+        work_tree: &'a Path,
+    },
+}
+
+fn git_dir_arg(git_dir: &Path) -> OsString {
+    let mut arg = OsString::from("--git-dir=");
+    arg.push(git_dir);
+    arg
 }
 
 /// How git signs in: with `token`, for `remote` alone.
@@ -723,11 +765,11 @@ mod tests {
         }
 
         /// git run by rozed from inside the hostile environment.
-        fn git(&self, dir: &Path, config: &[&str]) -> GitCommand {
+        fn git(&self, location: Location<'_>, config: &[&str]) -> GitCommand {
             let config: Vec<String> = config.iter().map(|c| c.to_string()).collect();
             Git::with_env(Git::find().unwrap().program, self.env.clone())
                 .unwrap()
-                .command(dir, &self.home, None, &config)
+                .command(location, &self.home, self.dir.path(), None, &config)
         }
 
         /// The hostile programs that ran.
@@ -749,7 +791,7 @@ mod tests {
 
         // No URL rewrite, and git's own upload-pack, not GIT_EXEC_PATH's.
         let refs = hostile
-            .git(hostile.dir.path(), &[ALLOW_FILE])
+            .git(Location::Nowhere, &[ALLOW_FILE])
             .args(["ls-remote", &hostile.url])
             .run()
             .unwrap();
@@ -761,7 +803,7 @@ mod tests {
 
         // git sees no config but rozed's own.
         let config = hostile
-            .git(hostile.dir.path(), &[])
+            .git(Location::Nowhere, &[])
             .args(["config", "--list", "--show-origin"])
             .run()
             .unwrap();
@@ -785,25 +827,29 @@ mod tests {
 
         // A new repository gets no hostile template, and a checkout runs no hook.
         hostile
-            .git(hostile.dir.path(), &[])
+            .git(Location::Nowhere, &[])
             .args(["init", "-q"])
             .arg(&clone)
             .run()
             .unwrap();
         assert!(!clone.join(".git/info/hostile-template").exists());
         let work = hostile.work.to_str().unwrap();
+        let checkout = Location::Checkout {
+            git_dir: &clone.join(".git"),
+            work_tree: &clone,
+        };
         hostile
-            .git(&clone, &[ALLOW_FILE])
+            .git(checkout, &[ALLOW_FILE])
             .args(["fetch", "-q", work, "trunk"])
             .run()
             .unwrap();
         hostile
-            .git(&clone, &[])
+            .git(checkout, &[])
             .args(["checkout", "-q", "FETCH_HEAD"])
             .run()
             .unwrap();
         hostile
-            .git(&clone, &[])
+            .git(checkout, &[])
             .args(["status", "--porcelain"])
             .run()
             .unwrap();
@@ -813,7 +859,6 @@ mod tests {
     #[test]
     fn only_https_is_allowed() {
         let hostile = Hostile::new();
-        let dir = hostile.dir.path();
         for (url, transport) in [
             (hostile.url.as_str(), "file"),
             ("ssh://git@example.invalid/a/b.git", "ssh"),
@@ -822,7 +867,7 @@ mod tests {
             ("ext::sh -c touch% /tmp/rozed-ext", "ext"),
         ] {
             let error = hostile
-                .git(dir, &[])
+                .git(Location::Nowhere, &[])
                 .args(["ls-remote", url])
                 .run()
                 .unwrap_err();
@@ -842,7 +887,7 @@ mod tests {
 
         // Neither the user's attributes nor GIT_ATTR_SOURCE's.
         let attributes = hostile
-            .git(&hostile.dir.path().join("remote.git"), &[])
+            .git(Location::Clone(&hostile.dir.path().join("remote.git")), &[])
             .args(["check-attr", "binary", "diff", "--", "a.txt"])
             .run()
             .unwrap();
@@ -852,7 +897,7 @@ mod tests {
         );
         // Nor the repository's own `.gitattributes`, though the bare remote's HEAD has one.
         let numstat = hostile
-            .git(&hostile.dir.path().join("remote.git"), &[])
+            .git(Location::Clone(&hostile.dir.path().join("remote.git")), &[])
             .args(["diff", "--numstat", &hostile.first, &hostile.second])
             .run()
             .unwrap();
@@ -860,7 +905,13 @@ mod tests {
 
         // `first` is itself, despite refs/replace/ and GIT_REPLACE_REF_BASE.
         let subject = hostile
-            .git(&hostile.work, &[])
+            .git(
+                Location::Checkout {
+                    git_dir: &hostile.work.join(".git"),
+                    work_tree: &hostile.work,
+                },
+                &[],
+            )
             .args(["log", "-1", "--format=%s", &hostile.first])
             .run()
             .unwrap();
@@ -875,7 +926,7 @@ mod tests {
         url: &str,
     ) -> Result<String, Error> {
         let output = git
-            .command(home, home, auth, &[])
+            .command(Location::Nowhere, home, home, auth, &[])
             .args(["credential", "fill"])
             .run_with_input(Some(format!("url={url}\n\n").as_bytes()))?;
         Ok(String::from_utf8(output).unwrap())
@@ -903,7 +954,7 @@ mod tests {
         assert!(credentials.contains("password=gho_secret\n"));
         // The token is in no argument, only in the variable the helper reads.
         let (command, display) = git
-            .command(dir.path(), dir.path(), Some(auth), &[])
+            .command(Location::Nowhere, dir.path(), dir.path(), Some(auth), &[])
             .args(["credential", "fill"])
             .into_command();
         assert!(!display.contains("gho_secret"));

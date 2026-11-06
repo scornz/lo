@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::Error;
-use crate::git::{Auth, Git, GitCommand, Token};
+use crate::git::{Auth, Git, GitCommand, Location, Token};
 use crate::lock::RepoLock;
 use crate::repo::Repo;
 
@@ -32,6 +32,8 @@ pub struct RepoCache {
 #[derive(Clone)]
 pub(crate) struct GitEnv {
     pub git: Git,
+    /// The cache's folder. git never looks for a repository there or above it.
+    pub root: PathBuf,
     pub home: PathBuf,
     /// Where repositories are fetched from: `<remote_base>/<owner>/<repo>.git`. The token goes
     /// to this URL and nowhere else.
@@ -41,13 +43,20 @@ pub(crate) struct GitEnv {
 }
 
 impl GitEnv {
-    /// A git command in `dir`, signing in to the remote with `token` if there is one.
-    pub fn command(&self, dir: &Path, token: Option<&Token>) -> GitCommand {
+    /// A git command on the repository at `location`, signing in to the remote with `token` if
+    /// there is one.
+    pub fn command(&self, location: Location<'_>, token: Option<&Token>) -> GitCommand {
         let auth = token.map(|token| Auth {
             remote: &self.remote_base,
             token,
         });
-        self.git.command(dir, &self.home, auth, &self.config)
+        self.git
+            .command(location, &self.home, &self.root, auth, &self.config)
+    }
+
+    /// Moves `path` out of the way and deletes it (see [`trash`]).
+    pub fn trash(&self, path: &Path) -> Result<(), Error> {
+        trash(&self.root, path)
     }
 }
 
@@ -67,13 +76,14 @@ impl RepoCache {
         // The askpass helper earlier versions wrote, which nothing uses now.
         let _ = fs::remove_file(env_dir.join("askpass.sh"));
         Ok(Self {
-            root,
             env: Arc::new(GitEnv {
                 git,
+                root: root.clone(),
                 home,
                 remote_base: format!("https://{HOST}"),
                 config: Vec::new(),
             }),
+            root,
         })
     }
 
@@ -145,6 +155,12 @@ impl RepoCache {
             if git_dir.join("HEAD").is_file() {
                 self.update_remote(&git_dir, &url)?;
             } else {
+                // A folder without HEAD isn't a clone git can use: what an interrupted deletion
+                // left behind. It goes, and a new clone takes its place.
+                if fs::symlink_metadata(&git_dir).is_ok() {
+                    log::warn!("{} has no HEAD, so making it again", git_dir.display());
+                    self.env.trash(&git_dir)?;
+                }
                 self.create(&git_dir, &url)?;
             }
             stamp_last_used(&git_dir, SystemTime::now())?;
@@ -162,18 +178,11 @@ impl RepoCache {
     /// Creates a bare clone at `git_dir`, set up to fetch from `url`. It's made in a temporary
     /// folder and moved into place, so a clone in the cache is always complete.
     fn create(&self, git_dir: &Path, url: &str) -> Result<(), Error> {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let temporary_root = self.root.join("tmp");
-        fs::create_dir_all(&temporary_root)
-            .map_err(Error::io(format!("creating {}", temporary_root.display())))?;
-        let temporary = temporary_root.join(format!(
-            "{}-{}.git",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+        let temporary = temporary_path(&self.root, "git")?;
         let result = (|| {
             // No template: nothing but what git needs, so no sample hooks.
-            self.git(&temporary_root)
+            self.env
+                .command(Location::Nowhere, None)
                 .args(["init", "--quiet", "--bare", "--template="])
                 .arg(&temporary)
                 .run()?;
@@ -221,8 +230,9 @@ impl RepoCache {
         Ok(())
     }
 
-    fn git(&self, dir: &Path) -> GitCommand {
-        self.env.command(dir, None)
+    /// A git command on the clone at `git_dir`.
+    fn git(&self, git_dir: &Path) -> GitCommand {
+        self.env.command(Location::Clone(git_dir), None)
     }
 
     /// How much disk space the cache takes, in bytes.
@@ -319,10 +329,11 @@ impl RepoCache {
         Ok(clones)
     }
 
-    /// Removes a clone and its checkouts. The caller holds its lock.
+    /// Removes a clone and its checkouts. The caller holds its lock. Each is moved aside before
+    /// it's deleted, so another rozed sees the whole clone or none of it.
     fn remove_clone(&self, owner: &str, repo: &str) -> Result<(), Error> {
-        remove_dir_all_if_exists(&self.repo_checkouts_dir(owner, repo))?;
-        remove_dir_all_if_exists(&self.repo_dir(owner, repo))?;
+        self.env.trash(&self.repo_checkouts_dir(owner, repo))?;
+        self.env.trash(&self.repo_dir(owner, repo))?;
         remove_dir_if_empty(&self.repos_dir().join(owner));
         remove_dir_if_empty(&self.checkouts_root().join(owner));
         Ok(())
@@ -345,7 +356,7 @@ impl RepoCache {
                 if let Some(_lock) = RepoLock::try_acquire(&self.lock_path(&owner_name, &repo))?
                     && !self.repo_dir(&owner_name, &repo).exists()
                 {
-                    remove_dir_all_if_exists(&checkouts)?;
+                    self.env.trash(&checkouts)?;
                 }
             }
             remove_dir_if_empty(&owner);
@@ -356,6 +367,39 @@ impl RepoCache {
     fn checkouts_root(&self) -> PathBuf {
         self.root.join("checkouts").join(HOST)
     }
+}
+
+/// A new, unused path in the cache's `tmp/` folder, ending in `.<extension>`.
+fn temporary_path(root: &Path, extension: &str) -> Result<PathBuf, Error> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let temporary_root = root.join("tmp");
+    fs::create_dir_all(&temporary_root)
+        .map_err(Error::io(format!("creating {}", temporary_root.display())))?;
+    Ok(temporary_root.join(format!(
+        "{}-{}.{extension}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )))
+}
+
+/// Moves `path`, in the cache at `root`, into a new folder in its `tmp/`, then deletes it from
+/// there. Nothing ever finds it half deleted at its own path, where git would look for it. Fine if
+/// it's gone already.
+pub(crate) fn trash(root: &Path, path: &Path) -> Result<(), Error> {
+    let trash = temporary_path(root, "trash")?;
+    fs::create_dir(&trash).map_err(Error::io(format!("creating {}", trash.display())))?;
+    let moved = trash.join(path.file_name().unwrap_or("removed".as_ref()));
+    match fs::rename(path, &moved) {
+        Ok(()) => {}
+        Err(error) => {
+            let _ = fs::remove_dir(&trash);
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(Error::io(format!("moving {} aside", path.display()))(error));
+        }
+    }
+    remove_dir_all_if_exists(&trash)
 }
 
 /// When the clone at `git_dir` was last opened, from its stamp, or the folder's own time if the

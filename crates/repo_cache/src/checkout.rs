@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::git::Location;
 use crate::{Error, Oid, Repo};
 
 impl Repo {
@@ -17,9 +18,13 @@ impl Repo {
     pub fn checkout(&self, number: u64, head: &Oid) -> Result<PathBuf, Error> {
         let dir = self.checkouts_dir().join(format!("pull-{number}"));
         let _lock = self.lock()?;
-        if self.is_worktree(&dir) {
+        if let Some(git_dir) = self.worktree_git_dir(&dir) {
+            let checkout = Location::Checkout {
+                git_dir: &git_dir,
+                work_tree: &dir,
+            };
             let moved = self
-                .run(self.git_in(&dir).args([
+                .run(self.git_at(checkout).args([
                     "checkout",
                     "--quiet",
                     "--force",
@@ -27,16 +32,14 @@ impl Repo {
                     head.as_str(),
                     "--",
                 ]))
-                .and_then(|_| self.run(self.git_in(&dir).args(["clean", "-ffdxq"])));
+                .and_then(|_| self.run(self.git_at(checkout).args(["clean", "-ffdxq"])));
             match moved {
                 Ok(_) => return Ok(dir),
                 // A checkout in a bad state is rebuilt below.
                 Err(error) => log::warn!("rebuilding {}: {error}", dir.display()),
             }
         }
-        if dir.exists() {
-            fs::remove_dir_all(&dir).map_err(Error::io(format!("removing {}", dir.display())))?;
-        }
+        self.trash(&dir)?;
         let parent = dir.parent().expect("a checkout has a parent folder");
         fs::create_dir_all(parent).map_err(Error::io(format!("creating {}", parent.display())))?;
         // Forget worktrees whose folders are gone, such as this one.
@@ -52,7 +55,8 @@ impl Repo {
 
     /// The blob ID git would give the file at `path` in `checkout`, one of this clone's
     /// checkouts, hashing its bytes as they are on disk, without the conversions `.gitattributes`
-    /// asks for. `None` when `path` isn't a regular file there: missing, a folder or a symlink.
+    /// asks for. `None` when `path` isn't a regular file there: missing, a folder or a symlink. A
+    /// folder that isn't one of this clone's checkouts is an error.
     ///
     /// A checkout's file can differ from the head's blob: changed on disk, or two names that
     /// differ only in case sharing one file on a case-insensitive disk. Compare before letting a
@@ -69,34 +73,35 @@ impl Repo {
                 value: path.to_string(),
             });
         }
+        let Some(git_dir) = self.worktree_git_dir(checkout) else {
+            return Err(Error::Invalid {
+                what: "checkout",
+                value: checkout.display().to_string(),
+            });
+        };
         let is_file = fs::symlink_metadata(checkout.join(relative))
             .is_ok_and(|metadata| metadata.file_type().is_file());
         if !is_file {
             return Ok(None);
         }
         let output = self.run(
-            self.git_in(checkout)
-                .args(["hash-object", "--no-filters", "--"])
-                .arg(path),
+            self.git_at(Location::Checkout {
+                git_dir: &git_dir,
+                work_tree: checkout,
+            })
+            .args(["hash-object", "--no-filters", "--"])
+            .arg(path),
         )?;
         crate::oid::parse_output(&output).map(Some)
     }
 
-    /// Whether `dir` is a worktree of this clone, judged from its `.git` file rather than by
-    /// running git there, which could find some other repository further up.
-    fn is_worktree(&self, dir: &Path) -> bool {
-        let Ok(dot_git) = fs::read_to_string(dir.join(".git")) else {
-            return false;
-        };
-        let Some(worktree_git_dir) = dot_git.strip_prefix("gitdir:") else {
-            return false;
-        };
-        let (Ok(worktree_git_dir), Ok(worktrees)) = (
-            fs::canonicalize(worktree_git_dir.trim()),
-            fs::canonicalize(self.git_dir().join("worktrees")),
-        ) else {
-            return false;
-        };
-        worktree_git_dir.starts_with(worktrees)
+    /// The git dir of the checkout in `dir`, if it's one of this clone's, judged from its `.git`
+    /// file rather than by running git there, which could find some other repository.
+    fn worktree_git_dir(&self, dir: &Path) -> Option<PathBuf> {
+        let dot_git = fs::read_to_string(dir.join(".git")).ok()?;
+        let worktree_git_dir = dot_git.strip_prefix("gitdir:")?;
+        let worktree_git_dir = fs::canonicalize(worktree_git_dir.trim()).ok()?;
+        let worktrees = fs::canonicalize(self.git_dir().join("worktrees")).ok()?;
+        (worktree_git_dir.parent() == Some(worktrees.as_path())).then_some(worktree_git_dir)
     }
 }
