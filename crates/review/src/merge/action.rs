@@ -173,6 +173,21 @@ mod tests {
     }
 
     #[test]
+    fn a_pull_request_behind_its_base_still_joins_the_queue() {
+        let snapshot = MergeSnapshot {
+            merge_state: MergeStateStatus::Behind,
+            ..with_queue(ready(), None)
+        };
+
+        assert_eq!(
+            merge_action(&snapshot),
+            MergeAction::Enqueue {
+                method: Some(MergeMethod::Squash)
+            }
+        );
+    }
+
+    #[test]
     fn a_pull_request_in_the_queue_is_not_added_again() {
         assert_eq!(
             merge_action(&with_queue(ready(), Some(2))),

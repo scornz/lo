@@ -145,7 +145,7 @@ pub struct MergeSnapshot {
     /// commits the head doesn't. The caller works it out from the base's rules (strict required
     /// status checks) and the local copy, because `mergeStateStatus` says `BEHIND` only when nothing
     /// else blocks the merge. It's ignored on a branch that requires a merge queue, since the queue
-    /// tests each pull request on the latest base itself.
+    /// tests each pull request on the latest base itself, and so is GitHub's `BEHIND` there.
     pub out_of_date: bool,
     /// Other rules on the base branch the pull request doesn't meet yet, such as required
     /// deployments or signed commits.

@@ -86,7 +86,9 @@ impl Blocker {
 /// - A merged or closed pull request has only [`Blocker::Merged`] or [`Blocker::Closed`].
 /// - A draft is `isDraft`, or `mergeStateStatus` `DRAFT`, which REST still reports.
 /// - It conflicts when `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`.
-/// - It's out of date when `mergeStateStatus` is `BEHIND`, or the caller says so.
+/// - It's out of date when `mergeStateStatus` is `BEHIND`, or the caller says so, except on a
+///   branch that requires a merge queue, which tests each pull request on the latest base itself.
+///   There `BEHIND` means nothing blocks joining the queue.
 /// - Reviews block it only when `reviewDecision` says so. With `CHANGES_REQUESTED`, the
 ///   requesters are listed, and the missing approvals when any are; with `REVIEW_REQUIRED`, the
 ///   missing approvals always are.
@@ -127,8 +129,8 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     if snapshot.mergeable == MergeableState::Conflicting || merge_state == MergeStateStatus::Dirty {
         blockers.push(Blocker::Conflicts);
     }
-    if merge_state == MergeStateStatus::Behind || (snapshot.out_of_date && !snapshot.queue.required)
-    {
+    let behind = merge_state == MergeStateStatus::Behind || snapshot.out_of_date;
+    if behind && !snapshot.queue.required {
         blockers.push(Blocker::OutOfDate);
     }
     let decision = snapshot.review_decision;
@@ -333,16 +335,23 @@ mod tests {
 
     #[test]
     fn being_behind_does_not_block_joining_a_merge_queue() {
-        let snapshot = MergeSnapshot {
+        let queue = MergeQueue {
+            required: true,
+            ..Default::default()
+        };
+        let flagged = MergeSnapshot {
             out_of_date: true,
-            queue: MergeQueue {
-                required: true,
-                ..Default::default()
-            },
+            queue,
+            ..ready()
+        };
+        let behind = MergeSnapshot {
+            merge_state: MergeStateStatus::Behind,
+            queue,
             ..ready()
         };
 
-        assert_eq!(blockers(&snapshot), []);
+        assert_eq!(blockers(&flagged), []);
+        assert_eq!(blockers(&behind), []);
     }
 
     #[test]
