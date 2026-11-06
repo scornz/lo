@@ -260,7 +260,15 @@ impl PrCache {
                 fetched_at: from_secs(fetched_at),
             })),
             Err(error) => {
-                log::warn!("ignoring a cached {} for {target:?}: {error}", T::NAME);
+                // serde's message can quote the JSON, which holds private repositories' titles
+                // and paths: log only what kind of error it was, and where.
+                log::warn!(
+                    "ignoring a cached {} for {target:?}: {:?} error at line {}, column {}",
+                    T::NAME,
+                    error.classify(),
+                    error.line(),
+                    error.column()
+                );
                 Ok(None)
             }
         }
