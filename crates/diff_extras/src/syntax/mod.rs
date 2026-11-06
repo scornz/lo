@@ -10,8 +10,12 @@ mod dijkstra;
 mod graph;
 mod language;
 #[allow(dead_code)]
+mod lcs;
+#[allow(dead_code)]
 mod nodes;
 #[allow(dead_code)]
 mod parse;
+#[allow(dead_code)]
+mod unchanged;
 
 pub use language::Language;
