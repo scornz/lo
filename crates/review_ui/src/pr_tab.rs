@@ -1119,11 +1119,15 @@ mod tests {
         );
     }
 
+    /// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
+    /// keymap, and rozed's changes to every workspace.
     fn init(cx: &mut TestAppContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
+            command_palette_hooks::init(cx);
             editor::init(cx);
             crate::init_workspaces(cx);
+            crate::keymap::load(cx);
         });
     }
 
@@ -1556,7 +1560,7 @@ mod tests {
         cx.simulate_keystrokes("alt-o");
         assert_eq!(selected(cx).0, FileOrder::Review);
 
-        // Escape goes back to the diff, and the file list hides again.
+        // Escape goes back to the diff, leaving the list shown, and cmd-b then hides it.
         cx.simulate_keystrokes("escape");
         assert!(!in_file_list(cx));
         cx.simulate_keystrokes("cmd-b");
@@ -1658,28 +1662,79 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn the_window_offers_no_new_files_and_opens_editors_read_only(cx: &mut TestAppContext) {
+    async fn no_file_action_runs_or_shows_in_the_command_palette(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
-
-        // A double click in the tab bar or an empty pane, which focuses the pane, sends NewFile.
+        // Where the command palette sends an action: what had focus, here an empty pane, which a
+        // double click in the tab bar also sends NewFile to.
         workspace.update_in(cx, |workspace, window, cx| {
             window.focus(&workspace.active_pane().focus_handle(cx), cx)
         });
         cx.run_until_parked();
-        cx.dispatch_action(workspace::NewFile);
-        cx.run_until_parked();
-        let items = |cx: &mut VisualTestContext| {
-            workspace.read_with(cx, |workspace, cx| workspace.items(cx).count())
-        };
-        assert_eq!(items(cx), 0);
 
-        // What a file header's Open File opens.
-        let editor = workspace.update_in(cx, |workspace, window, cx| {
-            let editor = cx.new(|cx| Editor::single_line(window, cx));
-            workspace.add_item_to_active_pane(Box::new(editor.clone()), None, true, window, cx);
-            editor
-        });
-        assert_eq!(items(cx), 1);
+        let names = crate::read_only::FileActions::names();
+        for name in [
+            "workspace::NewFile",
+            "workspace::NewFileSplit",
+            "workspace::NewFileSplitVertical",
+            "workspace::NewFileSplitHorizontal",
+            "workspace::NewWindow",
+            "workspace::SaveAs",
+            "workspace::Open",
+        ] {
+            assert!(names.contains(&name), "{name}");
+        }
+        for name in names {
+            // Two take an argument: which recent project, and which way to split.
+            let data = match name {
+                "welcome::OpenRecentProject" => Some(serde_json::json!(0)),
+                "workspace::NewFileSplit" => Some(serde_json::json!("right")),
+                _ => None,
+            };
+            let action = cx.update(|_, cx| cx.build_action(name, data)).unwrap();
+            let hidden = cx.update(|_, cx| {
+                command_palette_hooks::CommandPaletteFilter::try_global(cx)
+                    .is_some_and(|filter| filter.is_hidden(&*action))
+            });
+            assert!(hidden, "the command palette lists {name}");
+            cx.update(|window, cx| window.dispatch_action(action.boxed_clone(), cx));
+            cx.run_until_parked();
+            assert_eq!(
+                workspace.read_with(cx, |workspace, cx| workspace.items(cx).count()),
+                0,
+                "{name} opened something"
+            );
+            assert_eq!(cx.update(|_, cx| cx.windows().len()), 1, "{name}");
+            assert_eq!(worktrees(&workspace, cx), 0, "{name}");
+        }
+    }
+
+    #[gpui::test]
+    async fn the_window_opens_editors_read_only(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        // A trusted checkout is a folder of the project, and a file header's Open File opens one
+        // of its files in an ordinary editor.
+        let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        let (worktree, _) = project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree("/elsewhere", true, cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+        let path = RelPath::from_unix_str("src/main.rs").unwrap().into_arc();
+        let item = workspace
+            .update_in(cx, |workspace, window, cx| {
+                workspace.open_path((worktree_id, path), None, true, window, cx)
+            })
+            .await
+            .unwrap();
+
+        let editor = item.downcast::<Editor>().unwrap();
+        assert_eq!(
+            workspace.read_with(cx, |workspace, cx| workspace.items(cx).count()),
+            1
+        );
         assert!(editor.read_with(cx, |editor, cx| editor.read_only(cx)));
     }
 }

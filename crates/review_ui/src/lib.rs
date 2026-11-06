@@ -5,6 +5,7 @@ pub mod account;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
+pub mod keymap;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
@@ -35,10 +36,12 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     init_workspaces(cx);
 }
 
-/// [`init`] without the GitHub layer, for tests: pull requests open without signing in.
+/// [`init`] without the GitHub layer, for tests: pull requests open without signing in. Call it
+/// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
     pr_tab::bind_keys(cx);
     open_box::bind_keys(cx);
+    read_only::hide_from_palette(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;

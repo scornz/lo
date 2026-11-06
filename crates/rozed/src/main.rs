@@ -6,7 +6,6 @@
 mod accounts_ui;
 mod forced_settings;
 mod http;
-mod keymap;
 mod rust_toolchain;
 
 use std::io::IsTerminal as _;
@@ -234,7 +233,7 @@ fn main() {
             MenuItem::separator(),
             MenuItem::action("Quit rozed", zed_actions::Quit),
         ])]);
-        keymap::load(cx);
+        review_ui::keymap::load(cx);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
