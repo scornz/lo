@@ -1,0 +1,25 @@
+# Git hooks, installed by `pnpm install` (the `prepare` script runs `lefthook install`).
+# Docs: https://lefthook.dev/configuration/
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: script/hooks/with-toolchain.sh pnpm exec commitlint --edit {1}
+
+pre-commit:
+  piped: true
+  jobs:
+    - name: block-main-commit
+      run: script/hooks/block-main-commit.sh
+    # rustfmt rather than `cargo fmt`, which would format the whole workspace. rustfmt.toml sets the
+    # edition.
+    - name: rustfmt
+      glob: '*.rs'
+      run: script/hooks/with-toolchain.sh rustfmt {staged_files}
+      stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: block-main-push
+      run: script/hooks/block-main-push.sh
+      use_stdin: true

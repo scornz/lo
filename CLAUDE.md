@@ -39,7 +39,9 @@ pnpm install                         # commitlint and lefthook; installs the git
 ```
 
 Rust comes from rustup. `rust-toolchain.toml` pins Zed's toolchain, and cargo installs it on first
-use. If your shell doesn't activate mise, prefix Node and pnpm commands with `mise exec --`.
+use. If your shell doesn't activate mise, prefix Node and pnpm commands with `mise exec --`. Run
+`pnpm install` in every new clone and worktree, because the `commit-msg` hook runs commitlint from
+its `node_modules`.
 
 ## Build, test and run
 
