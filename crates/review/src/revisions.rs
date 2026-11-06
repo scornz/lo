@@ -224,6 +224,16 @@ impl Revisions {
             .find(|revision| revision.available)
     }
 
+    /// The position of the newest revision a marker commit covers, for comparing from it: the
+    /// revision with that head, or else the one before the first revision containing it. Comparing
+    /// from the revision containing it would hide what that revision added after the commit.
+    fn covered(&self, commit: &str) -> Option<usize> {
+        match self.position(commit) {
+            Some(index) => Some(index),
+            None => self.locate(commit)?.checked_sub(1),
+        }
+    }
+
     /// The position of the revision a marker commit points at. See [`Revisions::find`].
     fn locate(&self, commit: &str) -> Option<usize> {
         self.position(commit).or_else(|| {
