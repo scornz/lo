@@ -98,6 +98,22 @@ impl Remote {
         self
     }
 
+    /// Points the submodule at `path` at `commit`, a commit in another repository, without
+    /// checking it out.
+    pub fn gitlink(&self, path: &str, commit: &str) -> &Self {
+        fs::create_dir_all(self.work.join(path)).unwrap();
+        git(
+            &self.work,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{commit},{path}"),
+            ],
+        );
+        self
+    }
+
     /// Commits everything in the working copy and returns the commit.
     pub fn commit(&self, message: &str) -> Oid {
         git(&self.work, &["add", "-A"]);

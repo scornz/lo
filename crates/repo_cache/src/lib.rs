@@ -7,16 +7,26 @@
 //! it.
 //!
 //! ```no_run
-//! use repo_cache::{Git, RepoCache};
+//! use repo_cache::{Git, PullRequestRefs, RepoCache};
 //!
 //! let cache = RepoCache::new("/Users/me/Library/Caches/rozed", Git::find()?)?;
 //! let repo = cache.open("sharkdp", "fd", None)?;
-//! let head = repo.fetch_pull(2212)?;
-//! let base_tip = repo.fetch_branch("master")?;
-//! let base = repo.merge_base(&head, &base_tip)?.expect("shared history");
-//! for file in repo.changed_files(&base, &head)? {
-//!     let old = file.old_path().map(|path| repo.read_blob(&base, path)).transpose()?;
-//!     println!("{} ({:?}, {} bytes before)", file.path(), file.change, old.flatten().map_or(0, |o| o.len()));
+//! let pull = repo.fetch_pull(&PullRequestRefs {
+//!     number: 2212,
+//!     head: Some("22c70acc6992c0c51cb68527b87adf114d01acbc".parse()?),
+//!     base_branch: "master".into(),
+//!     base: None,
+//! })?;
+//! let base = repo.merge_base(&pull.head, &pull.base_tip)?.expect("shared history");
+//! for file in repo.changed_files(&base, &pull.head)? {
+//!     if file.is_submodule() || file.binary {
+//!         continue;
+//!     }
+//!     let old = match &file.old {
+//!         Some(old) => repo.read_blob(&old.oid)?.unwrap_or_default(),
+//!         None => Vec::new(),
+//!     };
+//!     println!("{}: {:?}, {} bytes before", file.path(), file.change, old.len());
 //! }
 //! # Ok::<(), repo_cache::Error>(())
 //! ```
@@ -27,6 +37,7 @@ mod cat_file;
 mod diff;
 mod error;
 mod git;
+mod lock;
 mod oid;
 mod progress;
 mod repo;
@@ -37,4 +48,4 @@ pub use error::{Error, FetchFailure};
 pub use git::{Git, GitVersion, Token};
 pub use oid::Oid;
 pub use progress::Progress;
-pub use repo::Repo;
+pub use repo::{BaseSource, FetchedPull, HeadSource, PullRequestRefs, Repo};

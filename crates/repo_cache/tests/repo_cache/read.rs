@@ -4,18 +4,27 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 use repo_cache::{
-    Change, ChangedFile, Error, FetchFailure, FileMode, FileVersion, LineCounts, Oid, Repo,
+    Change, ChangedFile, Error, FetchFailure, FileMode, FileVersion, LineCounts, Oid,
+    PullRequestRefs, Repo,
 };
 use tempfile::TempDir;
 
 use crate::support::{Remote, Server, blob_id, missing_objects, rust_source};
 
+/// The commits the submodule points at. Neither is on the server, so fetching either fails.
+const SUBMODULE_BEFORE: &str = "1111111111111111111111111111111111111111";
+const SUBMODULE_AFTER: &str = "2222222222222222222222222222222222222222";
+
 /// A pull request that changes a file of every kind, and the clone it's fetched into:
 ///
 /// - `keep.txt` modified, `run.sh` made executable, `data.bin` (binary) modified;
+/// - `crlf.txt`'s line endings changed to CRLF;
 /// - `old_name.rs` renamed to `src/new_name.rs` and edited;
 /// - `gone.txt` deleted, `added.txt` added;
-/// - `link`, a symlink, replaced by a file.
+/// - `link`, a symlink, replaced by a file;
+/// - `vendor/lib`, a submodule, moved to another commit.
+///
+/// Every commit has a `.gitattributes` calling `*.txt` binary, which rozed ignores.
 struct Fixture {
     server: Server,
     remote: Remote,
@@ -30,29 +39,35 @@ struct Fixture {
 fn fixture() -> Fixture {
     let server = Server::new();
     let remote = server.repo("owner", "repo");
-    remote.write("keep.txt", "keep, first version\n");
+    remote
+        .write(".gitattributes", "*.txt binary\n")
+        .write("keep.txt", "keep, first version\n");
     let first = remote.commit("first");
 
     remote
         .write("keep.txt", "keep\n")
+        .write("crlf.txt", "one\ntwo\n")
         .write("run.sh", "echo run\n")
         .write("old_name.rs", rust_source(""))
         .write("gone.txt", "gone\n")
         .write("data.bin", b"\x00\x01\x02base")
-        .write("odd\nname.txt", "a line break in the name\n");
+        .write("odd\nname.txt", "a line break in the name\n")
+        .gitlink("vendor/lib", SUBMODULE_BEFORE);
     symlink("keep.txt", remote.work.join("link")).unwrap();
     let base = remote.commit("base");
 
     remote
         .switch("feature")
         .write("keep.txt", "keep, changed\n")
+        .write("crlf.txt", "one\r\ntwo\r\n")
         .write("data.bin", b"\x00\x01\x02head")
         .remove("old_name.rs")
         .write("src/new_name.rs", rust_source("pub fn added() {}\n"))
         .remove("gone.txt")
         .write("added.txt", "added\n")
         .remove("link")
-        .write("link", "a file now\n");
+        .write("link", "a file now\n")
+        .gitlink("vendor/lib", SUBMODULE_AFTER);
     let run = remote.work.join("run.sh");
     fs::set_permissions(&run, fs::Permissions::from_mode(0o755)).unwrap();
     let head = remote.commit("head");
@@ -66,8 +81,16 @@ fn fixture() -> Fixture {
 
     let (cache_dir, cache) = server.cache();
     let repo = cache.open("owner", "repo", None).unwrap();
-    assert_eq!(repo.fetch_pull(1).unwrap(), head);
-    assert_eq!(repo.fetch_branch("trunk").unwrap(), trunk_tip);
+    let fetched = repo
+        .fetch_pull(&PullRequestRefs {
+            number: 1,
+            head: Some(head.clone()),
+            base_branch: "trunk".into(),
+            base: None,
+        })
+        .unwrap();
+    assert_eq!(fetched.head, head);
+    assert_eq!(fetched.base_tip, trunk_tip);
     Fixture {
         server,
         remote,
@@ -91,7 +114,7 @@ impl Fixture {
 }
 
 #[test]
-fn lists_what_changed_with_renames_binary_files_and_modes() {
+fn lists_what_changed_with_renames_binary_files_modes_and_submodules() {
     let f = fixture();
 
     let files = f.repo.changed_files(&f.base, &f.head).unwrap();
@@ -106,6 +129,13 @@ fn lists_what_changed_with_renames_binary_files_and_modes() {
         lines,
     };
     let (base, head) = (&f.base, &f.head);
+    let submodule = |oid: &str| {
+        Some(FileVersion {
+            path: "vendor/lib".into(),
+            oid: oid.parse().unwrap(),
+            mode: FileMode::Submodule,
+        })
+    };
     let expected = vec![
         file(
             Change::Added,
@@ -113,6 +143,13 @@ fn lists_what_changed_with_renames_binary_files_and_modes() {
             f.version(head, "added.txt", regular),
             false,
             lines(1, 0),
+        ),
+        file(
+            Change::Modified,
+            f.version(base, "crlf.txt", regular),
+            f.version(head, "crlf.txt", regular),
+            false,
+            lines(2, 2),
         ),
         file(
             Change::Modified,
@@ -156,11 +193,21 @@ fn lists_what_changed_with_renames_binary_files_and_modes() {
             false,
             lines(1, 0),
         ),
+        file(
+            Change::Modified,
+            submodule(SUBMODULE_BEFORE),
+            submodule(SUBMODULE_AFTER),
+            false,
+            None,
+        ),
     ];
     assert_eq!(files, expected);
-    assert_eq!(files[2].path(), "gone.txt");
-    assert_eq!(files[6].path(), "src/new_name.rs");
-    assert_eq!(files[6].old_path(), Some("old_name.rs"));
+    assert_eq!(files[3].path(), "gone.txt");
+    assert_eq!(files[7].path(), "src/new_name.rs");
+    assert_eq!(files[7].old_path(), Some("old_name.rs"));
+    assert!(files[6].is_mode_change_only());
+    assert!(!files[4].is_mode_change_only());
+    assert!(files[8].is_submodule());
 }
 
 #[test]
@@ -185,17 +232,39 @@ fn listing_changes_downloads_both_sides_at_once() {
 }
 
 #[test]
-fn reads_files_at_any_revision() {
+fn reads_files_by_blob_id() {
     let f = fixture();
-    let read = |rev: &Oid, path: &str| f.repo.read_blob(rev, path).unwrap();
+    let files = f.repo.changed_files(&f.base, &f.head).unwrap();
+    let renamed = &files[7];
+
+    let read = |version: &Option<FileVersion>| {
+        f.repo
+            .read_blob(&version.as_ref().unwrap().oid)
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(read(&renamed.old), rust_source("").into_bytes());
+    assert_eq!(
+        read(&renamed.new),
+        rust_source("pub fn added() {}\n").into_bytes()
+    );
+    assert_eq!(read(&files[2].new), b"\x00\x01\x02head");
+    // A symlink's contents are its target.
+    assert_eq!(read(&files[5].old), b"keep.txt");
+
+    let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
+    assert!(f.repo.read_blob(&f.head).is_err(), "a commit isn't a file");
+    let _ = unknown;
+}
+
+#[test]
+fn reads_files_by_path_at_any_revision() {
+    let f = fixture();
+    let read = |rev: &Oid, path: &str| f.repo.read_file(rev, path).unwrap();
 
     assert_eq!(
         read(&f.base, "old_name.rs").unwrap(),
         rust_source("").into_bytes()
-    );
-    assert_eq!(
-        read(&f.head, "src/new_name.rs").unwrap(),
-        rust_source("pub fn added() {}\n").into_bytes()
     );
     assert_eq!(read(&f.head, "data.bin").unwrap(), b"\x00\x01\x02head");
     assert_eq!(
@@ -206,8 +275,6 @@ fn reads_files_at_any_revision() {
         read(&f.trunk_tip, "trunk.txt").unwrap(),
         b"trunk moved on\n"
     );
-    // A symlink's contents are its target.
-    assert_eq!(read(&f.base, "link").unwrap(), b"keep.txt");
     assert_eq!(
         read(&f.base, "odd\nname.txt").unwrap(),
         b"a line break in the name\n"
@@ -216,14 +283,37 @@ fn reads_files_at_any_revision() {
     assert_eq!(read(&f.base, "added.txt"), None);
     assert_eq!(read(&f.head, "gone.txt"), None);
     assert_eq!(read(&f.head, "odd\nmissing.txt"), None);
-    assert!(
-        f.repo.read_blob(&f.head, "src").is_err(),
-        "a folder isn't a file"
-    );
+    // Pathspec magic and globs are just names.
+    assert_eq!(read(&f.head, "*.txt"), None);
+    assert_eq!(read(&f.head, ":(glob)**/*.rs"), None);
+    assert_eq!(read(&f.head, "src/"), None);
+
+    let error = f.repo.read_file(&f.head, "src").unwrap_err();
+    assert!(error.to_string().contains("src is a tree"), "{error}");
     assert!(matches!(
-        f.repo.read_blob(&f.head, ""),
+        f.repo.read_file(&f.head, ""),
         Err(Error::Invalid { .. })
     ));
+}
+
+#[test]
+fn never_fetches_a_submodules_commit() {
+    let f = fixture();
+
+    // The submodule's commits aren't on the server, so fetching either would fail.
+    let files = f.repo.changed_files(&f.base, &f.head).unwrap();
+    assert!(files.iter().any(|file| file.is_submodule()));
+    let error = f.repo.read_file(&f.head, "vendor/lib").unwrap_err();
+    assert!(
+        error.to_string().contains("vendor/lib is a submodule"),
+        "{error}"
+    );
+
+    // Everything else still reads.
+    assert_eq!(
+        f.repo.read_file(&f.head, "keep.txt").unwrap().unwrap(),
+        b"keep, changed\n"
+    );
 }
 
 #[test]
@@ -233,7 +323,7 @@ fn reading_a_file_downloads_it_once() {
     let blob = blob_id(&f.remote.work, &f.first, "keep.txt");
     assert!(missing_objects(git_dir, f.first.as_str()).contains(&blob));
 
-    f.repo.read_blob(&f.first, "keep.txt").unwrap();
+    f.repo.read_file(&f.first, "keep.txt").unwrap();
 
     assert!(!missing_objects(git_dir, f.first.as_str()).contains(&blob));
 }
@@ -242,11 +332,11 @@ fn reading_a_file_downloads_it_once() {
 fn a_failed_download_is_a_fetch_error_and_the_next_read_recovers() {
     let f = fixture();
     // Start the long-lived reader, then take the server away.
-    f.repo.read_blob(&f.head, "keep.txt").unwrap();
+    f.repo.read_file(&f.head, "keep.txt").unwrap();
     let moved = f.remote.git_dir.with_extension("moved");
     fs::rename(&f.remote.git_dir, &moved).unwrap();
 
-    let error = f.repo.read_blob(&f.first, "keep.txt").unwrap_err();
+    let error = f.repo.read_file(&f.first, "keep.txt").unwrap_err();
     assert!(
         matches!(
             error,
@@ -260,7 +350,7 @@ fn a_failed_download_is_a_fetch_error_and_the_next_read_recovers() {
 
     fs::rename(&moved, &f.remote.git_dir).unwrap();
     assert_eq!(
-        f.repo.read_blob(&f.first, "keep.txt").unwrap().unwrap(),
+        f.repo.read_file(&f.first, "keep.txt").unwrap().unwrap(),
         b"keep, first version\n"
     );
     let _ = &f.server;
@@ -280,11 +370,22 @@ fn finds_merge_bases_and_ancestors() {
     assert!(!repo.is_ancestor(&f.head, &f.base).unwrap());
     assert!(!repo.is_ancestor(&f.trunk_tip, &f.head).unwrap());
 
-    // A branch with no history in common.
+    // A pull request with no history in common with its base.
     f.remote.orphan("unrelated").write("other.txt", "other\n");
-    f.remote.commit("unrelated");
-    f.remote.publish("refs/heads/unrelated");
-    let unrelated = repo.fetch_branch("unrelated").unwrap();
-    assert_eq!(repo.merge_base(&f.head, &unrelated).unwrap(), None);
+    let unrelated = f.remote.commit("unrelated");
+    f.remote.publish("refs/pull/2/head");
+    let fetched = repo
+        .fetch_pull(&PullRequestRefs {
+            number: 2,
+            head: None,
+            base_branch: "trunk".into(),
+            base: None,
+        })
+        .unwrap();
+    assert_eq!(fetched.head, unrelated);
+    assert_eq!(repo.merge_base(&unrelated, &f.head).unwrap(), None);
     assert!(!repo.is_ancestor(&unrelated, &f.head).unwrap());
+    // A commit the clone doesn't have is an error, not "no history in common".
+    let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
+    assert!(repo.merge_base(&unknown, &f.head).is_err());
 }

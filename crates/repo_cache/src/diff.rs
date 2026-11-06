@@ -12,7 +12,7 @@ pub struct ChangedFile {
     pub new: Option<FileVersion>,
     /// Whether git considers either side binary, from its content or `.gitattributes`.
     pub binary: bool,
-    /// Lines added and deleted. `None` for a binary file.
+    /// Lines added and deleted. `None` for a binary file or a submodule.
     pub lines: Option<LineCounts>,
 }
 
@@ -34,7 +34,8 @@ pub enum Change {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileVersion {
     pub path: String,
-    /// The blob, or for a submodule the commit it points at.
+    /// The blob, to read with [`crate::Repo::read_blob`]. For a submodule, the commit it points
+    /// at, which is in another repository: never read it.
     pub oid: Oid,
     pub mode: FileMode,
 }
@@ -54,6 +55,20 @@ pub struct LineCounts {
 }
 
 impl ChangedFile {
+    /// Whether only the file's mode changed, such as being made executable.
+    pub fn is_mode_change_only(&self) -> bool {
+        matches!((&self.old, &self.new), (Some(old), Some(new))
+            if old.oid == new.oid && old.mode != new.mode && old.path == new.path)
+    }
+
+    /// Whether either side is a submodule.
+    pub fn is_submodule(&self) -> bool {
+        [&self.old, &self.new]
+            .into_iter()
+            .flatten()
+            .any(|version| version.mode == FileMode::Submodule)
+    }
+
     /// The path to show: the new path, or the old one for a deleted file.
     pub fn path(&self) -> &str {
         self.new
@@ -157,8 +172,14 @@ pub(crate) fn parse(output: &[u8]) -> Result<Vec<ChangedFile>, Error> {
                 file.path()
             )));
         }
+        let submodule = [&file.old, &file.new]
+            .into_iter()
+            .flatten()
+            .any(|version| version.mode == FileMode::Submodule);
         if added == "-" && deleted == "-" {
             file.binary = true;
+        } else if submodule {
+            // git counts the "Subproject commit" lines it makes up.
         } else {
             let count = |count: &str| {
                 count
@@ -324,7 +345,7 @@ mod tests {
                 version("vendor/lib", A, FileMode::Submodule),
                 version("vendor/lib", B, FileMode::Submodule),
                 false,
-                lines(1, 1),
+                None,
             ),
         ];
         assert_eq!(files.len(), expected.len());

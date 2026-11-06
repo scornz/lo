@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::Error;
 use crate::askpass;
 use crate::git::{Auth, Git, GitCommand, Token};
+use crate::lock::RepoLock;
 use crate::repo::Repo;
 
 /// rozed's local copies of repositories, in one folder (`~/Library/Caches/rozed`):
@@ -18,6 +19,8 @@ use crate::repo::Repo;
 ///   goes under rozed's own refs, `refs/rozed/...`.
 /// - `checkouts/github.com/<owner>/<repo>/pull-<n>`: a checkout of a pull request's head, for
 ///   language servers.
+/// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone (see
+///   [`crate::lock`]).
 /// - `git-env/`: the askpass helper and the empty `HOME` git runs with.
 ///
 /// Folder names are lowercase, since GitHub's owner and repository names aren't case-sensitive.
@@ -105,24 +108,51 @@ impl RepoCache {
             .join(format!("{}.git", repo.to_ascii_lowercase()))
     }
 
+    /// Where the checkouts of `owner/repo`'s pull requests live.
+    fn repo_checkouts_dir(&self, owner: &str, repo: &str) -> PathBuf {
+        self.root
+            .join("checkouts")
+            .join(HOST)
+            .join(owner.to_ascii_lowercase())
+            .join(repo.to_ascii_lowercase())
+    }
+
+    /// The lock held while writing to `owner/repo`'s clone or its checkouts.
+    fn lock_path(&self, owner: &str, repo: &str) -> PathBuf {
+        self.root
+            .join("locks")
+            .join(HOST)
+            .join(owner.to_ascii_lowercase())
+            .join(format!("{}.lock", repo.to_ascii_lowercase()))
+    }
+
     /// The clone of `owner/repo`, created on first use. Nothing is fetched yet; the first fetch
     /// downloads the history it needs. With `token`, git signs in with it whenever GitHub asks,
     /// including when reading a file downloads it.
+    ///
+    /// Pass the repository's canonical name, GitHub's `full_name` for it, not a name from a link:
+    /// a renamed or transferred repository then keeps one clone.
     pub fn open(&self, owner: &str, repo: &str, token: Option<Token>) -> Result<Repo, Error> {
         check_name("repository owner", owner)?;
         check_name("repository name", repo)?;
         let git_dir = self.repo_dir(owner, repo);
+        let lock_path = self.lock_path(owner, repo);
         let url = format!("{}/{owner}/{repo}.git", self.remote_base);
-        if git_dir.join("HEAD").is_file() {
-            self.update_remote(&git_dir, &url)?;
-        } else {
-            self.create(&git_dir, &url)?;
+        {
+            let _lock = RepoLock::acquire(&lock_path)?;
+            if git_dir.join("HEAD").is_file() {
+                self.update_remote(&git_dir, &url)?;
+            } else {
+                self.create(&git_dir, &url)?;
+            }
+            stamp_last_used(&git_dir, SystemTime::now())?;
         }
-        stamp_last_used(&git_dir, SystemTime::now())?;
         Ok(Repo::new(
             self.env.clone(),
             format!("{owner}/{repo}"),
             git_dir,
+            self.repo_checkouts_dir(owner, repo),
+            lock_path,
             token,
         ))
     }
@@ -174,7 +204,8 @@ impl RepoCache {
         result
     }
 
-    /// Points the clone at `url` if it points somewhere else.
+    /// Points the clone at `url` if it points somewhere else. Config is written only when it
+    /// changes, so opening a clone usually writes nothing.
     fn update_remote(&self, git_dir: &Path, url: &str) -> Result<(), Error> {
         let current = self
             .git(git_dir)
