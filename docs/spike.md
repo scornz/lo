@@ -62,8 +62,14 @@ CI, `rust` job on `macos-26` (arm64):
 |---|---|
 | No cache | 10 min (fetching and building xtask 3 min, clippy 2 min, tests 3 min) |
 | Cached | 8.5 min (restoring the cache 40 s, clippy 2 min, tests 4 min) |
-| `target/` at the end | 4.6 GB, with 91 GB of disk still free |
+| With `test-support` features, cache partly matching (after a `Cargo.lock` change) | 13 min (restoring the cache 45 s, clippy 3.5 min, tests 7 min) |
+| With `test-support` features, cache fully matching | 5.7 min (restoring the cache 35 s, clippy 1.3 min, tests 3 min) |
+| `target/` at the end | 4.6 GB, 5.3 GB with `test-support`, with 90 GB of disk still free |
 | Cache saved | 1.3 GB |
+
+rozed's gpui tests need `test-support` features on `gpui`, `project`, `settings` and `workspace`.
+Features differ between test and normal builds, so tests compile Zed's crates a second time locally
+too: the first `cargo test` after `cargo build` takes about a minute and adds to `target/`.
 
 CI turns off debug info and incremental compilation, which only cost time and disk in a fresh
 checkout. Nothing else was needed for disk, memory or time.
