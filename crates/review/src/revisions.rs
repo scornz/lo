@@ -79,6 +79,8 @@ pub enum Source {
     CheckSuite,
     /// rozed's poller.
     Poller,
+    /// git: the pull request's head in rozed's local copy, the last of its current commits.
+    Git,
 }
 
 /// When a revision was pushed.
@@ -87,7 +89,7 @@ pub enum PushedAt {
     /// The push's time, from the activity API, or else a force-push event.
     Exact(SystemTime),
     /// It was pushed at or before this time: the earliest a review, check suite or rozed's poller
-    /// saw the head.
+    /// saw the head, or a later head's push time.
     By(SystemTime),
     /// No source dates it.
     Unknown,

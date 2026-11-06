@@ -7,26 +7,37 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 
 /// Merges push records from every source into the pull request's revisions, one per head SHA.
 ///
-/// `commits` are the pull request's current commits from git, oldest first.
+/// `commits` are the pull request's current commits from git, oldest first. The last is the head
+/// in rozed's local copy, which is a revision even if no source saw it.
 ///
 /// - **Deduplicated by head.** A head several sources saw is one revision, listing them all. A
 ///   head pushed twice (`a` → `b` → `a`) is one revision, placed at its latest push.
-/// - **Ordered by time.** Times from the activity API, or else a force-push event, are exact. A
-///   review, check suite or the poller only says the head was pushed by then.
+/// - **Ordered by the push chain, ancestry and time.** A head comes after the head its push
+///   replaced, and among the current commits, after its ancestors. Times order the rest. Times
+///   from the activity API, or else a force-push event, are exact. A review, check suite or the
+///   poller only says the head was pushed by then, and so does a later head's push, which places a
+///   head no source dated, such as a force-push's `before`, just before the push that replaced it.
+///   Where the chain loops because a head was pushed again, its latest push decides.
 /// - **Previous head and forced.** The activity API is trusted first, then force-push events,
 ///   then check suites. A check suite never says whether its push was forced.
-pub fn build_revisions(records: &[PushRecord], _commits: &[String]) -> Revisions {
+pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions {
     let mut heads = Heads::default();
     for record in records {
         heads.add(record);
     }
-    let seen = heads.seen;
+    if let Some(head) = commits.last() {
+        heads.see(head, Source::Git);
+    }
 
-    let key = |index: usize| seen[index].exact().or(seen[index].seen_by);
-    let mut order: Vec<usize> = (0..seen.len()).collect();
-    // Undated heads go last; ties keep the order the records first named them in.
-    order.sort_by_key(|&index| (key(index).is_none(), key(index), index));
+    let mut positions = HashMap::new();
+    for (position, commit) in commits.iter().enumerate() {
+        positions.entry(commit.as_str()).or_insert(position);
+    }
+    let after = successors(&heads, &positions);
+    let latest = latest_push_times(&heads.seen, &after);
+    let order = order(&latest, &after);
 
+    let seen = &heads.seen;
     let list = order
         .iter()
         .enumerate()
@@ -39,7 +50,7 @@ pub fn build_revisions(records: &[PushRecord], _commits: &[String]) -> Revisions
                 head: head.head.to_string(),
                 previous: previous.map(str::to_string),
                 forced: head.forced(),
-                pushed_at: match (head.exact(), head.seen_by) {
+                pushed_at: match (head.exact(), latest[index]) {
                     (Some(at), _) => PushedAt::Exact(at),
                     (None, Some(by)) => PushedAt::By(by),
                     (None, None) => PushedAt::Unknown,
@@ -49,6 +60,84 @@ pub fn build_revisions(records: &[PushRecord], _commits: &[String]) -> Revisions
         })
         .collect();
     Revisions { list }
+}
+
+/// The heads that must come after each head: the heads whose push replaced it, and its nearest
+/// descendant among the heads in the current commits.
+fn successors(heads: &Heads, positions: &HashMap<&str, usize>) -> Vec<BTreeSet<usize>> {
+    let mut after = vec![BTreeSet::new(); heads.seen.len()];
+    for (index, head) in heads.seen.iter().enumerate() {
+        if let Some(previous) = head.previous()
+            && let Some(&previous) = heads.index.get(previous)
+            && previous != index
+        {
+            after[previous].insert(index);
+        }
+    }
+    let mut current: Vec<(usize, usize)> = (heads.seen.iter().enumerate())
+        .filter_map(|(index, head)| Some((*positions.get(head.head)?, index)))
+        .collect();
+    current.sort_unstable();
+    for pair in current.windows(2) {
+        after[pair[0].1].insert(pair[1].1);
+    }
+    after
+}
+
+/// The latest each head can have been pushed: its exact time, or else the earliest of its
+/// sightings and the times of the heads that must come after it. `None` when nothing bounds it.
+fn latest_push_times(seen: &[Seen], after: &[BTreeSet<usize>]) -> Vec<Option<SystemTime>> {
+    let mut latest: Vec<_> = seen
+        .iter()
+        .map(|head| head.exact().or(head.seen_by))
+        .collect();
+    // Each pass carries times at least one more head back, so this ends within a pass per head.
+    loop {
+        let mut changed = false;
+        for (index, head) in seen.iter().enumerate() {
+            if head.exact().is_some() {
+                continue;
+            }
+            for &next in &after[index] {
+                if let Some(by) = latest[next]
+                    && latest[index].is_none_or(|own| by < own)
+                {
+                    latest[index] = Some(by);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return latest;
+        }
+    }
+}
+
+/// The heads in revision order: each after the heads that must come before it, the earliest
+/// first. Heads nothing bounds go last, and ties keep the order the records first named them in.
+/// Where the constraints loop, the earliest head in the loop goes first.
+fn order(latest: &[Option<SystemTime>], after: &[BTreeSet<usize>]) -> Vec<usize> {
+    let rank = |index: usize| (latest[index].is_none(), latest[index], index);
+    let mut waiting_on = vec![0usize; latest.len()];
+    for &next in after.iter().flatten() {
+        waiting_on[next] += 1;
+    }
+    let mut placed = vec![false; latest.len()];
+    let mut order = Vec::with_capacity(latest.len());
+    while order.len() < latest.len() {
+        let unplaced = (0..latest.len()).filter(|&index| !placed[index]);
+        let next = (unplaced.clone())
+            .filter(|&index| waiting_on[index] == 0)
+            .min_by_key(|&index| rank(index))
+            .or_else(|| unplaced.min_by_key(|&index| rank(index)))
+            .expect("a head is left to place");
+        placed[next] = true;
+        order.push(next);
+        for &later in &after[next] {
+            waiting_on[later] -= 1;
+        }
+    }
+    order
 }
 
 /// Every head the records name, in the order they first name them.
@@ -75,6 +164,12 @@ impl<'a> Heads<'a> {
             PushRecord::ForcePush { before, after, at } => {
                 if let Some(head) = self.see(after, source) {
                     keep_latest(&mut head.force_push, Push::new(*at, before, Some(true)));
+                }
+                // The head a force-push replaced was a revision too. Only force-push events add
+                // the head before: an activity entry's or check suite's can predate the pull
+                // request.
+                if let Some(before) = before {
+                    self.see(before, source);
                 }
             }
             PushRecord::CheckSuite { previous, next, at } => {
@@ -410,6 +505,82 @@ mod tests {
         assert_eq!(a1.previous.as_deref(), Some("b1"));
         assert_eq!(a1.forced, Some(true));
         assert_eq!(a1.pushed_at, PushedAt::Exact(at(30)));
+    }
+
+    #[test]
+    fn a_force_pushed_over_head_comes_just_before_the_force_push() {
+        let revisions = build(&[
+            polled("a1", 5),
+            force_push("a2", "b1", 50),
+            polled("a0", 1),
+            polled("b2", 60),
+        ]);
+
+        assert_eq!(heads(&revisions), ["a0", "a1", "a2", "b1", "b2"]);
+        let a2 = revisions.get("a2").unwrap();
+        assert_eq!(a2.pushed_at, PushedAt::By(at(50)));
+        assert_eq!(a2.sources, [Source::ForcePush].into());
+        assert_eq!(a2.previous.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn the_push_chain_orders_heads_whose_check_suites_started_out_of_order() {
+        // a1's suite started a minute after a2's: CI was slow to pick up the first push.
+        let revisions = build(&[check_suite("a1", "a2", 11), check_suite("0000", "a1", 12)]);
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(revisions.get("a1").unwrap().pushed_at, PushedAt::By(at(11)));
+    }
+
+    #[test]
+    fn ancestry_places_a_review_submitted_after_the_next_push() {
+        // A review started on a1 and submitted after a2 was pushed is on a1.
+        let commits = ["c0", "a1", "c2", "a2"].map(String::from);
+        let revisions = build_revisions(&[polled("a2", 20), review("a1", 30)], &commits);
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(revisions.get("a1").unwrap().pushed_at, PushedAt::By(at(20)));
+    }
+
+    #[test]
+    fn a_head_pushed_back_to_stays_at_its_latest_push_though_it_is_an_ancestor() {
+        // a2 descends from a1, and a3 from a2. The author reset the branch to a1, then pushed a3.
+        let commits = ["a1", "a2", "a3"].map(String::from);
+        let revisions = build_revisions(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+                activity(Some("a2"), "a1", 30, true),
+                activity(Some("a1"), "a3", 40, false),
+            ],
+            &commits,
+        );
+
+        assert_eq!(heads(&revisions), ["a2", "a1", "a3"]);
+    }
+
+    #[test]
+    fn the_head_in_git_is_a_revision_even_when_no_source_saw_it() {
+        let commits = ["a1", "a2"].map(String::from);
+        let revisions = build_revisions(&[polled("a1", 5)], &commits);
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        let a2 = revisions.latest().unwrap();
+        assert_eq!(a2.sources, [Source::Git].into());
+        assert_eq!(a2.pushed_at, PushedAt::Unknown);
+        assert_eq!(a2.previous.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn the_head_in_git_joins_the_revision_the_poller_saw() {
+        let commits = ["a1", "a2"].map(String::from);
+        let revisions = build_revisions(&[polled("a1", 5), polled("a2", 25)], &commits);
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(
+            revisions.latest().unwrap().sources,
+            [Source::Poller, Source::Git].into()
+        );
     }
 
     #[test]
