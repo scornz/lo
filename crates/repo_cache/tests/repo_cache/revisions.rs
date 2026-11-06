@@ -111,6 +111,24 @@ fn heads_github_no_longer_has_are_unavailable_and_the_rest_are_fetched() {
         repo.read_file(&r3, b"feature.txt").unwrap().unwrap(),
         b"third version\n"
     );
+
+    // The clone remembers them, so asking again asks GitHub for nothing: with the server gone,
+    // it still answers.
+    let mut remembered: Vec<String> = (repo.unavailable_revisions(1).unwrap().iter())
+        .map(Oid::to_string)
+        .collect();
+    remembered.sort();
+    assert_eq!(remembered, expected);
+    assert_eq!(repo.unavailable_revisions(2).unwrap(), Vec::<Oid>::new());
+    drop(pr);
+    drop(server);
+    let again = repo
+        .fetch_commits(1, &[r1.clone(), never.clone(), r3.clone(), r2.clone()])
+        .unwrap();
+    assert_eq!(again.len(), 3);
+    drop(repo);
+    let offline = cache.open_offline("owner", "repo").unwrap().unwrap();
+    assert_eq!(offline.unavailable_revisions(1).unwrap().len(), 3);
 }
 
 #[test]

@@ -381,22 +381,35 @@ impl Repo {
     /// the clone lacks are fetched by ID in one fetch. Returns the ones GitHub no longer has
     /// (design §11, "Missing revisions"), which are left out; any other failure fails the whole
     /// fetch.
+    ///
+    /// GitHub stops a fetch at the first commit it doesn't have, naming it, so each lost one costs
+    /// a fetch of the rest again. The clone remembers them per pull request
+    /// ([`Self::unavailable_revisions`]), so they're never asked for again.
     pub fn fetch_commits(&self, number: u64, heads: &[Oid]) -> Result<Vec<Oid>, Error> {
         let _lock = self.lock()?;
         self.stamp_used()?;
-        let mut missing = Vec::new();
+        let mut wanted: Vec<&Oid> = Vec::new();
         for oid in heads {
-            if !missing.contains(oid) && !self.has_commit(oid)? {
-                missing.push(oid.clone());
+            if !wanted.contains(&oid) {
+                wanted.push(oid);
+            }
+        }
+        let lost_before = self.unavailable_revisions(number)?;
+        let present = self.commits_present(&wanted)?;
+        let mut unavailable: Vec<Oid> = Vec::new();
+        let mut missing: Vec<Oid> = Vec::new();
+        for (oid, present) in wanted.iter().zip(&present) {
+            match (present, lost_before.contains(oid)) {
+                (true, _) => {}
+                (false, true) => unavailable.push((*oid).clone()),
+                (false, false) => missing.push((*oid).clone()),
             }
         }
         let what = match missing.as_slice() {
             [oid] => format!("pull request #{number}'s revision {}", oid.short(7)),
             _ => format!("{} of pull request #{number}'s revisions", missing.len()),
         };
-        // GitHub stops a fetch at the first commit it doesn't have, naming it: that one is left
-        // out, and the rest asked for again.
-        let mut unavailable = Vec::new();
+        let mut newly_lost = Vec::new();
         while !missing.is_empty() {
             let refspecs: Vec<String> = (missing.iter())
                 .map(|oid| format!("+{oid}:{}", revision_ref(number, oid)))
@@ -408,29 +421,96 @@ impl Repo {
                     if let Some(lost) =
                         (missing.iter()).position(|oid| is_lost_commit(&message, oid)) =>
                 {
-                    unavailable.push(missing.remove(lost));
+                    newly_lost.push(missing.remove(lost));
                 }
                 Err(error) => return Err(error),
             }
         }
-        let mut pinned: Vec<&Oid> = Vec::new();
-        for oid in heads {
-            if unavailable.contains(oid) || pinned.contains(&oid) {
-                continue;
-            }
-            // Also checks it's a commit.
-            self.resolve(oid.as_str())?;
-            self.pin(&revision_ref(number, oid), oid)?;
-            pinned.push(oid);
+        if !newly_lost.is_empty() {
+            let mut lost = lost_before;
+            lost.extend(newly_lost.iter().cloned());
+            self.remember_unavailable(number, &lost)?;
+            unavailable.extend(newly_lost);
+        }
+        let pins: Vec<&Oid> = (wanted.into_iter())
+            .filter(|oid| !unavailable.contains(oid))
+            .collect();
+        // Also checks each is a commit.
+        if let Some(position) = (self.commits_present(&pins)?.iter()).position(|present| !present) {
+            return Err(Error::Git {
+                command: "git fetch".into(),
+                message: format!("{} isn't a commit", pins[position]),
+            });
+        }
+        let input: String = (pins.iter())
+            .map(|oid| format!("update {} {oid}\n", revision_ref(number, oid)))
+            .collect();
+        if !input.is_empty() {
+            (self.git().args(["update-ref", "--stdin"])).run_with_input(Some(input.as_bytes()))?;
         }
         Ok(unavailable)
     }
 
+    /// The heads of pull request `number` that GitHub no longer had when
+    /// [`Self::fetch_commits`] asked for them. Reads only the clone, so it works offline.
+    pub fn unavailable_revisions(&self, number: u64) -> Result<Vec<Oid>, Error> {
+        let path = self.unavailable_file(number);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => text.lines().map(str::parse).collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(Error::io(format!("reading {}", path.display()))(error)),
+        }
+    }
+
+    /// Notes `lost` as pull request `number`'s heads GitHub no longer has. The caller holds the
+    /// lock.
+    fn remember_unavailable(&self, number: u64, lost: &[Oid]) -> Result<(), Error> {
+        let path = self.unavailable_file(number);
+        let dir = path.parent().expect("the file is in a folder");
+        std::fs::create_dir_all(dir).map_err(Error::io(format!("creating {}", dir.display())))?;
+        let text: String = lost.iter().map(|oid| format!("{oid}\n")).collect();
+        std::fs::write(&path, text).map_err(Error::io(format!("writing {}", path.display())))
+    }
+
+    fn unavailable_file(&self, number: u64) -> PathBuf {
+        (self.shared.git_dir)
+            .join(UNAVAILABLE_DIR)
+            .join(format!("pull-{number}"))
+    }
+
+    /// Whether each of `oids` is a commit in the clone, in one `git cat-file`, never downloading
+    /// anything. Older git can't be told not to download, so it asks one by one with `rev-list`.
+    fn commits_present(&self, oids: &[&Oid]) -> Result<Vec<bool>, Error> {
+        if oids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.shared.env.git.version() < GitVersion::NO_LAZY_FETCH {
+            return oids.iter().map(|oid| self.has_commit(oid)).collect();
+        }
+        let input: String = oids.iter().map(|oid| format!("{oid}\n")).collect();
+        let output = self
+            .git()
+            .env(NO_LAZY_FETCH_VAR, "1")
+            .args(["cat-file", "--batch-check=%(objectname) %(objecttype)"])
+            .run_with_input(Some(input.as_bytes()))?;
+        let output = String::from_utf8_lossy(&output);
+        let mut lines = output.lines();
+        Ok(oids
+            .iter()
+            .map(|oid| {
+                let line = lines.next().unwrap_or_default();
+                line.strip_prefix(oid.as_str()) == Some(" commit")
+            })
+            .collect())
+    }
+
     /// The commits on `head` that `base` doesn't have, oldest first and each after its parents
-    /// (`git rev-list --topo-order --reverse <base>..<head>`): with its base branch's tip as
-    /// `base`, a pull request's current commits, as `review::revisions::build_revisions` takes
-    /// them. Reads only commits, which the clone keeps whole, so it works offline. Both must be
-    /// in the clone already: a missing one is [`Error::NotFetched`], and is never downloaded.
+    /// (`git rev-list --topo-order --reverse <base>..<head>`): with its base as `base`, a pull
+    /// request's current commits, as `review::revisions::build_revisions` takes them. For a
+    /// merged pull request, that's its base as it was (`review::revisions::base_tip_at`), since
+    /// today's base branch holds every commit a merge commit or a fast-forward merged. Reads only
+    /// commits, which the clone keeps whole, so it works offline. Both must be in the clone
+    /// already: a missing one is [`Error::NotFetched`], and is never downloaded.
     pub fn pull_commits(&self, base: &Oid, head: &Oid) -> Result<Vec<Oid>, Error> {
         for oid in [base, head] {
             if !self.has_commit(oid)? {
@@ -810,6 +890,10 @@ fn branch_base_ref(number: u64, branch: &str) -> String {
         .collect();
     format!("refs/rozed/pull/{number}/branch-bases/{hash}")
 }
+
+/// The folder in a clone where each pull request's heads GitHub no longer has are noted, one
+/// file per pull request.
+const UNAVAILABLE_DIR: &str = "rozed-unavailable";
 
 /// The variable that stops git downloading what a partial clone lacks.
 pub(crate) const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
