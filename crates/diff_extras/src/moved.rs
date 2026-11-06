@@ -5,7 +5,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::ops::{Range, RangeInclusive};
 
-/// The fewest matching lines a move has.
+/// The fewest matching lines with a letter or digit a move has.
 const MIN_LINES: usize = 3;
 
 /// The most edited lines a move has in a row.
@@ -166,6 +166,9 @@ struct Side {
 struct Entry {
     /// The trimmed text's number in [`Texts`].
     id: u32,
+    /// Whether the line has a letter or digit, so it counts toward a move's length. Lines of only
+    /// punctuation, such as `}` or `});`, can sit inside a move but don't make one.
+    counts: bool,
     number: u32,
     /// The index of its run in [`Side::runs`].
     run: usize,
@@ -208,6 +211,7 @@ impl Side {
                     if !text.is_empty() {
                         side.lines.push(Entry {
                             id: texts.id(text),
+                            counts: text.chars().any(char::is_alphanumeric),
                             number: line.number,
                             run,
                         });
@@ -262,6 +266,8 @@ impl Index {
 struct Candidate {
     new: Range<usize>,
     delta: isize,
+    /// How many of its matching lines have a letter or digit: its length.
+    length: usize,
     /// How many of its lines match.
     matched: usize,
     /// How many of its lines were edited.
@@ -273,10 +279,11 @@ impl Candidate {
         self.new.start.wrapping_add_signed(self.delta)..self.new.end.wrapping_add_signed(self.delta)
     }
 
-    /// Longer blocks first, then the one with fewer edits, then the one that lands first, then the
-    /// one that came from first.
+    /// Longer blocks first, then the one with more matching lines of punctuation, then the one
+    /// with fewer edits, then the one that lands first, then the one that came from first.
     fn rank(&self) -> impl Ord {
         (
+            self.length,
             self.matched,
             Reverse(self.edited),
             Reverse(self.new.start),
@@ -315,7 +322,14 @@ impl Finder<'_> {
     fn candidates(&self, texts: usize) -> Vec<Candidate> {
         let index = self.old.index(texts);
         let mut seeds = Vec::new();
-        for (new, line) in self.new.lines.iter().enumerate() {
+        // Every move has a matching line that counts, so only those start a lineup.
+        for (new, line) in self
+            .new
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.counts)
+        {
             let new_run = &self.new.runs[line.run];
             for &old in index.get(line.id) {
                 let old_run = &self.old.runs[self.old.lines[old].run];
@@ -352,16 +366,20 @@ impl Finder<'_> {
     /// The candidate moves among the added lines `new`, lined up with the deleted lines `delta`
     /// away. `new` has no more than [`MAX_EDITS_IN_A_ROW`] edited lines in a row.
     ///
-    /// A stretch that starts and ends with matching lines, matches on at least
-    /// [`MIN_LINES`] lines and on at least two thirds of its lines is a candidate. A stretch short
-    /// of two thirds gives way to its longest stretch that isn't, and what's either side of that
-    /// is tried again.
+    /// A stretch that starts and ends with matching lines, matches on at least [`MIN_LINES`] lines
+    /// with a letter or digit, and matches on at least two thirds of its lines is a candidate. A
+    /// stretch short of two thirds gives way to its longest stretch that isn't, and what's either
+    /// side of that is tried again.
     fn blocks(&self, new: Range<usize>, delta: isize, out: &mut impl Extend<Candidate>) {
         let mut stretches = vec![new];
         while let Some(stretch) = stretches.pop() {
             let stretch = self.trim(stretch, delta);
-            let matched = stretch.clone().filter(|&new| self.same(new, delta)).count();
-            if matched < MIN_LINES {
+            let (mut length, mut matched) = (0, 0);
+            for line in stretch.clone().filter(|&new| self.same(new, delta)) {
+                matched += 1;
+                length += usize::from(self.new.lines[line].counts);
+            }
+            if length < MIN_LINES {
                 continue;
             }
             let edited = stretch.len() - matched;
@@ -369,6 +387,7 @@ impl Finder<'_> {
                 out.extend([Candidate {
                     new: stretch,
                     delta,
+                    length,
                     matched,
                     edited,
                 }]);

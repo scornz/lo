@@ -69,3 +69,51 @@ fn a_block_is_consecutive_lines() {
 
     assert_eq!(moves(&files), Vec::<String>::new());
 }
+
+#[test]
+fn lines_of_only_punctuation_are_not_a_move() {
+    let braces = ["        }", "    });", "}"];
+    let files = [
+        FileChanges::new("a.rs").delete(1, braces),
+        FileChanges::new("b.rs").add(1, braces),
+    ];
+
+    assert_eq!(moves(&files), Vec::<String>::new());
+}
+
+#[test]
+fn lines_of_only_punctuation_do_not_count_toward_three() {
+    let call = ["run(", "    first,", ");"];
+    let files = [
+        FileChanges::new("a.rs").delete(1, call),
+        FileChanges::new("b.rs").add(1, call),
+    ];
+
+    assert_eq!(moves(&files), Vec::<String>::new());
+}
+
+#[test]
+fn lines_of_only_punctuation_sit_inside_a_block() {
+    let block = ["let list = vec![", "    1,", "];", "let total = 2;"];
+    let files = [
+        FileChanges::new("a.rs").delete(1, block),
+        FileChanges::new("b.rs").add(1, block),
+    ];
+
+    assert_eq!(moves(&files), ["a.rs:1-4 -> b.rs:1-4"]);
+}
+
+#[test]
+fn lines_with_letters_or_digits_decide_which_match_is_longer() {
+    let parts = ["let p1 = 1;", "let p2 = 2;", "let p3 = 3;", "let p4 = 4;"];
+    let mut old = parts.to_vec();
+    old.extend(["}"; 6]);
+    let files = [
+        FileChanges::new("a.rs").delete(1, &old),
+        // Nine matching lines, but only three with letters or digits.
+        FileChanges::new("b.rs").add(1, &old[1..]),
+        FileChanges::new("c.rs").add(1, parts),
+    ];
+
+    assert_eq!(moves(&files), ["a.rs:1-4 -> c.rs:1-4"]);
+}
