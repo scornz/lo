@@ -8,5 +8,6 @@ mod github;
 pub mod files;
 pub mod merge;
 pub mod revisions;
+pub mod threads;
 
 pub use github::UnknownValue;
