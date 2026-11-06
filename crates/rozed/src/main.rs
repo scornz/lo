@@ -200,7 +200,7 @@ fn create_dirs() -> anyhow::Result<()> {
 }
 
 /// Logs to `~/Library/Logs/rozed/rozed.log`, and to stdout too when it's a terminal.
-/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=rozed=debug` to log every HTTP request's host.
+/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=rozed=debug` to log every HTTP request.
 fn init_logging() {
     zlog::init();
     if let Err(error) = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file())) {
@@ -212,7 +212,7 @@ fn init_logging() {
     }
 }
 
-/// The one HTTP client for everything, which refuses Zed's hosts.
+/// The one HTTP client for everything, which refuses Zed's hosts, redirects included.
 fn http_client(cx: &mut App) -> Arc<dyn HttpClient> {
     let user_agent = format!(
         "rozed/{} ({}; {})",

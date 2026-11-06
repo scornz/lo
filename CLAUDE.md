@@ -61,7 +61,7 @@ cargo test --workspace
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
 `~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
-`RUST_LOG=info,rozed=debug` also logs the host of every HTTP request.
+`RUST_LOG=info,rozed=debug` also logs the host and path of every HTTP request and redirect.
 
 ## Verify
 
