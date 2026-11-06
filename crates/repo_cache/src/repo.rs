@@ -893,9 +893,10 @@ mod tests {
         let b = "b".repeat(40);
         let c = "c".repeat(40);
         let zero = "0".repeat(40);
-        // The second path starts with a colon, as a file's name can.
+        // The second path starts with a colon and has spaces, as a file's name can: read as an
+        // entry, it would name blobs that aren't there.
         let output = format!(
-            ":100644 100644 {a} {b} M\0x.rs\0:000000 100644 {zero} {c} A\0:y.rs\0\
+            ":100644 100644 {a} {b} M\0x.rs\0:000000 100644 {zero} {c} A\0:x y z w\0\
              :160000 160000 {a} {b} M\0sub\0"
         );
         let blobs: Vec<String> = raw_diff_blobs(output.as_bytes())
