@@ -10,6 +10,7 @@ mod blockers;
 mod github;
 mod reviews;
 mod ship;
+mod status;
 
 pub use action::{MergeAction, NotPossible, merge_action};
 pub use blockers::{Blocker, blockers};
@@ -19,6 +20,7 @@ pub use github::{
 };
 pub use reviews::MissingApprovals;
 pub use ship::{Approval, ApproveAndShip, Plan, Ship, Stop, approve_and_ship};
+pub use status::{MergeStatus, status};
 
 /// What GitHub says about a pull request's merge, and the head on screen. The GitHub layer fills
 /// it from GraphQL (field names below are `PullRequest`'s unless they say otherwise) and REST,
