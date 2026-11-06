@@ -417,7 +417,7 @@ fn queued_repository() -> MergeSnapshot {
         queue: MergeQueue {
             required: true,
             method: "SQUASH".parse().ok(),
-            position: None,
+            ..Default::default()
         },
         methods: ALL_METHODS,
         viewer: you(),
@@ -477,12 +477,13 @@ fn a_queued_pull_request_shows_its_position_and_ships_nothing_more() {
     snapshot.reviews.push(review("mika", "APPROVED", HEAD, &[]));
     snapshot.review_decision = "APPROVED".parse().ok();
     snapshot.merge_state = "CLEAN".parse().unwrap();
+    snapshot.queue.in_queue = true;
     snapshot.queue.position = Some(3);
 
-    assert_eq!(status(&snapshot), MergeStatus::Queued { position: 3 });
+    assert_eq!(status(&snapshot), MergeStatus::Queued { position: Some(3) });
     assert_eq!(
         merge_action(&snapshot),
-        MergeAction::NotPossible(NotPossible::Queued { position: 3 })
+        MergeAction::NotPossible(NotPossible::Queued { position: Some(3) })
     );
     assert_eq!(
         approve_and_ship(&snapshot),

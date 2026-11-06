@@ -355,7 +355,7 @@ fn same_commit(a: &str, b: &str) -> bool {
 
 /// What to do once approved, from the snapshot as GitHub reports it, or as rozed expects it to.
 fn ship(snapshot: &MergeSnapshot) -> Ship {
-    if snapshot.queue.position.is_some() {
+    if snapshot.queue.in_queue {
         return Ship::AlreadyQueued;
     }
     let blockers = blockers(snapshot);
@@ -531,7 +531,7 @@ mod tests {
             queue: MergeQueue {
                 required: true,
                 method: Some(MergeMethod::Rebase),
-                position: None,
+                ..Default::default()
             },
             ..snapshot
         }
@@ -1209,7 +1209,7 @@ mod tests {
             reviews: vec![review("carol", ReviewState::Approved, HEAD)],
             ..with_queue(reviewing())
         };
-        snapshot.queue.position = Some(3);
+        snapshot.queue.in_queue = true;
 
         assert_eq!(
             approve_and_ship(&snapshot),
@@ -1703,6 +1703,7 @@ mod tests {
             enabled_by: Some("bob".to_string()),
         });
         let mut queued = with_queue(approved(reviewing(), "APPROVED", "CLEAN"));
+        queued.queue.in_queue = true;
         queued.queue.position = Some(1);
 
         assert_eq!(

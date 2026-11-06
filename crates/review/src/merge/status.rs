@@ -10,8 +10,8 @@ pub enum MergeStatus {
     Merged,
     /// It's closed.
     Closed,
-    /// It's in the merge queue, at this position (`mergeQueueEntry.position`).
-    Queued { position: u32 },
+    /// It's in the merge queue, at this position (`mergeQueueEntry.position`) when GitHub says.
+    Queued { position: Option<u32> },
     /// Nothing blocks it: it can merge, or join the merge queue.
     Ready,
     /// Only things waiting will fix block it. With `auto_merge`, auto-merge is on, so it merges,
@@ -39,8 +39,10 @@ pub fn status(snapshot: &MergeSnapshot) -> MergeStatus {
         PullRequestState::Closed => return MergeStatus::Closed,
         PullRequestState::Open => {}
     }
-    if let Some(position) = snapshot.queue.position {
-        return MergeStatus::Queued { position };
+    if snapshot.queue.in_queue {
+        return MergeStatus::Queued {
+            position: snapshot.queue.position,
+        };
     }
     let blockers = blockers(snapshot);
     let auto_merge = snapshot.auto_merge.is_some();
@@ -133,12 +135,27 @@ mod tests {
             queue: MergeQueue {
                 required: true,
                 method: None,
+                in_queue: true,
                 position: Some(4),
             },
             ..ready()
         };
 
-        assert_eq!(status(&snapshot), MergeStatus::Queued { position: 4 });
+        assert_eq!(status(&snapshot), MergeStatus::Queued { position: Some(4) });
+    }
+
+    #[test]
+    fn a_queued_pull_request_is_queued_without_an_entry_to_read() {
+        let snapshot = MergeSnapshot {
+            queue: MergeQueue {
+                required: true,
+                in_queue: true,
+                ..Default::default()
+            },
+            ..checks(&[("test", CheckState::Running)])
+        };
+
+        assert_eq!(status(&snapshot), MergeStatus::Queued { position: None });
     }
 
     #[test]

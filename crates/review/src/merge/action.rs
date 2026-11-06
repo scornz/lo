@@ -26,8 +26,8 @@ pub enum NotPossible {
     Merged,
     /// It's closed.
     Closed,
-    /// It's in the merge queue already, at this position.
-    Queued { position: u32 },
+    /// It's in the merge queue already, at this position when GitHub says.
+    Queued { position: Option<u32> },
     /// Something blocks it: see [`blockers`](super::blockers).
     Blocked,
     /// GitHub's rules let it merge, but you can't merge into the base branch.
@@ -46,8 +46,10 @@ pub fn merge_action(snapshot: &MergeSnapshot) -> MergeAction {
         PullRequestState::Closed => return not_possible(NotPossible::Closed),
         PullRequestState::Open => {}
     }
-    if let Some(position) = snapshot.queue.position {
-        return not_possible(NotPossible::Queued { position });
+    if snapshot.queue.in_queue {
+        return not_possible(NotPossible::Queued {
+            position: snapshot.queue.position,
+        });
     }
     if !blockers(snapshot).is_empty() {
         return not_possible(NotPossible::Blocked);
@@ -106,6 +108,7 @@ mod tests {
             queue: MergeQueue {
                 required: true,
                 method: Some(MergeMethod::Squash),
+                in_queue: position.is_some(),
                 position,
             },
             ..snapshot
@@ -191,7 +194,26 @@ mod tests {
     fn a_pull_request_in_the_queue_is_not_added_again() {
         assert_eq!(
             merge_action(&with_queue(ready(), Some(2))),
-            not_possible(NotPossible::Queued { position: 2 })
+            not_possible(NotPossible::Queued { position: Some(2) })
+        );
+    }
+
+    #[test]
+    fn whether_it_is_queued_is_githubs_flag_not_its_entry() {
+        let mut in_queue_without_an_entry = with_queue(ready(), None);
+        in_queue_without_an_entry.queue.in_queue = true;
+        let mut entry_without_the_flag = with_queue(ready(), Some(2));
+        entry_without_the_flag.queue.in_queue = false;
+
+        assert_eq!(
+            merge_action(&in_queue_without_an_entry),
+            not_possible(NotPossible::Queued { position: None })
+        );
+        assert_eq!(
+            merge_action(&entry_without_the_flag),
+            MergeAction::Enqueue {
+                method: Some(MergeMethod::Squash)
+            }
         );
     }
 

@@ -320,8 +320,11 @@ pub struct MergeQueue {
     pub required: bool,
     /// The method it merges with (`mergeQueue.configuration.mergeMethod`).
     pub method: Option<MergeMethod>,
-    /// The pull request's position in it (`mergeQueueEntry.position`), when it's in it
-    /// (`isInMergeQueue`).
+    /// Whether the pull request is in it (`isInMergeQueue`). GitHub can say so while
+    /// `mergeQueueEntry` is null or can't be read, so this, not `position`, says it's queued.
+    pub in_queue: bool,
+    /// The pull request's position in it (`mergeQueueEntry.position`), when it's in it and GitHub
+    /// says where.
     pub position: Option<u32>,
 }
 
