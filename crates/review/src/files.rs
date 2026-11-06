@@ -19,7 +19,8 @@ pub use state::{InitialState, LARGE_FILE_LINES, initial_state};
 pub struct ChangedFile {
     /// The file's path in the head revision. For a deleted file, its path in the base.
     pub path: String,
-    /// The file's path in the base revision when the pull request renames it.
+    /// The file's path in the base revision when the pull request renames it. Review order
+    /// places a renamed file by its new path.
     pub previous_path: Option<String>,
     /// Lines added. Zero for a binary file.
     pub additions: u32,
