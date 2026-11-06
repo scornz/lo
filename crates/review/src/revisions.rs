@@ -8,7 +8,7 @@
 
 mod build;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
 pub use build::build_revisions;
@@ -111,12 +111,18 @@ pub struct Revision {
     pub pushed_at: PushedAt,
     /// The sources that saw this head.
     pub sources: BTreeSet<Source>,
+    /// Whether rozed can still get the head commit. Revisions start out available; the caller
+    /// flags one GitHub no longer has, and that rozed never fetched, with
+    /// [`Revisions::mark_unavailable`]. It stays in the list, shown as "no longer available".
+    pub available: bool,
 }
 
 /// A pull request's revisions, oldest first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Revisions {
     list: Vec<Revision>,
+    /// The pull request's current commits and their positions, oldest first.
+    commits: HashMap<String, usize>,
 }
 
 impl Revisions {
@@ -159,12 +165,104 @@ impl Revisions {
         self.number(head).map(|number| format!("r{number}"))
     }
 
+    /// The revision a marker commit points at, such as the commit of your last review: the
+    /// revision with that head, or else the first whose head contains it, which the current
+    /// commits tell. A review the API made on an older commit is on a commit that was never a head.
+    pub fn find(&self, commit: &str) -> Option<&Revision> {
+        self.locate(commit).map(|index| &self.list[index])
+    }
+
+    /// Flags the revision with this head as one GitHub no longer has. Returns whether there was
+    /// one.
+    pub fn mark_unavailable(&mut self, head: &str) -> bool {
+        let Some(index) = self.position(head) else {
+            return false;
+        };
+        self.list[index].available = false;
+        true
+    }
+
     fn position(&self, head: &str) -> Option<usize> {
         self.list.iter().position(|revision| revision.head == head)
+    }
+
+    /// The position of the revision a marker commit points at. See [`Revisions::find`].
+    fn locate(&self, commit: &str) -> Option<usize> {
+        self.position(commit).or_else(|| {
+            let commit = *self.commits.get(commit)?;
+            self.list.iter().position(|revision| {
+                (self.commits.get(&revision.head)).is_some_and(|&head| head >= commit)
+            })
+        })
     }
 }
 
 /// The SHA, or `None` for GitHub's all-zero "no commit" SHA.
 fn sha(value: &str) -> Option<&str> {
     (!value.is_empty() && !value.bytes().all(|byte| byte == b'0')).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use super::*;
+
+    fn polled(head: &str, minute: u64) -> PushRecord {
+        PushRecord::Polled {
+            head: head.to_string(),
+            at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + minute * 60),
+        }
+    }
+
+    /// Revisions `a1` and `a2` over the current commits `c1 a1 c3 c4 a2`, and `x1`, rebased away.
+    fn revisions() -> Revisions {
+        let commits = ["c1", "a1", "c3", "c4", "a2"].map(String::from);
+        build_revisions(
+            &[polled("x1", 1), polled("a1", 10), polled("a2", 20)],
+            &commits,
+        )
+    }
+
+    fn found<'a>(revisions: &'a Revisions, commit: &str) -> Option<&'a str> {
+        revisions
+            .find(commit)
+            .map(|revision| revision.head.as_str())
+    }
+
+    #[test]
+    fn revisions_start_out_available() {
+        assert!(revisions().iter().all(|revision| revision.available));
+    }
+
+    #[test]
+    fn the_caller_flags_a_revision_github_no_longer_has() {
+        let mut revisions = revisions();
+
+        assert!(revisions.mark_unavailable("x1"));
+        assert!(!revisions.get("x1").unwrap().available);
+        assert!(revisions.get("a1").unwrap().available);
+        assert!(!revisions.mark_unavailable("ffff"));
+    }
+
+    #[test]
+    fn a_marker_on_a_head_finds_its_revision() {
+        let revisions = revisions();
+
+        assert_eq!(found(&revisions, "a1"), Some("a1"));
+        assert_eq!(found(&revisions, "x1"), Some("x1"));
+    }
+
+    #[test]
+    fn a_marker_on_an_older_commit_finds_the_first_revision_containing_it() {
+        let revisions = revisions();
+
+        assert_eq!(found(&revisions, "c1"), Some("a1"));
+        assert_eq!(found(&revisions, "c3"), Some("a2"));
+    }
+
+    #[test]
+    fn a_marker_on_a_commit_neither_a_head_nor_current_finds_nothing() {
+        assert_eq!(found(&revisions(), "ffff"), None);
+    }
 }

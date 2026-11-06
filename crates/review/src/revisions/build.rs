@@ -32,7 +32,7 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions 
 
     let mut positions = HashMap::new();
     for (position, commit) in commits.iter().enumerate() {
-        positions.entry(commit.as_str()).or_insert(position);
+        positions.entry(commit.clone()).or_insert(position);
     }
     let after = successors(&heads, &positions);
     let latest = latest_push_times(&heads.seen, &after);
@@ -59,10 +59,14 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions 
                     (None, None) => PushedAt::Unknown,
                 },
                 sources: head.sources.clone(),
+                available: true,
             }
         })
         .collect();
-    Revisions { list }
+    Revisions {
+        list,
+        commits: positions,
+    }
 }
 
 /// Whether the push from `previous` to `head` was forced, as far as the current commits tell. A
@@ -71,7 +75,7 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions 
 fn forced_by_ancestry(
     previous: &str,
     head: &str,
-    positions: &HashMap<&str, usize>,
+    positions: &HashMap<String, usize>,
     revisions: &HashMap<&str, usize>,
 ) -> Option<bool> {
     let head = *positions.get(head)?;
@@ -83,7 +87,7 @@ fn forced_by_ancestry(
 
 /// The heads that must come after each head: the heads whose push replaced it, and its nearest
 /// descendant among the heads in the current commits.
-fn successors(heads: &Heads, positions: &HashMap<&str, usize>) -> Vec<BTreeSet<usize>> {
+fn successors(heads: &Heads, positions: &HashMap<String, usize>) -> Vec<BTreeSet<usize>> {
     let mut after = vec![BTreeSet::new(); heads.seen.len()];
     for (index, head) in heads.seen.iter().enumerate() {
         if let Some(previous) = head.previous()
@@ -384,6 +388,7 @@ mod tests {
                     forced: Some(false),
                     pushed_at: PushedAt::Exact(at(10)),
                     sources: [Source::Activity].into(),
+                    available: true,
                 },
                 Revision {
                     head: "a2".into(),
@@ -391,6 +396,7 @@ mod tests {
                     forced: Some(false),
                     pushed_at: PushedAt::Exact(at(20)),
                     sources: [Source::Activity].into(),
+                    available: true,
                 },
                 Revision {
                     head: "b1".into(),
@@ -398,6 +404,7 @@ mod tests {
                     forced: Some(true),
                     pushed_at: PushedAt::Exact(at(30)),
                     sources: [Source::Activity].into(),
+                    available: true,
                 },
             ]
         );
@@ -442,6 +449,7 @@ mod tests {
                     Source::Poller,
                 ]
                 .into(),
+                available: true,
             })
         );
     }
@@ -458,6 +466,7 @@ mod tests {
                 forced: Some(true),
                 pushed_at: PushedAt::Exact(at(30)),
                 sources: [Source::ForcePush].into(),
+                available: true,
             })
         );
     }
