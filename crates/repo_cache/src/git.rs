@@ -11,10 +11,21 @@
 //! - `HOME` is a folder of rozed's, so git and its HTTP library read none of the user's files there
 //!   (`~/.gitconfig`, `~/.config/git/attributes`, `~/.netrc`).
 //! - No system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`), no
-//!   credential helper, and no prompts (`GIT_TERMINAL_PROMPT=0`). The only credential git gets is
-//!   the token rozed hands it through `GIT_ASKPASS` (see [`crate::askpass`]).
+//!   credential helper but rozed's, and no prompts (`GIT_TERMINAL_PROMPT=0`, no askpass). The
+//!   only credential git gets is the token, from a helper scoped to the remote's own URL
+//!   (`https://github.com`), which reads it from a variable set only on that git. A proxy that
+//!   asks for a password, or a host a request is redirected to, matches no helper, and git fails
+//!   rather than prompting. Redirects are off anyway: rozed always fetches a repository by its
+//!   canonical name.
 //! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
-//!   a repository's own `.gitattributes`), no replace refs, and literal pathspecs.
+//!   a repository's own `.gitattributes`, in a clone or a checkout), no replace refs, and literal
+//!   pathspecs.
+//! - Nothing a server offers sends git to another host: no bundle URIs, promisor remotes or
+//!   packfile URIs.
+//! - Every command names its repository (`--git-dir`, and `--work-tree` for a checkout), and git
+//!   never looks for one in the cache's folder or above it (`GIT_CEILING_DIRECTORIES`). A clone
+//!   that's half deleted is an error, never a reason to use some repository further up, such as
+//!   dotfiles kept in the home folder, with its own remote and config.
 //! - HTTPS only. [`crate::RepoCache::with_remote_base`] allows another protocol for tests.
 //! - `LC_ALL=C`, so the messages rozed reads are in English.
 //!
@@ -40,11 +51,12 @@ pub struct GitVersion {
 }
 
 impl GitVersion {
-    /// The oldest git rozed runs: 2.40 added `git merge-tree --write-tree --merge-base`, which
-    /// rebase-aware comparison needs.
+    /// The oldest git rozed runs: 2.41 added `--attr-source`, which keeps a repository's own
+    /// `.gitattributes` out of its checkouts (2.40 added `git merge-tree --write-tree
+    /// --merge-base`, which rebase-aware comparison needs).
     pub const MINIMUM: GitVersion = GitVersion {
         major: 2,
-        minor: 40,
+        minor: 41,
         patch: 0,
     };
 
@@ -86,6 +98,12 @@ impl Token {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// Whether git can be given the token: not empty, and nothing that would split the
+    /// credential helper's answer into more lines. GitHub's tokens are letters, digits and `_`.
+    pub(crate) fn is_usable(&self) -> bool {
+        !self.0.is_empty() && !self.0.chars().any(|c| c.is_control() || c.is_whitespace())
+    }
 }
 
 impl fmt::Debug for Token {
@@ -94,14 +112,39 @@ impl fmt::Debug for Token {
     }
 }
 
-/// The git rozed runs.
-#[derive(Clone, Debug)]
+/// The git rozed runs. Its `Debug` hides the proxy variables' values, which can hold a password.
+#[derive(Clone)]
 pub struct Git {
     program: PathBuf,
     version: GitVersion,
     /// The variables every git inherits from rozed's environment (see [`inherited_env`]).
     inherited: Vec<(OsString, OsString)>,
 }
+
+impl fmt::Debug for Git {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let inherited: Vec<String> = self
+            .inherited
+            .iter()
+            .map(|(name, value)| {
+                let name = name.to_string_lossy();
+                if name.to_ascii_lowercase().ends_with("_proxy") {
+                    format!("{name}=(redacted)")
+                } else {
+                    format!("{name}={}", value.to_string_lossy())
+                }
+            })
+            .collect();
+        f.debug_struct("Git")
+            .field("program", &self.program)
+            .field("version", &self.version)
+            .field("inherited", &inherited)
+            .finish()
+    }
+}
+
+/// The empty tree's ID, which git knows without having it.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Where rozed looks for git first: Apple's, from the Xcode Command Line Tools.
 const SYSTEM_GIT: &str = "/usr/bin/git";
@@ -127,9 +170,14 @@ const INHERITED_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-/// The variable the askpass helper reads the token from. It's set only on git children that
+/// The variable the credential helper reads the token from. It's set only on git children that
 /// sign in.
 pub(crate) const TOKEN_VAR: &str = "ROZED_GIT_TOKEN";
+
+/// The credential helper, a shell function git runs with the action (`get`, `store` or `erase`)
+/// as its argument. It answers `get` with the token in [`TOKEN_VAR`], and nothing else.
+const CREDENTIAL_HELPER: &str = "!f() { test \"$1\" = get || exit 0; \
+     printf 'username=x-access-token\\npassword=%s\\n' \"$ROZED_GIT_TOKEN\"; }; f";
 
 impl Git {
     /// Finds git, `/usr/bin/git` first and then each `git` on `PATH`, and checks that it's new
@@ -164,7 +212,10 @@ impl Git {
     }
 
     /// The git at `program`, as if rozed's environment were `env`.
-    fn with_env(program: PathBuf, env: Vec<(OsString, OsString)>) -> Result<Self, Error> {
+    pub(crate) fn with_env(
+        program: PathBuf,
+        env: Vec<(OsString, OsString)>,
+    ) -> Result<Self, Error> {
         let inherited = inherited_env(env);
         let output = Command::new(&program)
             .arg("--version")
@@ -216,15 +267,24 @@ impl Git {
         self.version
     }
 
-    /// A git command with rozed's environment (see the module docs), running in `dir`. `home` is
-    /// the empty folder git gets as its `HOME`. With `auth`, git signs in with its token when a
-    /// server asks.
+    /// This git, as if it were `version`, for tests of what rozed does differently on older git.
+    #[cfg(test)]
+    pub(crate) fn with_version(mut self, version: GitVersion) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// A git command with rozed's environment (see the module docs), working on the repository
+    /// at `location`, which git is always told so it never looks for one. `home` is the empty
+    /// folder git gets as its `HOME`, and git never looks for a repository in `ceiling` or above
+    /// it. With `auth`, git signs in with its token when the remote asks, and only then.
     ///
     /// `config` is extra `name=value` config, which wins over rozed's own: tests allow `file://`.
     pub(crate) fn command(
         &self,
-        dir: &Path,
+        location: Location<'_>,
         home: &Path,
+        ceiling: &Path,
         auth: Option<Auth<'_>>,
         config: &[String],
     ) -> GitCommand {
@@ -233,23 +293,53 @@ impl Git {
             .env_clear()
             .envs(self.inherited.iter().map(|(name, value)| (name, value)))
             .env("HOME", home)
+            .env("GIT_CEILING_DIRECTORIES", ceiling)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_LITERAL_PATHSPECS", "1")
             .env("LC_ALL", "C")
-            .current_dir(dir)
             .stdin(Stdio::null());
-        if let Some(auth) = auth {
-            command
-                .env("GIT_ASKPASS", auth.askpass)
-                .env(TOKEN_VAR, auth.token.expose());
+        match location {
+            Location::Nowhere => {
+                command.current_dir(home);
+            }
+            Location::Clone(git_dir) => {
+                command.current_dir(home).arg(git_dir_arg(git_dir));
+            }
+            Location::Checkout { git_dir, work_tree } => {
+                let mut work_tree_arg = OsString::from("--work-tree=");
+                work_tree_arg.push(work_tree);
+                command
+                    .current_dir(work_tree)
+                    .arg(git_dir_arg(git_dir))
+                    .arg(work_tree_arg);
+            }
         }
         command.args([
-            // No credential helper, so the token from askpass is the only credential.
+            // No credential helper, prompt or redirect: only rozed's helper, added below for the
+            // remote's URL, gives git a credential.
             "-c",
             "credential.helper=",
+            "-c",
+            "core.askPass=",
+            "-c",
+            "http.followRedirects=false",
+        ]);
+        if let Some(auth) = auth
+            && auth.token.is_usable()
+        {
+            command.env(TOKEN_VAR, auth.token.expose()).args([
+                "-c".to_string(),
+                format!("credential.{}.helper={CREDENTIAL_HELPER}", auth.remote),
+            ]);
+        }
+        command.args([
+            // Paths are the bytes in the tree. A Mac's git otherwise composes a decomposed name
+            // (`cafe\u{301}`) given on the command line, and reads the composed one's file.
+            "-c",
+            "core.precomposeUnicode=false",
             // Symlinks in a checkout become plain files holding their target, so nothing in a
             // checkout points outside it.
             "-c",
@@ -272,18 +362,25 @@ impl Git {
             "-c",
             "core.fsmonitor=false",
             // No attributes: not the user's file, and not a repository's own `.gitattributes`,
-            // which git reads from `attr.tree` in a bare repository. rozed's clones never have a
-            // HEAD to read them from either; the empty tree makes that explicit.
+            // whatever a clone's config says (`attr.tree`). `--attr-source`, below, reads
+            // attributes from the empty tree instead of a checkout's files.
             "-c",
             "core.attributesFile=/dev/null",
+            // Nothing a server offers makes git fetch from another host, which would ask for
+            // credentials: no bundles, no other promisor remotes, no packfile URIs.
             "-c",
-            "attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "transfer.bundleURI=false",
+            "-c",
+            "promisor.acceptFromServer=None",
+            "-c",
+            "fetch.uriProtocols=",
             // HTTPS only: no ssh, git or ext transports, and no local paths.
             "-c",
             "protocol.allow=never",
             "-c",
             "protocol.https.allow=always",
         ]);
+        command.arg(format!("--attr-source={EMPTY_TREE}"));
         for config in config {
             command.args(["-c", config]);
         }
@@ -294,10 +391,32 @@ impl Git {
     }
 }
 
-/// How git signs in: the askpass helper, and the token it answers with.
+/// The repository a git command works on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Location<'a> {
+    /// None, for `git init` and the commands that need no repository.
+    Nowhere,
+    /// A bare clone.
+    Clone(&'a Path),
+    /// A checkout of a clone: its git dir, under the clone's `worktrees/`, and its folder.
+    Checkout {
+        git_dir: &'a Path,
+        work_tree: &'a Path,
+    },
+}
+
+fn git_dir_arg(git_dir: &Path) -> OsString {
+    let mut arg = OsString::from("--git-dir=");
+    arg.push(git_dir);
+    arg
+}
+
+/// How git signs in: with `token`, for `remote` alone.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Auth<'a> {
-    pub askpass: &'a Path,
+    /// The remote's URL without a path, such as `https://github.com`: the only place the token
+    /// goes.
+    pub remote: &'a str,
     pub token: &'a Token,
 }
 
@@ -415,12 +534,6 @@ pub(crate) fn failure_message(finished: &Finished) -> String {
     }
 }
 
-/// Writes the askpass helper into `dir`, for this crate's tests.
-#[cfg(test)]
-pub(crate) fn test_askpass(dir: &Path) -> PathBuf {
-    crate::askpass::install(dir).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,10 +578,10 @@ mod tests {
     }
 
     #[test]
-    fn needs_git_2_40() {
-        assert_eq!(GitVersion::MINIMUM, version(2, 40, 0));
-        assert!(version(2, 39, 9) < GitVersion::MINIMUM);
-        assert!(version(2, 40, 0) >= GitVersion::MINIMUM);
+    fn needs_git_2_41() {
+        assert_eq!(GitVersion::MINIMUM, version(2, 41, 0));
+        assert!(version(2, 40, 1) < GitVersion::MINIMUM);
+        assert!(version(2, 41, 0) >= GitVersion::MINIMUM);
         assert!(version(2, 100, 0) > version(2, 40, 0));
         assert_eq!(version(2, 40, 1).to_string(), "2.40.1");
     }
@@ -489,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_git_older_than_2_40() {
+    fn refuses_a_git_older_than_2_41() {
         let dir = TempDir::new().unwrap();
         let program = fake_git(dir.path(), "2.39.5 (Apple Git-154)");
         let error = Git::at(&program).unwrap_err();
@@ -498,13 +611,18 @@ mod tests {
         };
         assert_eq!(*found, version(2, 39, 5));
         let message = error.to_string();
-        assert!(message.contains("git 2.40.0 or newer"), "{message}");
+        assert!(message.contains("git 2.41.0 or newer"), "{message}");
         assert!(message.contains("is git 2.39.5"), "{message}");
         assert!(message.contains("xcode-select --install"), "{message}");
+        // 2.40 has no `--attr-source`, which keeps a repository's attributes out of checkouts.
+        assert!(matches!(
+            Git::at(fake_git(dir.path(), "2.40.1")),
+            Err(Error::GitTooOld { .. })
+        ));
 
         assert_eq!(
-            Git::at(fake_git(dir.path(), "2.40.0")).unwrap().version(),
-            version(2, 40, 0)
+            Git::at(fake_git(dir.path(), "2.41.0")).unwrap().version(),
+            version(2, 41, 0)
         );
     }
 
@@ -584,10 +702,10 @@ mod tests {
         /// The remote's URL.
         url: String,
         /// A working copy, with `first` and `second` commits on `trunk`. Both have a
-        /// `.gitattributes` saying `*.txt -diff`, and `second` changes `a.txt`.
+        /// `.gitattributes` saying `*.txt -diff`, and `second` changes `a.txt`. Replace refs make
+        /// `first` read as `second`.
         work: PathBuf,
         first: String,
-        second: String,
         /// rozed's own `HOME` for git.
         home: PathBuf,
         env: Vec<(OsString, OsString)>,
@@ -692,18 +810,17 @@ mod tests {
                 url,
                 work,
                 first,
-                second,
                 home,
                 env,
             }
         }
 
         /// git run by rozed from inside the hostile environment.
-        fn git(&self, dir: &Path, config: &[&str]) -> GitCommand {
+        fn git(&self, location: Location<'_>, config: &[&str]) -> GitCommand {
             let config: Vec<String> = config.iter().map(|c| c.to_string()).collect();
             Git::with_env(Git::find().unwrap().program, self.env.clone())
                 .unwrap()
-                .command(dir, &self.home, None, &config)
+                .command(location, &self.home, self.dir.path(), None, &config)
         }
 
         /// The hostile programs that ran.
@@ -725,7 +842,7 @@ mod tests {
 
         // No URL rewrite, and git's own upload-pack, not GIT_EXEC_PATH's.
         let refs = hostile
-            .git(hostile.dir.path(), &[ALLOW_FILE])
+            .git(Location::Nowhere, &[ALLOW_FILE])
             .args(["ls-remote", &hostile.url])
             .run()
             .unwrap();
@@ -737,7 +854,7 @@ mod tests {
 
         // git sees no config but rozed's own.
         let config = hostile
-            .git(hostile.dir.path(), &[])
+            .git(Location::Nowhere, &[])
             .args(["config", "--list", "--show-origin"])
             .run()
             .unwrap();
@@ -749,8 +866,22 @@ mod tests {
         for absent in ["insteadof", "hostile", "markers", "protocol.allow=always"] {
             assert!(!config.contains(absent), "{absent} in {config}");
         }
-        assert!(config.contains("credential.helper="), "{config}");
-        assert!(config.contains("core.hookspath=/dev/null"), "{config}");
+        for pinned in [
+            "credential.helper=",
+            "core.askpass=",
+            "http.followredirects=false",
+            "core.hookspath=/dev/null",
+            "core.fsmonitor=false",
+            "transfer.bundleuri=false",
+            "promisor.acceptfromserver=None",
+            "fetch.uriprotocols=",
+            "core.precomposeunicode=false",
+        ] {
+            assert!(
+                config.lines().any(|line| line.ends_with(pinned)),
+                "{pinned} not in {config}"
+            );
+        }
         assert_eq!(hostile.programs_run(), Vec::<String>::new());
     }
 
@@ -761,25 +892,29 @@ mod tests {
 
         // A new repository gets no hostile template, and a checkout runs no hook.
         hostile
-            .git(hostile.dir.path(), &[])
+            .git(Location::Nowhere, &[])
             .args(["init", "-q"])
             .arg(&clone)
             .run()
             .unwrap();
         assert!(!clone.join(".git/info/hostile-template").exists());
         let work = hostile.work.to_str().unwrap();
+        let checkout = Location::Checkout {
+            git_dir: &clone.join(".git"),
+            work_tree: &clone,
+        };
         hostile
-            .git(&clone, &[ALLOW_FILE])
+            .git(checkout, &[ALLOW_FILE])
             .args(["fetch", "-q", work, "trunk"])
             .run()
             .unwrap();
         hostile
-            .git(&clone, &[])
+            .git(checkout, &[])
             .args(["checkout", "-q", "FETCH_HEAD"])
             .run()
             .unwrap();
         hostile
-            .git(&clone, &[])
+            .git(checkout, &[])
             .args(["status", "--porcelain"])
             .run()
             .unwrap();
@@ -789,7 +924,6 @@ mod tests {
     #[test]
     fn only_https_is_allowed() {
         let hostile = Hostile::new();
-        let dir = hostile.dir.path();
         for (url, transport) in [
             (hostile.url.as_str(), "file"),
             ("ssh://git@example.invalid/a/b.git", "ssh"),
@@ -798,7 +932,7 @@ mod tests {
             ("ext::sh -c touch% /tmp/rozed-ext", "ext"),
         ] {
             let error = hostile
-                .git(dir, &[])
+                .git(Location::Nowhere, &[])
                 .args(["ls-remote", url])
                 .run()
                 .unwrap_err();
@@ -816,9 +950,10 @@ mod tests {
     fn hostile_attributes_and_replace_refs_have_no_effect() {
         let hostile = Hostile::new();
 
-        // Neither the user's attributes nor GIT_ATTR_SOURCE's.
+        // Neither the user's attributes nor GIT_ATTR_SOURCE's. A repository's own are the clone and
+        // checkout tests' business.
         let attributes = hostile
-            .git(&hostile.dir.path().join("remote.git"), &[])
+            .git(Location::Clone(&hostile.dir.path().join("remote.git")), &[])
             .args(["check-attr", "binary", "diff", "--", "a.txt"])
             .run()
             .unwrap();
@@ -826,91 +961,122 @@ mod tests {
             String::from_utf8(attributes).unwrap(),
             "a.txt: binary: unspecified\na.txt: diff: unspecified\n"
         );
-        // Nor the repository's own `.gitattributes`, though the bare remote's HEAD has one.
-        let numstat = hostile
-            .git(&hostile.dir.path().join("remote.git"), &[])
-            .args(["diff", "--numstat", &hostile.first, &hostile.second])
-            .run()
-            .unwrap();
-        assert_eq!(String::from_utf8(numstat).unwrap(), "1\t1\ta.txt\n");
-
         // `first` is itself, despite refs/replace/ and GIT_REPLACE_REF_BASE.
         let subject = hostile
-            .git(&hostile.work, &[])
+            .git(
+                Location::Checkout {
+                    git_dir: &hostile.work.join(".git"),
+                    work_tree: &hostile.work,
+                },
+                &[],
+            )
             .args(["log", "-1", "--format=%s", &hostile.first])
             .run()
             .unwrap();
         assert_eq!(String::from_utf8(subject).unwrap(), "first\n");
     }
 
-    #[test]
-    fn askpass_answers_both_prompts() {
-        let dir = TempDir::new().unwrap();
-        let askpass = test_askpass(dir.path());
-        let ask = |prompt: &str| {
-            let output = Command::new(&askpass)
-                .arg(prompt)
-                .env_clear()
-                .env(TOKEN_VAR, "gho_secret")
-                .output()
-                .unwrap();
-            (
-                output.status.success(),
-                String::from_utf8(output.stdout).unwrap(),
-            )
-        };
-        assert_eq!(
-            ask("Username for 'https://github.com': "),
-            (true, "x-access-token\n".into())
-        );
-        assert_eq!(
-            ask("Password for 'https://x-access-token@github.com': "),
-            (true, "gho_secret\n".into())
-        );
-        assert!(!ask("Are you sure you want to continue connecting (yes/no)? ").0);
-
-        // The helper holds no token itself.
-        assert!(!fs::read_to_string(&askpass).unwrap().contains("gho_secret"));
-        let mode = fs::metadata(&askpass).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700);
-    }
-
-    /// Asks git for github.com's credentials, as it does when a server answers 401.
-    fn credential_fill(git: &Git, auth: Option<Auth<'_>>, home: &Path) -> Result<Vec<u8>, Error> {
-        git.command(home, home, auth, &[])
+    /// Asks git for credentials for `url`, as it does when a server or proxy answers 401 or 407.
+    fn credential_fill(
+        git: &Git,
+        auth: Option<Auth<'_>>,
+        home: &Path,
+        url: &str,
+    ) -> Result<String, Error> {
+        let output = git
+            .command(Location::Nowhere, home, home, auth, &[])
             .args(["credential", "fill"])
-            .run_with_input(Some(b"protocol=https\nhost=github.com\n\n"))
+            .run_with_input(Some(format!("url={url}\n\n").as_bytes()))?;
+        Ok(String::from_utf8(output).unwrap())
     }
 
+    const GITHUB: &str = "https://github.com";
+
     #[test]
-    fn git_signs_in_with_the_token_from_askpass() {
+    fn git_signs_in_to_the_remote_with_the_token() {
         let dir = TempDir::new().unwrap();
-        let askpass = test_askpass(dir.path());
         let token = Token::new("gho_secret\n");
         let auth = Auth {
-            askpass: &askpass,
+            remote: GITHUB,
             token: &token,
         };
-
         let git = Git::find().unwrap();
-        let command = git
-            .command(dir.path(), dir.path(), Some(auth), &[])
-            .args(["credential", "fill"]);
-        assert!(!command.display().contains("gho_secret"));
-        let (command, _) = command.into_command();
-        assert!(
-            command
-                .get_args()
-                .all(|arg| !arg.to_string_lossy().contains("gho_secret"))
-        );
 
         let credentials =
-            String::from_utf8(credential_fill(&git, Some(auth), dir.path()).unwrap()).unwrap();
+            credential_fill(&git, Some(auth), dir.path(), "https://github.com/a/b.git").unwrap();
+
         assert!(
             credentials.contains("username=x-access-token\n"),
             "{credentials}"
         );
         assert!(credentials.contains("password=gho_secret\n"));
+        // The token is in no argument, only in the variable the helper reads.
+        let (command, display) = git
+            .command(Location::Nowhere, dir.path(), dir.path(), Some(auth), &[])
+            .args(["credential", "fill"])
+            .into_command();
+        assert!(!display.contains("gho_secret"));
+        assert!(
+            command
+                .get_args()
+                .all(|arg| !arg.to_string_lossy().contains("gho_secret"))
+        );
+        assert!(CREDENTIAL_HELPER.contains(&format!("${TOKEN_VAR}")));
+    }
+
+    #[test]
+    fn the_token_goes_to_no_other_host_or_proxy() {
+        let hostile = Hostile::new();
+        let git = Git::with_env(Git::find().unwrap().program, hostile.env.clone()).unwrap();
+        let token = Token::new("gho_secret");
+        let auth = Auth {
+            remote: GITHUB,
+            token: &token,
+        };
+
+        for url in [
+            // A proxy whose URL names a user and no password.
+            "http://alice@proxy.example:3128",
+            "https://alice@proxy.example:3128",
+            // Another host, such as one a request was redirected to.
+            "https://example.com/a/b.git",
+            "https://github.com.example.com/a/b.git",
+            "https://gist.github.com/a.git",
+            // github.com, but not over HTTPS.
+            "http://github.com/a/b.git",
+            "https://github.com:8443/a/b.git",
+        ] {
+            let error = credential_fill(&git, Some(auth), &hostile.home, url).unwrap_err();
+            assert!(
+                error.to_string().contains("terminal prompts disabled"),
+                "{url}: {error}"
+            );
+        }
+        // Nor does any askpass the environment names run.
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_token_that_would_split_the_helpers_answer_isnt_used() {
+        let dir = TempDir::new().unwrap();
+        let token = Token::new("gho_secret\nhost=example.com");
+        let auth = Auth {
+            remote: GITHUB,
+            token: &token,
+        };
+
+        let error = credential_fill(
+            &Git::find().unwrap(),
+            Some(auth),
+            dir.path(),
+            "https://github.com/a/b.git",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("terminal prompts disabled"));
+        assert!(Token::new(" gho_ok\n").is_usable());
+        assert!(!Token::new("").is_usable());
+        assert!(!Token::new("a b").is_usable());
     }
 
     #[test]
@@ -918,7 +1084,8 @@ mod tests {
         let hostile = Hostile::new();
         let git = Git::with_env(Git::find().unwrap().program, hostile.env.clone()).unwrap();
 
-        let error = credential_fill(&git, None, &hostile.home).unwrap_err();
+        let error =
+            credential_fill(&git, None, &hostile.home, "https://github.com/a/b.git").unwrap_err();
 
         assert!(
             error.to_string().contains("terminal prompts disabled"),
@@ -926,6 +1093,26 @@ mod tests {
         );
         // Not GIT_ASKPASS's or SSH_ASKPASS's helper either.
         assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn proxy_passwords_stay_out_of_debug_output() {
+        let git = Git::with_env(
+            Git::find().unwrap().program,
+            vars(&[
+                ("PATH", "/usr/bin:/bin"),
+                ("https_proxy", "http://alice:hunter2@proxy:3128"),
+                ("ALL_PROXY", "socks5://bob:swordfish@proxy:1080"),
+            ]),
+        )
+        .unwrap();
+
+        let debug = format!("{git:?}");
+
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert!(!debug.contains("swordfish"), "{debug}");
+        assert!(debug.contains("https_proxy"), "{debug}");
+        assert!(debug.contains("/usr/bin:/bin"), "{debug}");
     }
 
     #[test]

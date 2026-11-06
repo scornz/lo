@@ -59,11 +59,16 @@ pub enum Error {
 pub enum FetchFailure {
     /// The network failed or timed out.
     Network,
-    /// GitHub refused the token, or wanted one and rozed had none.
+    /// GitHub refused the token, or wanted one and rozed had none, or the account can't use it
+    /// here (single sign-on, an IP allow list).
     Auth,
+    /// GitHub is limiting requests: a rate limit or an abuse limit, which wears off.
+    RateLimited,
+    /// The server's certificate didn't verify, so rozed sent it nothing.
+    Certificate,
     /// The repository doesn't exist, or the account can't see it.
     RepoNotFound,
-    /// The branch or pull request ref doesn't exist.
+    /// The branch or pull request ref doesn't exist, or a commit asked for by ID doesn't.
     RefNotFound,
     /// Something else, in git's words.
     Other,
@@ -73,6 +78,10 @@ impl FetchFailure {
     fn explain(self, message: &str) -> String {
         let reason = match self {
             FetchFailure::Network => "the network failed",
+            FetchFailure::RateLimited => "GitHub is limiting requests for now",
+            FetchFailure::Certificate => {
+                "the server's certificate didn't verify, so rozed sent it nothing"
+            }
             FetchFailure::Auth => {
                 "GitHub wants an account that can see the repository; sign in with one"
             }
@@ -91,13 +100,13 @@ impl FetchFailure {
 }
 
 impl Error {
-    /// Whether trying again later might work: a fetch that failed on the network or for a reason
-    /// rozed doesn't know.
+    /// Whether trying again later might work: a fetch that failed on the network, on a rate
+    /// limit, or for a reason rozed doesn't know.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
             Error::Fetch {
-                failure: FetchFailure::Network | FetchFailure::Other,
+                failure: FetchFailure::Network | FetchFailure::RateLimited | FetchFailure::Other,
                 ..
             }
         )
@@ -123,6 +132,10 @@ impl Error {
         if message.contains("No space left on device") {
             return Error::DiskFull;
         }
+        // The clone itself is gone or broken, which no fetch fixes; opening it again makes it anew.
+        if message.contains("fatal: not a git repository") {
+            return Error::Git { command, message };
+        }
         let fetching = what.is_some() || message.contains("promisor remote");
         if !fetching {
             return Error::Git { command, message };
@@ -140,8 +153,19 @@ impl Error {
 /// `LC_ALL=C`).
 fn classify_fetch(message: &str) -> FetchFailure {
     let has = |needles: &[&str]| needles.iter().any(|needle| message.contains(needle));
-    if has(&["couldn't find remote ref"]) {
+    let lowercase = message.to_ascii_lowercase();
+    if has(&[
+        "couldn't find remote ref",
+        "not our ref",
+        "unadvertised object",
+    ]) {
         FetchFailure::RefNotFound
+    } else if has(&["returned error: 429"])
+        || ["rate limit", "abuse detection"]
+            .iter()
+            .any(|needle| lowercase.contains(needle))
+    {
+        FetchFailure::RateLimited
     } else if has(&[
         "Authentication failed",
         "could not read Username",
@@ -153,11 +177,13 @@ fn classify_fetch(message: &str) -> FetchFailure {
         FetchFailure::Auth
     } else if has(&[
         "Repository not found",
-        "not found",
         "does not appear to be a git repository",
         "returned error: 404",
-    ]) {
+    ]) || is_github_repository_not_found(message)
+    {
         FetchFailure::RepoNotFound
+    } else if lowercase.contains("certificate") {
+        FetchFailure::Certificate
     } else if has(&[
         "Could not resolve host",
         "Failed to connect",
@@ -179,6 +205,16 @@ fn classify_fetch(message: &str) -> FetchFailure {
     } else {
         FetchFailure::Other
     }
+}
+
+/// Whether a line of `message` is git's `fatal: repository '<url>' not found`, which GitHub's 404
+/// for a repository leads to.
+fn is_github_repository_not_found(message: &str) -> bool {
+    message.lines().any(|line| {
+        line.trim()
+            .strip_prefix("fatal: repository '")
+            .is_some_and(|rest| rest.ends_with("' not found"))
+    })
 }
 
 #[cfg(test)]
@@ -234,10 +270,105 @@ mod tests {
                 "fatal: couldn't find remote ref refs/pull/9/head",
                 FetchFailure::RefNotFound,
             ),
+            // A commit GitHub no longer has, asked for by ID.
+            (
+                "fatal: remote error: upload-pack: not our ref \
+                 1234567890123456789012345678901234567890",
+                FetchFailure::RefNotFound,
+            ),
+            (
+                "error: Server does not allow request for unadvertised object \
+                 1234567890123456789012345678901234567890",
+                FetchFailure::RefNotFound,
+            ),
+            // Any 403 that isn't a rate limit is about the account: SSO, an IP allow list.
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': The requested URL \
+                 returned error: 403",
+                FetchFailure::Auth,
+            ),
+            (
+                "remote: The 'org' organization has enabled or enforced SAML SSO.\nfatal: unable \
+                 to access 'https://github.com/a/b.git/': The requested URL returned error: 403",
+                FetchFailure::Auth,
+            ),
+            // Rate and abuse limits wear off.
+            (
+                "remote: API rate limit exceeded for user ID 1.\nfatal: unable to access \
+                 'https://github.com/a/b.git/': The requested URL returned error: 403",
+                FetchFailure::RateLimited,
+            ),
+            (
+                "remote: You have exceeded a secondary rate limit.\nfatal: unable to access \
+                 'https://github.com/a/b.git/': The requested URL returned error: 403",
+                FetchFailure::RateLimited,
+            ),
+            (
+                "remote: You have triggered an abuse detection mechanism.\nfatal: unable to \
+                 access 'https://github.com/a/b.git/': The requested URL returned error: 403",
+                FetchFailure::RateLimited,
+            ),
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': The requested URL \
+                 returned error: 429",
+                FetchFailure::RateLimited,
+            ),
+            // Only GitHub's own words for a missing repository.
+            (
+                "fatal: repository 'https://github.com/a/b.git/' not found",
+                FetchFailure::RepoNotFound,
+            ),
+            ("fatal: path 'src/x' not found", FetchFailure::Other),
+            ("error: object 1234 not found", FetchFailure::Other),
+            // A certificate that fails to verify won't verify next time either.
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': SSL certificate problem: \
+                 unable to get local issuer certificate",
+                FetchFailure::Certificate,
+            ),
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': SSL: no alternative \
+                 certificate subject name matches target host name 'github.com'",
+                FetchFailure::Certificate,
+            ),
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': server certificate \
+                 verification failed. CAfile: none CRLfile: none",
+                FetchFailure::Certificate,
+            ),
+            // A TLS connection that drops is the network.
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': LibreSSL SSL_connect: \
+                 SSL_ERROR_SYSCALL in connection to github.com:443",
+                FetchFailure::Network,
+            ),
             ("fatal: something new", FetchFailure::Other),
         ];
         for (message, expected) in cases {
             assert_eq!(fetch_failure(message), expected, "{message}");
+        }
+    }
+
+    #[test]
+    fn rate_limits_and_the_network_are_retryable_and_the_rest_isnt() {
+        let retryable = |failure| {
+            Error::Fetch {
+                what: "pull request #1".into(),
+                failure,
+                message: String::new(),
+            }
+            .is_retryable()
+        };
+        assert!(retryable(FetchFailure::Network));
+        assert!(retryable(FetchFailure::RateLimited));
+        assert!(retryable(FetchFailure::Other));
+        for failure in [
+            FetchFailure::Auth,
+            FetchFailure::Certificate,
+            FetchFailure::RepoNotFound,
+            FetchFailure::RefNotFound,
+        ] {
+            assert!(!retryable(failure), "{failure:?}");
         }
     }
 
