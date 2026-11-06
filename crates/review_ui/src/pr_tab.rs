@@ -1086,11 +1086,18 @@ impl PrTab {
         };
         // Files stay open or folded as the reviewer left them, before the view scrolls to the
         // same line.
-        if let Some(old) = self.diff.clone() {
-            let at_cursor = shown_files::file_at_cursor(&old, cx);
-            shown_files::carry_over(&old, &editor, at_cursor.as_deref(), window, cx);
-        }
+        let to_load = match self.diff.clone() {
+            Some(old) => {
+                let at_cursor = shown_files::file_at_cursor(&old, cx);
+                shown_files::carry_over(&old, &editor, at_cursor.as_deref(), window, cx)
+            }
+            None => Vec::new(),
+        };
         self.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
+        // A large file the reviewer had open in GitHub's diff loads, as alt-a would load it.
+        for path in to_load {
+            self.load_file(editor.clone(), path, window, cx);
+        }
         if let Some(position) = &position
             && !pr_diff::scroll_to(&editor, position, window, cx)
         {
@@ -1305,9 +1312,21 @@ impl PrTab {
         else {
             return;
         };
-        if shown_files::expand(&diff, &path, window, cx) != Expanded::Load
-            || self.loading.contains_key(&path)
-        {
+        if shown_files::expand(&diff, &path, window, cx) == Expanded::Load {
+            self.load_file(diff, path, window, cx);
+        }
+    }
+
+    /// Loads `path`, a file too large to have been loaded with the others, into `diff`, unless
+    /// it's already loading.
+    fn load_file(
+        &mut self,
+        diff: Entity<SplittableEditor>,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.loading.contains_key(&path) {
             return;
         }
         let Some(project) = self

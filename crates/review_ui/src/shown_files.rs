@@ -313,14 +313,15 @@ pub(crate) fn add(
 
 /// Opens or folds each of `to`'s files as the reviewer left it in `from`, the diff it replaces,
 /// and shows it whole if they asked: what they chose wins over `to`'s own rules, which apply only
-/// to the files they didn't touch. The file at `cursor` never folds under them.
+/// to the files they didn't touch. The file at `cursor` never folds under them. Returns the files
+/// left open that `to` didn't load for being too large, for the caller to load.
 pub(crate) fn carry_over(
     from: &Entity<SplittableEditor>,
     to: &Entity<SplittableEditor>,
     cursor: Option<&str>,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Vec<String> {
     let from_rhs = from.read(cx).rhs_editor().clone();
     let chosen: HashMap<String, (bool, bool)> = read(from, cx, |files| {
         files
@@ -336,13 +337,22 @@ pub(crate) fn carry_over(
     })
     .unwrap_or_default();
     let to_rhs = to.read(cx).rhs_editor().clone();
+    let mut to_load = Vec::new();
     for (path, (folded, whole)) in chosen {
-        let Some((buffer_id, was_whole)) = read(to, cx, |files| {
-            files.get(&path).map(|file| (file.buffer_id, file.whole))
+        let Some((buffer_id, was_whole, large)) = read(to, cx, |files| {
+            files.get(&path).map(|file| {
+                let large = file.collapsed.as_ref().is_some_and(Collapsed::is_large);
+                (file.buffer_id, file.whole, large)
+            })
         })
         .flatten() else {
             continue;
         };
+        // Its placeholder stays folded until it's loaded, which opens it.
+        if large && !folded {
+            to_load.push(path);
+            continue;
+        }
         if whole != was_whole {
             update(to, cx, |files, _| {
                 if let Some(file) = files.files.get_mut(&path) {
@@ -356,6 +366,7 @@ pub(crate) fn carry_over(
             to_rhs.update(cx, |rhs, cx| rhs.unfold_buffer(buffer_id, cx));
         }
     }
+    to_load
 }
 
 /// The path of the file the diff's cursor is in. The right-hand editor holds the cursor; side by
@@ -1580,6 +1591,46 @@ mod tests {
         // The lockfile stays open, and api.pb.go, with the cursor in it, doesn't fold; gen.pb.go,
         // which the reviewer didn't touch, follows .gitattributes.
         assert_eq!(folded(&local, cx), [false, false, true, false]);
+    }
+
+    #[gpui::test]
+    async fn a_large_file_open_in_githubs_diff_loads_in_the_local_copys(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let large = |path, name| github::files::PullFile {
+            additions: 6_000,
+            changes: 6_001,
+            ..github_file(path, name, 20)
+        };
+        let github = show_github(
+            &tab,
+            vec![large("big.txt", "big"), large("huge.txt", "huge")],
+            cx,
+        );
+        // The reviewer opens big.txt and moves on to huge.txt, which stays folded.
+        select(&github, "big.txt", cx);
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        select(&github, "huge.txt", cx);
+
+        let (big, huge) = (lines("big", 6_000), lines("huge", 6_000));
+        let (local, _copy) = show(
+            &tab,
+            &[],
+            &[
+                Entry::File("big.txt", big.as_bytes()),
+                Entry::File("huge.txt", huge.as_bytes()),
+            ],
+            cx,
+        );
+        assert_ne!(local, github);
+        assert!(!is_folded(&local, "big.txt", cx));
+        assert_eq!(collapsed_label(&local, "big.txt", cx), None);
+        assert!(text(&local, cx).contains("big 6000"));
+        assert!(is_folded(&local, "huge.txt", cx));
+        assert_eq!(
+            collapsed_label(&local, "huge.txt", cx).as_deref(),
+            Some("large: load with ⌥A")
+        );
     }
 
     #[gpui::test]
