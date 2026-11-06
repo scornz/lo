@@ -302,17 +302,25 @@ impl PrTab {
     /// Takes the pull request's details from its account's poller: its title, author and the
     /// account's viewed marks.
     pub fn set_details(&mut self, details: &PullRequestData, cx: &mut Context<Self>) {
-        self.header.title = Some(details.title.clone());
+        let mut header = self.header.clone();
+        header.title = Some(details.title.clone());
         if let Some(author) = &details.author {
-            self.header.author = Some(author.login.clone());
+            header.author = Some(author.login.clone());
         }
-        self.viewed = details
+        let viewed: HashMap<String, ViewedState> = details
             .files
             .iter()
             .flat_map(|files| files.nodes.iter().flatten())
             .flatten()
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
+        // A change of title makes the workspace report the active item changed, which comes back
+        // here through `set_active`, so only a real change is reported.
+        if header == self.header && viewed == self.viewed {
+            return;
+        }
+        self.header = header;
+        self.viewed = viewed;
         self.files.set_viewed(&self.viewed);
         self.changed(cx);
     }
@@ -382,7 +390,9 @@ impl PrTab {
             PollEvent::Details { pull, details } if pull == watched => {
                 self.set_details(details, cx);
             }
-            PollEvent::Summary { pull, summary } if pull == watched => {
+            PollEvent::Summary { pull, summary }
+                if pull == watched && self.header.title.as_ref() != Some(&summary.title) =>
+            {
                 self.header.title = Some(summary.title.clone());
                 self.changed(cx);
             }
@@ -402,12 +412,13 @@ impl PrTab {
         let Some((poller, pull)) = self.watched.clone() else {
             return;
         };
-        if active {
+        let is_open = poller.read(cx).open() == Some(&pull);
+        if active && !is_open {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
                 self.set_details(&answer.details, cx);
             }
-        } else if poller.read(cx).open() == Some(&pull) {
+        } else if !active && is_open {
             poller.update(cx, |poller, cx| poller.set_open(None, cx));
         }
     }
@@ -1223,6 +1234,103 @@ mod tests {
             let revisions = tab.revisions().unwrap();
             assert_eq!(revisions.len(), 1);
             assert_eq!(revisions.label(head.as_str()).as_deref(), Some("r1"));
+        });
+    }
+
+    /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.
+    fn details(title: &str, viewed: &str) -> PullRequestData {
+        serde_json::from_value(serde_json::json!({
+            "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
+            "number": 2,
+            "title": title,
+            "url": "https://github.com/rozed-dev/playground/pull/2",
+            "state": "OPEN",
+            "isDraft": false,
+            "updatedAt": "2026-11-06T08:15:07Z",
+            "author": {
+                "__typename": "User",
+                "login": "rozed-bot",
+                "avatarUrl": "https://avatars.githubusercontent.com/u/353226052?v=4"
+            },
+            "baseRefName": "stack-a",
+            "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+            "headRefName": "stack-b",
+            "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+            "isCrossRepository": false,
+            "headRepository": { "nameWithOwner": "rozed-dev/playground", "isFork": false },
+            "files": {
+                "totalCount": 2,
+                "pageInfo": { "hasNextPage": false, "endCursor": "Mg" },
+                "nodes": [
+                    { "path": "a.rs", "viewerViewedState": viewed },
+                    { "path": "b.rs", "viewerViewedState": "UNVIEWED" }
+                ]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    async fn the_pollers_details_fill_the_header_and_viewed_marks_once(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let head: Oid = "2".repeat(40).parse().unwrap();
+        let files = [
+            changed("a.rs", Change::Modified),
+            changed("b.rs", Change::Modified),
+        ];
+        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        // A changed title makes the workspace report the active item changed, which comes back
+        // to the tab; the same details again must not, or the two would loop.
+        let active_item_changes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = cx.update(|_, cx| {
+            let changes = active_item_changes.clone();
+            cx.subscribe(&workspace, move |_, event, _| {
+                if let workspace::Event::ActiveItemChanged = event {
+                    changes.set(changes.get() + 1);
+                }
+            })
+        });
+
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details("Add b", "VIEWED"), cx)
+        });
+        cx.run_until_parked();
+        let after_first = active_item_changes.get();
+        assert!(after_first > 0);
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details("Add b", "VIEWED"), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(active_item_changes.get(), after_first);
+
+        tab.read_with(cx, |tab, cx| {
+            assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
+            assert_eq!(tab.header().author.as_deref(), Some("rozed-bot"));
+            let marks: Vec<_> = tab
+                .files()
+                .rows()
+                .map(|entry| (entry.path(), entry.viewed))
+                .collect();
+            assert_eq!(
+                marks,
+                [
+                    ("a.rs", Some(ViewedState::Viewed)),
+                    ("b.rs", Some(ViewedState::Unviewed))
+                ]
+            );
+        });
+
+        // A file marked viewed elsewhere changes the marks, and only them.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details("Add b", "DISMISSED"), cx)
+        });
+        cx.run_until_parked();
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(
+                tab.files().row(0).and_then(|entry| entry.viewed),
+                Some(ViewedState::Dismissed)
+            );
         });
     }
 
