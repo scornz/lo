@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://github.com/login/oauth/access_token",
+    "body": "client_id=Ov23liBORqwRdiPzqsPP&device_code=FAKE-DEVICE-CODE&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+  },
+  "response": {
+    "status": 502,
+    "headers": {
+      "content-type": "text/html; charset=utf-8"
+    },
+    "body_text": "<!DOCTYPE html>\n<html>\n  <head><title>Unicorn! &middot; GitHub</title></head>\n  <body>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n    <p>No server is currently available to service your request.</p>\n  </body>\n</html>\n"
+  }
+}

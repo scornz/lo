@@ -3,6 +3,7 @@
 //! Startup follows Zed's own (`third_party/zed/crates/zed/src/main.rs`) without the parts rozed
 //! leaves out: no Zed account, telemetry, auto-update, extensions, AI or collaboration.
 
+mod accounts_ui;
 mod forced_settings;
 mod github_api;
 mod http;
@@ -224,6 +225,8 @@ fn main() {
 
         editor::init(cx);
         workspace::init(app_state.clone(), cx);
+        command_palette::init(cx);
+        accounts_ui::init(cx);
         // Every pane shows its pull request's banners above it.
         cx.observe_new(|workspace: &mut Workspace, window, cx| {
             let Some(window) = window else {
@@ -241,9 +244,11 @@ fn main() {
         .detach();
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
-        cx.set_menus([
-            Menu::new("rozed").items([MenuItem::action("Quit rozed", zed_actions::Quit)])
-        ]);
+        cx.set_menus([Menu::new("rozed").items([
+            MenuItem::action("Accounts…", accounts_ui::OpenAccounts),
+            MenuItem::separator(),
+            MenuItem::action("Quit rozed", zed_actions::Quit),
+        ])]);
         keymap::load(cx);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
