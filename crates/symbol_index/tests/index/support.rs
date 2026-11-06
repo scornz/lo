@@ -16,11 +16,7 @@ pub static TYPESCRIPT: LazyLock<Grammar> = LazyLock::new(|| {
 });
 
 pub static TSX: LazyLock<Grammar> = LazyLock::new(|| {
-    Grammar::new(
-        tree_sitter_typescript::LANGUAGE_TSX.into(),
-        queries::TYPESCRIPT,
-    )
-    .unwrap()
+    Grammar::new(tree_sitter_typescript::LANGUAGE_TSX.into(), queries::TSX).unwrap()
 });
 
 /// Zed reads JavaScript with the TSX grammar.

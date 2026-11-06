@@ -1,4 +1,4 @@
-//! A file's definitions and references, with each language's own query.
+//! A file's definitions and references in each language.
 
 use symbol_index::{FileSymbols, Position};
 
@@ -45,7 +45,9 @@ fn main() {
         [
             "module shapes",
             "class Circle < shapes",
+            "field radius < Circle",
             "interface Area",
+            "method area < Area",
             // An impl block isn't a definition, so its methods have no parent.
             "method area",
             "function square",
@@ -57,7 +59,11 @@ fn main() {
         references(&symbols),
         [
             "implementation Area",
+            "type Circle",
             "call square in area",
+            "field radius in area",
+            "type Circle in main",
+            "field radius in main",
             "call area in main",
             "call log in main",
             "call println in main",
@@ -114,6 +120,8 @@ export const makeCircle = (r: number): Shape => new Circle(r);
     assert_eq!(
         references(&symbols),
         [
+            "class Base in Circle",
+            "type Shape in Circle",
             "call square in area",
             "call area in describe",
             "type Shape in makeCircle",
@@ -170,6 +178,7 @@ export default function App() {
             "call helper in render",
             "class Widget in make",
             "call make in create",
+            "call Widget in App",
         ]
     );
 }
@@ -216,6 +225,7 @@ print(circle.area())
     assert_eq!(
         references(&symbols),
         [
+            "class Shape in Circle",
             "call square in area",
             "call Circle in circle",
             "call print",
@@ -261,7 +271,9 @@ func Unit() Shape {
         definitions(&symbols),
         [
             "type Shape",
+            "method Area < Shape",
             "type Circle",
+            "field Radius < Circle",
             "method Area",
             "function square",
             "function Unit",
@@ -270,11 +282,14 @@ func Unit() Shape {
     assert_eq!(
         references(&symbols),
         [
-            "type float64 in Shape",
-            "type float64 in Circle",
+            // The interface's `Area` and the struct's `Radius`.
+            "type float64 in Area",
+            "type float64 in Radius",
             "type Circle in Area",
             "type float64 in Area",
             "call square in Area",
+            "field Radius in Area",
+            "field Pi in Area",
             "type float64 in square",
             "type float64 in square",
             "type Shape in Unit",

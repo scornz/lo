@@ -22,12 +22,3 @@ fn a_query_for_another_grammar_is_an_error() {
         "{error}"
     );
 }
-
-#[test]
-fn the_javascript_query_also_fits_typescript() {
-    Grammar::new(
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        queries::JAVASCRIPT,
-    )
-    .unwrap();
-}
