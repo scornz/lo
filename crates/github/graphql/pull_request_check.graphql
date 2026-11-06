@@ -2,7 +2,8 @@
 # doesn't move when it joins a stack, but its timeline's does, so this asks for both. It also holds
 # what the UI shows without the details and that moves nothing else: the checks' combined state,
 # the review decision, the merge state, which review threads are resolved (the first 100), and the
-# merge queue entry.
+# merge queue entry. Reads kept current with the open PR watch some of it, such as how many
+# force-pushes and retargets the timeline has.
 query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
   rateLimit {
     cost
@@ -31,6 +32,17 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
       timelineItems {
         updatedAt
         totalCount
+      }
+      # The timeline events a pull request's push history reads, which a comment doesn't add to.
+      revisionEvents: timelineItems(
+        itemTypes: [
+          HEAD_REF_FORCE_PUSHED_EVENT
+          BASE_REF_FORCE_PUSHED_EVENT
+          BASE_REF_CHANGED_EVENT
+          AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT
+        ]
+      ) {
+        filteredCount
       }
       commits {
         totalCount

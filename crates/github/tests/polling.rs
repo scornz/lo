@@ -21,6 +21,7 @@ use github::poll::{
     CachedRead, LowLimit, Offline, PauseReason, PollConfig, PollEvent, PollStatus, Poller,
     RateLimitState, WallClock,
 };
+use github::push_history::PushHistory;
 use github::queries::{PullRequestData, pull_request};
 use github::replay::ReplayHttpClient;
 use github::{AuthenticatedUser, GithubError, PullRef, RepoRef, Target, Token, User};
@@ -31,7 +32,7 @@ use parking_lot::Mutex;
 
 /// The wall clock when each test starts: after every recorded rate-limit window has reset, so
 /// only the windows a test sets count.
-const START: u64 = 1_794_000_000;
+const START: u64 = 1_794_020_000;
 const LOGIN: &str = "rozed-bot";
 
 fn wall(secs: u64) -> SystemTime {
@@ -1893,7 +1894,8 @@ impl github::cache::CacheEntry for Counted {
 }
 
 impl CachedRead for Counted {
-    const WATCHED: &'static [&'static str] = &["/headRefOid", "/timelineItems/updatedAt"];
+    /// What a push history watches.
+    const WATCHED: &'static [&'static str] = PushHistory::WATCHED;
 
     /// Zero stands for a value one of whose parts couldn't be read.
     fn is_complete(&self) -> bool {
@@ -1968,9 +1970,16 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
     let rollup = check_with(&r, |pull| {
         pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
     });
-    let timeline = check_with(&r, |pull| {
+    let commented = check_with(&r, |pull| {
         pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
         pull["timelineItems"]["updatedAt"] = "2026-11-06T12:00:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+    });
+    let force_pushed = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["timelineItems"]["updatedAt"] = "2026-11-06T12:01:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+        pull["revisionEvents"]["filteredCount"] = 1.into();
     });
     let mut interactions = vec![
         r[0].clone(),
@@ -1978,7 +1987,8 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
         r[1].clone(),
         r[1].clone(),
         rollup,
-        timeline,
+        commented,
+        force_pushed,
         r[2].clone(),
     ];
     interactions.extend(repo_answers(&r));
@@ -1995,13 +2005,17 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
     assert_eq!(cached_count(&t), Some(1));
     assert!(t.events().contains(&"read Counted #1".to_string()));
 
-    // The checks' state isn't a field it watches.
+    // The checks' state isn't a field it watches, and a comment, which moves the timeline,
+    // changes none.
     t.run_until(40);
     assert_eq!(answers.runs(), 1);
     assert_eq!(t.events(), ["check #1"]);
-
-    // The timeline moved: it's read again, after the poll. An unchanged answer sends nothing.
     t.run_until(60);
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(t.events(), ["check #1"]);
+
+    // A force-push: it's read again, after the poll. An unchanged answer sends nothing.
+    t.run_until(80);
     assert_eq!(answers.runs(), 2);
     assert_eq!(t.events(), ["check #1"]);
     assert_eq!(cached_count(&t), Some(1));

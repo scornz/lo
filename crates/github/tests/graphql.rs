@@ -115,6 +115,7 @@ fn a_check_counts_its_unresolved_threads() {
         "statusCheckRollup": {"state": "PENDING"},
         "mergeQueueEntry": {"state": "QUEUED", "position": 2},
         "timelineItems": {"updatedAt": "2026-11-06T08:15:21Z", "totalCount": 2},
+        "revisionEvents": {"filteredCount": 0},
         "commits": {"totalCount": 1},
         "reviews": {"totalCount": 1},
         "reviewThreads": {

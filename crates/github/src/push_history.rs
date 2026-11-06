@@ -159,8 +159,16 @@ impl CacheEntry for PushHistory {
 }
 
 impl CachedRead for PushHistory {
-    /// A push changes the head, and every other event it reads is a timeline item.
-    const WATCHED: &'static [&'static str] = &["/headRefOid", "/timelineItems/updatedAt"];
+    /// A push changes the head, a retarget the base, a merge or close the state, and a review the
+    /// count of reviews; force-pushes and retargets are among the revision events. A comment,
+    /// which moves the timeline, changes none of them.
+    const WATCHED: &'static [&'static str] = &[
+        "/headRefOid",
+        "/baseRefName",
+        "/state",
+        "/reviews/totalCount",
+        "/revisionEvents/filteredCount",
+    ];
 
     /// Whether every branch's pushes were read, or GitHub has none to show.
     fn is_complete(&self) -> bool {

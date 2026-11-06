@@ -1,6 +1,6 @@
 {
   "description": "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (GET, PullRequestCheck, then PullRequest the first time), PR #2 as a watched one (GET), and the playground's open PRs (GET of the list, then OpenPullRequests the first time). The second poll asks about each PR since its last update, and about the list with its ETag",
-  "recorded_at": "2026-11-06T13:08:26Z",
+  "recorded_at": "2026-11-06T23:43:28Z",
   "repo": "rozed-dev/playground",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }
