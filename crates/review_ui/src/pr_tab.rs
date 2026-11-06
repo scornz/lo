@@ -10,9 +10,10 @@ use anyhow::Context as _;
 
 use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
+use github::files::CutShort;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{GithubClient, HelpLink, PullRef, Target};
+use github::{HelpLink, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -567,16 +568,31 @@ impl PrTab {
             repo_name: name.to_string(),
         };
         let opened = self.opened;
+        let changed_files = pull_request.changed_files;
         self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
             let started = Instant::now();
             match reader.read(&pull).await {
-                Ok(files) => {
+                Ok(read) => {
                     log::info!(
                         "{link}: GitHub listed {} files in {:?}",
-                        files.len(),
+                        read.files.len(),
                         started.elapsed()
                     );
-                    if let Err(error) = api_diff::show(this, source, files, opened, cx).await {
+                    if read.files.is_empty() && read.cut_short.is_some() {
+                        this.update(cx, |this, cx| this.github_diff_not_read(cx))
+                            .ok();
+                        return;
+                    }
+                    if let Some(cut) = cut_text(read.files.len(), changed_files, read.cut_short) {
+                        log::info!("{link}: {cut}");
+                        this.update(cx, |this, cx| {
+                            this.banners.update(cx, |banners, cx| {
+                                banners.show(BannerKind::GithubDiffCut, Severity::Info, cut, cx)
+                            })
+                        })
+                        .ok();
+                    }
+                    if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await {
                         log::warn!("{link}: can't show GitHub's diff: {error:#}");
                     }
                 }
@@ -649,6 +665,23 @@ impl PrTab {
                     "rozed couldn't read GitHub's diff, so the diff shows once the local copy is \
                      ready: {error}"
                 ),
+                cx,
+            )
+        });
+    }
+
+    /// GitHub's diff wasn't read, to save the requests GitHub allows without signing in.
+    fn github_diff_not_read(&mut self, cx: &mut Context<Self>) {
+        if self.diff.is_some() {
+            return;
+        }
+        self.banners.update(cx, |banners, cx| {
+            banners.show(
+                BannerKind::GithubDiffFailed,
+                Severity::Info,
+                "rozed didn't read GitHub's diff, to keep the few requests GitHub allows without \
+                 signing in for opening pull requests. The diff shows once the local copy is \
+                 ready.",
                 cx,
             )
         });
@@ -767,7 +800,8 @@ impl PrTab {
         if source == DiffSource::LocalCopy {
             self._github_diff = None;
             self.banners.update(cx, |banners, cx| {
-                banners.hide(BannerKind::GithubDiffFailed, cx)
+                banners.hide(BannerKind::GithubDiffFailed, cx);
+                banners.hide(BannerKind::GithubDiffCut, cx);
             });
         }
         if focused && !self.file_list_focus.contains_focused(window, cx) {
@@ -1251,6 +1285,50 @@ impl PrTab {
     }
 }
 
+/// What the banner says when GitHub's diff lists only `listed` of the pull request's `changed`
+/// files, or `None` when it lists them all.
+fn cut_text(listed: usize, changed: Option<u32>, cut_short: Option<CutShort>) -> Option<String> {
+    let changed = changed.map(|changed| changed as usize);
+    if cut_short.is_none() && changed.is_none_or(|changed| changed <= listed) {
+        return None;
+    }
+    let of = match changed {
+        Some(changed) => format!(
+            "{} of this pull request's {} files",
+            thousands(listed),
+            thousands(changed)
+        ),
+        None => format!("{} of this pull request's files", thousands(listed)),
+    };
+    let text = match cut_short {
+        Some(CutShort::Pages) => format!(
+            "Without signing in, GitHub's diff shows the first {of}, to save GitHub's 60 requests \
+             an hour."
+        ),
+        Some(CutShort::RateLimit) => format!(
+            "Few of the requests GitHub allows without signing in are left, so GitHub's diff shows \
+             the first {of}."
+        ),
+        None => format!("GitHub lists only {of}, so GitHub's diff shows those."),
+    };
+    Some(format!(
+        "{text} The rest show once the local copy is ready."
+    ))
+}
+
+/// `n` with a comma between each group of three digits.
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut text = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
+}
+
 /// GitHub's viewed mark as rozed's review model has it.
 fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     match state {
@@ -1451,26 +1529,24 @@ async fn load(
             let token = client
                 .token()
                 .map(|token| repo_cache::Token::new(token.expose()));
-            let reader = FilesReader {
+            let reader = FilesReader::Account {
                 client: client.clone(),
-                queue: Some(queue),
+                queue,
             };
             (pull_request, token, reader, Some(poller))
         }
         _ => {
-            let http = cx.update(|_, cx| cx.http_client())?;
+            // The app's one client without an account keeps what GitHub says about the 60
+            // requests an hour it allows without one, for every tab.
+            let client = cx.update(|_, cx| github_api::anonymous_client(cx))?;
             let can_sign_in = match layer {
                 Some(_) => CanSignIn::Yes,
                 None => CanSignIn::No,
             };
-            let reader = FilesReader {
-                client: GithubClient::anonymous(http.clone()),
-                queue: None,
-            };
             (
-                github_api::fetch_pull_request(http, &link, can_sign_in).await?,
+                github_api::fetch_pull_request(&client, &link, can_sign_in).await?,
                 None,
-                reader,
+                FilesReader::Anonymous(client),
                 None,
             )
         }
@@ -1807,6 +1883,7 @@ mod tests {
                     clone_url: "https://github.com/sharkdp/fd.git".into(),
                 },
             },
+            changed_files: None,
         }
     }
 
@@ -1896,8 +1973,105 @@ mod tests {
             base_branch: "main".into(),
             base: "b".repeat(40),
             files,
+            changed_files: None,
         });
         github.make_public(repo);
+    }
+
+    #[gpui::test]
+    async fn without_signing_in_githubs_diff_reads_at_most_three_pages(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/big", 1, 450);
+        anonymous(&github, cx);
+
+        let tab = open_loaded(&workspace, "github.com/acme/big/pull/1", cx);
+
+        let requests = github.requests();
+        let pages: Vec<_> = requests
+            .iter()
+            .filter(|request| request.contains("/files"))
+            .collect();
+        assert_eq!(pages.len(), 3, "{requests:#?}");
+        assert_eq!(tab.read_with(cx, |tab, _| tab.files().len()), 300);
+        let banners = banners(&tab, cx);
+        assert!(
+            banners.contains(
+                &"Without signing in, GitHub's diff shows the first 300 of this pull request's \
+                  450 files, to save GitHub's 60 requests an hour. The rest show once the local \
+                  copy is ready."
+                    .to_string()
+            ),
+            "{banners:#?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn without_signing_in_githubs_diff_isnt_read_while_few_requests_are_left(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/one", 1, 2);
+        uncopyable_pull(&github, "acme/two", 2, 2);
+        anonymous(&github, cx);
+        github.limit_anonymous(13);
+
+        // The first reads its one page, and the app's one client without an account keeps what
+        // GitHub said about the limit.
+        let one = open_loaded(&workspace, "github.com/acme/one/pull/1", cx);
+        assert_eq!(
+            one.read_with(cx, |tab, _| tab.diff_source()),
+            Some(DiffSource::GitHub)
+        );
+        let left = cx.update(|_, cx| {
+            let client = github_api::anonymous_client(cx);
+            client.rate_limits().core().map(|core| core.remaining)
+        });
+        assert_eq!(left, Some(11));
+
+        // With 10 left after the second's own request, its file list isn't read.
+        github.requests();
+        let two = open_loaded(&workspace, "github.com/acme/two/pull/2", cx);
+        assert_eq!(github.requests(), ["GET /repos/acme/two/pulls/2 as nobody"]);
+        assert_eq!(two.read_with(cx, |tab, _| tab.diff_source()), None);
+        let banners = banners(&two, cx);
+        assert!(
+            banners.iter().any(|banner| banner.starts_with(
+                "rozed didn't read GitHub's diff, to keep the few requests GitHub allows"
+            )),
+            "{banners:#?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_says_when_github_lists_only_some_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        uncopyable_pull(&github, "acme/huge", 1, 3);
+        github.let_see("gho_BOT", "acme/huge");
+        sign_in(&github, &[("rozed-bot", "gho_BOT")], cx).await;
+        // GitHub lists no more than 3,000 of a pull request's files; this one has 3,100.
+        github.set_changed_files("acme/huge", 1, 3_100);
+
+        let tab = open_loaded(&workspace, "github.com/acme/huge/pull/1", cx);
+
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.diff_source()),
+            Some(DiffSource::GitHub)
+        );
+        let banners = banners(&tab, cx);
+        assert!(
+            banners.contains(
+                &"GitHub lists only 3 of this pull request's 3,100 files, so GitHub's diff shows \
+                  those. The rest show once the local copy is ready."
+                    .to_string()
+            ),
+            "{banners:#?}"
+        );
     }
 
     #[gpui::test]

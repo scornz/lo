@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use buffer_diff::BufferDiffSnapshot;
 use git::status::{FileStatus as GitStatus, StatusCode, TrackedStatus};
-use github::files::{FileStatus, Pages, PullFile};
+use github::files::{FileStatus, PullFile, PullFiles, ReadFiles};
 use github::patch::{HunkLine, Patch};
 use github::poll::RequestQueue;
 use github::{GithubClient, GithubError, PullRef};
@@ -27,29 +27,44 @@ use crate::pr_diff::{self, FileHeaders, FilePlan, NewSide, Target, Warning};
 use crate::pr_link::PrLink;
 use crate::pr_tab::PrTab;
 
-/// How a tab reads GitHub's list of files: with its account's client, one page at a time through
-/// the account's request queue, or without signing in.
+/// How a tab reads GitHub's list of files.
 #[derive(Clone)]
-pub(crate) struct FilesReader {
-    pub client: GithubClient,
-    /// The account's queue; `None` without signing in.
-    pub queue: Option<RequestQueue>,
+pub(crate) enum FilesReader {
+    /// With its account's client, one page at a time through the account's request queue.
+    Account {
+        client: GithubClient,
+        queue: RequestQueue,
+    },
+    /// Without signing in, with the app's one client without an account
+    /// ([`crate::github_api::anonymous_client`]).
+    Anonymous(GithubClient),
 }
 
+/// How many pages of a pull request's files a tab reads without signing in. GitHub allows 60
+/// requests an hour per IP address without a token, and opening a pull request needs one.
+pub(crate) const ANONYMOUS_PAGES: usize = 3;
+
+/// Without signing in, no page of files is read while this few requests are left, so they stay
+/// for opening pull requests.
+pub(crate) const ANONYMOUS_RESERVE: u32 = 10;
+
 impl FilesReader {
-    /// Every file GitHub lists for `pull`, with its patch.
-    pub async fn read(&self, pull: &PullRef) -> Result<Vec<PullFile>, GithubError> {
-        let mut files = Vec::new();
-        let mut pages = Pages::new(pull);
-        while let Some(path) = pages.next_path() {
-            let page = match &self.queue {
-                Some(queue) => queue.read(|| self.client.pull_files_page(&path)).await?,
-                None => self.client.pull_files_page(&path).await?,
-            };
-            files.extend(page.files);
-            pages.read(page.next)?;
+    /// The files GitHub lists for `pull`, with their patches, as far as the reader reads.
+    pub async fn read(&self, pull: &PullRef) -> Result<PullFiles, GithubError> {
+        match self {
+            Self::Account { client, queue } => {
+                client
+                    .read_pull_files(pull, Some(queue), ReadFiles::ALL)
+                    .await
+            }
+            Self::Anonymous(client) => {
+                let limits = ReadFiles {
+                    max_pages: ANONYMOUS_PAGES,
+                    keep_requests: ANONYMOUS_RESERVE,
+                };
+                client.read_pull_files(pull, None, limits).await
+            }
         }
-        Ok(files)
     }
 }
 

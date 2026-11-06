@@ -35,6 +35,8 @@ pub struct FakePull {
     pub base: String,
     /// GitHub's list of the files the pull request changes, each with its patch.
     pub files: Vec<serde_json::Value>,
+    /// How many files GitHub says the pull request changes, when it's more than it lists.
+    pub changed_files: Option<usize>,
 }
 
 /// An answer to one request: its status, headers and body.
@@ -69,6 +71,8 @@ struct State {
     /// Answers that win over the rest, by token (`""` for none) and path.
     answers: HashMap<(String, String), Answer>,
     offline: bool,
+    /// How many requests without a token GitHub still allows this hour, when it says.
+    anonymous_left: Option<u32>,
     /// Each request, as `GET /path as token`.
     requests: Vec<String>,
 }
@@ -92,6 +96,16 @@ impl FakeGithub {
             .push(repo.to_ascii_lowercase());
     }
 
+    /// Says pull request `number` of `repo` changes `count` files, more than GitHub lists.
+    pub fn set_changed_files(&self, repo: &str, number: u64, count: usize) {
+        let mut state = self.0.lock();
+        for pull in &mut state.pulls {
+            if pull.repo.eq_ignore_ascii_case(repo) && pull.number == number {
+                pull.changed_files = Some(count);
+            }
+        }
+    }
+
     pub fn make_public(&self, repo: &str) {
         self.0.lock().public.push(repo.to_ascii_lowercase());
     }
@@ -102,6 +116,12 @@ impl FakeGithub {
             .lock()
             .answers
             .insert((token.to_string(), path.to_string()), answer);
+    }
+
+    /// Allows `left` more requests without a token this hour, and says how many are left in each
+    /// answer to one, as GitHub does.
+    pub fn limit_anonymous(&self, left: u32) {
+        self.0.lock().anonymous_left = Some(left);
     }
 
     /// Whether every request fails as if the network were down.
@@ -129,6 +149,28 @@ impl FakeGithub {
         if state.offline {
             anyhow::bail!("the network is down");
         }
+        let Some(left) = state.anonymous_left.filter(|_| token.is_empty()) else {
+            return self.answer_for(&state, path, token);
+        };
+        let reset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            + 3_600;
+        let answer = match left.checked_sub(1) {
+            Some(left) => {
+                state.anonymous_left = Some(left);
+                self.answer_for(&state, path, token)?
+            }
+            None => Answer::new(403, r#"{"message":"API rate limit exceeded"}"#),
+        };
+        Ok(answer
+            .header("x-ratelimit-limit", "60")
+            .header("x-ratelimit-remaining", left.saturating_sub(1).to_string())
+            .header("x-ratelimit-reset", reset.to_string())
+            .header("x-ratelimit-resource", "core"))
+    }
+
+    fn answer_for(&self, state: &State, path: &str, token: &str) -> anyhow::Result<Answer> {
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
         }
@@ -238,6 +280,7 @@ fn pull_json(pull: &FakePull) -> serde_json::Value {
         "created_at": "2026-11-01T10:00:00Z",
         "updated_at": "2026-11-02T10:00:00Z",
         "head": { "ref": "feature", "sha": pull.head },
+        "changed_files": pull.changed_files.unwrap_or(pull.files.len()),
         "base": {
             "ref": pull.base_branch,
             "sha": pull.base,
@@ -412,6 +455,7 @@ impl GitServer {
             base_branch: "main".into(),
             base: base_commit,
             files,
+            changed_files: None,
         }
     }
 }
