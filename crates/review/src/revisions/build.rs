@@ -24,7 +24,9 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///   a head was pushed again, the heads in the loop go by their own times, whatever order the
 ///   records came in.
 /// - **Previous head and forced.** The activity API is trusted first, then force-push events,
-///   then check suites. With no source's word, the previous head is the revision before, and
+///   then check suites. A check suite names the previous head only when its previous SHA is a head
+///   another record names or a current commit, and the earliest such suite does. With no source's
+///   word, the previous head is the revision before, and
 ///   ancestry in the current commits tells whether the push was forced when it can.
 pub fn build_revisions(records: &[PushRecord], commits: &[String], head: &str) -> Revisions {
     let mut heads = Heads::default();
@@ -38,6 +40,7 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String], head: &str) -
     for (position, commit) in commits.iter().enumerate() {
         positions.entry(commit.clone()).or_insert(position);
     }
+    heads.choose_check_suites(&positions);
     let after = successors(&heads, &positions, pull_head);
     let components = Components::new(&after);
     let latest = latest_push_times(&heads.seen, &after, &components);
@@ -346,7 +349,7 @@ impl<'a> Heads<'a> {
             }
             PushRecord::CheckSuite { previous, next, at } => {
                 if let Some(head) = self.see(next, source) {
-                    keep_latest(&mut head.check_suite, Push::new(*at, previous, None));
+                    head.check_suites.push(Push::new(*at, previous, None));
                     head.sighted(*at);
                 }
             }
@@ -355,6 +358,20 @@ impl<'a> Heads<'a> {
                     head.sighted(*at);
                 }
             }
+        }
+    }
+
+    /// Picks the check suite that names each head's previous head: the earliest whose previous SHA
+    /// is a head another record names or a current commit. A suite for the same commit pushed to
+    /// another branch, such as a backport, names that branch's head instead.
+    fn choose_check_suites(&mut self, positions: &HashMap<String, usize>) {
+        for index in 0..self.seen.len() {
+            let known = |sha: &str| self.index.contains_key(sha) || positions.contains_key(sha);
+            let chosen = (self.seen[index].check_suites.iter())
+                .filter(|suite| suite.before.is_some_and(known))
+                .min_by_key(|suite| suite.at)
+                .copied();
+            self.seen[index].check_suite = chosen;
         }
     }
 
@@ -405,7 +422,9 @@ struct Seen<'a> {
     activity: Option<Push<'a>>,
     /// The latest force-push to the head.
     force_push: Option<Push<'a>>,
-    /// The latest check suite the head's push started.
+    /// Every check suite the head's push started.
+    check_suites: Vec<Push<'a>>,
+    /// The check suite that names the previous head, once chosen.
     check_suite: Option<Push<'a>>,
     /// The earliest a review, check suite or the poller saw the head.
     seen_by: Option<SystemTime>,
@@ -418,6 +437,7 @@ impl<'a> Seen<'a> {
             sources: BTreeSet::new(),
             activity: None,
             force_push: None,
+            check_suites: Vec::new(),
             check_suite: None,
             seen_by: None,
         }
@@ -657,6 +677,7 @@ mod tests {
     fn the_activity_api_names_the_previous_head_over_other_sources() {
         let revisions = build(
             &[
+                polled("x9", 1),
                 check_suite("x9", "b1", 31),
                 force_push("y9", "b1", 30),
                 activity(Some("a1"), "b1", 29, true),
@@ -671,7 +692,11 @@ mod tests {
     #[test]
     fn a_force_push_event_names_the_previous_head_over_a_check_suite() {
         let revisions = build(
-            &[check_suite("x9", "b1", 31), force_push("a1", "b1", 30)],
+            &[
+                polled("x9", 1),
+                check_suite("x9", "b1", 31),
+                force_push("a1", "b1", 30),
+            ],
             &[],
             "b1",
         );
@@ -682,6 +707,48 @@ mod tests {
     #[test]
     fn a_check_suite_names_the_previous_head_when_nothing_else_does() {
         let revisions = build(&[polled("a1", 5), check_suite("a1", "a2", 21)], &[], "a2");
+
+        assert_eq!(revisions.get("a2").unwrap().previous.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn a_check_suite_from_another_branch_names_no_previous_head() {
+        // a2 was later pushed to a backport branch whose head was e5f6.
+        let revisions = build(
+            &[
+                check_suite(NO_COMMIT, "a1", 10),
+                check_suite("a1", "a2", 21),
+                check_suite("e5f6", "a2", 50),
+            ],
+            &["a1", "a2"],
+            "a2",
+        );
+
+        let a2 = revisions.get("a2").unwrap();
+        assert_eq!(a2.previous.as_deref(), Some("a1"));
+        assert_eq!(a2.forced, Some(false));
+    }
+
+    #[test]
+    fn a_check_suite_naming_an_unknown_head_leaves_the_revision_before() {
+        let revisions = build(&[polled("a1", 5), check_suite("e5f6", "a2", 20)], &[], "a2");
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(revisions.get("a2").unwrap().previous.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn the_earliest_check_suite_naming_a_known_head_names_the_previous_head() {
+        let revisions = build(
+            &[
+                polled("a0", 1),
+                polled("a1", 5),
+                check_suite("a0", "a2", 30),
+                check_suite("a1", "a2", 21),
+            ],
+            &[],
+            "a2",
+        );
 
         assert_eq!(revisions.get("a2").unwrap().previous.as_deref(), Some("a1"));
     }

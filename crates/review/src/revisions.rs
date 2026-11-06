@@ -73,7 +73,10 @@ pub enum PushRecord {
     /// on an older commit adds that commit as a revision.
     Review { commit: String, at: SystemTime },
     /// The push that started a check suite (`CheckSuite.push`): `previousSha`, `nextSha`, and the
-    /// suite's `createdAt`, up to a minute after the push.
+    /// suite's `createdAt`, up to a minute after the push. The caller drops suites whose `branch`
+    /// is set and isn't the head branch; it's null once the branch is deleted. A suite whose
+    /// previous SHA isn't a head another record names or a current commit, such as one for the same
+    /// commit pushed to a backport branch, never names the previous head.
     CheckSuite {
         previous: Option<String>,
         next: String,
