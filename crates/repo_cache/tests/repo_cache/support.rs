@@ -101,6 +101,21 @@ impl Remote {
         self
     }
 
+    /// Makes the file at `path` executable.
+    pub fn executable(&self, path: &str) -> &Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(self.work.join(path), fs::Permissions::from_mode(0o755)).unwrap();
+        self
+    }
+
+    /// Replaces whatever is at `path` with a symlink to `target`.
+    pub fn symlink(&self, path: &str, target: &str) -> &Self {
+        let path = self.work.join(path);
+        let _ = fs::remove_file(&path);
+        std::os::unix::fs::symlink(target, path).unwrap();
+        self
+    }
+
     /// Points the submodule at `path` at `commit`, a commit in another repository, without
     /// checking it out.
     pub fn gitlink(&self, path: &str, commit: &str) -> &Self {

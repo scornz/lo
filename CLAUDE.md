@@ -24,7 +24,8 @@ These bind every change (design §1).
 ## Layout
 
 - `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
-  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`).
+  rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`), plus
+  `symbol_index`, the syntax-based symbol index (design §7).
 - `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
   Cargo workspace, with its own `Cargo.lock`, so it runs even when rozed's workspace can't resolve
   (an empty `third_party/zed`, or a Zed update that needs a new patch).
