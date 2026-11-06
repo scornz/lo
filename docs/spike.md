@@ -20,7 +20,7 @@ What the build needs beyond Rust:
   grammars, so no highlighting) and `util/debug-embed` (debug builds otherwise look for Zed's assets
   under rozed's root and panic).
 - **Zed's `[patch]` sections, profiles and `.cargo/config.toml`**, which cargo ignores in a
-  dependency. `cargo xtask sync-zed` copies them, and starts `Cargo.lock` from Zed's.
+  dependency. `cargo xtask sync-zed` copies them, and seeds `Cargo.lock` with Zed's versions.
 
 Things that surprised:
 

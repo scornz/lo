@@ -116,9 +116,11 @@ copies of Zed's. `cargo xtask sync-zed` (`crates/xtask`) writes them between `BE
 - `rust-toolchain.toml`: Zed's toolchain channel.
 
 `cargo xtask sync-zed --check` changes nothing and fails, naming each stale section; CI runs it.
-`cargo xtask sync-zed --seed-lock` first replaces `Cargo.lock` with Zed's, so third-party crates
-resolve to the versions Zed tested, then lets cargo prune it and syncs. Run it after updating Zed
-or adding a dependency on another Zed crate, and review the `Cargo.lock` diff.
+`cargo xtask sync-zed --seed-lock` first merges Zed's `Cargo.lock` into rozed's: Zed's entries
+for every package in Zed's lockfile, rozed's own entries for the rest. Packages Zed uses then
+resolve to the versions Zed tested, and rozed's other dependencies keep their versions. Then it
+lets cargo prune the lockfile and syncs. Run it after updating Zed or adding a dependency on
+another Zed crate, and review the `Cargo.lock` diff.
 
 ### Updating Zed
 

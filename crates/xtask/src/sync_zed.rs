@@ -42,8 +42,9 @@ Copies the Cargo settings rozed needs from third_party/zed into rozed's root: Ze
 channel into rust-toolchain.toml.
 
   --check      change nothing; exit 1, naming what differs, if the copies are stale
-  --seed-lock  first replace Cargo.lock with Zed's, so dependencies resolve to the versions Zed
-               tested; then sync. Run it after a Zed bump or after adding a Zed crate dependency.";
+  --seed-lock  first merge Zed's Cargo.lock into rozed's, so packages Zed uses resolve to the
+               versions Zed tested and rozed's other packages keep their versions; then sync.
+               Run it after a Zed bump or after adding a Zed crate dependency.";
 
 /// One file rozed keeps in sync with Zed: where it lives and what it should contain.
 struct Synced {
@@ -122,10 +123,13 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
             Ok(true)
         }
         Mode::SeedLock => {
-            std::fs::copy(zed.join("Cargo.lock"), root.join("Cargo.lock"))
-                .context("copying Zed's Cargo.lock")?;
-            println!("sync-zed: copied Zed's Cargo.lock.");
-            // Against Zed's lockfile nothing is pruned yet. Let cargo resolve with every patch in
+            let merged = merge_locks(
+                &read(root, &format!("{ZED_DIR}/Cargo.lock"))?,
+                &read(root, "Cargo.lock")?,
+            )?;
+            std::fs::write(root.join("Cargo.lock"), merged).context("writing Cargo.lock")?;
+            println!("sync-zed: merged Zed's Cargo.lock into rozed's.");
+            // Against the merged lockfile nothing is pruned yet. Let cargo resolve with every patch in
             // place, which drops what rozed doesn't use from the lockfile, then prune against it.
             // Pruning changes no package, so a last resolve only clears the pruned patches from
             // the lockfile's `[[patch.unused]]` list.
@@ -138,10 +142,36 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
     }
 }
 
-/// Runs `cargo metadata`, which updates `Cargo.lock` to rozed's graph.
+/// Zed's `Cargo.lock`, plus rozed's entries for packages Zed's doesn't have. Resolving against it
+/// keeps each locked version that still fits, so packages Zed uses get the versions Zed tested and
+/// rozed's other dependencies keep their pins instead of moving to the newest release.
+fn merge_locks(zed: &str, rozed: &str) -> Result<String> {
+    let mut merged: DocumentMut = zed.parse().context("parsing Zed's Cargo.lock")?;
+    let rozed: DocumentMut = rozed.parse().context("parsing Cargo.lock")?;
+    let zed_packages = lock_packages(zed)?;
+    let Some(packages) = merged
+        .get_mut("package")
+        .and_then(Item::as_array_of_tables_mut)
+    else {
+        bail!("Zed's Cargo.lock lists no packages");
+    };
+    if let Some(rozed_packages) = rozed.get("package").and_then(Item::as_array_of_tables) {
+        for package in rozed_packages {
+            let name = package.get("name").and_then(Item::as_str);
+            if name.is_some_and(|name| !zed_packages.contains(name)) {
+                packages.push(package.clone());
+            }
+        }
+    }
+    Ok(merged.to_string())
+}
+
+/// Runs `cargo metadata`, which updates `Cargo.lock` to rozed's graph. It runs in rozed's root, so
+/// cargo reads rozed's `.cargo/config.toml`.
 fn resolve(root: &Path) -> Result<()> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let status = Command::new(cargo)
+        .current_dir(root)
         .args(["metadata", "--format-version", "1", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
         .stdout(Stdio::null())
@@ -682,6 +712,158 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
                 "{error}"
             );
         }
+    }
+
+    const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
+    /// The checksum every fake registry package has. Cargo only checks it matches the lockfile's.
+    const CHECKSUM: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    /// A `Cargo.lock` holding `packages`: (name, version, is from the registry).
+    fn lock(packages: &[(&str, &str, bool)]) -> String {
+        let mut lock = "version = 4\n".to_string();
+        for (name, version, registry) in packages {
+            lock.push_str(&format!(
+                "\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n"
+            ));
+            if *registry {
+                lock.push_str(&format!(
+                    "source = \"{REGISTRY}\"\nchecksum = \"{CHECKSUM}\"\n"
+                ));
+            }
+        }
+        lock
+    }
+
+    /// The (name, version) of every package in a `Cargo.lock`.
+    fn locked(lock: &str) -> BTreeSet<(String, String)> {
+        let lock: DocumentMut = lock.parse().unwrap();
+        lock["package"]
+            .as_array_of_tables()
+            .unwrap()
+            .iter()
+            .map(|package| {
+                (
+                    package["name"].as_str().unwrap().to_string(),
+                    package["version"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn pairs(packages: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+        packages
+            .iter()
+            .map(|(name, version)| (name.to_string(), version.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn merge_locks_takes_zeds_versions_and_keeps_rozeds_own() {
+        let zed = lock(&[("shared", "1.1.0", true), ("zed_only", "2.0.0", true)]);
+        let rozed = lock(&[
+            ("app", "0.1.0", false),
+            ("shared", "1.0.0", true),
+            ("own", "1.0.0", true),
+        ]);
+        assert_eq!(
+            locked(&merge_locks(&zed, &rozed).unwrap()),
+            pairs(&[
+                ("app", "0.1.0"),
+                ("own", "1.0.0"),
+                ("shared", "1.1.0"),
+                ("zed_only", "2.0.0"),
+            ])
+        );
+    }
+
+    #[test]
+    fn merge_locks_without_a_lock_of_rozeds_is_zeds() {
+        let zed = lock(&[("shared", "1.1.0", true)]);
+        assert_eq!(
+            locked(&merge_locks(&zed, "").unwrap()),
+            pairs(&[("shared", "1.1.0")])
+        );
+    }
+
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// Adds a package to the fake registry, a directory source cargo reads without the network.
+    fn publish(root: &Path, name: &str, version: &str) {
+        let dir = root.join("vendor").join(format!("{name}-{version}"));
+        write_file(
+            &dir.join("Cargo.toml"),
+            &format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\nedition = \"2021\"\n"),
+        );
+        write_file(&dir.join("src/lib.rs"), "");
+        write_file(
+            &dir.join(".cargo-checksum.json"),
+            &format!(r#"{{"files":{{}},"package":"{CHECKSUM}"}}"#),
+        );
+    }
+
+    #[test]
+    fn seed_lock_keeps_the_pin_of_a_dependency_zed_doesnt_have() {
+        // rozed's `app` depends on `shared`, which Zed uses too, and on `own`, which Zed doesn't.
+        // Both have a newer release than rozed's lockfile pins.
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        for (name, version) in [
+            ("shared", "1.0.0"),
+            ("shared", "1.1.0"),
+            ("own", "1.0.0"),
+            ("own", "1.1.0"),
+        ] {
+            publish(root, name, version);
+        }
+        write_file(
+            &root.join(".cargo/config.toml"),
+            "[source.crates-io]\nreplace-with = \"vendored\"\n\n[source.vendored]\ndirectory = \"vendor\"\n",
+        );
+        write_file(
+            &root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nexclude = [\"third_party\"]\nresolver = \"2\"\n",
+        );
+        write_file(
+            &root.join("app/Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nshared = \"1\"\nown = \"1\"\n",
+        );
+        write_file(&root.join("app/src/lib.rs"), "");
+        let toolchain = "[toolchain]\nchannel = \"1.0.0\"\n";
+        write_file(&root.join("rust-toolchain.toml"), toolchain);
+        write_file(
+            &root.join("Cargo.lock"),
+            &lock(&[
+                ("app", "0.1.0", false),
+                ("own", "1.0.0", true),
+                ("shared", "1.0.0", true),
+            ]),
+        );
+        let zed = root.join(ZED_DIR);
+        write_file(
+            &zed.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n\n[profile.dev]\nincremental = true\n",
+        );
+        write_file(
+            &zed.join(".cargo/config.toml"),
+            "[env]\nMACOSX_DEPLOYMENT_TARGET = \"12.0\"\n",
+        );
+        write_file(&zed.join("rust-toolchain.toml"), toolchain);
+        write_file(
+            &zed.join("Cargo.lock"),
+            &lock(&[("shared", "1.1.0", true), ("zed_only", "2.0.0", true)]),
+        );
+
+        assert!(run_mode(root, Mode::SeedLock).unwrap());
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        assert_eq!(
+            locked(&lock),
+            pairs(&[("app", "0.1.0"), ("own", "1.0.0"), ("shared", "1.1.0")]),
+            "{lock}"
+        );
     }
 
     #[test]
