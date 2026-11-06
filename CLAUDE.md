@@ -25,6 +25,9 @@ These bind every change (design §1).
 
 - `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
   rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`).
+- `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
+  Cargo workspace, with its own `Cargo.lock`, so it runs even when rozed's workspace can't resolve
+  (an empty `third_party/zed`, or a Zed update that needs a new patch).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
 - `docs/`: the design, plan, status and decisions.
@@ -33,15 +36,22 @@ These bind every change (design §1).
 ## Set up
 
 ```sh
-export PATH="$HOME/.cargo/bin:$PATH" # rustup's cargo, if your shell doesn't add it
-mise install                         # Node and pnpm, pinned in mise.toml
-pnpm install                         # commitlint and lefthook; installs the git hooks
+export PATH="$HOME/.cargo/bin:$PATH"  # rustup's cargo, if your shell doesn't add it
+mise install                          # Node, pnpm and cmake, pinned in mise.toml
+pnpm install                          # commitlint and lefthook; installs the git hooks
+git submodule update --init --depth 1 # Zed, one commit deep; see "Zed submodule"
 ```
 
 Rust comes from rustup. `rust-toolchain.toml` pins Zed's toolchain, and cargo installs it on first
-use. If your shell doesn't activate mise, prefix Node and pnpm commands with `mise exec --`. Run
-`pnpm install` in every new clone and worktree, because the `commit-msg` hook runs commitlint from
-its `node_modules`.
+use. Run `pnpm install` and `git submodule update --init --depth 1` in every new clone and
+worktree: the `commit-msg` hook runs commitlint from its `node_modules`, and nothing builds without
+Zed.
+
+Building needs Xcode (not just the Command Line Tools), because gpui compiles Metal shaders, and
+cmake, because Zed's tree-sitter builds wasmtime. If your shell doesn't activate mise, run cargo,
+Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p rozed`). mise's cmake shim
+fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
+`PATH`, which activation or `mise exec` provides.
 
 ## Build, test and run
 
@@ -51,22 +61,90 @@ cargo run -p rozed
 cargo test --workspace
 ```
 
+rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
+`~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
+`~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
+`RUST_LOG=info,rozed=debug` also logs the host and path of every HTTP request and redirect.
+
 ## Verify
 
 Run these before every push. CI runs the same on macOS.
 
 ```sh
-cargo fmt --all --check
+cargo fmt --check  # not --all, which formats Zed's crates too
+cargo xtask sync-zed --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 script/check-symlinks.sh
 ```
 
+xtask is a separate workspace, so check it too when you change it:
+
+```sh
+cargo fmt --check --manifest-path crates/xtask/Cargo.toml
+cargo clippy --manifest-path crates/xtask/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path crates/xtask/Cargo.toml
+```
+
 ## Zed submodule
 
-_Not added yet. The spike (plan milestone 2) adds `third_party/zed` on `scornz/zed`'s patch branch
-and fills in this section: the patch list, the Cargo settings copied from Zed and the script that
-keeps them in sync, and how to update Zed._
+`third_party/zed` is Zed, pinned to branch `rozed/v1.27.0` of
+[`scornz/zed`](https://github.com/scornz/zed): Zed's release tag `v1.27.0` plus rozed's patches, one
+commit each. rozed's crates depend on Zed's by path. Don't edit files in `third_party/zed`; change a
+patch on the branch instead.
+
+Fetch it with `git submodule update --init --depth 1`, which fetches only the pinned commit (32 MB,
+about 7 seconds). Always pass `--depth 1`. `.gitmodules` sets `shallow = true`, but git still
+fetches all of Zed's history (400 MB, about a minute) when the pinned commit isn't on the fork's
+default branch, and rozed's patch commits never are.
+
+### Patches
+
+On top of `v1.27.0`, in order. To change, reorder or drop one, make a new branch (see "Updating
+Zed").
+
+1. `paths: use rozed's folders`. Sets `APP_NAME` to `"rozed"` in `crates/paths/src/paths.rs`, so
+   rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
+   and `~/Library/Logs/rozed`, never Zed's folders.
+
+### Cargo settings copied from Zed
+
+Cargo ignores a dependency's `[patch]` sections, profiles and `.cargo/config.toml`, so rozed keeps
+copies of Zed's. `cargo xtask sync-zed` (`crates/xtask`) writes them between `BEGIN generated` and
+`END generated` markers; don't edit inside the markers.
+
+- `Cargo.toml`: Zed's `[patch.*]` sections, with `path` entries pointed into `third_party/zed`, and
+  its `[profile.*]` sections. Patches and per-package profile settings for crates that aren't in
+  rozed's `Cargo.lock` are left out, because cargo warns about each one on every build.
+- `.cargo/config.toml`: the macOS parts of Zed's, its `rustflags` and `MACOSX_DEPLOYMENT_TARGET`.
+- `rust-toolchain.toml`: Zed's toolchain channel.
+
+`cargo xtask sync-zed --check` changes nothing and fails, naming each stale section; CI runs it.
+`cargo xtask sync-zed --seed-lock` first merges Zed's `Cargo.lock` into rozed's: Zed's entries
+for every package in Zed's lockfile, rozed's own entries for the rest. Packages Zed uses then
+resolve to the versions Zed tested, and rozed's other dependencies keep their versions. Then it
+lets cargo prune the lockfile and syncs. Run it after updating Zed or adding a dependency on
+another Zed crate, and review the `Cargo.lock` diff.
+
+### Updating Zed
+
+Each Zed release gets its own branch, `rozed/v<version>`. Patch branches are append-only: never
+force-push or delete one, because older rozed commits pin commits on it. To rewrite a patch on the
+same Zed release, push a new branch with a suffix, such as `rozed/v1.27.0-2`, and point the
+submodule at it as in step 2.
+
+1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
+   above in order, and push the branch to `scornz/zed`.
+2. Point the submodule at it:
+
+   ```sh
+   git config -f .gitmodules submodule.third_party/zed.branch rozed/v<version>
+   git -C third_party/zed fetch --depth 1 origin rozed/v<version>
+   git -C third_party/zed checkout FETCH_HEAD
+   ```
+
+3. Run `cargo xtask sync-zed --seed-lock`.
+4. Build, fix what breaks, and update the patch list here.
 
 ## Agent rules
 
