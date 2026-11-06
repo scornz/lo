@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files or the
-  # license skip the Rust job. ci-ok passes when it's skipped.
+  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files, the license
+  # or the e2e fixture scripts skip the Rust job. ci-ok passes when it's skipped.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
           rust=false
           while IFS= read -r file; do
             case "$file" in
-              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE) ;;
+              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE | script/e2e/*) ;;
               *)
                 echo "$file changed, so the Rust job runs."
                 rust=true
@@ -80,6 +80,19 @@ jobs:
 
       - name: Check the agent symlinks
         run: script/check-symlinks.sh
+
+  # The e2e fixture scripts skip the Rust job, so this is their only check. ubuntu-latest ships
+  # shellcheck.
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the e2e fixture scripts
+        run: shellcheck --version && shellcheck script/e2e/*.sh
 
   rust:
     name: rust
@@ -150,7 +163,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, commitlint, symlinks, rust]
+    needs: [changes, commitlint, symlinks, shellcheck, rust]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any job failed or was cancelled
