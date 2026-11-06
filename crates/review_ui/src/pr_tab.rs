@@ -1313,4 +1313,39 @@ mod tests {
         cx.simulate_keystrokes("cmd-b");
         assert_eq!(shown(cx), (false, true));
     }
+
+    #[gpui::test]
+    async fn cmd_o_opens_a_link_in_a_tab_or_switches_to_it(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let fd = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let playground = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let has_box = |cx: &mut VisualTestContext| {
+            workspace.read_with(cx, |workspace, cx| {
+                workspace.active_modal::<crate::OpenBox>(cx).is_some()
+            })
+        };
+
+        cx.simulate_keystrokes("cmd-o");
+        assert!(has_box(cx));
+        cx.simulate_input("not a link");
+        cx.simulate_keystrokes("enter");
+        let error = workspace.read_with(cx, |workspace, cx| {
+            let open_box = workspace.active_modal::<crate::OpenBox>(cx).unwrap();
+            open_box.read(cx).error().cloned()
+        });
+        assert_eq!(
+            error.as_deref(),
+            Some("Can't open that: it isn't a link to github.com.")
+        );
+        cx.simulate_keystrokes("escape");
+        assert!(!has_box(cx));
+
+        cx.simulate_keystrokes("cmd-o");
+        cx.simulate_input("https://github.com/sharkdp/fd/pull/2212");
+        cx.simulate_keystrokes("enter");
+
+        assert!(!has_box(cx));
+        assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground]);
+        assert_eq!(active_tab(&workspace, cx), Some(fd));
+    }
 }

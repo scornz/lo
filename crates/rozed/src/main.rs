@@ -36,7 +36,7 @@ use workspace::notifications::NotifyTaskExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
 use review_ui::pr_link::PrLink;
-use review_ui::{Trust, local_copies, local_project, trust};
+use review_ui::{OpenBox, Trust, local_copies, local_project, trust};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 
@@ -216,6 +216,7 @@ fn main() {
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
         cx.set_menus([Menu::new("rozed").items([
+            MenuItem::action("Open Pull Request…", review_ui::OpenPullRequest),
             MenuItem::action("Accounts…", accounts_ui::OpenAccounts),
             MenuItem::separator(),
             MenuItem::action("Quit rozed", zed_actions::Quit),
@@ -401,6 +402,7 @@ fn open_window(
                 });
             }
             None => {
+                workspace.update(cx, |workspace, cx| OpenBox::toggle(workspace, window, cx));
                 // Opening a pull request reports a missing or old git itself. Without one, say
                 // so as soon as the launch check finds it.
                 let check = local_copies::cache(cx);

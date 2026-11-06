@@ -7,6 +7,7 @@ pub mod github_api;
 pub mod github_layer;
 pub mod local_copies;
 pub mod local_project;
+pub mod open_box;
 pub mod pr_diff;
 pub mod pr_link;
 pub mod pr_tab;
@@ -18,12 +19,13 @@ use github::db::RozedDb;
 use gpui::{App, Entity, Task};
 use workspace::Workspace;
 
+pub use open_box::{OpenBox, OpenPullRequest};
 pub use pr_diff::Trust;
 pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, open};
 
-/// Sets up the PR tab: its keys, the GitHub layer from `accounts` (the loaded accounts and their
-/// database, or `None` without one), and following which tab is active in every workspace.
+/// Sets up the PR tab: its keys, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
+/// their database, or `None` without one), and following which tab is active in every workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
     init_workspaces(cx);
@@ -32,10 +34,14 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
 /// [`init`] without the GitHub layer, for tests: pull requests open without signing in.
 pub fn init_workspaces(cx: &mut App) {
     pr_tab::bind_keys(cx);
-    cx.observe_new(|_: &mut Workspace, window, cx| {
+    open_box::bind_keys(cx);
+    cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
             return;
         };
+        workspace.register_action(|workspace, _: &OpenPullRequest, window, cx| {
+            OpenBox::toggle(workspace, window, cx)
+        });
         let this = cx.entity();
         cx.subscribe_in(&this, window, |workspace, _, event, _, cx| {
             if let workspace::Event::ActiveItemChanged = event {
