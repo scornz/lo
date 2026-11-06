@@ -1,8 +1,10 @@
 //! The files a pull request changes: the order they're listed in and how each one starts out
 //! (design §5, "File order", "Generated files", "Very large files").
 
+mod generated;
 mod order;
 
+pub use generated::{Generated, generated, is_lockfile};
 pub use order::path_order;
 
 /// One file a pull request changes, as GitHub's changed-file list describes it, plus the
