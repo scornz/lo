@@ -104,6 +104,7 @@ mod tests {
             ],
             &commits,
             "a4",
+            SystemTime::UNIX_EPOCH,
         )
     }
 
@@ -181,6 +182,7 @@ mod tests {
             ],
             &commits,
             "a4",
+            SystemTime::UNIX_EPOCH,
         );
 
         assert_eq!(

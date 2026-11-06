@@ -10,8 +10,11 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///
 /// `commits` are the pull request's current commits from git, oldest first. `head` is its current
 /// head (`headRefOid`), which is always the latest revision, even when no source saw it or a
-/// source's time says otherwise.
+/// source's time says otherwise. `opened_at` is when the pull request opened (`createdAt`).
 ///
+/// - **Starting where the pull request opened.** The first revision is the head when the pull
+///   request opened: the newest head pushed at or before `opened_at`. Older heads were pushed
+///   before the pull request existed and aren't revisions.
 /// - **Deduplicated by head.** A head several sources saw is one revision, listing them all. A
 ///   head pushed twice (`a` → `b` → `a`) is one revision, placed at its latest push.
 /// - **Ordered by the push chain, ancestry and time.** A head comes after the head its push
@@ -28,7 +31,12 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///   another record names or a current commit, and the earliest such suite does. With no source's
 ///   word, the previous head is the revision before, and
 ///   ancestry in the current commits tells whether the push was forced when it can.
-pub fn build_revisions(records: &[PushRecord], commits: &[String], head: &str) -> Revisions {
+pub fn build_revisions(
+    records: &[PushRecord],
+    commits: &[String],
+    head: &str,
+    opened_at: SystemTime,
+) -> Revisions {
     let mut heads = Heads::default();
     for record in records {
         heads.add(record);
@@ -48,6 +56,10 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String], head: &str) -
     if let Some(pull_head) = pull_head {
         order.retain(|&index| index != pull_head);
         order.push(pull_head);
+    }
+    let pushed_by_opening = |index: usize| latest[index].is_some_and(|at| at <= opened_at);
+    if let Some(first) = order.iter().rposition(|&index| pushed_by_opening(index)) {
+        order.drain(..first);
     }
 
     let seen = &heads.seen;
@@ -340,9 +352,8 @@ impl<'a> Heads<'a> {
                 if let Some(head) = self.see(after, source) {
                     keep_latest(&mut head.force_push, Push::new(*at, before, Some(true)));
                 }
-                // The head a force-push replaced was a revision too. Only force-push events add
-                // the head before: an activity entry's or check suite's can predate the pull
-                // request.
+                // The head a force-push replaced was a revision too. An activity entry's head
+                // before is always another entry's head, except for the first.
                 if let Some(before) = before {
                     self.see(before, source);
                 }
@@ -363,7 +374,8 @@ impl<'a> Heads<'a> {
 
     /// Picks the check suite that names each head's previous head: the earliest whose previous SHA
     /// is a head another record names or a current commit. A suite for the same commit pushed to
-    /// another branch, such as a backport, names that branch's head instead.
+    /// another branch, such as a backport, names that branch's head instead. The previous heads
+    /// the chosen suites name are revisions too.
     fn choose_check_suites(&mut self, positions: &HashMap<String, usize>) {
         for index in 0..self.seen.len() {
             let known = |sha: &str| self.index.contains_key(sha) || positions.contains_key(sha);
@@ -372,6 +384,12 @@ impl<'a> Heads<'a> {
                 .min_by_key(|suite| suite.at)
                 .copied();
             self.seen[index].check_suite = chosen;
+        }
+        let previous: Vec<&'a str> = (self.seen.iter())
+            .filter_map(|head| head.check_suite?.before)
+            .collect();
+        for head in previous {
+            self.see(head, Source::CheckSuite);
         }
     }
 
@@ -524,10 +542,15 @@ mod tests {
     }
 
     /// The revisions `records` make, over the current commits `commits`, for a pull request whose
-    /// head is `head`.
+    /// head is `head`, opened before any of them.
     fn build(records: &[PushRecord], commits: &[&str], head: &str) -> Revisions {
+        opened(records, commits, head, 0)
+    }
+
+    /// The same, for a pull request opened at `minute`.
+    fn opened(records: &[PushRecord], commits: &[&str], head: &str, minute: u64) -> Revisions {
         let commits: Vec<String> = commits.iter().map(|commit| commit.to_string()).collect();
-        build_revisions(records, &commits, head)
+        build_revisions(records, &commits, head, at(minute))
     }
 
     fn heads(revisions: &Revisions) -> Vec<&str> {
@@ -952,6 +975,69 @@ mod tests {
         let a3 = revisions.latest().unwrap();
         assert_eq!(a3.previous.as_deref(), Some("a1"));
         assert_eq!(a3.forced, Some(false));
+    }
+
+    #[test]
+    fn pushes_before_the_pull_request_opened_are_not_revisions() {
+        // p1 and p2 were pushed before the pull request opened at p2; p3 came after.
+        let revisions = opened(
+            &[
+                check_suite(NO_COMMIT, "p1", 0),
+                check_suite("p1", "p2", 20),
+                check_suite("p2", "p3", 60),
+                polled("p2", 31),
+            ],
+            &["p1", "p2", "p3"],
+            "p3",
+            30,
+        );
+
+        assert_eq!(heads(&revisions), ["p2", "p3"]);
+        assert_eq!(revisions.get("p2").unwrap().previous.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn the_whole_activity_log_starts_at_the_head_when_the_pull_request_opened() {
+        let revisions = opened(
+            &[
+                activity(None, "x0", 5, false),
+                activity(Some("x0"), "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+            ],
+            &["x0", "a1", "a2"],
+            "a2",
+            12,
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(revisions.get("a1").unwrap().previous.as_deref(), Some("x0"));
+    }
+
+    #[test]
+    fn with_nothing_dated_before_the_pull_request_opened_every_head_stays() {
+        let revisions = opened(
+            &[force_push("a1", "b1", 50), polled("b1", 51)],
+            &["b1"],
+            "b1",
+            30,
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "b1"]);
+    }
+
+    #[test]
+    fn a_check_suites_previous_head_in_the_current_commits_is_a_revision() {
+        // No other source saw a2, which only the next push's check suite names.
+        let revisions = build(
+            &[polled("a1", 5), check_suite("a2", "a3", 30)],
+            &["a1", "a2", "a3"],
+            "a3",
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "a2", "a3"]);
+        let a2 = revisions.get("a2").unwrap();
+        assert_eq!(a2.sources, [Source::CheckSuite].into());
+        assert_eq!(a2.pushed_at, PushedAt::By(at(30)));
     }
 
     #[test]

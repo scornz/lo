@@ -90,6 +90,7 @@ mod tests {
             ],
             &commits,
             "a4",
+            SystemTime::UNIX_EPOCH,
         )
     }
 
@@ -187,6 +188,7 @@ mod tests {
             &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
             &commits,
             "a2",
+            SystemTime::UNIX_EPOCH,
         );
 
         assert_eq!(
@@ -202,6 +204,7 @@ mod tests {
             &[pushed(None, "a1", 10), pushed(Some("a1"), "a2", 20)],
             &commits,
             "a2",
+            SystemTime::UNIX_EPOCH,
         );
 
         assert_eq!(default_comparison(&revisions, Some("c0"), None), full());

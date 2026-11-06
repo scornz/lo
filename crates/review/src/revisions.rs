@@ -20,7 +20,7 @@
 //!     PushRecord::Review { commit: "a2".into(), at: at(25) },
 //!     PushRecord::ForcePush { before: Some("a2".into()), after: "b1".into(), at: at(30) },
 //! ];
-//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()], "b1");
+//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()], "b1", at(0));
 //!
 //! let heads: Vec<_> = revisions.iter().map(|revision| revision.head.as_str()).collect();
 //! assert_eq!(heads, ["a1", "a2", "b1"]);
@@ -52,9 +52,8 @@ pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
 pub enum PushRecord {
     /// A push in the repository activity API for the head branch
     /// (`GET /repos/{owner}/{repo}/activity?ref=refs/heads/{branch}`): `before`, `after`,
-    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller passes the
-    /// entries from the one that was the head when the pull request opened onwards, without
-    /// `branch_deletion` entries.
+    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller drops
+    /// `branch_deletion` entries; entries from before the pull request opened are dropped here.
     Activity {
         before: Option<String>,
         after: String,
@@ -273,6 +272,7 @@ mod tests {
             &[polled("x1", 1), polled("a1", 10), polled("a2", 20)],
             &commits,
             "a2",
+            SystemTime::UNIX_EPOCH,
         )
     }
 
