@@ -82,7 +82,12 @@ impl ReplayHttpClient {
 
     fn respond(&self, request: SeenRequest) -> Result<Response<AsyncBody>> {
         let url = Url::parse(&request.url)?;
-        let key = cassette::key(&request.method, &url, &request.body);
+        let key = cassette::key(
+            &request.method,
+            &url,
+            &request.body,
+            request.header("if-none-match"),
+        );
         let graphql = cassette::graphql_body(&url, &request.body);
         let mut replay = self.0.lock();
         let name = replay.name.clone();
@@ -226,6 +231,46 @@ mod tests {
         )
         .unwrap();
         get(&client, "https://api.github.com/other");
+    }
+
+    fn conditional(etag: &str) -> Interaction {
+        let mut recorded = interaction("GET", "https://api.github.com/repos/o/r", 304, "");
+        recorded.request.if_none_match = Some(etag.into());
+        recorded
+    }
+
+    fn get_with_etag(client: &ReplayHttpClient, etag: &str) -> u16 {
+        let request = Request::get("https://api.github.com/repos/o/r")
+            .header("If-None-Match", etag)
+            .body(AsyncBody::empty())
+            .unwrap();
+        futures::executor::block_on(client.send(request))
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+
+    #[test]
+    fn a_conditional_request_gets_the_304_recorded_for_its_etag() {
+        let client = ReplayHttpClient::from_interactions(
+            "t",
+            [
+                interaction("GET", "https://api.github.com/repos/o/r", 200, "{}"),
+                conditional("W/\"abc\""),
+            ],
+        )
+        .unwrap();
+        assert_eq!(get(&client, "https://api.github.com/repos/o/r").0, 200);
+        assert_eq!(get_with_etag(&client, "W/\"abc\""), 304);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "has no response for\n  GET https://api.github.com/repos/o/r if-none-match=W/\"wrong\""
+    )]
+    fn a_wrong_etag_fails_the_test() {
+        let client = ReplayHttpClient::from_interactions("t", [conditional("W/\"abc\"")]).unwrap();
+        get_with_etag(&client, "W/\"wrong\"");
     }
 
     #[test]

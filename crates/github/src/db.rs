@@ -364,7 +364,15 @@ mod tests {
         // A folder where the file should be: SQLite can't open it.
         let path = dir.path().join("rozed.sqlite");
         std::fs::create_dir(&path).unwrap();
-        let result = futures::executor::block_on(RozedDb::open(&path));
-        assert!(result.is_err());
+        let Err(error) = futures::executor::block_on(RozedDb::open(&path)) else {
+            panic!("opened a folder as a database");
+        };
+        // sqlez fell back to memory, and rozed's own check refused that.
+        let message = format!("{error:#}");
+        assert!(
+            message.starts_with(&format!("couldn't open {}", path.display())),
+            "{message}"
+        );
+        assert!(message.contains("SQLite opened"), "{message}");
     }
 }

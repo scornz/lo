@@ -337,6 +337,7 @@ mod tests {
 
         let replay = ReplayHttpClient::from_dir(&cassette).unwrap();
         let request = Request::get("https://api.github.com/user")
+            .header("If-None-Match", "W/\"old\"")
             .body(AsyncBody::empty())
             .unwrap();
         let response = futures::executor::block_on(replay.send(request)).unwrap();

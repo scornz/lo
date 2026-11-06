@@ -2,8 +2,9 @@
 //!
 //! A cassette is a folder with a `cassette.json` describing it and one file per request and
 //! response, named `NNN-<METHOD>-<what>.json` and replayed in name order. Requests are matched by
-//! a [`key`]: the method and URL with its query sorted; for GraphQL the operation's name and its
-//! variables; for any other request with a body, a hash of the body.
+//! a [`key`]: the method and URL with its query sorted, and the ETag a conditional request sent;
+//! for GraphQL the operation's name and its variables; for any other request with a body, a hash
+//! of the body.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -134,25 +135,26 @@ pub fn graphql_body(url: &Url, body: &[u8]) -> Option<GraphQlBody> {
     serde_json::from_slice(body).ok()
 }
 
-/// The key a request is matched by.
-pub fn key(method: &str, url: &Url, body: &[u8]) -> String {
+/// The key a request is matched by. A conditional request only matches the response recorded
+/// for the same ETag, so a wrong ETag can't get a recorded `304`.
+pub fn key(method: &str, url: &Url, body: &[u8], if_none_match: Option<&str>) -> String {
     let graphql = graphql_body(url, body);
     let url = normalize_url(url);
-    if let Some(graphql) = graphql {
-        return graphql_key(method, &url, &graphql.operation_name, &graphql.variables);
-    }
-    if body.is_empty() {
+    let key = if let Some(graphql) = graphql {
+        graphql_key(method, &url, &graphql.operation_name, &graphql.variables)
+    } else if body.is_empty() {
         format!("{method} {url}")
     } else {
         format!("{method} {url} body={}", sha256(body))
-    }
+    };
+    with_etag(key, if_none_match)
 }
 
 /// The key of a recorded request.
 pub fn recorded_key(request: &RecordedRequest) -> Result<String> {
     let url = Url::parse(&request.url).with_context(|| format!("bad URL {}", request.url))?;
     let normalized = normalize_url(&url);
-    Ok(if let Some(operation) = &request.operation {
+    let key = if let Some(operation) = &request.operation {
         let variables = request.variables.clone().unwrap_or(serde_json::Value::Null);
         graphql_key(&request.method, &normalized, operation, &variables)
     } else if let Some(body) = &request.body {
@@ -161,7 +163,15 @@ pub fn recorded_key(request: &RecordedRequest) -> Result<String> {
         format!("{} {normalized} body={hash}", request.method)
     } else {
         format!("{} {normalized}", request.method)
-    })
+    };
+    Ok(with_etag(key, request.if_none_match.as_deref()))
+}
+
+fn with_etag(key: String, if_none_match: Option<&str>) -> String {
+    match if_none_match {
+        Some(etag) => format!("{key} if-none-match={etag}"),
+        None => key,
+    }
 }
 
 fn graphql_key(method: &str, url: &str, operation: &str, variables: &serde_json::Value) -> String {
@@ -381,11 +391,11 @@ mod tests {
     #[test]
     fn query_order_does_not_change_the_key() {
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?b=2&a=1"), b""),
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b""),
+            key("GET", &url("https://api.github.com/x?b=2&a=1"), b"", None),
+            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
         );
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b""),
+            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
             "GET https://api.github.com/x?a=1&b=2"
         );
     }
@@ -395,10 +405,18 @@ mod tests {
         let a = br#"{"query":"query A { x }","operationName":"A","variables":{"b":1,"a":2}}"#;
         let b = br#"{"operationName":"A","variables":{"a":2,"b":1},"query":"query A {x}"}"#;
         let graphql = url("https://api.github.com/graphql");
-        assert_eq!(key("POST", &graphql, a), key("POST", &graphql, b));
-        assert!(key("POST", &graphql, a).starts_with("POST https://api.github.com/graphql A "));
+        assert_eq!(
+            key("POST", &graphql, a, None),
+            key("POST", &graphql, b, None)
+        );
+        assert!(
+            key("POST", &graphql, a, None).starts_with("POST https://api.github.com/graphql A ")
+        );
         let other = br#"{"query":"query A { x }","operationName":"A","variables":{"a":3}}"#;
-        assert_ne!(key("POST", &graphql, a), key("POST", &graphql, other));
+        assert_ne!(
+            key("POST", &graphql, a, None),
+            key("POST", &graphql, other, None)
+        );
     }
 
     #[test]
@@ -414,7 +432,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &graphql, body)
+            key("POST", &graphql, body, None)
         );
 
         let form = "client_id=abc&scope=repo";
@@ -427,7 +445,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &device, form.as_bytes())
+            key("POST", &device, form.as_bytes(), None)
         );
     }
 
