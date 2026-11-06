@@ -742,6 +742,55 @@ async fn a_secondary_limit_waits_as_long_as_github_asks_then_backs_off(cx: &mut 
     );
 }
 
+/// The recorded poll with the open PR's second check answered by a GraphQL rate-limit error,
+/// with `remaining` of GraphQL's limit left in a window that resets at 600 s.
+fn with_graphql_rate_limit(remaining: u32) -> Vec<Interaction> {
+    let r = recorded();
+    let limited = answer(
+        &r[7],
+        200,
+        &[],
+        r#"{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}"#,
+    );
+    let mut interactions = r.clone();
+    interactions.insert(
+        7,
+        with_headers(limited, &rate_limit("graphql", remaining, 600)),
+    );
+    interactions
+}
+
+#[gpui::test]
+async fn a_used_up_graphql_limit_is_named(cx: &mut TestAppContext) {
+    let mut t = Polling::new("graphql_used_up", with_graphql_rate_limit(0), cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(20);
+    assert_eq!(
+        t.status().rate_limit,
+        RateLimitState::Paused {
+            until: wall(600),
+            reason: PauseReason::UsedUp {
+                resource: "graphql".into()
+            },
+        }
+    );
+}
+
+#[gpui::test]
+async fn a_graphql_rate_limit_with_some_left_is_a_secondary_limit(cx: &mut TestAppContext) {
+    let mut t = Polling::new("graphql_secondary", with_graphql_rate_limit(4000), cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(20);
+    // A minute, not until the window resets, and not "core used up".
+    assert_eq!(
+        t.status().rate_limit,
+        RateLimitState::Paused {
+            until: wall(80),
+            reason: PauseReason::Secondary,
+        }
+    );
+}
+
 #[gpui::test]
 async fn offline_it_backs_off_and_answers_from_the_cache_with_its_age(cx: &mut TestAppContext) {
     let r = recorded();

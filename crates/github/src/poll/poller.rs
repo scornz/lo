@@ -647,40 +647,11 @@ impl Poller {
                 secondary,
                 reset,
                 retry_after,
+                resource,
                 message,
             }) => {
                 log::info!("GitHub's rate limit: {message}");
-                self.cooldown = Some(if secondary {
-                    self.secondary_attempts += 1;
-                    let wait = retry_after.unwrap_or_else(|| {
-                        backoff(
-                            self.secondary_attempts,
-                            self.config.secondary_first_wait,
-                            self.config.secondary_max_wait,
-                            0.0,
-                            0.0,
-                        )
-                    });
-                    Cooldown {
-                        until: wall + wait,
-                        reason: PauseReason::Secondary,
-                    }
-                } else {
-                    let until = reset
-                        .map(|reset| SystemTime::UNIX_EPOCH + Duration::from_secs(reset))
-                        .filter(|until| *until > wall)
-                        .unwrap_or(wall + self.config.secondary_first_wait);
-                    let resource = ["graphql", "core"]
-                        .into_iter()
-                        .find(|r| self.limits.get(r).is_some_and(|l| l.remaining == 0))
-                        .unwrap_or("core");
-                    Cooldown {
-                        until,
-                        reason: PauseReason::UsedUp {
-                            resource: resource.to_string(),
-                        },
-                    }
-                });
+                self.rate_limited(secondary, reset, retry_after, resource, wall);
             }
             // The client's hook has already read a newer token from gh for an account imported
             // from it, and signed the account out when there was none.
@@ -700,6 +671,60 @@ impl Poller {
         }
         self.refresh_status(cx);
         writes
+    }
+
+    /// Pauses polling as a rate-limit error asks: until the limit that was hit resets, or, for
+    /// GitHub's secondary limits, for as long as GitHub asked or a minute doubling.
+    fn rate_limited(
+        &mut self,
+        secondary: bool,
+        reset: Option<u64>,
+        retry_after: Option<Duration>,
+        resource: Option<String>,
+        wall: SystemTime,
+    ) {
+        let used_up = |resource: &str| self.limits.get(resource).is_some_and(|l| l.remaining == 0);
+        // The limit GitHub names, else whichever is at zero. With none at zero, it can only have
+        // been a secondary limit.
+        let used_up = (!secondary)
+            .then(|| {
+                resource.filter(|r| used_up(r)).or_else(|| {
+                    ["graphql", "core"]
+                        .into_iter()
+                        .find(|r| used_up(r))
+                        .map(str::to_string)
+                })
+            })
+            .flatten();
+        self.cooldown = Some(match used_up {
+            Some(resource) => {
+                let until = reset
+                    .or_else(|| self.limits.get(&resource).map(|limit| limit.reset))
+                    .map(|reset| SystemTime::UNIX_EPOCH + Duration::from_secs(reset))
+                    .filter(|until| *until > wall)
+                    .unwrap_or(wall + self.config.secondary_first_wait);
+                Cooldown {
+                    until,
+                    reason: PauseReason::UsedUp { resource },
+                }
+            }
+            None => {
+                self.secondary_attempts += 1;
+                let wait = retry_after.unwrap_or_else(|| {
+                    backoff(
+                        self.secondary_attempts,
+                        self.config.secondary_first_wait,
+                        self.config.secondary_max_wait,
+                        0.0,
+                        0.0,
+                    )
+                });
+                Cooldown {
+                    until: wall + wait,
+                    reason: PauseReason::Secondary,
+                }
+            }
+        });
     }
 
     fn mark_polled(&mut self, target: &Target, now: Instant) {
