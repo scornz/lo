@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files or the
+  # license skip the Rust job. ci-ok passes when it's skipped.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether the Rust job runs
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A separate assignment, so a failing diff fails the step instead of skipping Rust.
+          files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          rust=false
+          while IFS= read -r file; do
+            case "$file" in
+              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE) ;;
+              *)
+                echo "$file changed, so the Rust job runs."
+                rust=true
+                break
+                ;;
+            esac
+          done <<< "$files"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
+  commitlint:
+    name: commitlint
+    # Dependabot commit bodies exceed commitlint's line-length limits. Its PR title, which becomes
+    # the squash commit, is still checked by pr-title.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint PR commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
+
+  symlinks:
+    name: symlinks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the agent symlinks
+        run: script/check-symlinks.sh
+
+  rust:
+    name: rust
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # With no arguments, rustup installs the toolchain and components in rust-toolchain.toml.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install && rustc --version
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  # The one required check besides pr-title, so adding jobs never changes the ruleset. Skipped jobs
+  # pass.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [changes, commitlint, symlinks, rust]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "Job results: $RESULTS"
+          exit 1
