@@ -29,9 +29,12 @@ Things that surprised:
   per project folder. Before rozed handled the flag, each capture started another full rozed, which
   captured again: a runaway chain of processes. rozed now answers it as Zed does, and a rozed started
   by a running rozed refuses to start.
-- **Debug links warn about unwind info.** A debug rozed has more than 16 MB of `__eh_frame`, more
-  than ld's compact unwind table can index, so ld warned on every link. Debug builds now link with
-  `-no_compact_unwind`; release builds don't need it.
+- **Debug links warn about unwind info.** Unoptimized code gives a debug rozed 34 MB of
+  `__eh_frame`, more than the 16 MB ld's compact unwind table can index, so ld warns on every debug
+  link. It's harmless, and Zed's own binary gets the same warning. Linking with `-no_compact_unwind`
+  silences it but leaves out `__unwind_info`, which the unwinder needs: every panic then aborts with
+  "failed to initiate panic", and one failing test kills the whole test binary. Optimized builds stay
+  under the limit (`release` 7 MB, `release-fast` 11 MB) and don't warn.
 - **Zed-owned files.** A run creates only rozed's folders. It also creates
   `~/Library/Logs/rozed/telemetry.log`, empty, because Zed's `Client` sets up its telemetry sink;
   nothing is sent.
