@@ -70,8 +70,9 @@ pub enum Trust {
 }
 
 /// Copies the pull request locally, signed in with `token` for a private repository, and shows
-/// the local copy's diff in `tab`, from git first. While it copies, the tab shows git's progress,
-/// and a fetch that fails for a reason that may pass is tried again, with a banner saying why.
+/// the local copy's diff in `tab`, from git first; GitHub gave the pull request at `answered_at`.
+/// While it copies, the tab shows git's progress, and a fetch that fails for a reason that may
+/// pass is tried again, with a banner saying why.
 /// When `trust` asks for a checkout, it's made in the background once the diff shows, and each
 /// file whose checkout copy matches the head switches to the checkout's project buffer when it's
 /// ready, or a banner says why there's none. `launched` is when the tab opened, for timing.
@@ -81,6 +82,7 @@ pub async fn open(
     workspace: WeakEntity<Workspace>,
     link: PrLink,
     pull_request: PullRequest,
+    answered_at: SystemTime,
     token: Option<Token>,
     trust: Trust,
     launched: Instant,
@@ -108,9 +110,16 @@ pub async fn open(
         "{link}: {}",
         crate::window_title::without_bidi(&pull_request.title)
     );
-    let polled_at = SystemTime::now();
     show_local_copy(
-        tab, workspace, link, title, local, polled_at, trust, launched, cx,
+        tab,
+        workspace,
+        link,
+        title,
+        local,
+        answered_at,
+        trust,
+        launched,
+        cx,
     )
     .await
 }
@@ -342,9 +351,9 @@ fn retry(error: &anyhow::Error) -> Option<Retry> {
 }
 
 /// Shows the local copy's diff of the pull request in `tab`, of the head GitHub gave at
-/// `polled_at`. While the tab shows GitHub's diff, the local copy's is built out of sight and
-/// replaces it once every file is in, scrolled to the same file and line; otherwise it shows at
-/// once and fills in as files load.
+/// `polled_at`. While the tab shows a diff, GitHub's or an older local copy's, this one is built
+/// out of sight and replaces it once every file is in, scrolled to the same file and line;
+/// otherwise it shows at once and fills in as files load.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn show_local_copy(
     tab: WeakEntity<PrTab>,
@@ -390,17 +399,17 @@ pub(crate) async fn show_local_copy(
             });
         })
     });
-    // The tab lists the files and says where each goes in the diff, at once, or with GitHub's
-    // diff on screen, once this one replaces it, so the list always matches the diff shown.
+    // The tab lists the files and says where each goes in the diff, at once, or with a diff on
+    // screen, once this one replaces it, so the list always matches the diff shown.
     let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
-        if tab.diff_source() == Some(DiffSource::GitHub) {
-            return (true, tab.positions_of(&local.files));
+        if let Some(source) = tab.diff_source() {
+            return (Some(source), tab.positions_of(&local.files));
         }
         let positions = tab.copied(&local.files, &local.head, polled_at, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
-        (false, positions)
+        (None, positions)
     })?;
-    if !replacing {
+    if replacing.is_none() {
         show_banners(cx);
     }
 
@@ -497,16 +506,20 @@ pub(crate) async fn show_local_copy(
         });
     });
     tab.update_in(cx, |tab, window, cx| {
-        if replacing {
+        if replacing.is_some() {
             tab.copied(&local.files, &local.head, polled_at, cx);
             tab.switch_diff(editor.clone(), &local.head, window, cx);
         }
         tab.diff_loaded(cx);
     })?;
-    if replacing {
+    if let Some(replaced) = replacing {
         show_banners(cx);
+        let replaced = match replaced {
+            DiffSource::GitHub => "GitHub's diff",
+            DiffSource::LocalCopy => "an older local copy's",
+        };
         log::info!(
-            "{link}: switched from GitHub's diff to the local copy's {:?} after launch",
+            "{link}: switched from {replaced} to the local copy's diff {:?} after launch",
             launched.elapsed()
         );
     }

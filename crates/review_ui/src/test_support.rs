@@ -568,6 +568,18 @@ impl GitServer {
         std::fs::rename(git_dir.with_extension("hidden"), &git_dir).unwrap();
     }
 
+    /// Pushes a commit of `files`, the whole tree, on top of pull request `number`'s head in
+    /// `repo`, as its new `refs/pull/<number>/head`, and returns the commit.
+    pub fn push(&self, repo: &str, number: u64, files: &[(&str, &str)]) -> String {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        let index = self.dir.path().join("index");
+        let pull_ref = format!("refs/pull/{number}/head");
+        let head = git(&git_dir, &["rev-parse", &pull_ref], None, None);
+        let pushed = commit(&git_dir, &index, files, Some(head.trim()));
+        git(&git_dir, &["update-ref", &pull_ref, &pushed], None, None);
+        pushed
+    }
+
     /// Pull request `number` of `repo` on top of a stack's lower layer: `base`, a new commit on
     /// `main`; `lower`, a commit on top of it, as branch `stack-a`; and `head`, a commit on top of
     /// that, as `refs/pull/<number>/head`. It merges into `main` to start with. Each is a list of

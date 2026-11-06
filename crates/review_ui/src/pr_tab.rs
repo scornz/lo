@@ -298,10 +298,8 @@ pub struct PrTab {
     /// The account to open the pull request with, while it can see the repository, whatever
     /// account the repository's choice is: a recent row's, for the load that row started.
     preferred: Option<String>,
-    /// Whether the diff shown is the local copy's, because GitHub's didn't load.
-    showing_copy: bool,
-    /// Whether that's because GitHub couldn't be reached at all.
-    copy_offline: bool,
+    /// Why the diff shown is a local copy that isn't of GitHub's latest head, while it is.
+    showing_copy: Option<OlderCopy>,
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
@@ -374,6 +372,8 @@ pub struct PrTab {
     /// Tries copying again, when rozed stopped trying after failures it doesn't know.
     retry_copy: Option<oneshot::Sender<()>>,
     _subscriptions: Vec<Subscription>,
+    /// What the tab hears from the poller it watches with, replaced when it watches with another.
+    _poller_subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PrTabEvent> for PrTab {}
@@ -409,8 +409,7 @@ impl PrTab {
             file_list_scroll: UniformListScrollHandle::new(),
             acting: None,
             preferred: None,
-            showing_copy: false,
-            copy_offline: false,
+            showing_copy: None,
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
@@ -449,6 +448,7 @@ impl PrTab {
             github_head: None,
             retry_copy: None,
             _subscriptions: vec![on_focus, on_banners],
+            _poller_subscriptions: Vec::new(),
         }
     }
 
@@ -478,7 +478,7 @@ impl PrTab {
                     return;
                 };
                 let waitable = is_waitable(&error);
-                match this.read_with(cx, |this, _| (this.showing_copy, this.answered)) {
+                match this.read_with(cx, |this, _| (this.showing_copy.is_some(), this.answered)) {
                     Err(_) => return,
                     // GitHub gave the pull request, so its diff, or the copy shown, stays, with
                     // why the rest didn't load. Waiting won't fix that: the local copy tries
@@ -487,7 +487,6 @@ impl PrTab {
                         log::error!("{link}: {error:#}");
                         this.update(cx, |this, cx| {
                             this.help_links = help_links(&error);
-                            this.action = Some(TabAction::TryAgain);
                             this.load_failed(&error, cx)
                         })
                         .ok();
@@ -662,8 +661,9 @@ impl PrTab {
     }
 
     pub fn set_acting(&mut self, acting: Acting, cx: &mut Context<Self>) {
-        // Viewed marks are the account's own, so another account's saved ones go once GitHub's
-        // diff shows; until then, as when this load fails and the local copy stays, they stay.
+        // Viewed marks are the account's own, so another account's saved ones go once GitHub
+        // answers for this one; until then, as when this load fails and the local copy stays,
+        // they stay.
         if let Some((saved_for, _)) = &self.saved {
             self.viewed_are_others = acting
                 .login()
@@ -676,7 +676,7 @@ impl PrTab {
     /// Shows what rozed saved about the pull request, at once and online or not, until GitHub
     /// answers.
     pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
-        self.take_details(&saved.details, saved.fetched_at, cx);
+        self.take_details(&saved.details, saved.fetched_at, Some(&saved.login), cx);
         self.saved = Some((saved.login.clone(), saved.fetched_at));
         self.show_saved_banner(true, cx);
     }
@@ -685,14 +685,18 @@ impl PrTab {
     /// failed with `why`: with GitHub's links to fix it, and when waiting won't fix it, a button
     /// to try again.
     fn showing_copy_because(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
-        self.showing_copy = true;
-        self.copy_offline = is_offline(why);
+        let offline = is_offline(why);
+        self.showing_copy = Some(if offline {
+            OlderCopy::Unreachable
+        } else {
+            OlderCopy::NotLoaded
+        });
         self.show_saved_banner(false, cx);
         self.help_links = help_links(why);
         let waitable = is_waitable(why);
         self.action = (!waitable).then(|| action_for(why));
         let reason = sentence(why);
-        let text = if self.copy_offline {
+        let text = if offline {
             format!(
                 "Offline: {reason}. This is the local copy's diff, read-only, until GitHub \
                  answers again; rozed keeps trying."
@@ -740,6 +744,28 @@ impl PrTab {
         self.set_status(Status::Loading(text.into()), cx);
     }
 
+    /// Reads where this Mac recorded `saved`'s account viewing the files, for the notes on what
+    /// changed since, while the local copy shows without GitHub. Nothing's written.
+    fn read_saved_records(&mut self, saved: &Saved, cx: &App) {
+        let Some(layer) = github_layer::loaded(cx) else {
+            return;
+        };
+        // The records go by the repository's name as GitHub gave it with the saved details.
+        let link = saved
+            .details
+            .url
+            .parse::<PrLink>()
+            .unwrap_or_else(|_| self.link().clone());
+        let Ok(number) = i64::try_from(link.number) else {
+            return;
+        };
+        let pull = PullRef::new(&link.owner, &link.repo, number);
+        match layer.read(cx).viewed_records().heads(&saved.login, &pull) {
+            Ok(heads) => self.viewed_at = heads,
+            Err(error) => log::error!("{pull}: reading where files were viewed: {error:#}"),
+        }
+    }
+
     /// Says how old the saved details the tab shows are, if it shows them.
     fn show_saved_banner(&self, asking: bool, cx: &mut Context<Self>) {
         let Some((login, fetched_at)) = &self.saved else {
@@ -759,8 +785,13 @@ impl PrTab {
         });
     }
 
-    /// Takes GitHub's REST view of the pull request.
-    pub fn set_pull_request(&mut self, pull_request: &PullRequest, cx: &mut Context<Self>) {
+    /// Takes GitHub's REST view of the pull request, which GitHub gave at `answered_at`.
+    pub fn set_pull_request(
+        &mut self,
+        pull_request: &PullRequest,
+        answered_at: SystemTime,
+        cx: &mut Context<Self>,
+    ) {
         self.header.title = Some(window_title::without_bidi(&pull_request.title));
         if let Some(user) = &pull_request.user {
             self.header.author = Some(user.login.clone());
@@ -771,12 +802,15 @@ impl PrTab {
             self.key.canonical = Some((owner.to_string(), name.to_string()));
         }
         self.created_at = Some(pull_request.created_at.into());
-        self.set_head(&pull_request.head.sha);
+        // A diff on screen, such as the local copy shown offline, keeps its head until the new
+        // copy replaces it; if GitHub's is newer, `e` won't mark files as of it meanwhile.
+        if self.diff.is_none() {
+            self.set_head(&pull_request.head.sha, answered_at);
+        }
+        self.note_latest_head(&pull_request.head.sha, answered_at);
         self.api_head = Some(pull_request.head.sha.clone());
         self.answered = true;
-        // The local copy shown offline stays until the new one replaces it, but GitHub answers.
-        self.showing_copy = false;
-        self.copy_offline = false;
+        self.showing_copy = None;
         self.status = Status::Loading("Copying it locally…".into());
         // GitHub answered for the account the tab acts as, whose viewed marks its details bring.
         if std::mem::take(&mut self.viewed_are_others) {
@@ -794,15 +828,34 @@ impl PrTab {
     /// Takes the pull request's details, just fetched by its account's poller: its title, author,
     /// head and the account's viewed marks.
     pub fn set_details(&mut self, details: &PullRequestData, cx: &mut Context<Self>) {
-        self.take_details(details, SystemTime::now(), cx);
+        let login = self.watched_login(cx);
+        self.take_details(details, SystemTime::now(), login.as_deref(), cx);
     }
 
-    /// Takes the pull request's details as GitHub gave them at `fetched_at`, from the poller or
-    /// from what rozed saved.
+    /// The account whose poller the tab watches its pull request with.
+    fn watched_login(&self, cx: &App) -> Option<String> {
+        let (poller, _) = self.watched.as_ref()?;
+        Some(poller.read(cx).login().to_string())
+    }
+
+    /// Whether this Mac's records of where files were viewed follow `login`'s marks: those of
+    /// the account the tab acts as and watches with, whose records the tab writes.
+    fn records_follow(&self, login: Option<&str>, cx: &App) -> bool {
+        let (Some(login), Some(watched)) = (login, self.watched_login(cx)) else {
+            return false;
+        };
+        let acting = self.acting.as_ref().and_then(Acting::login);
+        watched.eq_ignore_ascii_case(login)
+            && acting.is_some_and(|acting| acting.eq_ignore_ascii_case(login))
+    }
+
+    /// Takes the pull request's details as GitHub gave them at `fetched_at` to `login`, from the
+    /// poller or from what rozed saved.
     fn take_details(
         &mut self,
         details: &PullRequestData,
         fetched_at: SystemTime,
+        login: Option<&str>,
         cx: &mut Context<Self>,
     ) {
         self.note_latest_head(&details.head_ref_oid, fetched_at);
@@ -822,7 +875,10 @@ impl PrTab {
         // Details from before a write finished, such as the ones a tab switch hands back, don't
         // undo it.
         let viewed = self.marks.without_stale(viewed, fetched_at);
-        self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
+        // Only the watched account's marks say where it viewed files.
+        if self.records_follow(login, cx) {
+            self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
+        }
         let listed_changed = self.marks.set_listed(listed_paths(details));
         let marks_changed = self.marks.set_github(viewed) || listed_changed;
         // A change of title makes the workspace report the active item changed, which comes back
@@ -903,7 +959,7 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) -> Vec<usize> {
         self.list(files.iter().map(FileEntry::from_local).collect());
-        self.set_head(head.as_str());
+        self.set_head(head.as_str(), polled_at);
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let records = [PushRecord::Polled {
@@ -969,6 +1025,7 @@ impl PrTab {
             ),
             repo_name: name.to_string(),
             head: None,
+            listed_at: SystemTime::now(),
         };
         let opened = self.opened;
         let changed_files = pull_request.changed_files;
@@ -1026,6 +1083,7 @@ impl PrTab {
                 return;
             }
             source.head = read.head;
+            source.listed_at = SystemTime::now();
             let tab = this.clone();
             if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await
                 && tab.upgrade().is_some()
@@ -1054,14 +1112,15 @@ impl PrTab {
         }));
     }
 
-    /// GitHub's diff, listed at `head`, is ready to show in `editor`, which lists `entries`.
-    /// Unless the local copy's diff got there first, lists them and shows it, and returns where
-    /// each file goes in it.
+    /// GitHub's diff, listed at `head` at `listed_at`, is ready to show in `editor`, which lists
+    /// `entries`. Unless the local copy's diff got there first, lists them and shows it, and
+    /// returns where each file goes in it.
     pub(crate) fn show_github_diff(
         &mut self,
         entries: Vec<FileEntry>,
         editor: Entity<SplittableEditor>,
         head: Option<String>,
+        listed_at: SystemTime,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Vec<usize>> {
@@ -1082,9 +1141,11 @@ impl PrTab {
                 banners.show(BannerKind::MovedOn, Severity::Warning, text, cx)
             });
         }
-        // The head on screen is the one GitHub listed the files at.
+        // The head on screen is the one GitHub listed the files at, which GitHub says is its
+        // latest.
         if let Some(head) = &head {
-            self.set_head(head);
+            self.set_head(head, listed_at);
+            self.note_latest_head(head, listed_at);
         }
         self.github_head = head;
         self.list(entries);
@@ -1198,12 +1259,16 @@ impl PrTab {
         self.set_status(Status::Loading(step.into()), cx);
     }
 
-    /// What the tab shows until the local copy's diff is ready, if it shows GitHub's.
-    fn meanwhile(&self) -> &'static str {
+    /// What the tab shows until the local copy's diff is ready, if it shows GitHub's or an older
+    /// copy.
+    fn meanwhile(&self) -> String {
         if self.diff_source == Some(DiffSource::GitHub) {
-            " Until then, this is GitHub's diff: changed lines only."
+            " Until then, this is GitHub's diff: changed lines only.".to_string()
+        } else if self.shows_older_copy() {
+            let shown = self.head.as_deref().map(short).unwrap_or_default();
+            format!(" Until then, this is the local copy of {shown}, an older push.")
         } else {
-            ""
+            String::new()
         }
     }
 
@@ -1234,7 +1299,11 @@ impl PrTab {
                 cx,
             )
         });
-        let status = if self.diff.is_some() {
+        let status = if self.shows_older_copy() {
+            // The banner's button tries the copy again.
+            self.keep_older_copy(why, cx);
+            return;
+        } else if self.diff.is_some() {
             Status::Ready
         } else if self._github_diff.is_some() && !self.github_failed {
             // GitHub's diff shows when it arrives, and it's all there is until a retry.
@@ -1253,10 +1322,35 @@ impl PrTab {
         };
         retry.send(()).ok();
         self.copy_failed = None;
+        if self.showing_copy == Some(OlderCopy::NewerNotCopied) {
+            self.showing_copy = None;
+        }
         self.banners.update(cx, |banners, cx| {
             banners.hide(BannerKind::LocalCopyFailed, cx)
         });
         self.set_status(Status::Loading("Copying it locally…".into()), cx);
+    }
+
+    /// Whether the diff on screen is a local copy of an older head than the one GitHub gave
+    /// this load, as when the copy shown offline waits for a newer push to be copied.
+    fn shows_older_copy(&self) -> bool {
+        self.diff_source == Some(DiffSource::LocalCopy)
+            && self.api_head.is_some()
+            && self.head != self.api_head
+    }
+
+    /// GitHub gave a newer head than the local copy on screen, and copying it failed for `why`:
+    /// the older copy stays, read-only, saying so.
+    fn keep_older_copy(&mut self, why: &str, cx: &mut Context<Self>) {
+        self.showing_copy = Some(OlderCopy::NewerNotCopied);
+        let latest = self.api_head.as_deref().map(short).unwrap_or_default();
+        let shown = self.head.as_deref().map(short).unwrap_or_default();
+        let why = why.trim_end().trim_end_matches('.');
+        let text = format!(
+            "GitHub has {latest}, but rozed couldn't copy it: {why}. This is the local copy of \
+             {shown}, read-only."
+        );
+        self.set_status(Status::Offline(text.into()), cx);
     }
 
     /// Shows that the local copy's diff is loading file `file` of its `total`, counting from 1.
@@ -1283,7 +1377,13 @@ impl PrTab {
         let github_coming =
             self.diff.is_none() && self._github_diff.is_some() && !self.github_failed;
         if self.diff.is_none() && !github_coming {
+            self.action = Some(TabAction::TryAgain);
             self.set_status(Status::Failed(format!("{error:#}").into()), cx);
+            return;
+        }
+        if self.shows_older_copy() {
+            self.action = Some(TabAction::TryAgain);
+            self.keep_older_copy(&format!("{error:#}"), cx);
             return;
         }
         if github_coming {
@@ -1424,6 +1524,23 @@ impl PrTab {
         records: Option<ViewedRecords>,
         cx: &mut Context<Self>,
     ) {
+        // A load as another account, or by the repository's name now, stops the watch before,
+        // and another account's marks go with it.
+        if let Some((old, old_pull)) = self.watched.take() {
+            if old != poller || old_pull != pull {
+                old.update(cx, |old, cx| old.unwatch(&old_pull, cx));
+            }
+            if !old
+                .read(cx)
+                .login()
+                .eq_ignore_ascii_case(poller.read(cx).login())
+            {
+                self.marks = ViewedMarks::default();
+                self.viewed_at.clear();
+                self.node_id = None;
+                self.files.set_viewed(&self.marks.shown());
+            }
+        }
         if let Some(records) = &records {
             match records.heads(poller.read(cx).login(), &pull) {
                 Ok(heads) => self.viewed_at = heads,
@@ -1433,16 +1550,16 @@ impl PrTab {
         self.records = records;
         poller.update(cx, |poller, cx| poller.watch(pull.clone(), cx));
         self.poll.status = poller.read(cx).status().clone();
-        self._subscriptions
-            .push(cx.observe(&poller, |this, poller, cx| {
+        self._poller_subscriptions = vec![
+            cx.observe(&poller, |this, poller, cx| {
                 let status = poller.read(cx).status().clone();
                 if this.poll.status != status {
                     this.poll.status = status;
                     cx.notify();
                 }
-            }));
-        self._subscriptions
-            .push(cx.subscribe(&poller, |this, _, event, cx| this.poll_event(event, cx)));
+            }),
+            cx.subscribe(&poller, |this, _, event, cx| this.poll_event(event, cx)),
+        ];
         self.watched = Some((poller, pull));
     }
 
@@ -1496,16 +1613,16 @@ impl PrTab {
         }
     }
 
-    /// The diff shows the pull request at `head`.
-    fn set_head(&mut self, head: &str) {
+    /// The diff shows the pull request at `head`, which GitHub gave at `given_at`.
+    fn set_head(&mut self, head: &str, given_at: SystemTime) {
         if self.head.as_deref() != Some(head) {
             self.head = Some(head.to_string());
-            self.head_at = Some(SystemTime::now());
+            self.head_at = Some(given_at);
         }
     }
 
-    /// GitHub's latest head, when GitHub gave it after rozed learned the head on screen and it
-    /// isn't that head.
+    /// GitHub's latest head, when GitHub gave it no earlier than it gave the head on screen and
+    /// it isn't that head.
     fn newer_head(&self) -> Option<&str> {
         let (latest, at) = self.latest_head.as_ref()?;
         let newer =
@@ -1558,7 +1675,8 @@ impl PrTab {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
                 self.poll.details_at = Some(answer.fetched_at);
-                self.take_details(&answer.details, answer.fetched_at, cx);
+                let login = poller.read(cx).login().to_string();
+                self.take_details(&answer.details, answer.fetched_at, Some(&login), cx);
             }
         } else if !active && is_open {
             poller.update(cx, |poller, cx| poller.set_open(None, cx));
@@ -1734,17 +1852,20 @@ impl PrTab {
             return;
         };
         // GitHub's view didn't load, so neither would a write: the local copy shows, read-only.
-        if self.showing_copy {
-            let why = if self.copy_offline {
-                "rozed can't reach GitHub"
-            } else {
-                "GitHub's view of this pull request didn't load"
-            };
+        // One older than GitHub's newest head gets the newer push's refusal below.
+        let why = match self.showing_copy {
+            Some(OlderCopy::Unreachable) => Some(format!(
+                "rozed can't reach GitHub, so it can't mark {path} viewed until it's back"
+            )),
+            Some(OlderCopy::NotLoaded) => Some(format!(
+                "GitHub's view of this pull request didn't load, so rozed can't mark {path} \
+                 viewed until it does"
+            )),
+            Some(OlderCopy::NewerNotCopied) | None => None,
+        };
+        if let Some(why) = why {
             self.toast(
-                format!(
-                    "{why}, so rozed can't mark {path} viewed until it does. Until then, this is \
-                     the local copy, read-only."
-                ),
+                format!("{why}. Until then, this is the local copy, read-only."),
                 cx,
             );
             return;
@@ -2805,7 +2926,11 @@ async fn load(
             )
         }
     };
-    this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
+    // When GitHub gave the head it names, which the local copy then fetches.
+    let answered_at = SystemTime::now();
+    this.update(cx, |this, cx| {
+        this.set_pull_request(&pull_request, answered_at, cx)
+    })?;
     // Opened by a name the repository no longer has, it's listed once, by its name now.
     if let Some(layer) = &layer {
         let other_names = this.read_with(cx, |this, _| this.key.other_names())?;
@@ -2816,9 +2941,12 @@ async fn load(
             }
         })?;
     }
-    // GitHub's diff shows while the local copy loads.
+    // GitHub's diff shows while the local copy loads, unless a diff, such as the copy shown
+    // offline, is on screen until the new copy replaces it.
     this.update_in(cx, |this, window, cx| {
-        this.load_github_diff(reader, &pull_request, window, cx)
+        if this.diff.is_none() {
+            this.load_github_diff(reader, &pull_request, window, cx)
+        }
     })?;
 
     // A tab opened by another of the repository's names may show it already.
@@ -2847,6 +2975,7 @@ async fn load(
         workspace,
         link,
         pull_request,
+        answered_at,
         token,
         trust,
         opened,
@@ -2910,6 +3039,17 @@ fn sentence(error: &anyhow::Error) -> String {
         .to_string()
 }
 
+/// Why the diff on screen is a local copy that isn't of GitHub's latest head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OlderCopy {
+    /// GitHub couldn't be reached.
+    Unreachable,
+    /// GitHub's view of the pull request didn't load.
+    NotLoaded,
+    /// GitHub gave a newer head, which couldn't be copied.
+    NewerNotCopied,
+}
+
 /// What a tab that stopped loading offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabAction {
@@ -2967,20 +3107,34 @@ async fn show_offline(
     let Some(saved) = saved else {
         return Err(offline);
     };
-    let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
+    let workspace = this.update(cx, |this, cx| {
+        // `e` says why it won't mark the copy's files as they arrive, and their notes say what
+        // changed since this Mac recorded them viewed.
+        this.showing_copy = Some(if is_offline(&offline) {
+            OlderCopy::Unreachable
+        } else {
+            OlderCopy::NotLoaded
+        });
+        this.read_saved_records(&saved, cx);
+        this.workspace.clone()
+    })?;
     let shown =
         pr_diff::open_offline(this.clone(), workspace, link.clone(), &saved, opened, cx).await;
-    match shown {
-        Ok(true) => {
-            this.update(cx, |this, cx| this.showing_copy_because(&offline, cx))?;
-            Ok(())
-        }
-        Ok(false) => Err(offline),
+    let shown = match shown {
+        Ok(shown) => shown,
         Err(error) => {
             log::warn!("{link}: can't show the local copy offline: {error:#}");
-            Err(offline)
+            false
         }
-    }
+    };
+    this.update(cx, |this, cx| {
+        if shown {
+            this.showing_copy_because(&offline, cx);
+        } else {
+            this.showing_copy = None;
+        }
+    })?;
+    if shown { Ok(()) } else { Err(offline) }
 }
 
 /// What a question about the account for `found`'s repository is for: its owner, or the
@@ -5758,6 +5912,22 @@ mod tests {
         assert_eq!(status(&tab, cx), Status::Ready);
         assert_eq!(marks(&tab, cx), viewed);
         close(&workspace, tab, cx);
+        // Where this Mac recorded a.rs viewed.
+        let records = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.read(cx).viewed_records().clone()
+        });
+        let pull_ref = PullRef::new("rozed-dev", "playground", 2);
+        records
+            .record(
+                "rozed-bot",
+                &pull_ref,
+                "a.rs",
+                &pull.head,
+                SystemTime::now(),
+            )
+            .await
+            .unwrap();
 
         // Offline, the local copy shows with the marks rozed saved, and `e` marks nothing and
         // says why.
@@ -5765,16 +5935,264 @@ mod tests {
         let tab = open_row(cx);
         assert!(matches!(status(&tab, cx), Status::Offline(_)));
         assert_eq!(marks(&tab, cx), viewed);
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.viewed_at.get("a.rs").cloned()),
+            Some(pull.head.clone())
+        );
         tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
         cx.simulate_keystrokes("e");
         assert_eq!(
             toasts(cx),
             [
-                "rozed can't reach GitHub, so rozed can't mark a.rs viewed until it does. Until \
+                "rozed can't reach GitHub, so it can't mark a.rs viewed until it's back. Until \
                  then, this is the local copy, read-only."
             ]
         );
         assert_eq!(marks(&tab, cx), viewed);
+    }
+
+    #[gpui::test]
+    async fn back_online_the_older_copy_stays_until_the_newer_push_is_copied(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let repo = "rozed-dev/playground";
+        let pull = git.pull_request(
+            repo,
+            2,
+            &[("a.rs", "a\n"), ("b.rs", "b\n")],
+            &[("a.rs", "a2\n"), ("b.rs", "b2\n")],
+        );
+        github.add_pull(pull.clone());
+        github.let_see("gho_BOT", repo);
+        let (_, cache) = sign_in(&github, &[("rozed-bot", "gho_BOT")], cx).await;
+        let link = "github.com/rozed-dev/playground/pull/2";
+        let tab = open_loaded(&workspace, link, cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        close(&workspace, tab, cx);
+        // What rozed saved at that head, with no file viewed yet.
+        let target = Target::Pull(PullRef::new("rozed-dev", "playground", 2));
+        let saved = details_based(
+            "Add b",
+            "UNVIEWED",
+            &pull.head,
+            &pull.base_branch,
+            &pull.base,
+        );
+        cache
+            .put("rozed-bot", &target, &saved, None, two_hours_ago())
+            .await
+            .unwrap();
+        // A push the local copy hasn't fetched.
+        let newer = git.push(repo, 2, &[("a.rs", "a3\n"), ("b.rs", "b3\n")]);
+
+        // Offline, the copy of the saved head shows, and the reviewer reads b.rs.
+        github.set_offline(true);
+        git.hide(repo);
+        let tab = open_loaded(&workspace, link, cx);
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+        go_to(&tab, "b.rs", cx);
+        let older_copy = tab.read_with(cx, |tab, _| tab.diff().cloned()).unwrap();
+        let unviewed = [
+            mark("a.rs", Some(ViewedState::Unviewed)),
+            mark("b.rs", Some(ViewedState::Unviewed)),
+        ];
+
+        // Back online, GitHub names the newer push, but copying it fails: the older copy stays,
+        // read-only, saying so, with a button to try again.
+        github.set_head(repo, 2, &newer);
+        github.set_offline(false);
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        let Status::Offline(text) = status(&tab, cx) else {
+            panic!("{:?}", status(&tab, cx));
+        };
+        assert!(
+            text.starts_with(&format!(
+                "GitHub has {}, but rozed couldn't copy it: ",
+                &newer[..7]
+            )),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(&format!(
+                "This is the local copy of {}, read-only.",
+                &pull.head[..7]
+            )),
+            "{text}"
+        );
+        assert!(!text.contains(".."), "{text}");
+        assert_eq!(action(&tab, cx), Some(TabAction::TryAgain));
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.diff().cloned()),
+            Some(older_copy.clone())
+        );
+        assert!(tab.read_with(cx, |tab, _| tab.status().tries_again()));
+
+        // GitHub would mark b.rs as of the newer push, which isn't on screen, so `e` doesn't.
+        github.hold("/graphql");
+        tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
+        cx.simulate_keystrokes("e");
+        let toasts = toasts(cx);
+        assert!(
+            toasts
+                .last()
+                .is_some_and(|toast| toast.starts_with("There's a newer push")),
+            "{toasts:#?}"
+        );
+        assert_eq!(marks(&tab, cx), unviewed);
+
+        // Trying again copies the newer push, which replaces the older copy where the reviewer
+        // was, and `e` marks b.rs.
+        git.restore(repo);
+        tab.update_in(cx, |tab, window, cx| tab.load_again(window, cx));
+        cx.run_until_parked();
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_ne!(
+            tab.read_with(cx, |tab, _| tab.diff().cloned()),
+            Some(older_copy)
+        );
+        assert_eq!(cursor_file(&tab, cx).as_deref(), Some("b.rs"));
+        tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
+        cx.simulate_keystrokes("e");
+        assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(ViewedState::Viewed)));
+        github.let_go("/graphql");
+    }
+
+    #[gpui::test]
+    async fn a_copy_stopped_behind_an_older_copy_keeps_it_and_says_so(cx: &mut TestAppContext) {
+        let (_, tab, _signed_in, cx) = three_files("copy_stopped_older", &[], &[], cx).await;
+        let mut newer = fd_2212();
+        newer.head.sha = NEWER.into();
+        let (retry, _asked) = oneshot::channel();
+        tab.update(cx, |tab, cx| {
+            tab.set_pull_request(&newer, SystemTime::now(), cx);
+            tab.copy_stopped("the disk is full.", 5, retry, cx);
+        });
+        assert_eq!(
+            status(&tab, cx),
+            Status::Offline(
+                "GitHub has 3333333, but rozed couldn't copy it: the disk is full. This is the \
+                 local copy of 2222222, read-only."
+                    .into()
+            )
+        );
+
+        // The banner's button tries the copy again.
+        tab.update(cx, |tab, cx| tab.retry_copy(cx));
+        assert!(matches!(status(&tab, cx), Status::Loading(_)));
+        assert_eq!(tab.read_with(cx, |tab, _| tab.showing_copy), None);
+    }
+
+    #[gpui::test]
+    async fn after_github_listed_a_newer_head_its_older_copy_doesnt_mark_as_of_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let signed_in = sign_in_bot(&tab, "e_after_the_switch", &[], cx).await;
+        // A minute ago GitHub said the head was HEAD. It then listed the files at NEWER, and its
+        // details say NEWER.
+        let answered_at = SystemTime::now() - Duration::from_secs(60);
+        tab.update(cx, |tab, cx| {
+            tab.set_pull_request(&fd_2212(), answered_at, cx)
+        });
+        show_github_files(&tab, vec![github_file_at("a.rs", 3, NEWER)], cx);
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details_at(NEWER, &[("a.rs", "UNVIEWED")]), cx)
+        });
+
+        // The local copy of HEAD, which GitHub gave first, replaces GitHub's diff.
+        let files = [("a.rs", lines(5, &[]), lines(5, &[3]))];
+        let head: Oid = HEAD.parse().unwrap();
+        let editor = test_diff_editor(&workspace, cx);
+        let positions = tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified)], &head, answered_at, cx)
+        });
+        add_test_files(&editor, &files, &positions, cx).await;
+        tab.update_in(cx, |tab, window, cx| {
+            tab.switch_diff(editor.clone(), &head, window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.head.clone()),
+            Some(HEAD.to_string())
+        );
+
+        // GitHub would mark a.rs as of NEWER, which isn't on screen.
+        tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
+        cx.simulate_keystrokes("e");
+        assert_eq!(signed_in.github.mutations(), []);
+        assert!(toasts(cx)[0].starts_with("There's a newer push"));
+    }
+
+    #[gpui::test]
+    async fn a_tab_that_changes_account_stops_hearing_the_old_accounts_poller(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let bot = sign_in_bot(&tab, "changes_account", &[], cx).await;
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(
+                &[changed("a.rs", Change::Modified)],
+                &head,
+                SystemTime::now(),
+                cx,
+            );
+            tab.set_details(&details_with(&[("a.rs", "UNVIEWED")]), cx);
+            tab.set_active(true, cx);
+        });
+        // Another account's saved marks aren't written into the bot's records.
+        tab.update(cx, |tab, cx| {
+            let saved = Saved {
+                login: "other".into(),
+                details: details_with(&[("a.rs", "VIEWED")]),
+                fetched_at: SystemTime::now(),
+            };
+            tab.show_saved(&saved, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(bot.recorded(), HashMap::new());
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details_with(&[("a.rs", "VIEWED")]), cx)
+        });
+        let (bots, pull) = (bot._poller.clone(), bot.pull.clone());
+        let open = |cx: &mut VisualTestContext| bots.read_with(cx, |bots, _| bots.open().cloned());
+        assert_eq!(open(cx), Some(pull.clone()));
+        assert_eq!(marks(&tab, cx), [mark("a.rs", Some(ViewedState::Viewed))]);
+
+        // The tab loads again as another account, which watches with its own poller.
+        let other = cx.new(|cx| {
+            Poller::new(
+                bot.accounts.clone(),
+                "other",
+                bot.cache.clone(),
+                github::poll::PollConfig::default(),
+                cx,
+            )
+        });
+        tab.update(cx, |tab, cx| {
+            tab.set_acting(Acting::Account("other".into()), cx);
+            tab.watch(other.clone(), pull.clone(), Some(bot.records.clone()), cx);
+        });
+        cx.run_until_parked();
+
+        // The bot's poller stops watching it, and the bot's marks go.
+        assert_eq!(open(cx), None);
+        assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
+        // What the bot's poller says doesn't reach the tab.
+        bots.update(cx, |_, cx| {
+            cx.emit(PollEvent::Details {
+                pull: pull.clone(),
+                details: std::sync::Arc::new(details_with(&[("a.rs", "VIEWED")])),
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
     }
 
     #[test]
@@ -6084,6 +6502,8 @@ mod tests {
         github: std::sync::Arc<WriteGithub>,
         records: ViewedRecords,
         pull: PullRef,
+        accounts: Entity<github::accounts::Accounts>,
+        cache: github::cache::PrCache,
         /// The account's poller, which rozed's GitHub layer keeps after its tabs close.
         _poller: Entity<Poller>,
     }
@@ -6134,9 +6554,9 @@ mod tests {
         let cache = github::cache::PrCache::new(db);
         let poller = cx.new(|cx| {
             Poller::new(
-                accounts,
+                accounts.clone(),
                 BOT,
-                cache,
+                cache.clone(),
                 github::poll::PollConfig::default(),
                 cx,
             )
@@ -6151,6 +6571,8 @@ mod tests {
             github,
             records,
             pull,
+            accounts,
+            cache,
         }
     }
 
@@ -6503,7 +6925,7 @@ mod tests {
         // Older details, from before the summary, don't bring the old head back.
         let older = SystemTime::now() - Duration::from_secs(60);
         tab.update(cx, |tab, cx| {
-            tab.take_details(&details_with(&[("a.rs", "UNVIEWED")]), older, cx)
+            tab.take_details(&details_with(&[("a.rs", "UNVIEWED")]), older, Some(BOT), cx)
         });
         cx.simulate_keystrokes("e");
         assert_eq!(github.github.mutations(), []);
@@ -6523,6 +6945,7 @@ mod tests {
                     &[("a.rs", "UNVIEWED")],
                 ),
                 saved_at,
+                Some(BOT),
                 cx,
             )
         });
@@ -6821,7 +7244,9 @@ mod tests {
 
         // Switching back to the tab hands over the details the poller held from before.
         let stale = details_with(&[("a.rs", "UNVIEWED"), ("b.rs", "VIEWED")]);
-        tab.update(cx, |tab, cx| tab.take_details(&stale, before_the_write, cx));
+        tab.update(cx, |tab, cx| {
+            tab.take_details(&stale, before_the_write, Some(BOT), cx)
+        });
         assert_eq!(
             marks(&tab, cx)[..2],
             [
@@ -7558,7 +7983,7 @@ mod tests {
         playground.update(cx, |tab, cx| {
             let mut pull_request = fd_2212();
             pull_request.base.repo.full_name = "rozed-dev/renamed".into();
-            tab.set_pull_request(&pull_request, cx);
+            tab.set_pull_request(&pull_request, SystemTime::now(), cx);
         });
         let reopened = open_unloaded(&workspace, "github.com/rozed-dev/renamed/pull/2", cx);
         assert_eq!(reopened, playground);
@@ -8094,6 +8519,7 @@ mod tests {
                 title: format!("{PULL}: Change a and b"),
                 repo_name: "repo".into(),
                 head: github::files::files_head(&files).unwrap(),
+                listed_at: SystemTime::now(),
             };
             tab.show_github_files(source, files, window, cx)
         });
@@ -8693,6 +9119,7 @@ mod tests {
                 title: format!("{PULL}: Change a"),
                 repo_name: "repo".into(),
                 head: None,
+                listed_at: SystemTime::now(),
             };
             tab.show_github_files(source, vec![github_file("a.txt", 50)], window, cx);
             tab.load_failed(&error, cx);
