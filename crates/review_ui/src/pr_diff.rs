@@ -21,10 +21,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 use buffer_diff::BufferDiff;
-use editor::display_map::{DisplayRow, ToDisplayPoint as _};
+use editor::display_map::{DisplayRow, DisplaySnapshot, ToDisplayPoint as _};
 use editor::{
     Addon, Bias, DisplayPoint, EditorSettings, HiddenDiffHunkRenderer, MultiBuffer,
-    SplittableEditor, multibuffer_context_lines,
+    SelectionEffects, SplittableEditor, multibuffer_context_lines,
 };
 use futures::FutureExt as _;
 use futures::channel::{mpsc, oneshot};
@@ -566,8 +566,8 @@ pub struct DiffPosition {
     pub below_top: f64,
 }
 
-/// The file and line at the top of `diff`'s view, or the first one below it when a file's header
-/// is at the top.
+/// The file and line at the top of `diff`'s view, or the first one below it when a file's header,
+/// or a deleted line, is at the top.
 pub fn scroll_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<DiffPosition> {
     let editor = diff.read(cx).rhs_editor().clone();
     editor.update(cx, |editor, cx| {
@@ -575,14 +575,32 @@ pub fn scroll_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<
         let display = editor.display_snapshot(cx);
         let top_row = DisplayPoint::new(DisplayRow(top.floor() as u32), 0);
         let point = display.display_point_to_point(top_row, Bias::Right);
-        let shown_at = f64::from(point.to_display_point(&display).row().0);
-        let (buffer, buffer_point) = display.buffer_snapshot().point_to_buffer_point(point)?;
+        let (path, point) = file_point(&display, point)?;
+        let shown_at = f64::from(point.1.to_display_point(&display).row().0);
         Some(DiffPosition {
-            path: buffer.file()?.path().as_unix_str().to_string(),
-            row: buffer_point.row,
+            path,
+            row: point.0.row,
             below_top: shown_at - top,
         })
     })
+}
+
+/// The file and point that `point` of `display`'s multibuffer shows, with the multibuffer's point
+/// for it, or the first file's line below it. A deleted line is a row of its base's buffer, which
+/// has no file, so it gives the start of the file's next line.
+fn file_point(display: &DisplaySnapshot, mut point: Point) -> Option<(String, (Point, Point))> {
+    let buffer_snapshot = display.buffer_snapshot();
+    loop {
+        if let Some((buffer, buffer_point)) = buffer_snapshot.point_to_buffer_point(point)
+            && let Some(file) = buffer.file()
+        {
+            return Some((file.path().as_unix_str().to_string(), (buffer_point, point)));
+        }
+        if point.row >= buffer_snapshot.max_point().row {
+            return None;
+        }
+        point = Point::new(point.row + 1, 0);
+    }
 }
 
 /// Scrolls `diff` so `position`'s file and line show where they did, or the nearest line of that
@@ -618,6 +636,73 @@ pub fn scroll_to(
         );
     });
     true
+}
+
+/// Where a diff's cursor is: a file, and a point in the head's version of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffCursor {
+    pub path: String,
+    pub point: Point,
+}
+
+/// Where `diff`'s cursor is, when it shows in the view.
+pub fn cursor_position(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<DiffCursor> {
+    let editor = diff.read(cx).rhs_editor().clone();
+    editor.update(cx, |editor, cx| {
+        let display = editor.display_snapshot(cx);
+        let head = editor.selections.newest::<Point>(&display).head();
+        let row = head.to_display_point(&display).row().0;
+        let top = editor.scroll_position(cx).y.max(0.);
+        // Unknown until the editor is laid out, when it counts as in view.
+        let in_view = editor.visible_line_count().is_none_or(|lines| {
+            let row = f64::from(row);
+            row >= top.floor() && row < top + lines
+        });
+        if !in_view {
+            return None;
+        }
+        let (path, (point, _)) = file_point(&display, head)?;
+        Some(DiffCursor { path, point })
+    })
+}
+
+/// Puts `diff`'s cursor at `cursor`, or the nearest point of its file the diff shows, without
+/// scrolling. Returns whether `diff` has the file.
+pub fn put_cursor(
+    diff: &Entity<SplittableEditor>,
+    cursor: &DiffCursor,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let editor = diff.read(cx).rhs_editor().clone();
+    let multi_buffer = editor.read(cx).buffer().clone();
+    let Some(anchor) = buffer_anchor(&multi_buffer, &cursor.path, cursor.point, cx) else {
+        return false;
+    };
+    editor.update(cx, |editor, cx| {
+        editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+            selections.select_anchor_ranges([anchor..anchor])
+        });
+    });
+    true
+}
+
+/// The anchor in `multi_buffer` at `point` of the file at `path`.
+fn buffer_anchor(
+    multi_buffer: &Entity<MultiBuffer>,
+    path: &str,
+    point: Point,
+    cx: &App,
+) -> Option<multi_buffer::Anchor> {
+    let buffer = multi_buffer.read(cx).all_buffers_iter().find(|buffer| {
+        buffer
+            .read(cx)
+            .file()
+            .is_some_and(|file| file.path().as_unix_str() == path)
+    })?;
+    multi_buffer
+        .read(cx)
+        .buffer_point_to_anchor(&buffer, point, cx)
 }
 
 /// Checks the head out, trusts that checkout and nothing else, and opens it as a folder of

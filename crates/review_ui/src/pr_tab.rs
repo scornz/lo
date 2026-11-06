@@ -982,19 +982,33 @@ impl PrTab {
             Some(text) => banners.show(BannerKind::MovedOn, Severity::Warning, text, cx),
             None => banners.hide(BannerKind::MovedOn, cx),
         });
-        let position = self
-            .diff
-            .as_ref()
-            .and_then(|diff| pr_diff::scroll_position(diff, cx));
+        let (position, cursor) = match &self.diff {
+            Some(diff) => (
+                pr_diff::scroll_position(diff, cx),
+                pr_diff::cursor_position(diff, cx),
+            ),
+            None => (None, None),
+        };
         self.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
-        if let Some(position) = position
-            && !pr_diff::scroll_to(&editor, &position, window, cx)
+        if let Some(position) = &position
+            && !pr_diff::scroll_to(&editor, position, window, cx)
         {
             log::warn!(
                 "{}: the local copy's diff has no {}, so it starts at the top",
                 self.link(),
                 position.path
             );
+        }
+        // The cursor goes where it was, or, when it was out of view, to the top of the view, so
+        // the first key that moves it doesn't scroll to where it was.
+        let cursor = cursor.or_else(|| {
+            position.map(|position| pr_diff::DiffCursor {
+                path: position.path,
+                point: language::Point::new(position.row, 0),
+            })
+        });
+        if let Some(cursor) = cursor {
+            pr_diff::put_cursor(&editor, &cursor, window, cx);
         }
     }
 
@@ -1978,8 +1992,8 @@ mod tests {
     use github::files::{FileStatus, PullFile};
 
     use crate::github_api::{Base, BaseRepo, Head, User};
-    use crate::pr_diff::DiffPosition;
     use crate::pr_diff::tests::fixtures::Entry;
+    use crate::pr_diff::{DiffCursor, DiffPosition};
     use futures::FutureExt as _;
 
     use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
@@ -3609,6 +3623,110 @@ mod tests {
         let scrolled = scrolled_to(&local, cx).unwrap();
         assert_eq!((scrolled.path.as_str(), scrolled.row), ("b.txt", 59));
         assert_eq!(scrolled.below_top, 0.);
+    }
+
+    /// Shows every diff made from now on in one column, deleted lines above added ones.
+    fn unified(cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            cx.update_global::<settings::SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.editor.diff_view_style = Some(settings::DiffViewStyle::Unified)
+                })
+            })
+        });
+    }
+
+    /// Scrolls `diff` so the display row `above` rows above `position`'s line is at the top.
+    fn scroll_above(
+        diff: &Entity<SplittableEditor>,
+        position: &DiffPosition,
+        above: f64,
+        cx: &mut VisualTestContext,
+    ) {
+        cx.update(|window, cx| assert!(pr_diff::scroll_to(diff, position, window, cx)));
+        let editor = diff.read_with(cx, |diff, _| diff.rhs_editor().clone());
+        editor.update_in(cx, |editor, window, cx| {
+            let top = editor.scroll_position(cx).y;
+            editor.set_scroll_position(gpui::point(0., top - above), window, cx);
+        });
+    }
+
+    #[gpui::test]
+    async fn the_switch_keeps_a_deleted_line_at_the_top_in_one_column(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        unified(cx);
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(
+            &tab,
+            vec![github_file("a.txt", 50), github_file("b.txt", 60)],
+            cx,
+        );
+        let github = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        assert!(!github.read_with(cx, |diff, _| diff.is_split()));
+
+        // b.txt's deleted line 60, which only the base has, is at the top, above the line that
+        // replaced it.
+        let changed = DiffPosition {
+            path: "b.txt".into(),
+            row: 59,
+            below_top: 0.,
+        };
+        scroll_above(&github, &changed, 1., cx);
+        let at_top = DiffPosition {
+            below_top: 1.,
+            ..changed
+        };
+        assert_eq!(scrolled_to(&github, cx), Some(at_top.clone()));
+
+        let _local_copy = show_local_copy(&tab, cx);
+
+        let local = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        assert!(!local.read_with(cx, |diff, _| diff.is_split()));
+        assert_eq!(scrolled_to(&local, cx), Some(at_top));
+    }
+
+    #[gpui::test]
+    async fn the_switch_keeps_the_cursor_where_it_was(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(
+            &tab,
+            vec![github_file("a.txt", 50), github_file("b.txt", 60)],
+            cx,
+        );
+        let github = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        // The cursor is on b.txt's line 61, two below the top of the view.
+        let top = DiffPosition {
+            path: "b.txt".into(),
+            row: 58,
+            below_top: 0.,
+        };
+        cx.update(|window, cx| assert!(pr_diff::scroll_to(&github, &top, window, cx)));
+        let cursor = DiffCursor {
+            path: "b.txt".into(),
+            point: language::Point::new(60, 3),
+        };
+        cx.update(|window, cx| assert!(pr_diff::put_cursor(&github, &cursor, window, cx)));
+        assert_eq!(
+            cx.update(|_, cx| pr_diff::cursor_position(&github, cx)),
+            Some(cursor.clone())
+        );
+
+        let _local_copy = show_local_copy(&tab, cx);
+
+        let local = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        assert_eq!(
+            cx.update(|_, cx| pr_diff::cursor_position(&local, cx)),
+            Some(cursor)
+        );
+        // Moving the cursor moves it from there, and the view stays put.
+        cx.simulate_keystrokes("down");
+        let moved = cx
+            .update(|_, cx| pr_diff::cursor_position(&local, cx))
+            .unwrap();
+        assert_eq!((moved.path.as_str(), moved.point.row), ("b.txt", 61));
+        let scrolled = scrolled_to(&local, cx).unwrap();
+        assert_eq!((scrolled.path.as_str(), scrolled.row), ("b.txt", 58));
     }
 
     /// A copy whose fetch failed with `failure`, as git reports it.
