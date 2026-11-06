@@ -36,13 +36,7 @@ pub fn without_bidi(text: &str) -> String {
 /// Titles `window` after the active tab of `workspace`, or with an empty pane active, after the
 /// pull request last active.
 pub(crate) fn update(workspace: &Workspace, window: &mut Window, cx: &mut App) {
-    let pane_is_empty = workspace.active_pane().read(cx).active_item().is_none();
-    let tab = match workspace.active_item_as::<PrTab>(cx) {
-        Some(tab) => Some(tab),
-        None if pane_is_empty => last_active_pull_request(workspace, cx),
-        None => None,
-    };
-    let title = tab
+    let title = shown_pull_request(workspace, cx)
         .map(|tab| tab.read(cx).window_title())
         .unwrap_or_else(|| NO_PULL_REQUEST.to_string());
     window.set_window_title(&title);
@@ -52,6 +46,17 @@ pub(crate) fn update(workspace: &Workspace, window: &mut Window, cx: &mut App) {
         window.window_handle().window_id(),
         SharedString::from(title),
     );
+}
+
+/// The pull request the window is about: the active tab's, or with an empty pane active, the one
+/// whose tab was active last.
+pub(crate) fn shown_pull_request(workspace: &Workspace, cx: &App) -> Option<Entity<PrTab>> {
+    let pane_is_empty = workspace.active_pane().read(cx).active_item().is_none();
+    match workspace.active_item_as::<PrTab>(cx) {
+        Some(tab) => Some(tab),
+        None if pane_is_empty => last_active_pull_request(workspace, cx),
+        None => None,
+    }
 }
 
 /// The pull request whose tab was active last, in any pane. (Zed's `recent_active_item_by_type`

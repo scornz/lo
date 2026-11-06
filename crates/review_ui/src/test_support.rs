@@ -403,6 +403,32 @@ pub async fn sign_in(
     (entity, PrCache::new(db))
 }
 
+/// Signs `login` in with `token` after [`sign_in`], as Accounts… does: a new account, or one
+/// signed out signing in again.
+pub async fn sign_in_as(
+    accounts: &Entity<Accounts>,
+    login: &str,
+    token: &str,
+    cx: &mut TestAppContext,
+) {
+    let user = AuthenticatedUser {
+        user: User {
+            login: login.to_string(),
+            id: 1_000,
+            name: None,
+            avatar_url: None,
+        },
+        scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+    };
+    accounts
+        .update(cx, |accounts, cx| {
+            accounts.add(user, Token::new(token), AccountSource::DeviceFlow, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+}
+
 /// Without signing in: the app's HTTP client is `github`, and there's no accounts database.
 pub fn anonymous(github: &FakeGithub, cx: &mut TestAppContext) {
     cx.update(|cx| cx.set_http_client(Arc::new(github.clone())));

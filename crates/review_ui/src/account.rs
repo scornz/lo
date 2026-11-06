@@ -43,6 +43,9 @@ pub enum AccountDecision {
 pub struct Refusal {
     pub message: String,
     pub links: Vec<HelpLink>,
+    /// Whether waiting may fix every problem behind it, such as a server error or a rate limit,
+    /// so rozed tries again by itself.
+    pub waitable: bool,
 }
 
 impl fmt::Display for Refusal {
@@ -92,6 +95,7 @@ pub fn decide(found: Option<&RepoAccount>) -> AccountDecision {
                     .iter()
                     .filter_map(|(_, error)| error.help_link())
                     .collect(),
+                waitable: problems.iter().all(|(_, error)| error.is_waitable()),
             })
         }
         AccountChoice::Unavailable(login) => {
@@ -120,6 +124,7 @@ pub fn decide(found: Option<&RepoAccount>) -> AccountDecision {
                     .and_then(GithubError::help_link)
                     .into_iter()
                     .collect(),
+                waitable: problem.is_some_and(GithubError::is_waitable),
             })
         }
     }
@@ -205,6 +210,7 @@ mod tests {
                           answered 500: Server Error"
                     .into(),
                 links: Vec::new(),
+                waitable: true,
             })
         );
     }
@@ -280,6 +286,8 @@ mod tests {
             links,
             ["https://github.com/orgs/org/sso?authorization_request=abc"]
         );
+        // Only authorizing fixes it, so rozed doesn't keep trying.
+        assert!(!refusal.waitable);
     }
 
     #[test]

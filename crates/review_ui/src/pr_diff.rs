@@ -110,6 +110,7 @@ pub async fn open(
         &pull_request.title,
         local,
         SystemTime::now(),
+        true,
         trust,
         launched,
         cx,
@@ -170,6 +171,7 @@ pub async fn open_offline(
         &details.title,
         Arc::new(local),
         saved.fetched_at,
+        false,
         Trust::Untrusted,
         launched,
         cx,
@@ -179,7 +181,7 @@ pub async fn open_offline(
 }
 
 /// Shows `local`, the pull request titled `pr_title` in the local copy, whose head GitHub gave
-/// at `polled_at`, in `tab`'s diff. With [`Trust::Checkout`], each file then switches to the
+/// at `polled_at`, in `tab`'s diff: just now `from_github`, or as rozed saved it. With [`Trust::Checkout`], each file then switches to the
 /// trusted checkout's project buffer.
 #[allow(clippy::too_many_arguments)]
 async fn show(
@@ -189,13 +191,14 @@ async fn show(
     pr_title: &str,
     local: Arc<LocalPullRequest>,
     polled_at: SystemTime,
+    from_github: bool,
     trust: Trust,
     launched: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
     // The tab lists the files, and says where each goes in the diff.
     let positions = tab.update(cx, |tab, cx| {
-        tab.copied(&local.files, &local.head, polled_at, cx)
+        tab.copied(&local.files, &local.head, polled_at, from_github, cx)
     })?;
 
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;

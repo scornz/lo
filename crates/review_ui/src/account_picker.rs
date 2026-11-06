@@ -87,6 +87,9 @@ pub enum NotChosen {
     Dismissed { subject: String },
     /// None of the accounts that can see the repository is signed in any more.
     NoneLeft { subject: String },
+    /// An account was added or signed in again while the tab waited, so it should check which
+    /// accounts can see the repository again: the new one may be among them.
+    AccountsChanged,
 }
 
 /// The login chosen for a tab, or why there's none.
@@ -147,7 +150,8 @@ pub(crate) fn active_item_changed(cx: &mut App) {
 }
 
 /// Sets the open picker aside, keeping its question for once the dialog about to open closes,
-/// as Accounts… does: an account signed in there can then be chosen. Returns whether there was a
+/// as Accounts… does. An account signed in there makes the waiting tabs check again which
+/// accounts can see their repositories, so the picker then lists it. Returns whether there was a
 /// picker to set aside.
 pub fn set_aside(workspace: &mut Workspace, cx: &mut App) -> bool {
     let Some(picker) = workspace.active_modal::<AccountPicker>(cx) else {
@@ -184,15 +188,15 @@ impl Waiter {
         self.reply.send(answer).ok();
     }
 
-    /// Whether the waiting tab is its workspace's active item, where the picker may ask.
+    /// Whether the waiting tab is the pull request its window is about, as the window's title
+    /// has it: the active tab, or the one last active beside an empty pane. Only then may the
+    /// picker ask.
     fn is_active(&self, cx: &App) -> bool {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
-        workspace
-            .read(cx)
-            .active_item(cx)
-            .is_some_and(|item| item.item_id() == self.tab.entity_id())
+        crate::window_title::shown_pull_request(workspace.read(cx), cx)
+            .is_some_and(|tab| tab.entity_id() == self.tab.entity_id())
     }
 
     /// Tells the tab whether the picker asks its question now, or it waits.
@@ -218,8 +222,11 @@ pub struct Questions {
     shown: Option<Shown>,
     /// Looking again once another dialog may have closed.
     retry: Option<Task<()>>,
-    /// Accounts removed or signed out drop out of the questions.
+    /// Accounts removed or signed out drop out of the questions, and accounts added or signed in
+    /// again send the waiting tabs back to check.
     accounts: Option<Subscription>,
+    /// The accounts signed in when the questions were last looked at, lowercased.
+    signed_in: Vec<String>,
 }
 
 struct GlobalQuestions(Entity<Questions>);
@@ -236,6 +243,7 @@ impl Questions {
             shown: None,
             retry: None,
             accounts: None,
+            signed_in: Vec::new(),
         });
         cx.set_global(GlobalQuestions(questions.clone()));
         questions
@@ -248,6 +256,7 @@ impl Questions {
         }
         if let Some(layer) = github_layer::loaded(cx) {
             let accounts = layer.read(cx).accounts().clone();
+            self.signed_in = signed_in(&accounts, cx);
             self.accounts = Some(cx.observe(&accounts, |this, _, cx| this.settle(cx)));
         }
     }
@@ -256,6 +265,18 @@ impl Questions {
     /// shows the oldest question of an active tab left when the picker is free.
     fn settle(&mut self, cx: &mut Context<Self>) {
         let accounts = github_layer::loaded(cx).map(|layer| layer.read(cx).accounts().clone());
+        // An account added or signed in again may see the waiting tabs' repositories, which
+        // only checking again tells: each tab checks and asks anew.
+        if let Some(accounts) = &accounts {
+            let now = signed_in(accounts, cx);
+            let gained = now.iter().any(|login| !self.signed_in.contains(login));
+            self.signed_in = now;
+            if gained {
+                for waiter in std::mem::take(&mut self.waiting) {
+                    waiter.answer(Err(NotChosen::AccountsChanged));
+                }
+            }
+        }
         for waiter in std::mem::take(&mut self.waiting) {
             if waiter.reply.is_canceled() {
                 continue;
@@ -522,6 +543,17 @@ impl Questions {
             .ok();
         }));
     }
+}
+
+/// The accounts signed in now, lowercased.
+fn signed_in(accounts: &Entity<Accounts>, cx: &App) -> Vec<String> {
+    let accounts = accounts.read(cx);
+    accounts
+        .accounts()
+        .iter()
+        .filter(|account| !accounts.is_signed_out(&account.login))
+        .map(|account| account.login.to_ascii_lowercase())
+        .collect()
 }
 
 /// Whether `login` is an account that's still signed in.
