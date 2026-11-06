@@ -7,7 +7,8 @@
 //! first. Revisions are stored by head SHA and numbered r1, r2… only for display, because a source
 //! that reports late can insert one. [`default_comparison`] picks what the pull request compares
 //! when it opens, and [`viewed_file_comparison`] what a file shows once a push changed it after you
-//! marked it viewed.
+//! marked it viewed. [`base_tip_at`] says where the base branch was when a revision was pushed, for
+//! that revision's base.
 //!
 //! ```
 //! use std::time::{Duration, SystemTime};
@@ -32,6 +33,7 @@
 //! );
 //! ```
 
+mod base;
 mod build;
 mod compare;
 mod viewed;
@@ -39,6 +41,7 @@ mod viewed;
 use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
+pub use base::{BaseHistory, BaseRecord, BaseTip, BaseTipSource, Retarget, base_tip_at};
 pub use build::build_revisions;
 pub use compare::{Comparison, default_comparison};
 pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
