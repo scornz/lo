@@ -2,6 +2,7 @@
 //! (design §5, §10 "Window").
 
 pub mod account;
+pub mod account_picker;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
@@ -42,6 +43,7 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
 /// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
     pr_tab::bind_keys(cx);
+    account_picker::bind_keys(cx);
     open_box::bind_keys(cx);
     read_only::hide_from_palette(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {

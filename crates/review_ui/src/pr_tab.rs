@@ -28,6 +28,7 @@ use workspace::item::{Item, ItemEvent, TabContentParams};
 use workspace::{ItemNavHistory, Workspace};
 
 use crate::account::{self, AccountDecision, Acting, Refusal};
+use crate::account_picker::AccountPicker;
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
@@ -168,9 +169,6 @@ pub struct PrTab {
     file_list_focus: FocusHandle,
     file_list_scroll: UniformListScrollHandle,
     acting: Option<Acting>,
-    /// How many accounts could see the repository, when none was chosen for its owner and the
-    /// tab acts as the first.
-    guessed_among: Option<usize>,
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
@@ -233,7 +231,6 @@ impl PrTab {
             file_list_focus: cx.focus_handle(),
             file_list_scroll: UniformListScrollHandle::new(),
             acting: None,
-            guessed_among: None,
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
@@ -314,7 +311,6 @@ impl PrTab {
     /// Forgets why the tab failed, before it loads again.
     fn start_again(&mut self, cx: &mut Context<Self>) {
         self.acting = None;
-        self.guessed_among = None;
         self.help_links.clear();
         self.set_status(
             Status::Loading("Finding an account that can see it…".into()),
@@ -596,13 +592,10 @@ impl PrTab {
 
     /// Who the header says the tab acts as.
     pub fn acting_text(&self) -> String {
-        match (&self.acting, &self.guessed_among) {
-            (Some(Acting::Account(login)), Some(count)) => {
-                format!("as {login}, the first of the {count} accounts that can see it")
-            }
-            (Some(Acting::Account(login)), None) => format!("as {login}"),
-            (Some(Acting::Anonymous), _) => "not signed in".to_string(),
-            (None, _) => String::new(),
+        match &self.acting {
+            Some(Acting::Account(login)) => format!("as {login}"),
+            Some(Acting::Anonymous) => "not signed in".to_string(),
+            None => String::new(),
         }
     }
 
@@ -1125,17 +1118,10 @@ async fn load(
         ),
         None => None,
     };
-    let (acting, guessed_among) = match account::decide(&link.owner, &link.repo, found.as_ref()) {
-        AccountDecision::Open(acting) => (acting, None),
+    let acting = match account::decide(&link.owner, &link.repo, found.as_ref()) {
+        AccountDecision::Open(acting) => acting,
         AccountDecision::Ask(logins) => {
-            // Until rozed asks which account to use, the first one signed in, and the header
-            // says so.
-            log::info!(
-                "{link}: several accounts can see it ({}); using {}",
-                logins.join(", "),
-                logins[0]
-            );
-            (Acting::Account(logins[0].clone()), Some(logins.len()))
+            Acting::Account(ask_for_account(&this, &link, logins, cx).await?)
         }
         AccountDecision::Refuse(refusal) => return Err(refusal.into()),
     };
@@ -1146,10 +1132,7 @@ async fn load(
             Acting::Anonymous => "without signing in".to_string(),
         }
     );
-    this.update(cx, |this, cx| {
-        this.guessed_among = guessed_among;
-        this.set_acting(acting.clone(), cx)
-    })?;
+    this.update(cx, |this, cx| this.set_acting(acting.clone(), cx))?;
 
     // Signed in, the account's client reads the pull request in the account's queue, and its
     // token copies it.
@@ -1213,6 +1196,50 @@ async fn load(
     .await?;
     this.update(cx, |this, cx| this.set_status(Status::Ready, cx))?;
     Ok(())
+}
+
+/// Asks which of `logins`, the accounts that can see `link`'s repository, to open it with, and
+/// remembers the answer for its owner, so rozed asks once per owner (design §3 "Which account").
+async fn ask_for_account(
+    this: &WeakEntity<PrTab>,
+    link: &PrLink,
+    logins: Vec<String>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<String> {
+    log::info!(
+        "{link}: several accounts can see it ({}); asking which to use",
+        logins.join(", ")
+    );
+    let workspace = this.update(cx, |this, cx| {
+        this.set_status(
+            Status::Loading(format!("Choose the account rozed uses for {}…", link.owner).into()),
+            cx,
+        );
+        this.workspace.clone()
+    })?;
+    let answer = workspace.update_in(cx, |workspace, window, cx| {
+        AccountPicker::ask(workspace, &link.owner, &link.repo, logins, window, cx)
+    })?;
+    let Ok(login) = answer.await else {
+        anyhow::bail!(
+            "No account was chosen for {}. Open the pull request again to choose one.",
+            link.owner
+        );
+    };
+    let accounts =
+        cx.update(|_, cx| github_layer::loaded(cx).map(|layer| layer.read(cx).accounts().clone()))?;
+    if let Some(accounts) = accounts {
+        let remembered = accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner(&link.owner, &login, cx)
+            })
+            .await;
+        match remembered {
+            Ok(()) => log::info!("{link}: rozed uses {login} for {}", link.owner),
+            Err(error) => log::warn!("remembering {login} for {}: {error:#}", link.owner),
+        }
+    }
+    Ok(login)
 }
 
 impl Focusable for PrTab {
@@ -1607,26 +1634,146 @@ mod tests {
         })
     }
 
+    /// The accounts the account picker names, if it's open, and which it asks about.
+    fn picker(
+        workspace: &Entity<Workspace>,
+        cx: &mut VisualTestContext,
+    ) -> Option<(String, Vec<String>)> {
+        workspace.read_with(cx, |workspace, cx| {
+            let picker = workspace.active_modal::<AccountPicker>(cx)?;
+            let picker = picker.read(cx);
+            Some((picker.owner().to_string(), picker.logins().to_vec()))
+        })
+    }
+
+    /// `acme/app#1` and `acme/api#2` on the fake GitHub, which `home` and `work` can both see.
+    async fn two_accounts_see_acme(
+        github: &FakeGithub,
+        git: &GitServer,
+        cx: &mut TestAppContext,
+    ) -> Entity<github::accounts::Accounts> {
+        for (repo, number) in [("acme/app", 1), ("acme/api", 2)] {
+            let pull = git.pull_request(repo, number, &[], &[("a.rs", "a\n")]);
+            github.add_pull(pull);
+            github.let_see("gho_HOME", repo);
+            github.let_see("gho_WORK", repo);
+        }
+        let (accounts, _) =
+            sign_in(github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+        accounts
+    }
+
     #[gpui::test]
-    async fn with_several_accounts_and_none_chosen_the_header_says_it_took_the_first(
+    async fn with_several_accounts_it_asks_once_per_owner_and_remembers(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let accounts = two_accounts_see_acme(&github, &git, cx).await;
+
+        // The picker names each account, and the tab waits for the answer.
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        assert_eq!(
+            picker(&workspace, cx),
+            Some((
+                "acme".to_string(),
+                vec!["home".to_string(), "work".to_string()]
+            ))
+        );
+        assert!(matches!(status(&tab, cx), Status::Loading(_)));
+        assert_eq!(tab.read_with(cx, |tab, _| tab.acting().cloned()), None);
+        github.requests();
+
+        cx.simulate_keystrokes("j enter");
+        cx.run_until_parked();
+
+        assert_eq!(picker(&workspace, cx), None);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(tab.read_with(cx, |tab, _| tab.acting_text()), "as work");
+        let requests = github.requests();
+        assert!(
+            requests.contains(&"GET /repos/acme/app/pulls/1 as gho_WORK".to_string()),
+            "{requests:#?}"
+        );
+        assert_eq!(
+            accounts.read_with(cx, |accounts, _| accounts
+                .remembered_account("acme")
+                .unwrap()),
+            Some("work".to_string())
+        );
+
+        // Another of the owner's repositories opens with it, without asking.
+        let api = open_loaded(&workspace, "github.com/acme/api/pull/2", cx);
+        assert_eq!(picker(&workspace, cx), None);
+        assert_eq!(status(&api, cx), Status::Ready);
+        assert_eq!(api.read_with(cx, |tab, _| tab.acting_text()), "as work");
+    }
+
+    #[gpui::test]
+    async fn closing_the_account_picker_opens_nothing_until_the_link_is_opened_again(
         cx: &mut TestAppContext,
     ) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
-        let pull = git.pull_request("acme/app", 1, &[], &[("a.rs", "a\n")]);
-        github.add_pull(pull);
-        github.let_see("gho_HOME", "acme/app");
-        github.let_see("gho_WORK", "acme/app");
-        sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+        let accounts = two_accounts_see_acme(&github, &git, cx).await;
 
         let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        github.requests();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
 
-        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(picker(&workspace, cx), None);
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
         assert_eq!(
-            tab.read_with(cx, |tab, _| tab.acting_text()),
-            "as home, the first of the 2 accounts that can see it"
+            message.as_ref(),
+            "No account was chosen for acme. Open the pull request again to choose one."
         );
+        assert_eq!(github.requests(), Vec::<String>::new());
+        assert_eq!(
+            accounts.read_with(cx, |accounts, _| accounts
+                .remembered_account("acme")
+                .unwrap()),
+            None
+        );
+
+        // Opening it again asks again.
+        let reopened = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        assert_eq!(reopened, tab);
+        assert_eq!(
+            picker(&workspace, cx).map(|(owner, _)| owner),
+            Some("acme".to_string())
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(tab.read_with(cx, |tab, _| tab.acting_text()), "as home");
+    }
+
+    #[gpui::test]
+    async fn two_tabs_waiting_on_the_same_owner_share_one_answer(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        two_accounts_see_acme(&github, &git, cx).await;
+
+        let app = open_unloaded(&workspace, "github.com/acme/app/pull/1", cx);
+        let api = open_unloaded(&workspace, "github.com/acme/api/pull/2", cx);
+        for tab in [&app, &api] {
+            tab.update_in(cx, |tab, window, cx| tab.load(window, cx));
+        }
+        cx.run_until_parked();
+        assert!(picker(&workspace, cx).is_some());
+
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+
+        assert_eq!(picker(&workspace, cx), None);
+        for tab in [&app, &api] {
+            assert_eq!(status(tab, cx), Status::Ready);
+            assert_eq!(tab.read_with(cx, |tab, _| tab.acting_text()), "as work");
+        }
     }
 
     #[gpui::test]
