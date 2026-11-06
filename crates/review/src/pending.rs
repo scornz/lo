@@ -14,6 +14,30 @@
 //! - A comment posted at once is a review of its own, which GitHub refuses while you have a
 //!   pending review ("can only have one pending review per pull request"), so `C` adds to the
 //!   pending review instead, and says so.
+//!
+//! ```
+//! use review::pending::{Mutation, NewComment, NewThread, ReviewEvent, YourReview};
+//! use review::threads::{Line, Lines};
+//!
+//! let head = "c7f30e9b1a5d7c3e9f1b5d7a3c9e1f5b7d3a9c62";
+//! let comment = NewComment::Thread(NewThread {
+//!     path: "src/parse.rs".into(),
+//!     lines: Some(Lines::one(Line::right(14))),
+//!     body: "Off by one?".into(),
+//! });
+//!
+//! // `c`: the first comment starts your pending review on the revision on screen.
+//! let mut review = YourReview::default();
+//! let start = review.add(head, &comment).unwrap();
+//! assert!(matches!(&start, Mutation::StartReview { commit, .. } if commit == head));
+//! review.accepted(&start, Some("PRR_kwDOAbc"));
+//! assert_eq!(review.pending_comments(), 1);
+//!
+//! // `⌘⏎`: the dialog offers Comment, Approve and Request changes, and approving submits it.
+//! assert_eq!(review.submit_dialog("alice", false, head).choices.len(), 3);
+//! let submit = review.submit(ReviewEvent::Approve, "", false, head).unwrap();
+//! assert!(matches!(submit, Mutation::SubmitReview { event: ReviewEvent::Approve, .. }));
+//! ```
 
 use crate::github::github_enum;
 use crate::threads::Lines;
@@ -135,7 +159,8 @@ pub enum Refusal {
     OtherRevision { review_on: String },
     /// You opened the pull request, and GitHub lets its author only comment.
     OwnPullRequest,
-    /// A comment or a request for changes needs a summary or a pending comment.
+    /// A comment or a request for changes needs a summary or a pending comment: GitHub requires a
+    /// body for them when the review holds nothing else.
     NothingToSubmit,
 }
 

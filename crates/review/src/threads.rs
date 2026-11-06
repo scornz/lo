@@ -7,6 +7,36 @@
 //! while its lines are unchanged, and marks it outdated once they change. An outdated thread still
 //! shows where it was written whenever the diff on screen shows that revision. [`panel`] lists the
 //! threads the threads panel shows, by [`PanelFilter`].
+//!
+//! [`CommentableLines`] says which lines of a file on screen GitHub takes a new comment on, from
+//! the file's [`Hunk`]s, so the UI offers a file-level comment elsewhere, and
+//! [`suggestion_block`] starts a suggested change.
+//!
+//! ```
+//! use review::threads::{CommentableLines, Hunk, Line, Lines, Placement, Screen, Thread, place};
+//!
+//! // Written on r1 (head `a1`) at line 10. r2 added four lines above it, and it's unchanged
+//! // since, so GitHub has it on line 14 of the latest head, `a3`.
+//! let thread = Thread {
+//!     path: "src/parse.rs".into(),
+//!     side: "RIGHT".parse().unwrap(),
+//!     line: Some(14),
+//!     original_line: Some(10),
+//!     written_on: Some("a1".into()),
+//!     ..Default::default()
+//! };
+//! let under = |line| Placement::Lines(Lines::one(line));
+//! assert_eq!(place(&thread, &Screen::full("a3"), "a3"), under(Line::right(14)));
+//! assert_eq!(place(&thread, &Screen::full("a1"), "a3"), under(Line::right(10)));
+//! assert_eq!(place(&thread, &Screen::full("a2"), "a3"), Placement::NotOnScreen);
+//! assert!(thread.starts_open());
+//!
+//! // GitHub takes comments on the lines of the pull request's hunks, and nowhere else.
+//! let hunks = Hunk::parse("@@ -1,2 +1,3 @@\n fn main() {\n+    run();\n }\n").unwrap();
+//! let commentable = CommentableLines::new(&Screen::full("a3"), hunks);
+//! assert_eq!(commentable.line(Line::right(2)), Some(Lines::one(Line::right(2))));
+//! assert_eq!(commentable.line(Line::right(9)), None);
+//! ```
 
 mod commentable;
 mod panel;
