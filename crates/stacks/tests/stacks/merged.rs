@@ -75,6 +75,42 @@ fn a_branch_that_moved_on_after_its_pr_merged_is_a_root() {
 }
 
 #[test]
+fn a_deleted_base_branch_links_to_no_merged_pr() {
+    assert_forest(
+        &[
+            pr(1, "main", "a").merged(false),
+            pr(2, "a", "b").base_deleted(),
+        ],
+        &["a", "  #2"],
+    );
+}
+
+#[test]
+fn a_chain_of_merged_prs_links_whatever_their_tips() {
+    // #2 was squash-merged into `a`, which moved `a` on, then #1 was squash-merged into main.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1", "a.sq"]).merged(false),
+            pr(2, "a", "b").base_at("a.1").merged(false),
+            pr(3, "b", "c"),
+        ],
+        &["main", "  #3 base-branch needs-rebase(#2 b.1)"],
+    );
+}
+
+#[test]
+fn a_chain_of_merge_committed_prs_needs_no_rebase() {
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1", "a.mc"]).merged(true),
+            pr(2, "a", "b").base_at("a.1").merged(true),
+            pr(3, "b", "c"),
+        ],
+        &["main", "  #3 base-branch"],
+    );
+}
+
+#[test]
 fn a_merge_committed_head_is_just_history() {
     // #1's head is in main, so #2, built on main but aimed at release, isn't above it.
     assert_forest(

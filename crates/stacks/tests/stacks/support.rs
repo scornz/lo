@@ -5,15 +5,15 @@ use std::time::{Duration, SystemTime};
 use stacks::{NativeStackEntry, PullRequest, Rule, Stacks, State};
 
 /// An open pull request from `head` (a branch in the base repository) into `base`, with one commit,
-/// `<head>.1`, created `number` seconds after the epoch. The base branch points at `<base>.1`, a
-/// PR from that branch's default head.
+/// `<head>.1`, created `number` seconds after the epoch. The base branch's tip is `<base>.1`, the
+/// default head of a PR from that branch.
 pub fn pr(number: u64, base: &str, head: &str) -> PullRequest {
     let oid = format!("{head}.1");
     PullRequest {
         number,
         state: State::Open,
         base_ref: base.to_string(),
-        base_oid: format!("{base}.1"),
+        base_tip: Some(format!("{base}.1")),
         head_ref: head.to_string(),
         head_in_base_repo: true,
         head_oid: oid.clone(),
@@ -30,8 +30,10 @@ pub fn at(seconds: u64) -> SystemTime {
 pub trait With: Sized {
     /// Sets the commits, oldest first. The last is the head.
     fn commits(self, commits: &[&str]) -> Self;
-    /// Sets the commit the base branch points at.
+    /// Sets the base branch's tip.
     fn base_at(self, oid: &str) -> Self;
+    /// Makes the base branch deleted, so it has no tip.
+    fn base_deleted(self) -> Self;
     fn created(self, seconds: u64) -> Self;
     fn closed(self) -> Self;
     fn merged(self, head_in_base: bool) -> Self;
@@ -49,7 +51,12 @@ impl With for PullRequest {
     }
 
     fn base_at(mut self, oid: &str) -> Self {
-        self.base_oid = oid.to_string();
+        self.base_tip = Some(oid.to_string());
+        self
+    }
+
+    fn base_deleted(mut self) -> Self {
+        self.base_tip = None;
         self
     }
 

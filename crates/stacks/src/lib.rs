@@ -12,7 +12,7 @@
 //!     number,
 //!     state: State::Open,
 //!     base_ref: base.into(),
-//!     base_oid: format!("{base}-tip"),
+//!     base_tip: Some(format!("{base}-tip")),
 //!     head_ref: head.into(),
 //!     head_in_base_repo: true,
 //!     head_oid: format!("{head}-tip"),
@@ -45,8 +45,10 @@ pub struct PullRequest {
     pub state: State,
     /// `baseRefName`: the branch it merges into.
     pub base_ref: String,
-    /// `baseRefOid`: the base branch's latest commit.
-    pub base_oid: String,
+    /// The base branch's tip right now: `baseRef { target { oid } }`, or `None` once the branch is
+    /// deleted. Not `baseRefOid`, which only moves when the PR's head does, so it's stale on most
+    /// open PRs.
+    pub base_tip: Option<String>,
     /// `headRefName`: the branch it merges from.
     pub head_ref: String,
     /// Whether the head branch is in the base repository: `!isCrossRepository`. False for a PR from
@@ -93,8 +95,8 @@ pub enum Rule {
     /// It's the layer one position above the PR below in a GitHub stack. When that position wasn't
     /// passed or is closed, the other rules decide.
     NativeStack,
-    /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor to a
-    /// merged PR's branch that has moved on since the merge.
+    /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor an
+    /// open PR to a merged PR's branch that has moved on since the merge.
     BaseBranch,
     /// Its commits contain the head commit of the PR below, the latest such commit if several do.
     /// A PR with the same head commit isn't below it, and neither is a merged PR whose head is in
@@ -395,12 +397,15 @@ impl<'a> Graph<'a> {
                 ..entry
             })
         };
-        // A merged PR's branch is only below while it still points where the PR merged from. Once
-        // it moves on, like a long-lived `develop`, it's a root.
+        // An open PR's base branch only leads to a merged PR while it still points where that PR
+        // merged from. Once it moves on, like a long-lived `develop`, it's a root. A merged PR's
+        // base branch has moved on by merging it, so links between merged PRs skip the check.
         let base_branch = || {
             by.head_ref.get(pr.base_ref.as_str()).filter(|&&below| {
                 let lower = self.prs[below];
-                below != index && (lower.state == State::Open || lower.head_oid == pr.base_oid)
+                let unmoved = || pr.base_tip.as_deref() == Some(lower.head_oid.as_str());
+                below != index
+                    && (lower.state == State::Open || pr.state != State::Open || unmoved())
             })
         };
         // The nearest: the latest of its commits that's another PR's head. A PR with the same head
