@@ -551,6 +551,14 @@ pub(crate) mod tests {
                 ),
             ),
             ("a <use> fan-out", ImageFormat::Svg, use_fan_out()),
+            // As in resvg's own tests of recursive links: usvg recurses without end.
+            (
+                "feImage links in a loop",
+                ImageFormat::Svg,
+                svg(
+                    r##"<filter id="f1"><feImage xlink:href="#g1"/></filter><g id="g1" filter="url(#f2)"><rect width="9" height="9"/></g><filter id="f2"><feImage xlink:href="#g2"/></filter><g id="g2" filter="url(#f1)"><rect width="9" height="9"/></g><rect width="512" height="512" filter="url(#f1)"/>"##,
+                ),
+            ),
             (
                 "a 1 × 1 PNG with a 480 MiB iCCP",
                 ImageFormat::Png,
@@ -625,8 +633,13 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(
-            replies[8].0.as_ref().unwrap_err(),
+            replies[9].0.as_ref().unwrap_err(),
             "too large to preview: 6324 × 6324"
+        );
+        let looped = replies[7].0.as_ref().unwrap_err();
+        assert!(
+            looped.starts_with("couldn't preview this image: the decoder crashed"),
+            "{looped}"
         );
     }
 
