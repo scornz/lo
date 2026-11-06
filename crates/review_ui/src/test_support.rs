@@ -96,6 +96,17 @@ impl FakeGithub {
             .push(repo.to_ascii_lowercase());
     }
 
+    /// Moves pull request `number` of `repo` to `head`, without changing its files' links, as
+    /// when a push lands between GitHub's answer for the pull request and its file list.
+    pub fn set_head(&self, repo: &str, number: u64, head: &str) {
+        let mut state = self.0.lock();
+        for pull in &mut state.pulls {
+            if pull.repo.eq_ignore_ascii_case(repo) && pull.number == number {
+                pull.head = head.to_string();
+            }
+        }
+    }
+
     /// Says pull request `number` of `repo` changes `count` files, more than GitHub lists.
     pub fn set_changed_files(&self, repo: &str, number: u64, count: usize) {
         let mut state = self.0.lock();

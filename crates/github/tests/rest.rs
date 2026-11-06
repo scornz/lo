@@ -70,6 +70,11 @@ fn a_pull_requests_files_come_with_their_patches() {
     };
     assert_eq!(file.filename, "stack-b.md");
     assert_eq!(file.status, FileStatus::Added);
+    // The head GitHub listed it at, PR #2's.
+    assert_eq!(
+        file.head(),
+        Some("d712aa7652cc723fee5fd9b3eba867b0480d40da")
+    );
     assert_eq!((file.additions, file.deletions), (1, 0));
     let patch = file.parsed_patch().unwrap().unwrap();
     let [hunk] = &patch.hunks[..] else {

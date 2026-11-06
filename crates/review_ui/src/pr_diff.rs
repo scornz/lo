@@ -341,7 +341,7 @@ pub(crate) async fn show_local_copy(
     tab.update_in(cx, |tab, window, cx| {
         if replacing {
             tab.copied(&local.files, &local.head, cx);
-            tab.switch_diff(editor.clone(), window, cx);
+            tab.switch_diff(editor.clone(), &local.head, window, cx);
         }
         tab.diff_loaded(cx);
     })?;

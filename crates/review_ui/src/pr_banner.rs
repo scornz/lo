@@ -23,6 +23,8 @@ pub enum BannerKind {
     GithubDiffFailed,
     /// GitHub's diff lists only some of the pull request's files.
     GithubDiffCut,
+    /// The pull request moved on while it loaded, so its two diffs show different heads.
+    MovedOn,
     /// The header shows what rozed saved about the pull request, not what GitHub says now.
     Saved,
 }

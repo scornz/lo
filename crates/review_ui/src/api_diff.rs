@@ -76,6 +76,8 @@ pub(crate) struct GithubDiff {
     pub title: String,
     /// The repository's name as GitHub has it now, which starts each file's full path.
     pub repo_name: String,
+    /// The head commit GitHub listed the files at, when their links say.
+    pub head: Option<String>,
 }
 
 /// Shows GitHub's diff of the pull request, `files`, in `tab`, unless the local copy's diff got
@@ -100,7 +102,7 @@ pub(crate) async fn show(
     let (_, editor) = pr_diff::new_diff_editor(&workspace, &project, &source.title, cx)?;
     let entries = files.iter().map(file_entry).collect();
     let positions = tab.update_in(cx, |tab, window, cx| {
-        tab.show_github_diff(entries, editor.clone(), window, cx)
+        tab.show_github_diff(entries, editor.clone(), source.head.clone(), window, cx)
     })?;
     let Some(positions) = positions else {
         log::info!("{link}: the local copy's diff came first, so GitHub's doesn't show");
@@ -725,6 +727,8 @@ mod tests {
             changes: 3,
             patch: patch.map(str::to_string),
             previous_filename: None,
+            blob_url: None,
+            contents_url: None,
         }
     }
 

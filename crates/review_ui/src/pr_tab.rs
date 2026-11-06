@@ -214,6 +214,10 @@ pub struct PrTab {
     _github_diff: Option<Task<()>>,
     /// Why the local copy failed for good, when it did before GitHub's diff showed.
     copy_failed: Option<SharedString>,
+    /// The head GitHub's REST API gave for the pull request, which the local copy fetches.
+    api_head: Option<String>,
+    /// The head GitHub's diff was listed at, once it shows and if GitHub's links say.
+    github_head: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -270,6 +274,8 @@ impl PrTab {
             _load: None,
             _github_diff: None,
             copy_failed: None,
+            api_head: None,
+            github_head: None,
             _subscriptions: vec![on_focus, on_banners],
         }
     }
@@ -465,6 +471,7 @@ impl PrTab {
             self.key.canonical = Some((owner.to_string(), name.to_string()));
         }
         self.created_at = Some(pull_request.created_at.into());
+        self.api_head = Some(pull_request.head.sha.clone());
         self.status = Status::Loading("Copying it locally…".into());
         // GitHub answered, and the account's poller brings its details up to date.
         if self.saved.take().is_some() {
@@ -562,10 +569,11 @@ impl PrTab {
             return;
         };
         let pull = PullRef::new(owner, name, number);
-        let source = GithubDiff {
+        let mut source = GithubDiff {
             link: link.clone(),
             title: format!("{link}: {}", pull_request.title),
             repo_name: name.to_string(),
+            head: None,
         };
         let opened = self.opened;
         let changed_files = pull_request.changed_files;
@@ -592,6 +600,7 @@ impl PrTab {
                         })
                         .ok();
                     }
+                    source.head = read.head;
                     if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await {
                         log::warn!("{link}: can't show GitHub's diff: {error:#}");
                     }
@@ -624,18 +633,35 @@ impl PrTab {
         }));
     }
 
-    /// GitHub's diff is ready to show in `editor`, which lists `entries`. Unless the local copy's
-    /// diff got there first, lists them and shows it, and returns where each file goes in it.
+    /// GitHub's diff, listed at `head`, is ready to show in `editor`, which lists `entries`.
+    /// Unless the local copy's diff got there first, lists them and shows it, and returns where
+    /// each file goes in it.
     pub(crate) fn show_github_diff(
         &mut self,
         entries: Vec<FileEntry>,
         editor: Entity<SplittableEditor>,
+        head: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Vec<usize>> {
         if self.diff.is_some() {
             return None;
         }
+        // The local copy fetches the head GitHub gave before it listed the files.
+        if let (Some(head), Some(api_head)) = (&head, &self.api_head)
+            && head != api_head
+        {
+            let text = format!(
+                "This pull request moved on while rozed read it. GitHub's diff shows {}, and the \
+                 local copy's diff shows {} once it's ready.",
+                short(head),
+                short(api_head)
+            );
+            self.banners.update(cx, |banners, cx| {
+                banners.show(BannerKind::MovedOn, Severity::Warning, text, cx)
+            });
+        }
+        self.github_head = head;
         self.list(entries);
         self.show_diff(editor, DiffSource::GitHub, window, cx);
         // The local copy failed for good, so this is the diff the tab shows.
@@ -810,13 +836,31 @@ impl PrTab {
         cx.notify();
     }
 
-    /// Replaces GitHub's diff with the local copy's, `editor`, at the same file and line.
+    /// Replaces GitHub's diff with the local copy's, `editor` of `head`, at the same file and
+    /// line, and says so if GitHub's diff showed another head.
     pub(crate) fn switch_diff(
         &mut self,
         editor: Entity<SplittableEditor>,
+        head: &Oid,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let moved_on = self
+            .github_head
+            .as_deref()
+            .filter(|github_head| *github_head != head.as_str())
+            .map(|github_head| {
+                format!(
+                    "This pull request moved on while it loaded. This diff shows {}; GitHub's \
+                     diff showed {}.",
+                    short(head.as_str()),
+                    short(github_head)
+                )
+            });
+        self.banners.update(cx, |banners, cx| match moved_on {
+            Some(text) => banners.show(BannerKind::MovedOn, Severity::Warning, text, cx),
+            None => banners.hide(BannerKind::MovedOn, cx),
+        });
         let position = self
             .diff
             .as_ref()
@@ -1314,6 +1358,11 @@ fn cut_text(listed: usize, changed: Option<u32>, cut_short: Option<CutShort>) ->
     Some(format!(
         "{text} The rest show once the local copy is ready."
     ))
+}
+
+/// A commit ID's first seven characters, as GitHub shows it.
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 /// `n` with a comma between each group of three digits.
@@ -2096,6 +2145,8 @@ mod tests {
             assert!(tab.diff().is_some());
             assert_eq!(tab.tab_content_text(0, cx), "fd#2212 Pull request 2212");
         });
+        // GitHub's diff, if it showed, and the local copy's are of the same head.
+        assert_eq!(banners(&tab, cx), Vec::<String>::new());
         assert_eq!(
             github.requests(),
             [
@@ -3117,6 +3168,16 @@ mod tests {
             changes: 2,
             patch: Some(patch),
             previous_filename: None,
+            blob_url: None,
+            contents_url: None,
+        }
+    }
+
+    /// [`github_file`], listed at `head`.
+    fn github_file_at(name: &str, line: u32, head: &str) -> PullFile {
+        PullFile {
+            blob_url: Some(format!("https://github.com/owner/repo/blob/{head}/{name}")),
+            ..github_file(name, line)
         }
     }
 
@@ -3128,10 +3189,62 @@ mod tests {
                 link: link(PULL),
                 title: format!("{PULL}: Change a and b"),
                 repo_name: "repo".into(),
+                head: github::files::files_head(&files).unwrap(),
             };
             tab.show_github_files(source, files, window, cx)
         });
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn githubs_diff_read_after_a_push_says_which_head_it_shows(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let _git = GitServer::start(cx);
+        // The files are listed at dddddd…, but GitHub said the head was cccccc… a moment before.
+        uncopyable_pull(&github, "acme/app", 1, 2);
+        github.set_head("acme/app", 1, &"c".repeat(40));
+        anonymous(&github, cx);
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.diff_source()),
+            Some(DiffSource::GitHub)
+        );
+        let banners = banners(&tab, cx);
+        assert!(
+            banners.contains(
+                &"This pull request moved on while rozed read it. GitHub's diff shows ddddddd, \
+                  and the local copy's diff shows ccccccc once it's ready."
+                    .to_string()
+            ),
+            "{banners:#?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn the_switch_says_when_the_local_copy_shows_another_head(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        let github_head = "f".repeat(40);
+        show_github_files(&tab, vec![github_file_at("a.txt", 50, &github_head)], cx);
+        assert_eq!(banners(&tab, cx), Vec::<String>::new());
+
+        let _local_copy = show_local_copy(&tab, cx);
+
+        let local_head = tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.diff_source(), Some(DiffSource::LocalCopy));
+            tab.revisions().unwrap().latest().unwrap().head.clone()
+        });
+        assert_eq!(
+            banners(&tab, cx),
+            [format!(
+                "This pull request moved on while it loaded. This diff shows {}; GitHub's diff \
+                 showed fffffff.",
+                &local_head[..7]
+            )]
+        );
     }
 
     /// Shows the local copy's diff of a pull request that changes line 50 of a.txt and line 60 of
@@ -3399,6 +3512,7 @@ mod tests {
                 link: link(PULL),
                 title: format!("{PULL}: Change a"),
                 repo_name: "repo".into(),
+                head: None,
             };
             tab.show_github_files(source, vec![github_file("a.txt", 50)], window, cx);
             tab.load_failed(&error, cx);

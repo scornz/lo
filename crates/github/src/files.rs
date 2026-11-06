@@ -41,6 +41,13 @@ pub struct PullFile {
     /// The file's path in the base, when the pull request renames or copies it.
     #[serde(default)]
     pub previous_filename: Option<String>,
+    /// The file on github.com, at the commit GitHub listed it at: the head, or for a removed
+    /// file the base.
+    #[serde(default)]
+    pub blob_url: Option<String>,
+    /// The file in the API's contents, with the same commit as its `ref`.
+    #[serde(default)]
+    pub contents_url: Option<String>,
 }
 
 impl PullFile {
@@ -48,6 +55,41 @@ impl PullFile {
     pub fn parsed_patch(&self) -> Option<Result<Patch, PatchError>> {
         self.patch.as_deref().map(patch::parse_patch)
     }
+
+    /// The head commit GitHub listed the file at, from its links. `None` for a removed file,
+    /// whose links name the base, or when the links don't say.
+    pub fn head(&self) -> Option<&str> {
+        if self.status == FileStatus::Removed {
+            return None;
+        }
+        let from_contents = self.contents_url.as_deref().and_then(|url| {
+            let (_, query) = url.split_once('?')?;
+            query.split('&').find_map(|pair| pair.strip_prefix("ref="))
+        });
+        let from_blob = || {
+            let (_, rest) = self.blob_url.as_deref()?.split_once("/blob/")?;
+            rest.split('/').next()
+        };
+        from_contents
+            .or_else(from_blob)
+            .filter(|sha| !sha.is_empty())
+    }
+}
+
+/// The head commit `files` were listed at, or `None` when none says. Files that name different
+/// heads were read from pages either side of a push, which is an error: reading them again gives
+/// one head.
+pub fn files_head(files: &[PullFile]) -> Result<Option<String>, GithubError> {
+    let mut heads = files.iter().filter_map(PullFile::head);
+    let Some(head) = heads.next() else {
+        return Ok(None);
+    };
+    if let Some(other) = heads.find(|other| *other != head) {
+        return Err(GithubError::Inconsistent(format!(
+            "the pull request moved from {head} to {other} while its files were read"
+        )));
+    }
+    Ok(Some(head.to_string()))
 }
 
 /// How the pull request changes a file, in GitHub's words.
@@ -87,6 +129,8 @@ impl PullRef {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PullFiles {
     pub files: Vec<PullFile>,
+    /// The head commit GitHub listed them at, when their links say ([`files_head`]).
+    pub head: Option<String>,
     /// Why reading stopped with pages left, if it did. GitHub's own limit of [`MAX_FILES`] can
     /// also end the pages without a link to more; the pull request's `changed_files` tells.
     pub cut_short: Option<CutShort>,
@@ -168,6 +212,7 @@ impl GithubClient {
             pages.read(page.next)?;
         }
         Ok(PullFiles {
+            head: files_head(&files)?,
             files,
             cut_short: pages.cut_short(),
         })
@@ -529,6 +574,45 @@ mod tests {
         let read = block_on(client.read_pull_files(&PullRef::new("o", "r", 7), None, limits));
         assert_eq!(read.unwrap().cut_short, Some(CutShort::RateLimit));
         assert_eq!(http.seen().len(), 1);
+    }
+
+    #[test]
+    fn the_files_name_the_head_they_were_read_at() {
+        let head = "d712aa7652cc723fee5fd9b3eba867b0480d40da";
+        let base = "b046244d9569964088e952243e5e557312322488";
+        let file = |status: &str, at: &str| PullFile {
+            filename: "crates/a b.rs".into(),
+            status: serde_json::from_value(serde_json::json!(status)).unwrap(),
+            additions: 1,
+            deletions: 0,
+            changes: 1,
+            patch: None,
+            previous_filename: None,
+            blob_url: Some(format!(
+                "https://github.com/o/r/blob/{at}/crates%2Fa%20b.rs"
+            )),
+            contents_url: Some(format!(
+                "https://api.github.com/repos/o/r/contents/crates%2Fa%20b.rs?ref={at}"
+            )),
+        };
+        assert_eq!(file("modified", head).head(), Some(head));
+        // A removed file's links name the base, not the head.
+        assert_eq!(file("removed", base).head(), None);
+        let mut without_contents = file("added", head);
+        without_contents.contents_url = None;
+        assert_eq!(without_contents.head(), Some(head));
+
+        let files = [
+            file("modified", head),
+            file("removed", base),
+            file("added", head),
+        ];
+        assert_eq!(files_head(&files).unwrap().as_deref(), Some(head));
+        assert_eq!(files_head(&[]).unwrap(), None);
+        // A push between two pages mixes heads.
+        let mixed = [file("modified", head), file("added", base)];
+        let error = files_head(&mixed).unwrap_err();
+        assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
     }
 
     #[test]
