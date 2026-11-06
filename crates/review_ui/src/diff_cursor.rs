@@ -6,10 +6,11 @@
 //! prefix is the file's position in review order.
 
 use editor::display_map::{DisplayRow, ToDisplayPoint as _};
+use editor::scroll::Autoscroll;
 use editor::{Bias, Direction, DisplayPoint, SelectionEffects, SplittableEditor, ToPoint as _};
 use gpui::{App, Entity, Window};
 use language::Point;
-use multi_buffer::MultiBufferSnapshot;
+use multi_buffer::{MultiBufferDiffHunk, MultiBufferSnapshot};
 
 /// The file the diff's cursor is in: its position in review order and its path.
 pub fn file_at_cursor(diff: &Entity<SplittableEditor>, cx: &App) -> Option<(usize, String)> {
@@ -105,7 +106,8 @@ pub fn move_cursor_to(
 }
 
 /// Moves the diff's cursor to the start of the next change after it, or the previous one before
-/// it, in whichever file that is. At the last change, or the first, it stays.
+/// it, in whichever file that is, skipping files that are folded. At the last change, or the
+/// first, it stays.
 pub fn go_to_change(
     diff: &Entity<SplittableEditor>,
     direction: Direction,
@@ -115,10 +117,36 @@ pub fn go_to_change(
     let editor = diff.read(cx).rhs_editor().clone();
     editor.update(cx, |editor, cx| {
         let snapshot = editor.snapshot(window, cx);
+        let buffer = snapshot.buffer_snapshot();
         let head = editor
             .selections
             .newest::<Point>(&snapshot.display_snapshot)
             .head();
-        editor.go_to_hunk_before_or_after_position(&snapshot, head, direction, false, window, cx);
+        // Zed's own hunk search unfolds ranges but not whole files, so it would land on a folded
+        // file's hidden changes one by one.
+        let shown = |hunk: &MultiBufferDiffHunk| !editor.is_buffer_folded(hunk.buffer_id, cx);
+        let row = match direction {
+            Direction::Next => buffer
+                .diff_hunks_in_range(head..buffer.max_point())
+                .filter(|hunk| hunk.row_range.start.0 > head.row)
+                .find(shown),
+            Direction::Prev => buffer
+                .diff_hunks_in_range(Point::zero()..head)
+                .filter(|hunk| Point::new(hunk.row_range.start.0, 0) < head)
+                .filter(shown)
+                .last(),
+        }
+        .map(|hunk| hunk.row_range.start.0);
+        let Some(row) = row else {
+            return;
+        };
+        let destination = Point::new(row, 0);
+        editor.unfold_ranges(&[destination..destination], false, false, cx);
+        editor.change_selections(
+            SelectionEffects::scroll(Autoscroll::center()),
+            window,
+            cx,
+            |selections| selections.select_ranges([destination..destination]),
+        );
     });
 }

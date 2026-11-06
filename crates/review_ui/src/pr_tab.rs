@@ -3329,6 +3329,51 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn the_change_keys_skip_folded_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[2, 4])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[3])),
+            ],
+            cx,
+        )
+        .await;
+        // b.rs is collapsed, as a generated file starts, or as its header's chevron folds it.
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        rhs.update(cx, |editor, cx| {
+            let multi_buffer = editor.buffer().read(cx);
+            let snapshot = multi_buffer.snapshot(cx);
+            let b = multi_buffer
+                .all_buffers_iter()
+                .map(|buffer| buffer.read(cx).remote_id())
+                .find(|id| {
+                    snapshot
+                        .path_for_buffer(*id)
+                        .is_some_and(|key| key.path.as_unix_str() == "src/b.rs")
+                })
+                .unwrap();
+            editor.fold_buffers([b], cx);
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] c");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/c.rs"));
+        assert_eq!(listed.as_deref(), Some("src/c.rs"));
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        // b.rs stays folded.
+        assert!(rhs.read_with(cx, |editor, cx| editor.has_any_buffer_folded(cx)));
+    }
+
+    #[gpui::test]
     async fn a_change_key_back_to_where_the_cursor_started_moves_the_list_with_it(
         cx: &mut TestAppContext,
     ) {
