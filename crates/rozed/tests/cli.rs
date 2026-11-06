@@ -40,8 +40,19 @@ fn version_prints_the_version() {
 
 #[test]
 fn rozed_does_not_start_inside_rozed() {
-    let output = rozed("--no-such-flag");
-    assert!(!output.status.success(), "{output:?}");
+    let output = rozed("https://github.com/sharkdp/fd/pull/2212");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("not starting"), "{stderr}");
+}
+
+#[test]
+fn an_argument_that_isnt_a_pull_request_link_is_refused_with_usage() {
+    for arg in ["https://github.com/sharkdp/fd/issues/1", "--no-such-flag"] {
+        let output = rozed(arg);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&format!("can't open `{arg}`")), "{stderr}");
+        assert!(stderr.contains("usage: rozed"), "{stderr}");
+    }
 }

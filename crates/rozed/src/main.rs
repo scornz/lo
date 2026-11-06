@@ -5,6 +5,7 @@
 
 mod forced_settings;
 mod http;
+mod pr_link;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -32,12 +33,17 @@ use util::ResultExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
+use crate::pr_link::PrLink;
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
 
+const USAGE: &str = "usage: rozed [<pull request link>]
+example: rozed https://github.com/sharkdp/fd/pull/2212";
+
 fn main() {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         Some("--version") => {
             println!("rozed {}", version());
             return;
@@ -50,6 +56,13 @@ fn main() {
         }
         _ => {}
     }
+    let pull_request = match parse_args(&args) {
+        Ok(pull_request) => pull_request,
+        Err(error) => {
+            eprintln!("rozed: {error}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
     // If `--printenv` ever stops being handled above, every capture would start another rozed,
     // which would capture again. Refuse to start inside a running rozed instead.
     if let Some(parent) = std::env::var_os(SHELL_ENV_GUARD) {
@@ -165,7 +178,7 @@ fn main() {
         })
         .detach();
 
-        if let Err(error) = open_window(app_state, cx) {
+        if let Err(error) = open_window(app_state, pull_request, cx) {
             log::error!("{error:#}");
             cx.quit();
         }
@@ -176,6 +189,21 @@ fn main() {
 /// rozed's version, from its Cargo manifest.
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Reads the command line after the program name: nothing, or one pull request link.
+fn parse_args(args: &[String]) -> anyhow::Result<Option<PrLink>> {
+    match args {
+        [] => Ok(None),
+        [link] => link
+            .parse()
+            .map(Some)
+            .with_context(|| format!("can't open `{link}`")),
+        _ => anyhow::bail!(
+            "expected one pull request link, got {} arguments",
+            args.len()
+        ),
+    }
 }
 
 /// Creates rozed's folders. Zed's `paths` crate, patched to use the name rozed, puts them in
@@ -272,8 +300,19 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
 }
 
 /// Opens rozed's window: a workspace showing this file, read-only.
-fn open_window(app_state: Arc<AppState>, cx: &mut App) -> anyhow::Result<()> {
-    let options = (app_state.build_window_options)(None, cx);
+fn open_window(
+    app_state: Arc<AppState>,
+    pull_request: Option<PrLink>,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let mut options = (app_state.build_window_options)(None, cx);
+    if let Some(pull_request) = &pull_request {
+        log::info!("opening {pull_request}");
+        options.titlebar = Some(TitlebarOptions {
+            title: Some(format!("{pull_request} - rozed").into()),
+            ..Default::default()
+        });
+    }
     let window = cx
         .open_window(options, |window, cx| {
             theme_settings::setup_ui_font(window, cx);
@@ -347,5 +386,38 @@ mod tests {
         for part in parts {
             assert!(part.parse::<u64>().is_ok(), "{part} isn't a number");
         }
+    }
+
+    fn args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn no_arguments_open_no_pull_request() {
+        assert_eq!(parse_args(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn one_link_opens_that_pull_request() {
+        let pull_request = parse_args(&args(&["https://github.com/sharkdp/fd/pull/2212"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pull_request.to_string(), "sharkdp/fd#2212");
+    }
+
+    #[test]
+    fn a_bad_link_says_what_and_why() {
+        let error = parse_args(&args(&["https://github.com/sharkdp/fd/issues/1"])).unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "can't open `https://github.com/sharkdp/fd/issues/1`: \
+             it isn't a link to a pull request"
+        );
+    }
+
+    #[test]
+    fn more_than_one_argument_is_an_error() {
+        let error = parse_args(&args(&["https://github.com/a/b/pull/1", "x"])).unwrap_err();
+        assert!(error.to_string().contains("2 arguments"), "{error}");
     }
 }
