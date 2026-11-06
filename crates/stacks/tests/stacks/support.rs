@@ -26,6 +26,8 @@ pub fn at(seconds: u64) -> SystemTime {
 }
 
 pub trait With: Sized {
+    /// Sets the commits, oldest first. The last is the head.
+    fn commits(self, commits: &[&str]) -> Self;
     fn created(self, seconds: u64) -> Self;
     fn closed(self) -> Self;
     /// Makes it a PR from a fork, whose head branch isn't in the base repository.
@@ -33,6 +35,12 @@ pub trait With: Sized {
 }
 
 impl With for PullRequest {
+    fn commits(mut self, commits: &[&str]) -> Self {
+        self.commits = commits.iter().map(|oid| oid.to_string()).collect();
+        self.head_oid = self.commits.last().cloned().unwrap_or_default();
+        self
+    }
+
     fn created(mut self, seconds: u64) -> Self {
         self.created_at = at(seconds);
         self
@@ -64,6 +72,7 @@ pub fn render(stacks: &Stacks) -> String {
                     line.push(' ');
                     line.push_str(match rule {
                         Rule::BaseBranch => "base-branch",
+                        Rule::SharedCommits => "shared-commits",
                     });
                 }
                 lines.push(line);

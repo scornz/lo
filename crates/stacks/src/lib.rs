@@ -61,6 +61,8 @@ pub struct NativeStackEntry {
 pub enum Rule {
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch.
     BaseBranch,
+    /// Its commits contain the head commit of the PR below.
+    SharedCommits,
 }
 
 /// What a layer sits on.
@@ -279,14 +281,31 @@ impl<'a> Graph<'a> {
     /// Each PR's link to the PR below it, by the first rule that applies.
     fn links(&self) -> Vec<Option<Edge>> {
         let by_head_ref = self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str()));
+        let by_head_oid = self.index(|pr| Some(pr.head_oid.as_str()));
         self.prs
             .iter()
             .enumerate()
             .map(|(index, pr)| {
-                let below = *by_head_ref.get(pr.base_ref.as_str())?;
-                (below != index).then_some(Edge {
-                    below,
-                    rule: Rule::BaseBranch,
+                let base_branch = by_head_ref
+                    .get(pr.base_ref.as_str())
+                    .filter(|&&below| below != index)
+                    .map(|&below| Edge {
+                        below,
+                        rule: Rule::BaseBranch,
+                    });
+                base_branch.or_else(|| {
+                    // The nearest: the latest of its commits that's another PR's head. A PR with
+                    // the same head commit isn't below it.
+                    let below = pr
+                        .commits
+                        .iter()
+                        .rev()
+                        .filter(|&oid| *oid != pr.head_oid)
+                        .find_map(|oid| by_head_oid.get(oid.as_str()))?;
+                    Some(Edge {
+                        below: *below,
+                        rule: Rule::SharedCommits,
+                    })
                 })
             })
             .collect()
