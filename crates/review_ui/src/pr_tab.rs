@@ -1092,6 +1092,7 @@ mod tests {
     use workspace::MultiWorkspace;
 
     use crate::github_api::{Base, BaseRepo, Head, User};
+    use crate::test_support::{FakeGithub, FakePull, GitServer, anonymous, sign_in};
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -1197,6 +1198,112 @@ mod tests {
                 deleted: 1,
             }),
         }
+    }
+
+    /// Opens `link` and loads it, as rozed does.
+    fn open_loaded(
+        workspace: &Entity<Workspace>,
+        link: &str,
+        cx: &mut VisualTestContext,
+    ) -> Entity<PrTab> {
+        let link = self::link(link);
+        let tab = workspace.update_in(cx, |workspace, window, cx| {
+            open(workspace, link, Trust::Untrusted, window, cx)
+        });
+        cx.run_until_parked();
+        tab
+    }
+
+    fn status(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Status {
+        tab.read_with(cx, |tab, _| tab.status().clone())
+    }
+
+    /// A public pull request on the fake GitHub: a source file, its test and a lockfile.
+    fn public_pull(github: &FakeGithub, git: &GitServer, repo: &str, number: u64) -> FakePull {
+        let pull = git.pull_request(
+            repo,
+            number,
+            &[("src/main.rs", "fn main() {}\n"), ("Cargo.lock", "a\n")],
+            &[
+                ("src/main.rs", "fn main() {\n    run();\n}\n"),
+                ("tests/main.rs", "#[test]\nfn runs() {}\n"),
+                ("Cargo.lock", "b\n"),
+            ],
+        );
+        github.add_pull(pull.clone());
+        github.make_public(repo);
+        pull
+    }
+
+    #[gpui::test]
+    async fn a_public_pull_request_loads_without_signing_in(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = public_pull(&github, &git, "sharkdp/fd", 2212);
+        anonymous(&github, cx);
+
+        let tab = open_loaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+
+        assert_eq!(status(&tab, cx), Status::Ready);
+        tab.read_with(cx, |tab, cx| {
+            assert_eq!(tab.acting(), Some(&Acting::Anonymous));
+            assert_eq!(tab.header().title.as_deref(), Some("Pull request 2212"));
+            assert_eq!(tab.header().repo.as_deref(), Some("sharkdp/fd"));
+            let paths: Vec<_> = tab.files().rows().map(FileEntry::path).collect();
+            assert_eq!(paths, ["src/main.rs", "tests/main.rs", "Cargo.lock"]);
+            let revisions = tab.revisions().unwrap();
+            assert_eq!(revisions.label(&pull.head).as_deref(), Some("r1"));
+            assert!(tab.diff().is_some());
+            assert_eq!(tab.tab_content_text(0, cx), "fd#2212 Pull request 2212");
+        });
+        assert_eq!(
+            github.requests(),
+            ["GET /repos/sharkdp/fd/pulls/2212 as nobody"]
+        );
+    }
+
+    #[gpui::test]
+    async fn a_private_pull_request_loads_with_the_account_that_can_see_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request(
+            "rozed-dev/playground",
+            2,
+            &[("a.rs", "a\n")],
+            &[("a.rs", "b\n")],
+        );
+        github.add_pull(pull);
+        github.let_see("gho_BOT", "rozed-dev/playground");
+        sign_in(
+            &github,
+            &[("other", "gho_OTHER"), ("rozed-bot", "gho_BOT")],
+            cx,
+        )
+        .await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        assert_eq!(status(&tab, cx), Status::Ready);
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.acting(), Some(&Acting::Account("rozed-bot".into())));
+            let paths: Vec<_> = tab.files().rows().map(FileEntry::path).collect();
+            assert_eq!(paths, ["a.rs"]);
+        });
+        let requests = github.requests();
+        assert!(
+            requests.contains(&"GET /repos/rozed-dev/playground/pulls/2 as gho_BOT".to_string()),
+            "{requests:#?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.ends_with("as nobody")),
+            "{requests:#?}"
+        );
     }
 
     #[gpui::test]

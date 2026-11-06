@@ -14,6 +14,8 @@ pub mod pr_link;
 pub mod pr_tab;
 mod read_only;
 pub mod tabs;
+#[cfg(test)]
+mod test_support;
 pub mod trust;
 
 use github::accounts::Accounts;
