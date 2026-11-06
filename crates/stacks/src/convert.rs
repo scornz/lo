@@ -8,7 +8,7 @@
 use crate::{Parent, Retarget, Stacks};
 
 /// What "Make this a GitHub stack" will do. Show the steps in its confirmation, then run them in
-/// order and stop at the first that fails.
+/// order and stop at the first that fails; [`rollback`] says how to undo the ones that ran.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
     /// The root branch the stack sits on: the bottom layer's base branch once the plan has run.
@@ -145,6 +145,56 @@ pub fn plan_conversion(stacks: &Stacks, layer: u64, facts: &Facts) -> Result<Pla
         path,
         steps,
     })
+}
+
+/// How to undo the steps of a [`Plan`] that ran before one failed (design §11, "Conversion fails
+/// partway").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rollback {
+    /// The base-branch changes that put back the ones made, the last made first.
+    pub steps: Vec<Retarget>,
+    /// The stack step, if it ran. Putting base branches back doesn't undo it.
+    pub kept: Option<Kept>,
+}
+
+/// A stack step that ran, which rolling back leaves in place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// The stack was created from these pull requests. It can be unstacked:
+    /// `POST /repos/{owner}/{repo}/stacks/{number}/unstack`, with the number GitHub gave it when
+    /// it was created. Unstacking it, then putting the base branches back, undoes the whole plan.
+    Created { prs: Vec<u64> },
+    /// These pull requests were added to GitHub stack `stack`, and can't be taken out alone:
+    /// unstacking removes every open layer, those that were there before too.
+    Added { stack: u64, prs: Vec<u64> },
+}
+
+/// Undoes the first `done` steps of `plan`: the ones that succeeded before a step failed. If it's
+/// unclear whether a step went through, count it: putting back a base branch that never changed
+/// changes nothing.
+pub fn rollback(plan: &Plan, done: usize) -> Rollback {
+    let done = &plan.steps[..done.min(plan.steps.len())];
+    let mut rollback = Rollback {
+        steps: Vec::new(),
+        kept: None,
+    };
+    for step in done.iter().rev() {
+        match step {
+            Step::Retarget(Retarget { pr, from, to }) => rollback.steps.push(Retarget {
+                pr: *pr,
+                from: to.clone(),
+                to: from.clone(),
+            }),
+            Step::CreateStack { prs } => {
+                rollback.kept = Some(Kept::Created { prs: prs.clone() });
+            }
+            Step::AddToStack { stack, prs } => {
+                let (stack, prs) = (*stack, prs.clone());
+                rollback.kept = Some(Kept::Added { stack, prs });
+            }
+        }
+    }
+    rollback
 }
 
 /// The path through `layer`, bottom to top, and the root branch it sits on. `None` when `layer`

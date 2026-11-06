@@ -10,6 +10,7 @@ mod not_offered;
 mod order;
 mod performance;
 mod retarget;
+mod rollback;
 mod shared_commits;
 mod support;
 mod trunks;
