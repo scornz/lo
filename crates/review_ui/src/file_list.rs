@@ -78,6 +78,7 @@ impl FileEntry {
                 additions,
                 deletions,
                 binary: file.binary,
+                size: file.size(),
                 // Read from `.gitattributes` once the list collapses generated files.
                 linguist_generated: None,
             },
@@ -417,6 +418,7 @@ mod tests {
                     additions: 3,
                     deletions: 2,
                     binary: false,
+                    size: Some(10),
                     linguist_generated: None,
                 },
                 change: FileChange::Renamed,

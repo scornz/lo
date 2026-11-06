@@ -297,6 +297,8 @@ pub(crate) fn file_entry(file: &PullFile) -> FileEntry {
             additions: file.additions,
             deletions: file.deletions,
             binary: false,
+            // GitHub's list gives no sizes.
+            size: None,
             linguist_generated: None,
         },
         change: change(file.status),
