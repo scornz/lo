@@ -4,7 +4,9 @@
 //! [`compare`] takes both versions' text and tree-sitter trees, which the caller parses with
 //! Zed's grammars, and the [`Language`] settings for their grammar. It returns rows of aligned
 //! lines for a side-by-side view. Each row has a real line from either side or both, with the
-//! byte ranges on it that are novel: tokens the other side doesn't have.
+//! byte ranges on it that are novel: tokens the other side doesn't have. Real line numbers let a
+//! comment go on the line it's written beside; [`nearest_commentable_line`] says which line that
+//! is, if GitHub takes a comment there.
 //!
 //! ```
 //! use diff_extras::syntax::{Language, Limits, Source, compare};
@@ -44,6 +46,7 @@
 
 mod align;
 mod changes;
+mod comments;
 mod dijkstra;
 mod graph;
 mod language;
@@ -58,6 +61,7 @@ use std::ops::Range;
 
 use tree_sitter::Tree;
 
+pub use comments::{CommentLine, CommentableLines, Hunk, nearest_commentable_line};
 pub use language::Language;
 
 use changes::Changes;
