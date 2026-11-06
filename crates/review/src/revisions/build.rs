@@ -87,10 +87,7 @@ pub fn build_revisions(
             }
         })
         .collect();
-    Revisions {
-        list,
-        commits: positions,
-    }
+    Revisions { list }
 }
 
 /// Whether the push from `previous` to `head` was forced, as far as the current commits tell. A
@@ -788,6 +785,23 @@ mod tests {
         let previous: Vec<_> = revisions.iter().map(|r| r.previous.as_deref()).collect();
         assert_eq!(previous, [None, Some("a1"), Some("a2")]);
         assert!(revisions.iter().all(|revision| revision.forced.is_none()));
+    }
+
+    #[test]
+    fn a_reviews_commit_is_a_revision_even_between_pushes() {
+        // a2's push brought in c2 too; the API made a review on c2.
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+                review("c2", 35),
+            ],
+            &["a1", "c2", "a2"],
+            "a2",
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "c2", "a2"]);
+        assert_eq!(revisions.get("a2").unwrap().previous.as_deref(), Some("a1"));
     }
 
     #[test]

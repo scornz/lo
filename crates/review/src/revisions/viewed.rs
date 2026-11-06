@@ -37,8 +37,6 @@ pub enum FileComparison {
 /// - Without a usable record, the file was marked viewed elsewhere: compare from your last review,
 ///   unless that's on the latest revision too.
 /// - With neither, it's the file's whole diff.
-/// - A last review on a commit that was never a head compares from the revision before the one
-///   containing it, as in [`default_comparison`](super::default_comparison).
 /// - As in [`default_comparison`](super::default_comparison), a marker on a revision rozed can no
 ///   longer get compares from the nearest earlier one it can, or shows the whole diff when there's
 ///   none, rather than falling back to a later marker that could hide changes.
@@ -57,7 +55,7 @@ pub fn viewed_file_comparison(
     let to = latest.head.clone();
     let before_latest = |commit: Option<&str>| {
         revisions
-            .covered(commit?)
+            .position(commit?)
             .filter(|&index| index + 1 < revisions.len())
     };
     let comparison = if let Some(viewed) = before_latest(viewed_at) {
@@ -171,7 +169,8 @@ mod tests {
     }
 
     #[test]
-    fn a_last_review_on_a_commit_that_was_never_a_head_compares_from_the_revision_before_it() {
+    fn a_last_review_whose_record_was_not_passed_counts_as_none() {
+        // c3 is a current commit, but no revision's head.
         let commits = ["a1", "a2", "c3", "a3", "a4"].map(String::from);
         let revisions = build_revisions(
             &[
@@ -187,7 +186,7 @@ mod tests {
 
         assert_eq!(
             dismissed(&revisions, None, Some("c3")),
-            since_last_review("a2")
+            Some(FileComparison::Full)
         );
     }
 

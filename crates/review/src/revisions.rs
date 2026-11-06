@@ -36,7 +36,7 @@ mod build;
 mod compare;
 mod viewed;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::time::SystemTime;
 
 pub use build::build_revisions;
@@ -67,9 +67,10 @@ pub enum PushRecord {
         after: String,
         at: SystemTime,
     },
-    /// A review's commit (`PullRequestReview.commit`) and `submittedAt`. Reviews made in GitHub's
-    /// web UI or in rozed are on the head, so the commit was pushed by then. A review the API made
-    /// on an older commit adds that commit as a revision.
+    /// A submitted review's commit (`PullRequestReview.commit`) and `submittedAt`. The commit is
+    /// always a revision, since it was the head when the reviewer looked; a review the API made on
+    /// an older commit makes that commit one. Pending reviews have no `submittedAt` and don't
+    /// count.
     Review { commit: String, at: SystemTime },
     /// The push that started a check suite (`CheckSuite.push`): `previousSha`, `nextSha`, and the
     /// suite's `createdAt`, up to a minute after the push. The caller drops suites whose `branch`
@@ -153,8 +154,6 @@ pub struct Revision {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Revisions {
     list: Vec<Revision>,
-    /// The pull request's current commits and their positions, oldest first.
-    commits: HashMap<String, usize>,
 }
 
 impl Revisions {
@@ -197,11 +196,11 @@ impl Revisions {
         self.number(head).map(|number| format!("r{number}"))
     }
 
-    /// The revision a marker commit points at, such as the commit of your last review: the
-    /// revision with that head, or else the first whose head contains it, as far as the current
-    /// commits tell. The second is for a review the API made on a commit that was never a head.
+    /// The revision a marker points at: your last review's commit, the head last seen here, or the
+    /// head a file was marked viewed at. Each is a revision's head when the records that saw it
+    /// were passed to [`build_revisions`], as a review's always is; any other commit finds nothing.
     pub fn find(&self, commit: &str) -> Option<&Revision> {
-        self.locate(commit).map(|index| &self.list[index])
+        self.get(commit)
     }
 
     /// Flags the revision with this head as one GitHub no longer has. Returns whether there was
@@ -224,26 +223,6 @@ impl Revisions {
             .iter()
             .rev()
             .find(|revision| revision.available)
-    }
-
-    /// The position of the newest revision a marker commit covers, for comparing from it: the
-    /// revision with that head, or else the one before the first revision containing it. Comparing
-    /// from the revision containing it would hide what that revision added after the commit.
-    fn covered(&self, commit: &str) -> Option<usize> {
-        match self.position(commit) {
-            Some(index) => Some(index),
-            None => self.locate(commit)?.checked_sub(1),
-        }
-    }
-
-    /// The position of the revision a marker commit points at. See [`Revisions::find`].
-    fn locate(&self, commit: &str) -> Option<usize> {
-        self.position(commit).or_else(|| {
-            let commit = *self.commits.get(commit)?;
-            self.list.iter().position(|revision| {
-                (self.commits.get(&revision.head)).is_some_and(|&head| head >= commit)
-            })
-        })
     }
 }
 
@@ -306,15 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_on_an_older_commit_finds_the_first_revision_containing_it() {
+    fn a_marker_on_a_commit_no_revision_has_finds_nothing() {
         let revisions = revisions();
 
-        assert_eq!(found(&revisions, "c1"), Some("a1"));
-        assert_eq!(found(&revisions, "c3"), Some("a2"));
-    }
-
-    #[test]
-    fn a_marker_on_a_commit_neither_a_head_nor_current_finds_nothing() {
-        assert_eq!(found(&revisions(), "ffff"), None);
+        assert_eq!(found(&revisions, "c1"), None);
+        assert_eq!(found(&revisions, "c3"), None);
+        assert_eq!(found(&revisions, "ffff"), None);
     }
 }
