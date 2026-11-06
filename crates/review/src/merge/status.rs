@@ -1,6 +1,6 @@
 //! The one-line merge status in a pull request's header (design §9, "Merge status").
 
-use super::{Blocker, MergeSnapshot, PullRequestState, blockers};
+use super::{Blocker, MergeSnapshot, PullRequestState, blockers, may_not_see_every_rule};
 
 /// Where a pull request's merge stands, for the one-line status in its tab's header. It's about
 /// the pull request, not you: a pull request you can't merge can still be ready.
@@ -15,17 +15,20 @@ pub enum MergeStatus {
     /// Nothing blocks it: it can merge, or join the merge queue.
     Ready,
     /// Only things waiting will fix block it. With `auto_merge`, auto-merge is on, so it merges,
-    /// or joins the queue, once they clear.
+    /// or joins the queue, once they clear. With `partial`, rozed may not see every rule behind
+    /// GitHub's block ([`may_not_see_every_rule`]), so these may be only part of why.
     Waiting {
         blockers: Vec<Blocker>,
         auto_merge: bool,
+        partial: bool,
     },
     /// Something waiting won't fix blocks it. The first blocker is the one to name, as
     /// [`blockers`](super::blockers) orders them. With `auto_merge`, auto-merge is on, and it merges
-    /// once everything clears.
+    /// once everything clears. With `partial`, as for [`MergeStatus::Waiting`].
     Blocked {
         blockers: Vec<Blocker>,
         auto_merge: bool,
+        partial: bool,
     },
 }
 
@@ -41,17 +44,20 @@ pub fn status(snapshot: &MergeSnapshot) -> MergeStatus {
     }
     let blockers = blockers(snapshot);
     let auto_merge = snapshot.auto_merge.is_some();
+    let partial = may_not_see_every_rule(snapshot);
     if blockers.is_empty() {
         MergeStatus::Ready
     } else if blockers.iter().all(Blocker::waiting) {
         MergeStatus::Waiting {
             blockers,
             auto_merge,
+            partial,
         }
     } else {
         MergeStatus::Blocked {
             blockers,
             auto_merge,
+            partial,
         }
     }
 }
@@ -83,6 +89,7 @@ mod tests {
                     url: None,
                 })
                 .collect(),
+            sees_every_rule: true,
             ..ready()
         }
     }
@@ -151,6 +158,24 @@ mod tests {
             MergeStatus::Waiting {
                 blockers: vec![blocker("test", CheckState::Running)],
                 auto_merge: false,
+                partial: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_waiting_pull_request_says_when_rozed_may_not_see_every_rule() {
+        let snapshot = MergeSnapshot {
+            sees_every_rule: false,
+            ..checks(&[("test", CheckState::Running)])
+        };
+
+        assert_eq!(
+            status(&snapshot),
+            MergeStatus::Waiting {
+                blockers: vec![blocker("test", CheckState::Running)],
+                auto_merge: false,
+                partial: true,
             }
         );
     }
@@ -164,6 +189,7 @@ mod tests {
             MergeStatus::Waiting {
                 blockers: vec![blocker("test", CheckState::Running)],
                 auto_merge: true,
+                partial: false,
             }
         );
     }
@@ -181,6 +207,7 @@ mod tests {
                     url: None,
                 })],
                 auto_merge: false,
+                partial: false,
             }
         );
     }
@@ -200,6 +227,7 @@ mod tests {
                     blocker("test", CheckState::Running),
                 ],
                 auto_merge: true,
+                partial: false,
             }
         );
     }

@@ -548,6 +548,7 @@ fn your_pull_request_with_auto_merge_on_waits_for_ci() {
         MergeStatus::Waiting {
             blockers: vec![Blocker::Check(commit_status("ci/build", "pending"))],
             auto_merge: true,
+            partial: true,
         }
     );
     assert_eq!(
@@ -638,6 +639,7 @@ fn a_pull_request_with_everything_wrong_lists_every_reason() {
         MergeStatus::Blocked {
             blockers: expected,
             auto_merge: false,
+            partial: false,
         }
     );
 }

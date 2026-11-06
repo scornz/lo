@@ -174,6 +174,20 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     blockers
 }
 
+/// Whether rozed may not see every rule behind GitHub's block: GitHub says `BLOCKED`, the
+/// snapshot explains it at least in part, and the caller couldn't confirm rozed sees every rule
+/// on the base branch ([`MergeSnapshot::sees_every_rule`]). The merge panel and the status then
+/// note "rozed may not see every rule" and link to the pull request on GitHub, since what
+/// [`blockers`] lists may be only part of why. A block nothing explains is already
+/// [`Blocker::Unexplained`].
+pub fn may_not_see_every_rule(snapshot: &MergeSnapshot) -> bool {
+    snapshot.state == PullRequestState::Open
+        && snapshot.merge_state == MergeStateStatus::Blocked
+        && !snapshot.sees_every_rule
+        && !(blockers(snapshot).iter())
+            .any(|blocker| matches!(blocker, Blocker::Unexplained { .. }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{MergeQueue, ReviewRules};
@@ -574,6 +588,41 @@ mod tests {
             blockers(&snapshot),
             [Blocker::Check(check("test", CheckState::Running))]
         );
+    }
+
+    #[test]
+    fn rozed_may_not_see_every_rule_behind_a_block_it_explains_in_part() {
+        // An unsigned commit or a required workflow rozed wasn't told about, beside a running
+        // check: the running check is only part of why.
+        let snapshot = MergeSnapshot {
+            required_checks: vec![check("test", CheckState::Running)],
+            ..blocked()
+        };
+
+        assert!(may_not_see_every_rule(&snapshot));
+    }
+
+    #[test]
+    fn rozed_sees_every_rule_when_the_caller_says_so_or_github_does_not_block() {
+        let seen = MergeSnapshot {
+            required_checks: vec![check("test", CheckState::Running)],
+            sees_every_rule: true,
+            ..blocked()
+        };
+        let unexplained = blocked();
+        let conflicting = MergeSnapshot {
+            merge_state: MergeStateStatus::Dirty,
+            required_checks: vec![check("test", CheckState::Running)],
+            ..ready()
+        };
+        let merged = MergeSnapshot {
+            state: PullRequestState::Merged,
+            ..seen.clone()
+        };
+
+        for snapshot in [seen, unexplained, conflicting, ready(), merged] {
+            assert!(!may_not_see_every_rule(&snapshot), "{snapshot:?}");
+        }
     }
 
     #[test]

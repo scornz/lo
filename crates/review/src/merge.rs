@@ -90,7 +90,7 @@ mod ship;
 mod status;
 
 pub use action::{MergeAction, NotPossible, merge_action};
-pub use blockers::{Blocker, blockers};
+pub use blockers::{Blocker, blockers, may_not_see_every_rule};
 pub use github::{
     CheckConclusion, CheckStatus, MergeMethod, MergeStateStatus, MergeableState, PullRequestState,
     ReviewDecision, ReviewState, StatusState, UnknownValue,
@@ -150,6 +150,14 @@ pub struct MergeSnapshot {
     /// Other rules on the base branch the pull request doesn't meet yet, such as required
     /// deployments or signed commits.
     pub unmet_rules: Vec<UnmetRule>,
+    /// Whether rozed sees every rule on the base branch that can block the merge: the caller read
+    /// its branch protection and its rulesets' active rules (`GET
+    /// /repos/{owner}/{repo}/rules/branches/{branch}`), each one maps to a field here, and no list
+    /// was cut short by paging. Rules rozed doesn't model include code scanning, required
+    /// workflows, reviewers required by file pattern, and the extra approval for a pull request
+    /// Copilot opened. Without this, a `BLOCKED` that rozed explains may be only partly explained
+    /// ([`may_not_see_every_rule`]).
+    pub sees_every_rule: bool,
     /// The base branch's merge queue.
     pub queue: MergeQueue,
     /// Auto-merge, when it's on (`autoMergeRequest`).
