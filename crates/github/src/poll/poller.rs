@@ -917,9 +917,10 @@ impl Poller {
                         Put::TouchSummary => {
                             cache.touch::<PullSummary>(&login, &target, wall).await
                         }
-                        Put::Check(value) => cache.put(&login, &target, &*value, None, wall).await,
-                        Put::Details(value) => {
-                            cache.put(&login, &target, &*value, None, wall).await
+                        Put::Details(details, check) => {
+                            let rows =
+                                vec![PrCache::row(&*details, None)?, PrCache::row(&*check, None)?];
+                            cache.put_together(&login, &target, rows, wall).await
                         }
                         Put::Listed(value) => cache.put(&login, &target, &*value, None, wall).await,
                         Put::TouchListed => cache.touch::<ListedPulls>(&login, &target, wall).await,
@@ -974,8 +975,13 @@ impl Poller {
                             etag: None,
                             fetched_at: wall,
                         });
-                        put(&mut writes, &cache, &login, Put::Details(details.clone()));
-                        put(&mut writes, &cache, &login, Put::Check(check));
+                        // Together, so a restart never pairs old details with a newer check.
+                        put(
+                            &mut writes,
+                            &cache,
+                            &login,
+                            Put::Details(details.clone(), check),
+                        );
                         changed.then_some(details)
                     }
                     None => {
@@ -1190,8 +1196,8 @@ fn jitter_sample() -> f64 {
 enum Put {
     Summary(Arc<PullSummary>),
     TouchSummary,
-    Check(Arc<PullRequestCheckData>),
-    Details(Arc<PullRequestData>),
+    /// The details and the check they were fetched at.
+    Details(Arc<PullRequestData>, Arc<PullRequestCheckData>),
     Listed(Arc<ListedPulls>),
     TouchListed,
     List(Arc<OpenPullRequestList>),

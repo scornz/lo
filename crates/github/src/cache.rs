@@ -181,6 +181,14 @@ pub struct RecentPr {
     pub opened_at: SystemTime,
 }
 
+/// An answer encoded for the cache, from [`PrCache::row`].
+pub struct Row {
+    query: &'static str,
+    version: String,
+    json: String,
+    etag: Option<String>,
+}
+
 /// The cache, over rozed's database. Clones share the connection.
 #[derive(Clone)]
 pub struct PrCache {
@@ -264,34 +272,71 @@ impl PrCache {
         etag: Option<&str>,
         fetched_at: SystemTime,
     ) -> Result<()> {
-        let json = serde_json::to_string(value).context("encoding a cache entry")?;
+        let row = Self::row(value, etag)?;
+        self.put_together(account, target, vec![row], fetched_at)
+            .await
+    }
+
+    /// An answer ready for [`Self::put_together`].
+    pub fn row<T: CacheEntry>(value: &T, etag: Option<&str>) -> Result<Row> {
+        Ok(Row {
+            query: T::NAME,
+            version: T::version(),
+            json: serde_json::to_string(value).context("encoding a cache entry")?,
+            etag: etag.map(str::to_string),
+        })
+    }
+
+    /// Stores answers about one target that only make sense together, such as details and the
+    /// check they were fetched at: all of them, or, if any fails, none.
+    pub async fn put_together(
+        &self,
+        account: &str,
+        target: &Target,
+        rows: Vec<Row>,
+        fetched_at: SystemTime,
+    ) -> Result<()> {
         let repo = target.repo();
-        let row = (
+        let key = (
             HOST.to_string(),
             account.to_string(),
             repo.owner.clone(),
             repo.name.clone(),
             target.number(),
-            T::NAME.to_string(),
-            T::version(),
-            json,
-            etag.map(str::to_string),
-            to_secs(fetched_at),
         );
+        let fetched_at = to_secs(fetched_at);
         self.db
             .connection()
             .write(move |connection| {
-                connection.exec_bound(sql!(
-                    INSERT INTO pr_cache(
-                        host, account, owner, repo, number, query, version, json, etag, fetched_at
-                    )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-                    ON CONFLICT(host, account, owner, repo, number, query) DO UPDATE SET
-                        version = excluded.version,
-                        json = excluded.json,
-                        etag = excluded.etag,
-                        fetched_at = excluded.fetched_at
-                ))?(row)
+                connection.with_savepoint("put_together", || {
+                    for row in rows {
+                        let (host, account, owner, repo, number) = key.clone();
+                        connection.exec_bound(sql!(
+                            INSERT INTO pr_cache(
+                                host, account, owner, repo, number, query, version, json, etag,
+                                fetched_at
+                            )
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                            ON CONFLICT(host, account, owner, repo, number, query) DO UPDATE SET
+                                version = excluded.version,
+                                json = excluded.json,
+                                etag = excluded.etag,
+                                fetched_at = excluded.fetched_at
+                        ))?((
+                            host,
+                            account,
+                            owner,
+                            repo,
+                            number,
+                            row.query.to_string(),
+                            row.version,
+                            row.json,
+                            row.etag,
+                            fetched_at,
+                        ))?;
+                    }
+                    Ok(())
+                })
             })
             .await
     }
@@ -671,6 +716,66 @@ mod tests {
                     .unwrap()
                     .value,
                 newer
+            );
+        });
+    }
+
+    /// A row the database refuses, once [`refuse_rows`] has run.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Refused(u32);
+
+    impl CacheEntry for Refused {
+        const NAME: &'static str = "refused";
+
+        fn shape() -> String {
+            schema_shape::<Self>()
+        }
+    }
+
+    async fn refuse_rows(db: &RozedDb) {
+        db.connection()
+            .write(|connection| {
+                connection.exec(
+                    "CREATE TRIGGER refuse BEFORE INSERT ON pr_cache WHEN NEW.query = 'refused' \
+                     BEGIN SELECT RAISE(ABORT, 'refused'); END",
+                )?()
+            })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn answers_stored_together_are_all_stored_or_none() {
+        block_on(async {
+            let (cache, db) = cache("cache_together").await;
+            cache
+                .put("bot", &pull(1), &summary("old"), None, at(1000))
+                .await
+                .unwrap();
+            refuse_rows(&db).await;
+            let rows = vec![
+                PrCache::row(&summary("new"), None).unwrap(),
+                PrCache::row(&Refused(1), None).unwrap(),
+            ];
+            cache
+                .put_together("bot", &pull(1), rows, at(2000))
+                .await
+                .unwrap_err();
+            let kept = cache.get::<PullSummary>("bot", &pull(1)).unwrap().unwrap();
+            assert_eq!(
+                (kept.value.title.as_str(), kept.fetched_at),
+                ("old", at(1000))
+            );
+
+            let rows = vec![PrCache::row(&summary("new"), Some("\"e\"")).unwrap()];
+            cache
+                .put_together("bot", &pull(1), rows, at(2000))
+                .await
+                .unwrap();
+            let stored = cache.get::<PullSummary>("bot", &pull(1)).unwrap().unwrap();
+            assert_eq!(
+                (stored.value.title.as_str(), stored.etag.as_deref()),
+                ("new", Some("\"e\""))
             );
         });
     }
