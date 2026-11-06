@@ -1,0 +1,9 @@
+# The signed-in user.
+query Viewer {
+  viewer {
+    login
+    databaseId
+    name
+    avatarUrl
+  }
+}
