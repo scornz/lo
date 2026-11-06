@@ -6,9 +6,11 @@
 mod forced_settings;
 mod github_api;
 mod http;
+mod keymap;
 mod local_copy;
 mod pr_diff;
 mod pr_link;
+mod trust;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -31,7 +33,7 @@ use project::Project;
 use release_channel::AppVersion;
 use reqwest_client::ReqwestClient;
 use session::{AppSession, Session};
-use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, Settings as _, SettingsAssets};
+use settings::Settings as _;
 use theme::ActiveTheme as _;
 use util::ResultExt as _;
 use workspace::notifications::NotifyTaskExt as _;
@@ -60,6 +62,26 @@ fn main() {
             util::shell_env::print_env();
             return;
         }
+        // Zed's askpass crate makes this executable the program git and ssh run to ask for a
+        // password, through a script that runs `rozed --askpass=<socket>` with the prompt on
+        // stdin. rozed passes the prompt to the running rozed over the socket and prints the
+        // answer, as Zed does.
+        Some(flag) if flag == "--askpass" || flag.starts_with("--askpass=") => {
+            let socket = flag
+                .strip_prefix("--askpass=")
+                .or(args.get(1).map(String::as_str))
+                .filter(|socket| !socket.is_empty());
+            let Some(socket) = socket else {
+                eprintln!("rozed: --askpass needs a socket: --askpass=<socket>");
+                std::process::exit(2);
+            };
+            askpass::main(socket);
+            return;
+        }
+        Some(flag) if flag.starts_with("--") => {
+            eprintln!("rozed: unknown option `{flag}`");
+            std::process::exit(2);
+        }
         _ => {}
     }
     let pull_request = match parse_args(&args) {
@@ -85,6 +107,8 @@ fn main() {
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
         std::env::set_var("ZED_DISABLE_STAFF", "1");
+        // Zed's client prefers this to the `server_url` setting, which rozed forces.
+        std::env::remove_var("ZED_SERVER_URL");
     }
 
     if let Err(error) = create_dirs() {
@@ -112,6 +136,8 @@ fn main() {
 
     app.run(move |cx| {
         cx.set_global(app_db);
+        // Before any project exists, so every project tracks trust.
+        trust::init(cx);
         release_channel::init(AppVersion::load(version(), None, None), cx);
         gpui_tokio::init(cx);
         settings::init(cx);
@@ -175,7 +201,7 @@ fn main() {
         cx.set_menus([
             Menu::new("rozed").items([MenuItem::action("Quit rozed", zed_actions::Quit)])
         ]);
-        load_keymaps(cx);
+        keymap::load(cx);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -184,11 +210,13 @@ fn main() {
         })
         .detach();
 
-        if let Err(error) = open_window(app_state, pull_request, launched, cx) {
-            log::error!("{error:#}");
-            cx.quit();
+        match open_window(app_state, pull_request, launched, cx) {
+            Ok(()) => cx.activate(true),
+            Err(error) => {
+                log::error!("{error:#}");
+                cx.quit();
+            }
         }
-        cx.activate(true);
     });
 }
 
@@ -230,7 +258,7 @@ fn create_dirs() -> anyhow::Result<()> {
 }
 
 /// Logs to `~/Library/Logs/rozed/rozed.log`, and to stdout too when it's a terminal.
-/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=rozed=debug` to log every HTTP request's host.
+/// `RUST_LOG` sets the levels, e.g. `RUST_LOG=rozed=debug` to log every HTTP request.
 fn init_logging() {
     zlog::init();
     if let Err(error) = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file())) {
@@ -242,7 +270,7 @@ fn init_logging() {
     }
 }
 
-/// The one HTTP client for everything, which refuses Zed's hosts.
+/// The one HTTP client for everything, which refuses Zed's hosts, redirects included.
 fn http_client(cx: &mut App) -> Arc<dyn HttpClient> {
     let user_agent = format!(
         "rozed/{} ({}; {})",
@@ -257,37 +285,6 @@ fn http_client(cx: &mut App) -> Arc<dyn HttpClient> {
         ReqwestClient::proxy_and_user_agent(proxy, &user_agent).expect("starting the HTTP client")
     };
     Arc::new(ZedHostGuard::new(Arc::new(reqwest)))
-}
-
-/// Loads Zed's default macOS keymap. Bindings for actions from Zed crates rozed doesn't include
-/// (the agent, terminal, debugger and so on) are skipped.
-fn load_keymaps(cx: &mut App) {
-    for path in [
-        settings::DEFAULT_KEYMAP_PATH,
-        settings::SPECIFIC_OVERRIDES_KEYMAP_PATH,
-    ] {
-        let content = util::asset_str::<SettingsAssets>(path);
-        let mut bindings = match KeymapFile::load(&content, cx) {
-            KeymapFileLoadResult::Success { key_bindings } => key_bindings,
-            KeymapFileLoadResult::SomeFailedToLoad {
-                key_bindings,
-                error_message,
-            } => {
-                log::debug!(
-                    "skipped bindings in {path} for actions rozed doesn't have: {error_message}"
-                );
-                key_bindings
-            }
-            KeymapFileLoadResult::JsonParseFailure { error } => {
-                log::error!("can't parse {path}: {error:#}");
-                continue;
-            }
-        };
-        for binding in &mut bindings {
-            binding.set_meta(KeybindSource::Default.meta());
-        }
-        cx.bind_keys(bindings);
-    }
 }
 
 fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
@@ -342,7 +339,9 @@ fn open_window(
                 app_state.fs.clone(),
                 None,
                 project::LocalProjectFlags {
-                    init_worktree_trust: false,
+                    // Zed's worktree trust: no language server or `.zed/settings.json` until
+                    // rozed trusts the worktree (see `trust`).
+                    init_worktree_trust: true,
                     watch_global_configs: true,
                 },
                 cx,
@@ -405,12 +404,23 @@ fn show_source(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<
 mod tests {
     use super::*;
 
+    /// Whether `version` parses the way Zed's `release_channel` parses rozed's at startup.
+    fn is_semver(version: &str) -> bool {
+        semver::Version::parse(version).is_ok()
+    }
+
     #[test]
     fn version_is_semver() {
-        let parts: Vec<&str> = version().split('.').collect();
-        assert_eq!(parts.len(), 3, "{} isn't major.minor.patch", version());
-        for part in parts {
-            assert!(part.parse::<u64>().is_ok(), "{part} isn't a number");
+        assert!(is_semver(version()), "{} isn't semver", version());
+    }
+
+    #[test]
+    fn semver_includes_pre_releases_and_build_metadata() {
+        for version in ["0.2.0", "0.2.0-beta.1", "1.0.0-rc.1+build.5"] {
+            assert!(is_semver(version), "{version}");
+        }
+        for version in ["0.2", "0.2.0.1", "v0.2.0", "0.2.0-"] {
+            assert!(!is_semver(version), "{version}");
         }
     }
 

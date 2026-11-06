@@ -1,9 +1,13 @@
 [workspace]
 members = ["crates/*"]
-# Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates rozed depends
-# on by path members of rozed's workspace, and their `workspace = true` keys fail to inherit from
-# rozed's root. Excluded, they inherit from Zed's.
-exclude = ["third_party"]
+exclude = [
+    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates rozed
+    # depends on by path members of rozed's workspace, and their `workspace = true` keys fail to
+    # inherit from rozed's root. Excluded, they inherit from Zed's.
+    "third_party",
+    # xtask is its own workspace, so it runs when this one can't resolve.
+    "crates/xtask",
+]
 resolver = "2"
 
 [workspace.package]
@@ -13,6 +17,7 @@ publish = false
 
 [workspace.dependencies]
 # Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
+askpass = { path = "third_party/zed/crates/askpass" }
 assets = { path = "third_party/zed/crates/assets" }
 buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
@@ -51,10 +56,10 @@ zlog = { path = "third_party/zed/crates/zlog" }
 anyhow = "1.0.86"
 futures = "0.3.34"
 log = { version = "0.4", default-features = false, features = ["std"] }
+semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.144"
 tempfile = "3.20.0"
-toml_edit = "0.23.7"
 uuid = { version = "1.1", features = ["v4"] }
 
 # BEGIN generated from Zed's Cargo.toml. Run `cargo xtask sync-zed`; don't edit by hand.
@@ -102,6 +107,7 @@ feature_flags_macros = { opt-level = 3 }
 settings_macros = { opt-level = 3 }
 sqlez_macros = { opt-level = 3, codegen-units = 1 }
 ui_macros = { opt-level = 3 }
+util_macros = { opt-level = 3 }
 quote = { opt-level = 3 }
 syn = { opt-level = 3 }
 proc-macro2 = { opt-level = 3 }
