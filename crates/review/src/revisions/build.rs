@@ -1,6 +1,7 @@
 //! Merging what each source saw into one ordered list of revisions.
 
-use std::collections::{BTreeSet, HashMap};
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::time::SystemTime;
 
 use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
@@ -19,8 +20,9 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///   poller only says the head was pushed by then, and so does a later head's push, which places a
 ///   head no source dated, such as a force-push's `before`, just before the push that replaced it.
 ///   Heads outside the current commits come before the latest force-push when its head is in
-///   them, since every push after it was then a fast-forward. Where the chain loops because a head
-///   was pushed again, its latest push decides.
+///   them, since every push after it was then a fast-forward. Where these constraints loop because
+///   a head was pushed again, the heads in the loop go by their own times, whatever order the
+///   records came in.
 /// - **Previous head and forced.** The activity API is trusted first, then force-push events,
 ///   then check suites. With no source's word, the previous head is the revision before, and
 ///   ancestry in the current commits tells whether the push was forced when it can.
@@ -37,8 +39,9 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String], head: &str) -
         positions.entry(commit.clone()).or_insert(position);
     }
     let after = successors(&heads, &positions, pull_head);
-    let latest = latest_push_times(&heads.seen, &after);
-    let mut order = order(&latest, &after);
+    let components = Components::new(&after);
+    let latest = latest_push_times(&heads.seen, &after, &components);
+    let mut order = order(&latest, &after, &components);
     if let Some(pull_head) = pull_head {
         order.retain(|&index| index != pull_head);
         order.push(pull_head);
@@ -116,8 +119,17 @@ fn successors(
         .filter_map(|(index, head)| Some((*positions.get(head.head)?, index)))
         .collect();
     current.sort_unstable();
+    // A head pushed back to from its own descendant was pushed after it, so its place among the
+    // current commits says nothing about when.
+    let pushed_back = |index: usize| {
+        let head = &heads.seen[index];
+        let previous = head.previous().and_then(|previous| positions.get(previous));
+        previous.is_some_and(|previous| Some(previous) > positions.get(head.head))
+    };
     for pair in current.windows(2) {
-        precedes(pair[0].1, pair[1].1);
+        if !pushed_back(pair[0].1) {
+            precedes(pair[0].1, pair[1].1);
+        }
     }
     // When the latest force-push's head is a current commit, every push since was a fast-forward,
     // so a head outside the current commits was pushed before it.
@@ -146,57 +158,155 @@ fn latest_force_push(seen: &[Seen]) -> Option<usize> {
         .map(|(_, index)| index)
 }
 
+/// The strongly connected components of the heads under the constraints: sets of heads whose
+/// constraints loop, which happens when a head was pushed again.
+struct Components {
+    /// Each component's heads. A component comes before every component with a constraint to it.
+    members: Vec<Vec<usize>>,
+    /// Each head's component.
+    of: Vec<usize>,
+}
+
+impl Components {
+    /// Tarjan's algorithm, without recursion so that long histories can't overflow the stack.
+    fn new(after: &[BTreeSet<usize>]) -> Self {
+        const UNSEEN: usize = usize::MAX;
+        let count = after.len();
+        let mut found = vec![UNSEEN; count];
+        let mut low = vec![0; count];
+        let mut on_stack = vec![false; count];
+        let mut stack = Vec::new();
+        let mut members = Vec::new();
+        let mut next_found = 0;
+        for root in 0..count {
+            if found[root] != UNSEEN {
+                continue;
+            }
+            found[root] = next_found;
+            low[root] = next_found;
+            next_found += 1;
+            stack.push(root);
+            on_stack[root] = true;
+            let mut frames = vec![(root, after[root].iter())];
+            while let Some((head, successors)) = frames.last_mut() {
+                let head = *head;
+                if let Some(&next) = successors.next() {
+                    if found[next] == UNSEEN {
+                        found[next] = next_found;
+                        low[next] = next_found;
+                        next_found += 1;
+                        stack.push(next);
+                        on_stack[next] = true;
+                        frames.push((next, after[next].iter()));
+                    } else if on_stack[next] {
+                        low[head] = low[head].min(found[next]);
+                    }
+                    continue;
+                }
+                frames.pop();
+                if let Some(&(parent, _)) = frames.last() {
+                    low[parent] = low[parent].min(low[head]);
+                }
+                if low[head] == found[head] {
+                    let mut component = Vec::new();
+                    while let Some(member) = stack.pop() {
+                        on_stack[member] = false;
+                        component.push(member);
+                        if member == head {
+                            break;
+                        }
+                    }
+                    members.push(component);
+                }
+            }
+        }
+        let mut of = vec![0; count];
+        for (component, heads) in members.iter().enumerate() {
+            for &head in heads {
+                of[head] = component;
+            }
+        }
+        Self { members, of }
+    }
+}
+
 /// The latest each head can have been pushed: its exact time, or else the earliest of its
 /// sightings and the times of the heads that must come after it. `None` when nothing bounds it.
-fn latest_push_times(seen: &[Seen], after: &[BTreeSet<usize>]) -> Vec<Option<SystemTime>> {
+///
+/// Constraints inside a loop don't carry times: one of them is wrong, and which one depends on the
+/// times themselves.
+fn latest_push_times(
+    seen: &[Seen],
+    after: &[BTreeSet<usize>],
+    components: &Components,
+) -> Vec<Option<SystemTime>> {
     let mut latest: Vec<_> = seen
         .iter()
         .map(|head| head.exact().or(head.seen_by))
         .collect();
-    // Each pass carries times at least one more head back, so this ends within a pass per head.
-    loop {
-        let mut changed = false;
-        for (index, head) in seen.iter().enumerate() {
-            if head.exact().is_some() {
+    // A component comes before every component with a constraint to it, so a head's successors
+    // in other components already have their times when it's reached: one pass is enough.
+    for heads in &components.members {
+        for &index in heads {
+            if seen[index].exact().is_some() {
                 continue;
             }
             for &next in &after[index] {
-                if let Some(by) = latest[next]
+                if components.of[next] != components.of[index]
+                    && let Some(by) = latest[next]
                     && latest[index].is_none_or(|own| by < own)
                 {
                     latest[index] = Some(by);
-                    changed = true;
                 }
             }
         }
-        if !changed {
-            return latest;
-        }
     }
+    latest
 }
 
 /// The heads in revision order: each after the heads that must come before it, the earliest
 /// first. Heads nothing bounds go last, and ties keep the order the records first named them in.
-/// Where the constraints loop, the earliest head in the loop goes first.
-fn order(latest: &[Option<SystemTime>], after: &[BTreeSet<usize>]) -> Vec<usize> {
+/// The heads of a loop go together, by their own times.
+fn order(
+    latest: &[Option<SystemTime>],
+    after: &[BTreeSet<usize>],
+    components: &Components,
+) -> Vec<usize> {
     let rank = |index: usize| (latest[index].is_none(), latest[index], index);
-    let mut waiting_on = vec![0usize; latest.len()];
-    for &next in after.iter().flatten() {
-        waiting_on[next] += 1;
+    let members: Vec<Vec<usize>> = (components.members.iter())
+        .map(|heads| {
+            let mut heads = heads.clone();
+            heads.sort_by_key(|&index| rank(index));
+            heads
+        })
+        .collect();
+    let mut waiting_on = vec![0usize; members.len()];
+    for (index, successors) in after.iter().enumerate() {
+        for &next in successors {
+            if components.of[next] != components.of[index] {
+                waiting_on[components.of[next]] += 1;
+            }
+        }
     }
-    let mut placed = vec![false; latest.len()];
-    let mut order = Vec::with_capacity(latest.len());
-    while order.len() < latest.len() {
-        let unplaced = (0..latest.len()).filter(|&index| !placed[index]);
-        let next = (unplaced.clone())
-            .filter(|&index| waiting_on[index] == 0)
-            .min_by_key(|&index| rank(index))
-            .or_else(|| unplaced.min_by_key(|&index| rank(index)))
-            .expect("a head is left to place");
-        placed[next] = true;
-        order.push(next);
-        for &later in &after[next] {
-            waiting_on[later] -= 1;
+    // Components ready to place, earliest first: a component ranks as its earliest head.
+    let mut ready: BinaryHeap<_> = (0..members.len())
+        .filter(|&component| waiting_on[component] == 0)
+        .map(|component| Reverse((rank(members[component][0]), component)))
+        .collect();
+    let mut order = Vec::with_capacity(after.len());
+    while let Some(Reverse((_, component))) = ready.pop() {
+        for &index in &members[component] {
+            order.push(index);
+            for &next in &after[index] {
+                let later = components.of[next];
+                if later == component {
+                    continue;
+                }
+                waiting_on[later] -= 1;
+                if waiting_on[later] == 0 {
+                    ready.push(Reverse((rank(members[later][0]), later)));
+                }
+            }
         }
     }
     order
@@ -811,6 +921,41 @@ mod tests {
 
         assert_eq!(heads(&revisions), ["a2", "a1", "a3"]);
         assert_eq!(forced(&revisions), [None, Some(true), Some(false)]);
+    }
+
+    #[test]
+    fn a_push_back_to_an_ancestor_is_ordered_the_same_whatever_the_record_order() {
+        let records = [
+            polled("a2", 10),
+            check_suite("a2", "a1", 20),
+            polled("a3", 30),
+        ];
+        let reversed: Vec<_> = records.iter().rev().cloned().collect();
+        let suite_first = [records[1].clone(), records[0].clone(), records[2].clone()];
+
+        for records in [&records[..], &reversed, &suite_first] {
+            let revisions = build(records, &["a1", "a2", "a3"], "a3");
+
+            assert_eq!(heads(&revisions), ["a2", "a1", "a3"]);
+            assert_eq!(forced(&revisions), [None, Some(true), Some(false)]);
+        }
+    }
+
+    #[test]
+    fn heads_pushed_back_and_forth_go_by_their_own_times_whatever_the_record_order() {
+        // a1 was pushed over by b1, then pushed back to; only check suites saw it.
+        let records = [
+            check_suite("a1", "b1", 20),
+            check_suite("b1", "a1", 30),
+            polled("c1", 40),
+        ];
+        let reversed: Vec<_> = records.iter().rev().cloned().collect();
+
+        for records in [&records[..], &reversed] {
+            let revisions = build(records, &[], "c1");
+
+            assert_eq!(heads(&revisions), ["b1", "a1", "c1"]);
+        }
     }
 
     #[test]
