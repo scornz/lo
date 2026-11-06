@@ -1,7 +1,8 @@
 //! Finds blocks of code that a pull request moves: deleted in one place and added in another, in
 //! the same file or another file of the PR.
 
-use std::collections::HashMap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap};
 use std::ops::{Range, RangeInclusive};
 
 /// The fewest matching lines a move has.
@@ -44,17 +45,13 @@ impl FileChanges {
     }
 
     /// Adds consecutive deleted lines, the first at old line `start`.
-    pub fn delete(
-        mut self,
-        start: u32,
-        lines: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
+    pub fn delete(mut self, start: u32, lines: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.deleted.extend(numbered(start, lines));
         self
     }
 
     /// Adds consecutive added lines, the first at new line `start`.
-    pub fn add(mut self, start: u32, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn add(mut self, start: u32, lines: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.added.extend(numbered(start, lines));
         self
     }
@@ -67,11 +64,11 @@ impl FileChanges {
 
 fn numbered(
     start: u32,
-    lines: impl IntoIterator<Item = impl Into<String>>,
+    lines: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> impl Iterator<Item = Line> {
     (start..).zip(lines).map(|(number, text)| Line {
         number,
-        text: text.into(),
+        text: text.as_ref().to_string(),
     })
 }
 
@@ -124,9 +121,9 @@ impl Moves {
             new: &new,
         };
         let mut moves: Vec<Move> = finder
-            .candidates(texts.len())
-            .into_iter()
-            .map(|candidate| finder.to_move(&candidate, files))
+            .choose(finder.candidates(texts.len()))
+            .iter()
+            .map(|candidate| finder.to_move(candidate, files))
             .collect();
         moves.sort_by_key(|moved| (moved.to.file, *moved.to.lines.start()));
         Self { moves }
@@ -254,15 +251,38 @@ impl Index {
 
 /// A block of added lines, lined up with the deleted lines `delta` positions away in
 /// [`Side::lines`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Candidate {
     new: Range<usize>,
     delta: isize,
+    /// How many of its lines match.
+    matched: usize,
 }
 
 impl Candidate {
     fn old(&self) -> Range<usize> {
         self.new.start.wrapping_add_signed(self.delta)..self.new.end.wrapping_add_signed(self.delta)
+    }
+
+    /// Longer blocks first, then the one that lands first, then the one that came from first.
+    fn rank(&self) -> impl Ord {
+        (
+            self.matched,
+            Reverse(self.new.start),
+            Reverse(self.old().start),
+        )
+    }
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.rank().cmp(&other.rank())
+    }
+}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -308,14 +328,55 @@ impl Finder<'_> {
             }
             let new = self.walk(seed);
             walked = Some((seed, new.end));
-            if new.len() >= MIN_LINES {
-                candidates.push(Candidate {
-                    new,
-                    delta: seed.delta,
-                });
-            }
+            candidates.extend(self.block(new, seed.delta));
         }
         candidates
+    }
+
+    /// The added lines `new`, lined up with the deleted lines `delta` away, as a candidate move if
+    /// they make one.
+    fn block(&self, new: Range<usize>, delta: isize) -> Option<Candidate> {
+        let matched = new.clone().filter(|&new| self.same(new, delta)).count();
+        (matched >= MIN_LINES).then_some(Candidate {
+            new,
+            delta,
+            matched,
+        })
+    }
+
+    /// Takes candidates longest first, giving each line to at most one move. A candidate that
+    /// overlaps one already taken is put back without the overlap, as each stretch left over.
+    fn choose(&self, candidates: Vec<Candidate>) -> Vec<Candidate> {
+        let mut queue = BinaryHeap::from(candidates);
+        let mut old_taken = vec![false; self.old.lines.len()];
+        let mut new_taken = vec![false; self.new.lines.len()];
+        let mut chosen = Vec::new();
+        while let Some(candidate) = queue.pop() {
+            let delta = candidate.delta;
+            let free = |new: usize| !new_taken[new] && !old_taken[new.wrapping_add_signed(delta)];
+            if candidate.new.clone().all(free) {
+                for new in candidate.new.clone() {
+                    new_taken[new] = true;
+                    old_taken[new.wrapping_add_signed(delta)] = true;
+                }
+                chosen.push(candidate);
+                continue;
+            }
+            let mut start = candidate.new.start;
+            while start < candidate.new.end {
+                if !free(start) {
+                    start += 1;
+                    continue;
+                }
+                let mut end = start + 1;
+                while end < candidate.new.end && free(end) {
+                    end += 1;
+                }
+                queue.extend(self.block(start..end, delta));
+                start = end;
+            }
+        }
+        chosen
     }
 
     /// The added lines that line up with deleted lines `seed.delta` away, from the start of both
