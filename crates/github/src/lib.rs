@@ -25,6 +25,7 @@ pub mod record;
 pub mod replay;
 mod token;
 mod user;
+pub mod viewed;
 
 pub use client::{
     API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RestResponse,

@@ -86,6 +86,26 @@ impl Domain for RozedDb {
                 PRIMARY KEY(host, owner, repo, number)
             ) STRICT;
         ),
+        sql!(
+            // Where each file was marked viewed on this Mac: the head on screen when rozed marked
+            // it, per account. Not cached data, so clearing the cache keeps it; removing the
+            // account removes its rows.
+            CREATE TABLE viewed_files(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The file's path in the pull request, as GitHub names it.
+                path TEXT NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                viewed_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, path),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
     ];
 }
 
@@ -494,6 +514,55 @@ mod tests {
             assert_eq!(
                 cache.get::<Note>("a", &target).unwrap().unwrap().value,
                 Note(1)
+            );
+        });
+    }
+
+    /// rozed's database as it was before viewed files were recorded: the accounts and the cache.
+    struct BeforeViewedFiles;
+
+    impl Domain for BeforeViewedFiles {
+        const NAME: &str = RozedDb::NAME;
+        const MIGRATIONS: &[&str] = &[RozedDb::MIGRATIONS[0], RozedDb::MIGRATIONS[1]];
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_viewed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rozed.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeViewedFiles>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = RozedDb::open(&path).await.unwrap();
+            assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
+            let records = crate::viewed::ViewedRecords::new(db);
+            let pull = crate::PullRef::new("o", "r", 1);
+            records
+                .record("a", &pull, "a.rs", "h1", std::time::SystemTime::now())
+                .await
+                .unwrap();
+            assert_eq!(
+                records
+                    .heads("a", &pull)
+                    .unwrap()
+                    .get("a.rs")
+                    .map(String::as_str),
+                Some("h1")
             );
         });
     }
