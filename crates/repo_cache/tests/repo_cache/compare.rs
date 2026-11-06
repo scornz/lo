@@ -1,6 +1,7 @@
 //! Comparing two revisions of a pull request, across a rebase.
 
 use std::fs;
+use std::time::Duration;
 
 use repo_cache::{
     Change, ChangedFile, Comparison, Error, FetchFailure, Oid, PullRequestRefs, Replay, Repo,
@@ -736,4 +737,41 @@ fn an_unknown_commit_is_an_error_not_a_conflict() {
 
     assert!(result.is_err(), "{result:?}");
     assert_eq!(f.replay_pins(), []);
+}
+
+#[test]
+fn pins_a_crash_left_behind_go_once_nobody_has_the_clone_open() {
+    let Rebased { f, m1, m2, r1, r2 } = rebased();
+    let comparison = f
+        .repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision { base: m2, head: r2 },
+        )
+        .unwrap();
+    let tree = comparison.old.clone();
+    drop(comparison);
+    // What a rozed that crashed while showing the comparison leaves.
+    let left = format!("refs/rozed/replays/{tree}/99999-0");
+    git(f.repo.git_dir(), &["update-ref", &left, tree.as_str()]);
+
+    // Another window opening the clone leaves it, since this one might be showing it.
+    let other = f.cache.open("owner", "repo", None).unwrap();
+    assert_eq!(f.replay_pins(), [(tree.to_string(), left.clone())]);
+    drop(other);
+
+    let Fixture { repo, cache, .. } = f;
+    drop(repo);
+    // Opening it with no other open removes it. A child process another test thread starts at
+    // that moment can hold the in-use lock for an instant, so this allows a moment.
+    let mut reopened = cache.open("owner", "repo", None).unwrap();
+    for _ in 0..100 {
+        if replay_pins(&reopened).is_empty() {
+            break;
+        }
+        drop(reopened);
+        std::thread::sleep(Duration::from_millis(20));
+        reopened = cache.open("owner", "repo", None).unwrap();
+    }
+    assert_eq!(replay_pins(&reopened), []);
 }

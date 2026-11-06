@@ -154,16 +154,30 @@ impl RepoCache {
     ///
     /// Pass the repository's canonical name, GitHub's `full_name` for it, not a name from a link:
     /// a renamed or transferred repository then keeps one clone.
+    ///
+    /// Opening a clone no rozed has open removes the pins of replayed trees (see
+    /// [`crate::Comparison`]) that a rozed which crashed left in it.
     pub fn open(&self, owner: &str, repo: &str, token: Option<Token>) -> Result<Repo, Error> {
         check_name("repository owner", owner)?;
         check_name("repository name", repo)?;
         let git_dir = self.repo_dir(owner, repo);
         let lock_path = self.lock_path(owner, repo);
         let url = format!("{}/{owner}/{repo}.git", self.env.remote_base);
+        let in_use_path = self.in_use_path(owner, repo);
         let in_use = {
             let _lock = RepoLock::acquire(&lock_path)?;
             if git_dir.join("HEAD").is_file() {
                 self.update_remote(&git_dir, &url)?;
+                // With the clone open nowhere, no comparison shows a replayed tree, so any pin
+                // left is a crashed rozed's.
+                if let Some(_alone) = RepoLock::try_acquire(&in_use_path)?
+                    && let Err(error) = self.remove_left_replay_pins(&git_dir)
+                {
+                    log::warn!(
+                        "can't remove replay pins from {}: {error}",
+                        git_dir.display()
+                    );
+                }
             } else {
                 // A folder without HEAD isn't a clone git can use: what an interrupted deletion
                 // left behind. It goes, and a new clone takes its place.
@@ -176,7 +190,7 @@ impl RepoCache {
             stamp_last_used(&git_dir, SystemTime::now())?;
             // Taken before the write lock is let go, so cleanup, which takes that first, can't
             // slip in between.
-            RepoLock::acquire_shared(&self.in_use_path(owner, repo))?
+            RepoLock::acquire_shared(&in_use_path)?
         };
         Ok(Repo::new(
             self.env.clone(),

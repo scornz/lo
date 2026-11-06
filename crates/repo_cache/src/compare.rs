@@ -2,12 +2,13 @@
 //! across a rebase (design §6, "Rebase-aware comparison").
 
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::diff::ChangedFile;
 use crate::git::failure_message;
-use crate::{Error, Oid, Repo};
+use crate::{Error, Oid, Repo, RepoCache};
 
 /// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<pin>`.
 const REPLAYS: &str = "refs/rozed/replays/";
@@ -153,6 +154,29 @@ impl Repo {
         } else {
             Replayed::Conflicted(paths)
         })
+    }
+}
+
+impl RepoCache {
+    /// Removes every replay pin from the clone at `git_dir`. Only for a clone no rozed has open,
+    /// where a pin is one a rozed that crashed left behind.
+    pub(crate) fn remove_left_replay_pins(&self, git_dir: &Path) -> Result<(), Error> {
+        let deletes = self
+            .git(git_dir)
+            .args(["for-each-ref", "--format=delete %(refname)", REPLAYS])
+            .run()?;
+        if deletes.is_empty() {
+            return Ok(());
+        }
+        self.git(git_dir)
+            .args(["update-ref", "--stdin"])
+            .run_with_input(Some(&deletes))?;
+        log::info!(
+            "removed {} replay pins left in {}",
+            deletes.iter().filter(|byte| **byte == b'\n').count(),
+            git_dir.display()
+        );
+        Ok(())
     }
 }
 
