@@ -8,17 +8,23 @@
 //!   from.
 //!
 //! Like viewed records ([`crate::viewed::ViewedRecords`]), these aren't cached answers: clearing
-//! the cache keeps them, and removing the account removes its rows.
+//! the cache keeps them, and removing the account removes its rows. A pull request's rows go once
+//! it has been closed for [`RevisionMarks::KEPT_AFTER_CLOSING`] ([`RevisionMarks::prune`]).
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use sqlez_macros::sql;
 
-use crate::cache::{from_secs, to_secs};
+use crate::cache::{CacheEntry as _, from_secs, to_secs};
 use crate::credentials::HOST;
 use crate::db::RozedDb;
-use crate::pulls::PullRef;
+use crate::pulls::{PullRef, PullSummary};
+
+/// Where a cached summary says whether a pull request is closed, and when it was last updated.
+const STATE: &str = "$.state";
+const CLOSED: &str = "closed";
+const UPDATED_AT: &str = "$.updated_at";
 
 /// A head a poller saw on a pull request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,8 +42,48 @@ pub struct RevisionMarks {
 }
 
 impl RevisionMarks {
+    /// How long a pull request's rows are kept after it closed.
+    pub const KEPT_AFTER_CLOSING: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
     pub fn new(db: RozedDb) -> Self {
         Self { db }
+    }
+
+    /// Forgets the seen heads and "last seen here" of every pull request closed before
+    /// [`Self::KEPT_AFTER_CLOSING`] ago, at `now`, as any account's cached summary of it says.
+    /// A closed pull request's summary is updated when it closes or later, so its update time
+    /// stands for when it closed. A pull request with no summary in the cache keeps its rows.
+    pub async fn prune(&self, now: SystemTime) -> Result<()> {
+        let cutoff = chrono::DateTime::<chrono::Utc>::from(now - Self::KEPT_AFTER_CLOSING)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let summary = PullSummary::NAME;
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.with_savepoint("prune_revision_marks", || {
+                    connection.exec_bound(sql!(
+                        DELETE FROM seen_heads WHERE EXISTS (
+                            SELECT pull.number FROM pr_cache AS pull
+                            WHERE pull.host = seen_heads.host AND pull.owner = seen_heads.owner
+                                AND pull.repo = seen_heads.repo
+                                AND pull.number = seen_heads.number AND pull.query = ?1
+                                AND json_extract(pull.json, ?3) = ?4
+                                AND json_extract(pull.json, ?5) < ?2
+                        )
+                    ))?((summary, cutoff.clone(), STATE, CLOSED, UPDATED_AT))?;
+                    connection.exec_bound(sql!(
+                        DELETE FROM last_seen WHERE EXISTS (
+                            SELECT pull.number FROM pr_cache AS pull
+                            WHERE pull.host = last_seen.host AND pull.owner = last_seen.owner
+                                AND pull.repo = last_seen.repo
+                                AND pull.number = last_seen.number AND pull.query = ?1
+                                AND json_extract(pull.json, ?3) = ?4
+                                AND json_extract(pull.json, ?5) < ?2
+                        )
+                    ))?((summary, cutoff, STATE, CLOSED, UPDATED_AT))
+                })
+            })
+            .await
     }
 
     /// Every head any account's poller saw on `pull`, with when one first saw it, earliest
@@ -253,6 +299,65 @@ mod tests {
                 marks.last_seen("bot", &pr("rozed-dev", "e2e", 14)).unwrap(),
                 None
             );
+        });
+    }
+
+    /// GitHub's summary of a pull request in `state`, last updated `days` days before `now`.
+    fn summary(number: i64, state: &str, days: u64, now: SystemTime) -> PullSummary {
+        let updated =
+            chrono::DateTime::<chrono::Utc>::from(now - Duration::from_secs(days * 86_400));
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "title": "t",
+            "state": state,
+            "updated_at": updated.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "head": {"ref": "h", "sha": "h1"},
+            "base": {"ref": "main", "sha": "m1"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn pull_requests_closed_a_month_ago_are_forgotten() {
+        block_on(async {
+            let (db, marks) = marks("marks_prune", &["bot"]).await;
+            let cache = PrCache::new(db);
+            let now = at(100 * 86_400);
+            // Closed 40 days ago, closed 10 days ago, open but untouched for 40, and never
+            // summarized.
+            let pulls = [
+                (
+                    pr("rozed-dev", "e2e", 1),
+                    Some(summary(1, "closed", 40, now)),
+                ),
+                (
+                    pr("rozed-dev", "e2e", 2),
+                    Some(summary(2, "closed", 10, now)),
+                ),
+                (pr("rozed-dev", "e2e", 3), Some(summary(3, "open", 40, now))),
+                (pr("rozed-dev", "e2e", 4), None),
+            ];
+            for (pull, summary) in &pulls {
+                marks.record_seen("bot", pull, "h1", now).await.unwrap();
+                marks.set_last_seen("bot", pull, "h1", now).await.unwrap();
+                if let Some(summary) = summary {
+                    let target = pull.clone().into();
+                    cache.put("bot", &target, summary, None, now).await.unwrap();
+                }
+            }
+
+            marks.prune(now).await.unwrap();
+
+            let kept: Vec<i64> = (pulls.iter())
+                .filter(|(pull, _)| !marks.seen_heads(pull).unwrap().is_empty())
+                .map(|(pull, _)| pull.number)
+                .collect();
+            assert_eq!(kept, [2, 3, 4]);
+            let last_seen: Vec<i64> = (pulls.iter())
+                .filter(|(pull, _)| marks.last_seen("bot", pull).unwrap().is_some())
+                .map(|(pull, _)| pull.number)
+                .collect();
+            assert_eq!(last_seen, [2, 3, 4]);
         });
     }
 

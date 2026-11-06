@@ -432,10 +432,19 @@ impl Poller {
                 this.wake();
             }
         });
+        // Long-closed pull requests' revision marks go at launch, as unused clones do.
+        let marks = RevisionMarks::new(cache.db().clone());
+        let (pruning, now) = (marks.clone(), config.wall_clock.now());
+        cx.background_spawn(async move {
+            if let Err(error) = pruning.prune(now).await {
+                log::warn!("forgetting closed pull requests' revisions: {error:#}");
+            }
+        })
+        .detach();
         Self {
             accounts,
             login: login.into(),
-            marks: RevisionMarks::new(cache.db().clone()),
+            marks,
             cache,
             queue: RequestQueue::new(cx.background_executor().clone(), config.write_spacing),
             config,
