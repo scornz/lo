@@ -121,6 +121,10 @@ jobs:
       - name: Check the Cargo settings copied from Zed
         run: cargo --locked xtask sync-zed --check
 
+      # Fails when the set of Zed crates linked into rozed changes; see script/zed-crates.txt.
+      - name: Check the Zed crates compiled in
+        run: script/check-zed-crates.sh
+
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
