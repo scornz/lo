@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 
@@ -271,24 +271,28 @@ impl PrTab {
     pub fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (link, trust, opened) = (self.key.opened_as.clone(), self.trust, self.opened);
         self._load = Some(cx.spawn_in(window, async move |this, cx| {
-            let loaded = match load(this.clone(), link.clone(), trust, opened, cx).await {
-                Err(error) if is_offline(&error) => {
-                    show_offline(this.clone(), link.clone(), opened, error, cx).await
+            loop {
+                let saved = saved_details(&link, cx).await;
+                let error = match load(this.clone(), link.clone(), trust, opened, &saved, cx).await
+                {
+                    Ok(()) => return,
+                    Err(error) => error,
+                };
+                if !is_offline(&error) {
+                    failed(&this, &link, error, cx);
+                    return;
                 }
-                loaded => loaded,
-            };
-            if let Err(error) = loaded {
-                log::error!("{link}: {error:#}");
-                let links = error
-                    .downcast_ref::<Refusal>()
-                    .map(|refusal| refusal.links.clone())
-                    .unwrap_or_default();
-                this.update(cx, |this, cx| {
-                    this.help_links = links;
-                    this.show_saved_banner(false, cx);
-                    this.set_status(Status::Failed(format!("{error:#}").into()), cx)
-                })
-                .ok();
+                if let Err(error) =
+                    show_offline(this.clone(), link.clone(), opened, saved, error, cx).await
+                {
+                    failed(&this, &link, error, cx);
+                }
+                // An offline tab keeps checking, and loads again once GitHub answers.
+                wait_for_github(cx).await;
+                log::info!("{link}: GitHub answers again, so loading it again");
+                if this.update(cx, |this, cx| this.start_again(cx)).is_err() {
+                    return;
+                }
             }
         }));
     }
@@ -429,8 +433,8 @@ impl PrTab {
     fn showing_offline(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
         self.show_saved_banner(false, cx);
         let text = format!(
-            "Offline: {why:#}. This is the local copy's diff, read-only; open the pull request \
-             again to try GitHub again."
+            "Offline: {why:#}. This is the local copy's diff, read-only, until GitHub answers \
+             again; rozed keeps trying."
         );
         self.set_status(Status::Offline(text.into()), cx);
     }
@@ -1122,23 +1126,74 @@ fn merge_into_twin(
     true
 }
 
+/// What rozed saved about `link`'s pull request, with any account.
+async fn saved_details(link: &PrLink, cx: &mut AsyncWindowContext) -> Option<Saved> {
+    let layer = cx.update(|_, cx| github_layer::ready(cx)).ok()?.await?;
+    let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number).ok()?);
+    cx.update(|_, cx| layer.read(cx).saved_details(&pull, cx))
+        .ok()?
+}
+
+/// The tab failed to load: says why, with GitHub's links to fix it.
+fn failed(
+    this: &WeakEntity<PrTab>,
+    link: &PrLink,
+    error: anyhow::Error,
+    cx: &mut AsyncWindowContext,
+) {
+    log::error!("{link}: {error:#}");
+    let links = error
+        .downcast_ref::<Refusal>()
+        .map(|refusal| refusal.links.clone())
+        .unwrap_or_default();
+    let mut text = format!("{error:#}");
+    if is_offline(&error) {
+        text.push_str(". rozed keeps trying GitHub.");
+    }
+    this.update(cx, |this, cx| {
+        this.help_links = links;
+        this.show_saved_banner(false, cx);
+        this.set_status(Status::Failed(text.into()), cx)
+    })
+    .ok();
+}
+
+/// How long an offline tab waits before checking GitHub the first time, doubling each time
+/// after, up to [`OFFLINE_MAX_WAIT`].
+const OFFLINE_FIRST_WAIT: Duration = Duration::from_secs(5);
+const OFFLINE_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
+
+/// Waits until GitHub answers again, checking less often the longer it doesn't.
+async fn wait_for_github(cx: &mut AsyncWindowContext) {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let wait = github::poll::backoff(attempt, OFFLINE_FIRST_WAIT, OFFLINE_MAX_WAIT, 0., 0.);
+        cx.background_executor().timer(wait).await;
+        let Ok(http) = cx.update(|_, cx| cx.http_client()) else {
+            return;
+        };
+        if github_api::github_answers(http).await {
+            return;
+        }
+    }
+}
+
 /// Loads `link`'s pull request into `this`: picks the account, reads the pull request, copies it
-/// locally and shows its diff.
+/// locally and shows its diff. What rozed `saved` about it shows until GitHub answers.
 async fn load(
     this: WeakEntity<PrTab>,
     link: PrLink,
     trust: Trust,
     opened: Instant,
+    saved: &Option<Saved>,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
     let layer = cx.update(|_, cx| github_layer::ready(cx))?.await;
     let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number)?);
     // What rozed saved shows at once, and offline.
-    if let Some(layer) = &layer {
-        let saved = cx.update(|_, cx| layer.read(cx).saved_details(&pull, cx))?;
-        if let Some(saved) = saved {
-            this.update(cx, |this, cx| this.show_saved(&saved, cx))?;
-        }
+    if let Some(saved) = saved {
+        this.update(cx, |this, cx| this.show_saved(saved, cx))?;
     }
 
     // The account that can see the repository, or none for a public one.
@@ -1233,28 +1288,28 @@ async fn load(
     Ok(())
 }
 
-/// Whether `error` says GitHub couldn't be reached.
+/// Whether `error` says GitHub couldn't be reached at all: no connection could be made. A slow
+/// answer that timed out isn't offline.
 fn is_offline(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| matches!(cause.downcast_ref(), Some(GithubError::Network(_))))
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<GithubError>()
+            .is_some_and(GithubError::is_unreachable)
+    })
 }
 
 /// When GitHub couldn't be reached (`offline`), shows the pull request's diff from the local
-/// copy, if it has the head rozed saved, with the saved details and their age (design §11
+/// copy, if it has the head rozed `saved`, with the saved details and their age (design §11
 /// "Offline"). Without a copy, it's `offline` again, and the tab shows the saved details alone.
 async fn show_offline(
     this: WeakEntity<PrTab>,
     link: PrLink,
     opened: Instant,
+    saved: Option<Saved>,
     offline: anyhow::Error,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
-    let Some(layer) = cx.update(|_, cx| github_layer::loaded(cx))? else {
-        return Err(offline);
-    };
-    let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number)?);
-    let Some(saved) = cx.update(|_, cx| layer.read(cx).saved_details(&pull, cx))? else {
+    let Some(saved) = saved else {
         return Err(offline);
     };
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
@@ -2414,9 +2469,10 @@ mod tests {
         // Offline, GitHub can't confirm the pull request, so nothing records it as opened.
         assert_eq!(cache.recent(10).unwrap(), Vec::new());
 
-        // Back online, opening it again loads it, and the banner goes.
+        // It keeps checking, and once GitHub answers again it loads, and the banner goes.
         github.set_offline(false);
-        open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
         assert_eq!(status(&tab, cx), Status::Ready);
         assert_eq!(banners(&tab, cx), Vec::<String>::new());
         let recent: Vec<_> = cache
@@ -2470,7 +2526,7 @@ mod tests {
             .await
             .unwrap();
         github.set_offline(true);
-        git.remove("rozed-dev/playground");
+        git.hide("rozed-dev/playground");
         pull
     }
 
@@ -2514,7 +2570,10 @@ mod tests {
         };
         assert!(message.starts_with("Offline: "), "{message}");
         assert!(message.contains("couldn't reach GitHub"), "{message}");
-        assert!(message.ends_with("open the pull request again to try GitHub again."));
+        assert!(
+            message.ends_with("until GitHub answers again; rozed keeps trying."),
+            "{message}"
+        );
         assert_eq!(
             banners(&tab, cx),
             ["Showing what rozed saved for rozed-bot 2 hours ago."]
@@ -2552,16 +2611,35 @@ mod tests {
         // Against the saved base, which the copy has.
         assert_eq!(old_texts(&tab, cx), ["a\n", "b\n"]);
 
-        // Back online, opening it again asks GitHub again.
+        // While GitHub can't be reached, it keeps checking, less often each time, and stays as
+        // it is.
+        github.requests();
+        cx.executor().advance_clock(Duration::from_secs(5 + 10));
+        cx.run_until_parked();
+        assert_eq!(
+            github.requests(),
+            ["GET /rate_limit as nobody", "GET /rate_limit as nobody"]
+        );
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+
+        // Back online, it loads from GitHub by itself: the local copy fetches again, and the
+        // offline status and the saved details' banner go.
         github.set_offline(false);
-        let reopened = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
-        assert_eq!(reopened, tab);
+        git.restore("rozed-dev/playground");
+        cx.executor().advance_clock(Duration::from_secs(20));
+        cx.run_until_parked();
         let requests = github.requests();
         assert!(
             requests.contains(&"GET /repos/rozed-dev/playground/pulls/2 as gho_BOT".to_string()),
             "{requests:#?}"
         );
+        assert_eq!(status(&tab, cx), Status::Ready);
         assert_eq!(banners(&tab, cx), Vec::<String>::new());
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.acting(), Some(&Acting::Account("rozed-bot".into())));
+            assert!(tab.diff().is_some());
+        });
+        assert_eq!(old_texts(&tab, cx), ["a\n", "b\n"]);
     }
 
     #[gpui::test]
@@ -2660,14 +2738,108 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    async fn a_slow_answer_isnt_offline(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
+        // GitHub can be reached, but answers too slowly.
+        github.set_offline(false);
+        github.set_timing_out(true);
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("expected the tab to fail: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("operation timed out"), "{message}");
+        assert!(!message.contains("keeps trying"), "{message}");
+        tab.read_with(cx, |tab, _| assert!(tab.diff().is_none()));
+    }
+
+    #[gpui::test]
+    async fn one_accounts_failed_connection_isnt_offline(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("rozed-dev/playground", 2, &[], &[("a.rs", "a\n")]);
+        github.add_pull(pull);
+        github.let_see("gho_BOT", "rozed-dev/playground");
+        sign_in(
+            &github,
+            &[("home", "gho_HOME"), ("rozed-bot", "gho_BOT")],
+            cx,
+        )
+        .await;
+        // home's requests can't connect, as through a VPN that's down.
+        github.cut_off("gho_HOME");
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        assert_eq!(status(&tab, cx), Status::Ready);
+        assert_eq!(acting(&tab, cx), Some(Acting::Account("rozed-bot".into())));
+    }
+
+    #[gpui::test]
+    async fn offline_the_newest_saved_details_show_whichever_account_saved_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("rozed-dev/playground", 2, &[], &[("a.rs", "a\n")]);
+        github.add_pull(pull);
+        let (accounts, cache) = sign_in(
+            &github,
+            &[("home", "gho_HOME"), ("rozed-bot", "gho_BOT")],
+            cx,
+        )
+        .await;
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("rozed-dev", "rozed-bot", cx)
+            })
+            .await
+            .unwrap();
+        // rozed-bot, the owner's account, saved them weeks ago, and home an hour ago.
+        let target = Target::Pull(PullRef::new("rozed-dev", "playground", 2));
+        for (login, title, ago) in [
+            ("rozed-bot", "Old title", 21 * 86_400),
+            ("home", "New title", 3_600 + 30),
+        ] {
+            let at = SystemTime::now() - Duration::from_secs(ago);
+            cache
+                .put(login, &target, &details(title, "VIEWED"), None, at)
+                .await
+                .unwrap();
+        }
+        github.set_offline(true);
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.header().title.clone())
+                .as_deref(),
+            Some("New title")
+        );
+        assert_eq!(
+            banners(&tab, cx),
+            ["Showing what rozed saved for home an hour ago."]
+        );
+    }
+
     #[test]
     fn only_an_unreachable_github_counts_as_offline() {
-        let unreachable =
-            || anyhow::Error::new(GithubError::Network(anyhow::anyhow!("the network is down")));
+        let network =
+            |kind| anyhow::Error::new(GithubError::Network(std::io::Error::from(kind).into()));
+        let unreachable = || network(std::io::ErrorKind::ConnectionRefused);
         assert!(is_offline(&unreachable()));
         assert!(is_offline(
             &unreachable().context("asking GitHub for a/b#1")
         ));
+        // A slow answer isn't offline.
+        assert!(!is_offline(&network(std::io::ErrorKind::TimedOut)));
         assert!(!is_offline(&anyhow::anyhow!(
             "GitHub has no pull request a/b#1, or bot can't see it"
         )));

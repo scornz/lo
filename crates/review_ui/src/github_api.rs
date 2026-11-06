@@ -108,15 +108,18 @@ pub async fn fetch_pull_request(
         // A renamed repository answers with a redirect to its new name.
         .follow_redirects(RedirectPolicy::FollowAll)
         .body(AsyncBody::empty())?;
+    // No answer is a network error, as with an account's client, so offline is told apart.
     let mut response = http
         .send(request)
         .await
+        .map_err(GithubError::Network)
         .with_context(|| format!("asking GitHub for {link}"))?;
     let mut body = String::new();
     response
         .body_mut()
         .read_to_string(&mut body)
         .await
+        .map_err(|error| GithubError::Network(error.into()))
         .with_context(|| format!("reading GitHub's answer for {link}"))?;
     check_status(
         response.status(),
@@ -126,6 +129,19 @@ pub async fn fetch_pull_request(
         can_sign_in,
     )?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
+}
+
+/// Whether GitHub's API answers at all, with any status: `GET /rate_limit` without signing in,
+/// which doesn't count against any rate limit. For telling when GitHub can be reached again.
+pub async fn github_answers(http: Arc<dyn HttpClient>) -> bool {
+    let request = Request::get("https://api.github.com/rate_limit")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .body(AsyncBody::empty());
+    match request {
+        Ok(request) => http.send(request).await.is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Turns an unsuccessful answer into an error that says what to do about it.

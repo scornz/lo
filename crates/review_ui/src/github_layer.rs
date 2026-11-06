@@ -106,49 +106,29 @@ impl GithubLayer {
             .unwrap_or_default()
     }
 
-    /// What rozed saved about `pull` the last time an account fetched it: the account remembered
-    /// for its owner's, else the account it was last opened with's, else any account's that has
-    /// it. It's read from rozed's database, so it's there at once, online or not.
+    /// What rozed saved about `pull` most recently, whichever account fetched it, so the newest
+    /// head shows. The viewed marks in it are that account's. It's read from rozed's database,
+    /// so it's there at once, online or not.
     pub fn saved_details(&self, pull: &PullRef, cx: &App) -> Option<Saved> {
-        let accounts = self.accounts.read(cx);
-        let remembered = accounts
-            .remembered_account(&pull.repo.owner)
-            .inspect_err(|error| log::warn!("reading the account for {}: {error:#}", pull.repo))
-            .ok()
-            .flatten();
-        let last_opened_with = self
-            .recent()
-            .into_iter()
-            .find(|recent| &recent.pull == pull)
-            .map(|recent| recent.account);
-        let mut logins: Vec<String> = remembered.into_iter().chain(last_opened_with).collect();
-        logins.extend(
-            accounts
-                .accounts()
-                .iter()
-                .map(|account| account.login.clone()),
-        );
         let target = Target::Pull(pull.clone());
-        let mut tried = Vec::new();
-        for login in logins {
-            let key = login.to_ascii_lowercase();
-            if tried.contains(&key) {
-                continue;
-            }
-            tried.push(key);
-            match self.cache.get::<PullRequestData>(&login, &target) {
-                Ok(Some(saved)) => {
-                    return Some(Saved {
-                        login,
+        self.accounts
+            .read(cx)
+            .accounts()
+            .iter()
+            .filter_map(|account| {
+                match self.cache.get::<PullRequestData>(&account.login, &target) {
+                    Ok(saved) => saved.map(|saved| Saved {
+                        login: account.login.clone(),
                         details: saved.value,
                         fetched_at: saved.fetched_at,
-                    });
+                    }),
+                    Err(error) => {
+                        log::warn!("reading what rozed saved about {pull}: {error:#}");
+                        None
+                    }
                 }
-                Ok(None) => {}
-                Err(error) => log::warn!("reading what rozed saved about {pull}: {error:#}"),
-            }
-        }
-        None
+            })
+            .max_by_key(|saved| saved.fetched_at)
     }
 
     /// Which account to open `owner/repo` with ([`Accounts::account_for_repo`]). Each account's

@@ -104,6 +104,10 @@ struct State {
     /// Answers that win over the rest, by token (`""` for none) and path.
     answers: HashMap<(String, String), Answer>,
     offline: bool,
+    /// Whether every request connects and then times out, as on a slow connection.
+    timing_out: bool,
+    /// Tokens whose requests can't connect, though others' can.
+    cut_off: Vec<String>,
     /// Requests to these paths wait until they're let go, each with what lets it go.
     held: HashMap<String, Vec<oneshot::Sender<()>>>,
     /// Each request, as `GET /path as token`.
@@ -146,6 +150,16 @@ impl FakeGithub {
         self.0.lock().offline = offline;
     }
 
+    /// Whether every request times out after connecting, as on a slow connection.
+    pub fn set_timing_out(&self, timing_out: bool) {
+        self.0.lock().timing_out = timing_out;
+    }
+
+    /// Makes `token`'s requests fail to connect, while other tokens' get answers.
+    pub fn cut_off(&self, token: &str) {
+        self.0.lock().cut_off.push(token.to_string());
+    }
+
     /// Makes requests to `path`, with any token, wait until [`Self::let_go`].
     pub fn hold(&self, path: &str) {
         self.0.lock().held.entry(path.to_string()).or_default();
@@ -176,12 +190,17 @@ impl FakeGithub {
         let mut state = self.0.lock();
         let who = if token.is_empty() { "nobody" } else { token };
         state.requests.push(format!("{method} {path} as {who}"));
-        if state.offline {
+        if state.offline || state.cut_off.iter().any(|cut_off| cut_off == token) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 "the network is down",
             )
             .into());
+        }
+        if state.timing_out {
+            return Err(anyhow::anyhow!("operation timed out").context(format!(
+                "error sending request for url (https://api.github.com{path})"
+            )));
         }
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
@@ -378,9 +397,17 @@ impl GitServer {
         }
     }
 
-    /// Takes `repo`, an `owner/name`, off the server, so fetching from it fails, as offline.
-    pub fn remove(&self, repo: &str) {
-        std::fs::remove_dir_all(self.dir.path().join(format!("{repo}.git"))).unwrap();
+    /// Takes `repo`, an `owner/name`, off the server, so fetching from it fails, as offline,
+    /// until [`Self::restore`].
+    pub fn hide(&self, repo: &str) {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        std::fs::rename(&git_dir, git_dir.with_extension("hidden")).unwrap();
+    }
+
+    /// Puts `repo` back on the server, as when GitHub can be reached again.
+    pub fn restore(&self, repo: &str) {
+        let git_dir = self.dir.path().join(format!("{repo}.git"));
+        std::fs::rename(git_dir.with_extension("hidden"), &git_dir).unwrap();
     }
 
     /// Pull request `number` of `repo`, an `owner/name`: `base`, a new commit on `main`, and
