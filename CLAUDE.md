@@ -159,6 +159,12 @@ force-push or delete one, because older rozed commits pin commits on it. To rewr
 same Zed release, push a new branch with a suffix, such as `rozed/v1.27.0-2`, and point the
 submodule at it as in step 2.
 
+To see what a release breaks first, run `script/zed-latest.sh --tag v<version>` (under `mise exec
+--`). It replays the patches onto the release in a worktree of its own, runs the checks in "Verify"
+there, and reports each patch that no longer applies and each failing step's first errors. It
+pushes nothing. The `weekly-zed` workflow runs it against Zed's latest release every week and keeps
+one issue labelled `zed-update` open, with the latest report, while that release breaks rozed.
+
 1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
    above in order, and push the branch to `scornz/zed`.
 2. Point the submodule at it:
