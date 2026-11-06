@@ -1,19 +1,19 @@
 {
   "request": {
     "method": "GET",
-    "url": "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Frevisions-4&direction=asc&per_page=100",
-    "if_none_match": "\"4baa240fbebdf3b1354d986733d619d84389b472eb332aa2aff585711d854860\""
+    "url": "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Frevisions-4&direction=desc&per_page=100",
+    "if_none_match": "\"b115ce0ddb3fe4b09e0a843e6e940c05f96b9c16a380d3d44751fb0de0406345\""
   },
   "response": {
     "status": 304,
     "headers": {
-      "etag": "\"4baa240fbebdf3b1354d986733d619d84389b472eb332aa2aff585711d854860\"",
+      "etag": "\"b115ce0ddb3fe4b09e0a843e6e940c05f96b9c16a380d3d44751fb0de0406345\"",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4986",
-      "x-ratelimit-reset": "1794005019",
+      "x-ratelimit-remaining": "4933",
+      "x-ratelimit-reset": "1794008622",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "14"
+      "x-ratelimit-used": "67"
     }
   }
 }

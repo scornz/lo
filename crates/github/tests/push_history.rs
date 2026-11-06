@@ -636,3 +636,106 @@ fn the_fields_a_push_history_watches_are_in_the_check() {
         );
     }
 }
+
+// A long-lived head branch, on answers made up from e2e#14's.
+
+/// The activity API's first page of e2e#14's head branch, newest first.
+const HEAD_PUSHES: &str = "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Frevisions-3&direction=desc&per_page=100";
+
+/// When push `n` of [`pushes`] was made.
+fn pushed_at(n: usize) -> SystemTime {
+    time("2026-11-06T10:00:00Z") + Duration::from_secs(n as u64 * 60)
+}
+
+/// e2e#14 as an open pull request whose head branch had `before` pushes when it opened, half a
+/// minute after the last of them, and `after` pushes since, each a minute apart: GraphQL's answer,
+/// the head branch's pushes newest first, a page at a time, and `main`'s as recorded.
+fn long_lived(before: usize, after: usize) -> (Vec<Interaction>, SystemTime) {
+    let opened = pushed_at(before) + Duration::from_secs(30);
+    let mut graphql = recorded_revisions();
+    let pull = &mut graphql.response.body.as_mut().unwrap()["data"]["repository"]["pullRequest"];
+    pull["createdAt"] = DateTime::<Utc>::from(opened)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        .into();
+    pull["closed"] = false.into();
+    pull["closedAt"] = serde_json::Value::Null;
+    pull["headRefOid"] = sha(before + after).into();
+    pull["timelineItems"]["filteredCount"] = 0.into();
+    pull["timelineItems"]["nodes"] = serde_json::json!([]);
+    pull["reviews"]["totalCount"] = 0.into();
+    pull["reviews"]["nodes"] = serde_json::json!([]);
+    pull["viewerLastReview"]["nodes"] = serde_json::json!([]);
+    pull["commits"]["nodes"] = serde_json::json!([]);
+
+    let mut newest_first = pushes(before + after);
+    newest_first.reverse();
+    let url = |page: usize| match page {
+        0 => HEAD_PUSHES.to_string(),
+        page => format!("{HEAD_PUSHES}&after=C{page}"),
+    };
+    let pages: Vec<&[serde_json::Value]> = newest_first.chunks(100).collect();
+    let mut interactions = vec![graphql];
+    for (index, entries) in pages.iter().enumerate() {
+        let next = (index + 1 < pages.len()).then(|| url(index + 1));
+        let etag = format!("\"h{index}\"");
+        interactions.push(page(&url(index), &etag, next.as_deref(), entries));
+    }
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    interactions.extend(
+        (recorded.into_iter().map(|(_, interaction)| interaction))
+            .filter(|interaction| interaction.request.url.contains("heads%2Fmain"))
+            .take(1),
+    );
+    (interactions, opened)
+}
+
+#[test]
+fn a_long_lived_head_branch_is_read_back_to_when_the_pull_request_opened() {
+    let (interactions, opened) = long_lived(1500, 5);
+    let http = Arc::new(ReplayHttpClient::from_interactions("long_lived", interactions).unwrap());
+
+    let history = block_on(client(http.clone()).push_history(&e2e(14), BOT, None)).unwrap();
+
+    // One page holds the five pushes since it opened, and the one it opened with.
+    let head_pages = http
+        .seen()
+        .iter()
+        .filter(|seen| seen.url.contains("revisions-3"))
+        .count();
+    assert_eq!(head_pages, 1);
+    assert!(!history.head_activity.truncated);
+    let revisions = revisions(&history, &[]);
+    let heads: Vec<String> = revisions.iter().map(|r| r.head.clone()).collect();
+    assert_eq!(heads, (1500..=1505).map(sha).collect::<Vec<_>>());
+    assert_eq!(
+        revisions.as_slice()[0].pushed_at,
+        PushedAt::Exact(pushed_at(1500))
+    );
+    assert!(pushed_at(1500) < opened);
+}
+
+#[test]
+fn a_head_branch_with_more_pushes_since_it_opened_than_rozed_reads_is_truncated() {
+    let (interactions, opened) = long_lived(3, 1100);
+    let http = Arc::new(ReplayHttpClient::from_interactions("truncated", interactions).unwrap());
+
+    let history = block_on(client(http.clone()).push_history(&e2e(14), BOT, None)).unwrap();
+
+    assert!(history.head_activity.truncated);
+    let head_pages = http
+        .seen()
+        .iter()
+        .filter(|seen| seen.url.contains("revisions-3"))
+        .count();
+    assert_eq!(head_pages, github::push_history::MAX_HEAD_PAGES);
+    // Only the latest thousand pushes, all since it opened: nothing from before stands in for
+    // its first revision.
+    let revisions = revisions(&history, &[]);
+    assert_eq!(revisions.len(), 1000);
+    assert_eq!(revisions.as_slice()[0].head, sha(104));
+    assert!(revisions.iter().all(|revision| match revision.pushed_at {
+        PushedAt::Exact(at) => at > opened,
+        _ => false,
+    }));
+}

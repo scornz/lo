@@ -1,29 +1,29 @@
 {
   "request": {
     "method": "GET",
-    "url": "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Frevisions-4&direction=asc&per_page=100"
+    "url": "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Frevisions-4&direction=desc&per_page=100"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "etag": "\"4baa240fbebdf3b1354d986733d619d84389b472eb332aa2aff585711d854860\"",
+      "etag": "\"b115ce0ddb3fe4b09e0a843e6e940c05f96b9c16a380d3d44751fb0de0406345\"",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4987",
-      "x-ratelimit-reset": "1794005019",
+      "x-ratelimit-remaining": "4934",
+      "x-ratelimit-reset": "1794008622",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "13"
+      "x-ratelimit-used": "66"
     },
     "body": [
       {
-        "id": 49288673350,
-        "node_id": "PSH_kwLOVleUfc8AAAALedV4Rg",
-        "before": "0000000000000000000000000000000000000000",
-        "after": "60005cf756d9ed28f97cd8f6f81ada3bee320e97",
+        "id": 49288689166,
+        "node_id": "PSH_kwLOVleUfc8AAAALedW2Dg",
+        "before": "b88cc8b3c4c702f34cd11d0e46fe27a285967e23",
+        "after": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
         "ref": "refs/heads/e1/revisions-4",
-        "timestamp": "2026-11-06T19:29:47Z",
-        "activity_type": "branch_creation",
+        "timestamp": "2026-11-06T19:29:57Z",
+        "activity_type": "push",
         "actor": {
           "login": "rozed-bot",
           "id": 353226052,
@@ -77,13 +77,13 @@
         }
       },
       {
-        "id": 49288689166,
-        "node_id": "PSH_kwLOVleUfc8AAAALedW2Dg",
-        "before": "b88cc8b3c4c702f34cd11d0e46fe27a285967e23",
-        "after": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+        "id": 49288673350,
+        "node_id": "PSH_kwLOVleUfc8AAAALedV4Rg",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "60005cf756d9ed28f97cd8f6f81ada3bee320e97",
         "ref": "refs/heads/e1/revisions-4",
-        "timestamp": "2026-11-06T19:29:57Z",
-        "activity_type": "push",
+        "timestamp": "2026-11-06T19:29:47Z",
+        "activity_type": "branch_creation",
         "actor": {
           "login": "rozed-bot",
           "id": 353226052,

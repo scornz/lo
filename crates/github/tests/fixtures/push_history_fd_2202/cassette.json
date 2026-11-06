@@ -1,6 +1,6 @@
 {
   "description": "sharkdp/fd#2202's push history, twice, as rozed-bot: a merged pull request whose fork was deleted, so its head branch's pushes can't be read",
-  "recorded_at": "2026-11-06T22:17:02Z",
+  "recorded_at": "2026-11-06T23:36:46Z",
   "repo": "sharkdp/fd",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

@@ -28,7 +28,8 @@ use crate::queries::pull_request_revisions::{
 };
 use crate::revision_marks::SeenHead;
 
-/// The most pages of the head branch's pushes read: a thousand pushes.
+/// The most pages of the head branch's pushes read, newest first back to the one the pull
+/// request opened with: a thousand pushes.
 pub const MAX_HEAD_PAGES: usize = 10;
 /// The most pages of a base branch's pushes read, newest first back to the pull request's first
 /// revision. A busy base branch's older pushes are left out; a base that only moved forward
@@ -54,7 +55,9 @@ pub struct PushHistory {
     pub merged: bool,
     /// The commit that merged it, with its parents: two for a merge commit.
     pub merge_commit: Option<MergeCommit>,
-    /// The head branch's pushes, oldest first.
+    /// The head branch's pushes, newest first back to the one the pull request opened with, its
+    /// first revision. Older pushes, to the branch before the pull request, aren't read. Past
+    /// [`MAX_HEAD_PAGES`] it's `truncated`, holding the latest pushes only.
     pub head_activity: BranchActivity,
     /// The pushes of each branch it targeted, newest first back to its first revision: today's
     /// base branch first, then those it targeted before, latest first.
@@ -167,7 +170,7 @@ impl PushHistory {
             opened_at: data.created_at,
             closed_at: data.closed.then_some(data.closed_at).flatten(),
             head: data.head_ref_oid,
-            head_activity: BranchActivity::none(&data.head_ref_name, Direction::Asc),
+            head_activity: BranchActivity::none(&data.head_ref_name, Direction::Desc),
             head_branch: data.head_ref_name,
             head_repo: data.head_repository.map(|repo| HeadRepo {
                 owner: repo.owner.login,
@@ -433,23 +436,28 @@ impl GithubClient {
             .pull_request_revisions(owner, name, pull.number, login)
             .await?;
         let mut history = PushHistory::from_graphql(data);
+        // Newest first, back to the push the pull request opened with: a long-lived branch, or
+        // one a bot reuses for every release, can have far more pushes from before.
+        let opened = history.opened_at;
         history.head_activity = match &history.head_repo {
             Some(repo) => {
                 let known = known.map(|known| &known.head_activity);
                 (self.branch_activity(
                     &repo.into(),
                     &history.head_branch,
-                    Direction::Asc,
+                    Direction::Desc,
                     known,
                     MAX_HEAD_PAGES,
-                    |_| false,
+                    |entry| entry.timestamp <= opened,
                 ))
                 .await?
             }
             None => BranchActivity::unavailable(
                 &history.head_branch,
-                Direction::Asc,
-                "the repository its head branch was in is gone".into(),
+                Direction::Desc,
+                "GitHub shows no repository for its head branch: it was deleted, or the account \
+                 can't see it"
+                    .into(),
             ),
         };
         let since = history.since();

@@ -11,10 +11,10 @@
       "link": "<https://api.github.com/repositories/90793418/activity?ref=refs%2Fheads%2Fmaster&direction=desc&per_page=100&after=Y3Vyc29yOnYyOpK7MjAyNi0wNC0wMlQwNzoyNDoyNy4wMDAwMDBazwAAAAeLRA5X>; rel=\"next\"",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4978",
-      "x-ratelimit-reset": "1794005019",
+      "x-ratelimit-remaining": "4930",
+      "x-ratelimit-reset": "1794008622",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "22"
+      "x-ratelimit-used": "70"
     },
     "body": [
       {
