@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://github.com/login/oauth/access_token",
+    "body": "client_id=Ov23liBORqwRdiPzqsPP&device_code=FAKE-DEVICE-CODE&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": "slow_down",
+      "error_description": "Too many requests have been made in the same timeframe.",
+      "error_uri": "https://docs.github.com",
+      "interval": 10
+    }
+  }
+}

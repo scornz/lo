@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://github.com/login/device/code",
+    "body": "client_id=Ov23liBORqwRdiPzqsPP&scope=repo+read%3Aorg+workflow"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": "Not Found"
+    }
+  }
+}
