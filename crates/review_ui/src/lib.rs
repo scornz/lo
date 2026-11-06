@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod api_diff;
+pub mod diff_cursor;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
@@ -20,6 +21,7 @@ pub mod tabs;
 #[cfg(test)]
 mod test_support;
 pub mod trust;
+pub mod viewed_marks;
 
 use github::accounts::Accounts;
 use github::db::RozedDb;

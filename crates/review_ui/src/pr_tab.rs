@@ -2,7 +2,7 @@
 //! threads (design §10 "Window"). rozed's window has one tab per pull request, and opening a pull
 //! request that's already open switches to its tab.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -10,27 +10,30 @@ use anyhow::Context as _;
 use futures::channel::oneshot;
 
 use editor::scroll::Autoscroll;
-use editor::{Editor, SelectionEffects, SplittableEditor};
+use editor::{Anchor, Direction, Editor, EditorEvent, SelectionEffects, SplittableEditor};
 use github::files::CutShort;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{GithubError, HelpLink, PullRef, Target};
+use github::viewed::ViewedRecords;
+use github::{GithubClient, GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
-    Window, actions, uniform_list,
+    AnyElement, App, AsyncApp, AsyncWindowContext, Context, ElementId, Entity, EntityId,
+    EventEmitter, FocusHandle, Focusable, KeyBinding, Render, SharedString, Subscription, Task,
+    UniformListScrollHandle, WeakEntity, Window, actions, uniform_list,
 };
-use language::Capability;
+use language::{Capability, Point};
 use project::WorktreeId;
 use repo_cache::{ChangedFile, Oid};
 use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 use util::rel_path::RelPath;
 use workspace::item::{Item, ItemEvent, TabContentParams};
-use workspace::{ItemNavHistory, Workspace};
+use workspace::notifications::NotificationId;
+use workspace::{ItemNavHistory, Toast, Workspace};
 
 use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::api_diff::{self, FilesReader, GithubDiff, thousands};
+use crate::diff_cursor;
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
@@ -39,6 +42,7 @@ use crate::pr_banner::{self, BannerAction, BannerKind, Banners};
 use crate::pr_diff::{self, CopyProgress, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
+use crate::viewed_marks::{Toggle, ViewedMarks, changed_since_viewed, write_failed};
 
 actions!(
     review_ui,
@@ -49,11 +53,26 @@ actions!(
         ToggleThreads,
         /// Switches the file list between review order and path order.
         ToggleFileOrder,
+        /// Marks the current file viewed and moves to the next unviewed file, or clears the mark
+        /// of a viewed file.
+        ToggleViewed,
+        /// Moves to the next file in the diff.
+        NextFile,
+        /// Moves to the previous file in the diff.
+        PreviousFile,
+        /// Moves to the next change, in whichever file it is.
+        NextChange,
+        /// Moves to the previous change, in whichever file it is.
+        PreviousChange,
     ]
 );
 
 const KEY_CONTEXT: &str = "PrTab";
 const FILE_LIST_CONTEXT: &str = "PrFileList";
+/// The tab outside any text box in it, such as a comment box: keys that type a character work
+/// here, so a text box still types them. The diff's own editors are the only full-size ones.
+/// Milestone 12 binds rozed's diff keys in a context deeper than vim's.
+const READING_CONTEXT: &str = "PrTab && !(Editor && mode != full)";
 
 /// The tab's keys. Panels toggle with Zed's keys for its docks.
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -61,7 +80,13 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-o", ToggleFileOrder, Some(KEY_CONTEXT)),
+        // alt-o types ø.
+        KeyBinding::new("alt-o", ToggleFileOrder, Some(READING_CONTEXT)),
+        KeyBinding::new("e", ToggleViewed, Some(READING_CONTEXT)),
+        KeyBinding::new("] f", NextFile, Some(READING_CONTEXT)),
+        KeyBinding::new("[ f", PreviousFile, Some(READING_CONTEXT)),
+        KeyBinding::new("] c", NextChange, Some(READING_CONTEXT)),
+        KeyBinding::new("[ c", PreviousChange, Some(READING_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // Back and forward through where the diff's cursor has been (design §10), beside Zed's
         // ctrl-- and ctrl-_.
@@ -137,6 +162,52 @@ pub(crate) fn sync_active(workspace: &Workspace, cx: &mut App) {
     }
 }
 
+/// Closes `tab` and opens its pull request again in its place, at its latest push.
+pub(crate) fn reopen(
+    workspace: &mut Workspace,
+    tab: &Entity<PrTab>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> Option<Entity<PrTab>> {
+    reopen_with(workspace, tab, window, cx, PrTab::load)
+}
+
+/// [`reopen`], with `start` run on the new tab instead of loading it.
+fn reopen_with(
+    workspace: &mut Workspace,
+    tab: &Entity<PrTab>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+    start: impl FnOnce(&mut PrTab, &mut Window, &mut Context<PrTab>),
+) -> Option<Entity<PrTab>> {
+    let pane = workspace.pane_for(tab)?;
+    let index = pane.read(cx).index_for_item(tab)?;
+    let (link, trust) = {
+        let tab = tab.read(cx);
+        (tab.link().clone(), tab.trust)
+    };
+    log::info!("{link}: opening it again at its latest push");
+    pane.update(cx, |pane, cx| {
+        pane.remove_item(tab.entity_id(), false, false, window, cx)
+    });
+    let weak_workspace = workspace.weak_handle();
+    let reopened = cx.new(|cx| {
+        let mut reopened = PrTab::new(link, trust, weak_workspace, window, cx);
+        start(&mut reopened, window, cx);
+        reopened
+    });
+    workspace.add_item(
+        pane,
+        Box::new(reopened.clone()),
+        Some(index),
+        true,
+        true,
+        window,
+        cx,
+    );
+    Some(reopened)
+}
+
 /// What the header shows about the pull request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Header {
@@ -185,8 +256,22 @@ pub struct PrTab {
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
-    /// GitHub's viewed marks, by path, kept for when the files arrive.
-    viewed: HashMap<String, ViewedState>,
+    /// GitHub's viewed marks, and the ones being set, kept for when the files arrive.
+    marks: ViewedMarks,
+    /// The pull request's GraphQL node ID, which writes name it by.
+    node_id: Option<String>,
+    /// The head on screen: GitHub's at first, then the one the local copy fetched.
+    head: Option<String>,
+    /// When rozed learned the head on screen. What GitHub said about its head before then is
+    /// older news.
+    head_at: Option<SystemTime>,
+    /// GitHub's latest head for the pull request, from its details or its summary, and when GitHub
+    /// gave it. `e` marks files only while it's the head on screen.
+    latest_head: Option<(String, SystemTime)>,
+    /// Where this Mac's records say each file was marked viewed, by path.
+    viewed_at: HashMap<String, String>,
+    /// This Mac's records of where files were marked viewed, once signed in.
+    records: Option<ViewedRecords>,
     revisions: Option<Revisions>,
     status: Status,
     /// GitHub's links for fixing why the tab failed, such as authorizing single sign-on.
@@ -210,6 +295,14 @@ pub struct PrTab {
     /// The trusted checkout's worktree, which goes with the last tab that uses it.
     checkout: Option<WorktreeId>,
     opened: Instant,
+    /// Where the tab put the diff's cursor while files arrive, until it's moved.
+    parked_cursor: Option<Anchor>,
+    /// Whether the diff's cursor was moved, by a key, a click or the file list. From then on the
+    /// tab leaves it where it is.
+    cursor_moved: bool,
+    /// Keeps the file list's selection on the file the diff's cursor is in, and the cursor at the
+    /// start until it's moved.
+    _diff_cursor: Option<Subscription>,
     _load: Option<Task<()>>,
     /// Reads and shows GitHub's diff, until the local copy's replaces it.
     _github_diff: Option<Task<()>>,
@@ -261,7 +354,13 @@ impl PrTab {
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
-            viewed: HashMap::new(),
+            marks: ViewedMarks::default(),
+            node_id: None,
+            head: None,
+            head_at: None,
+            latest_head: None,
+            viewed_at: HashMap::new(),
+            records: None,
             revisions: None,
             status: Status::Loading("Finding an account that can see it…".into()),
             help_links: Vec::new(),
@@ -276,6 +375,9 @@ impl PrTab {
             poll: PollState::default(),
             checkout: None,
             opened: Instant::now(),
+            parked_cursor: None,
+            cursor_moved: false,
+            _diff_cursor: None,
             _load: None,
             _github_diff: None,
             copy_failed: None,
@@ -439,8 +541,8 @@ impl PrTab {
                 .login()
                 .is_none_or(|login| !login.eq_ignore_ascii_case(saved_for))
         {
-            self.viewed.clear();
-            self.files.set_viewed(&self.viewed);
+            self.marks.set_github(HashMap::new());
+            self.files.set_viewed(&self.marks.shown());
         }
         self.acting = Some(acting);
         self.set_status(Status::Loading("Asking GitHub for it…".into()), cx);
@@ -449,7 +551,7 @@ impl PrTab {
     /// Shows what rozed saved about the pull request, at once and online or not, until GitHub
     /// answers.
     pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
-        self.set_details(&saved.details, cx);
+        self.take_details(&saved.details, saved.fetched_at, cx);
         self.saved = Some((saved.login.clone(), saved.fetched_at));
         self.show_saved_banner(true, cx);
     }
@@ -485,6 +587,7 @@ impl PrTab {
             self.key.canonical = Some((owner.to_string(), name.to_string()));
         }
         self.created_at = Some(pull_request.created_at.into());
+        self.set_head(&pull_request.head.sha);
         self.api_head = Some(pull_request.head.sha.clone());
         self.status = Status::Loading("Copying it locally…".into());
         // GitHub answered, and the account's poller brings its details up to date.
@@ -495,9 +598,21 @@ impl PrTab {
         self.changed(cx);
     }
 
-    /// Takes the pull request's details from its account's poller: its title, author and the
-    /// account's viewed marks.
+    /// Takes the pull request's details, just fetched by its account's poller: its title, author,
+    /// head and the account's viewed marks.
     pub fn set_details(&mut self, details: &PullRequestData, cx: &mut Context<Self>) {
+        self.take_details(details, SystemTime::now(), cx);
+    }
+
+    /// Takes the pull request's details as GitHub gave them at `fetched_at`, from the poller or
+    /// from what rozed saved.
+    fn take_details(
+        &mut self,
+        details: &PullRequestData,
+        fetched_at: SystemTime,
+        cx: &mut Context<Self>,
+    ) {
+        self.note_latest_head(&details.head_ref_oid, fetched_at);
         let mut header = self.header.clone();
         header.title = Some(details.title.clone());
         if let Some(author) = &details.author {
@@ -510,15 +625,78 @@ impl PrTab {
             .flatten()
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
+        self.node_id = Some(details.id.clone());
+        // Details from before a write finished, such as the ones a tab switch hands back, don't
+        // undo it.
+        let viewed = self.marks.without_stale(viewed, fetched_at);
+        self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
+        let listed_changed = self.marks.set_listed(listed_paths(details));
+        let marks_changed = self.marks.set_github(viewed) || listed_changed;
         // A change of title makes the workspace report the active item changed, which comes back
         // here through `set_active`, so only a real change is reported.
-        if header == self.header && viewed == self.viewed {
+        if header == self.header && !marks_changed {
             return;
         }
         self.header = header;
-        self.viewed = viewed;
-        self.files.set_viewed(&self.viewed);
+        self.files.set_viewed(&self.marks.shown());
         self.changed(cx);
+    }
+
+    /// GitHub's `marks`, read at `head`, changed in ways rozed's own writes don't explain, so this
+    /// Mac's records follow them (design §6): a file GitHub says isn't viewed has no record, and a
+    /// file marked viewed again elsewhere is recorded at `head`. A file changed since viewed keeps
+    /// its record, which is what it's for.
+    fn follow_marks_set_elsewhere(
+        &mut self,
+        marks: &HashMap<String, ViewedState>,
+        head: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let changes: Vec<(String, Option<String>)> = marks
+            .iter()
+            .filter(|(path, _)| !self.marks.is_pending(path))
+            .filter_map(|(path, state)| match state {
+                ViewedState::Unviewed if self.viewed_at.contains_key(path) => {
+                    Some((path.clone(), None))
+                }
+                ViewedState::Viewed
+                    if matches!(
+                        self.marks.github_state(path),
+                        Some(ViewedState::Unviewed | ViewedState::Dismissed)
+                    ) =>
+                {
+                    Some((path.clone(), Some(head.to_string())))
+                }
+                _ => None,
+            })
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        for (path, head) in &changes {
+            match head {
+                Some(head) => self.viewed_at.insert(path.clone(), head.clone()),
+                None => self.viewed_at.remove(path),
+            };
+        }
+        let (Some(records), Some((poller, pull))) = (self.records.clone(), self.watched.clone())
+        else {
+            return;
+        };
+        let login = poller.read(cx).login().to_string();
+        let now = SystemTime::now();
+        cx.spawn(async move |_, _| {
+            for (path, head) in changes {
+                let written = match head {
+                    Some(head) => records.record(&login, &pull, &path, &head, now).await,
+                    None => records.forget(&login, &pull, &path).await,
+                };
+                if let Err(error) = written {
+                    log::error!("{pull}: recording where {path} was viewed: {error:#}");
+                }
+            }
+        })
+        .detach();
     }
 
     /// The local copy listed the pull request's files: lists them, builds its revisions, and
@@ -530,6 +708,7 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) -> Vec<usize> {
         self.list(files.iter().map(FileEntry::from_local).collect());
+        self.set_head(head.as_str());
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let now = SystemTime::now();
@@ -559,7 +738,7 @@ impl PrTab {
     fn list(&mut self, entries: Vec<FileEntry>) {
         let mut list = FileList::new(entries);
         list.set_order(self.files.order());
-        list.set_viewed(&self.viewed);
+        list.set_viewed(&self.marks.shown());
         if let Some(selected) = self.files.selected() {
             list.select_path(selected.path());
         }
@@ -705,6 +884,10 @@ impl PrTab {
             self.banners.update(cx, |banners, cx| {
                 banners.show(BannerKind::MovedOn, Severity::Warning, text, cx)
             });
+        }
+        // The head on screen is the one GitHub listed the files at.
+        if let Some(head) = &head {
+            self.set_head(head);
         }
         self.github_head = head;
         self.list(entries);
@@ -935,8 +1118,8 @@ impl PrTab {
         self.set_status(Status::Ready, cx);
     }
 
-    /// Shows `editor` as the tab's diff, from `source`. The local copy's diff stops GitHub's from
-    /// loading.
+    /// Shows `editor` as the tab's diff, from `source`, with its cursor at its start until it's
+    /// moved. The local copy's diff stops GitHub's from loading.
     pub(crate) fn show_diff(
         &mut self,
         editor: Entity<SplittableEditor>,
@@ -945,10 +1128,21 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
+        let rhs = editor.read(cx).rhs_editor().clone();
         if let Some(history) = self.nav_history.clone() {
-            let rhs_editor = editor.read(cx).rhs_editor().clone();
-            rhs_editor.update(cx, |editor, _| editor.set_nav_history(Some(history)));
+            rhs.update(cx, |editor, _| editor.set_nav_history(Some(history)));
         }
+        self._diff_cursor = Some(cx.subscribe_in(
+            &rhs,
+            window,
+            |this, _, event: &EditorEvent, window, cx| match event {
+                EditorEvent::SelectionsChanged { .. } => this.diff_cursor_moved(cx),
+                EditorEvent::ScrollPositionChanged { .. } => this.select_shown_file(cx),
+                EditorEvent::BufferRangesUpdated { .. } => this.park_cursor(window, cx),
+                _ => {}
+            },
+        ));
+        self.parked_cursor = None;
         self.diff = Some(editor.clone());
         self.diff_source = Some(source);
         if source == DiffSource::LocalCopy {
@@ -958,6 +1152,10 @@ impl PrTab {
                 banners.hide(BannerKind::GithubDiffCut, cx);
             });
         }
+        // A diff with its files in already, as when the local copy's replaces GitHub's, sends no
+        // event as they arrive, so its cursor would stay at its end, in the last file.
+        self.cursor_moved = false;
+        self.park_cursor(window, cx);
         if focused && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
         }
@@ -1019,9 +1217,23 @@ impl PrTab {
         }
     }
 
-    /// Watches the pull request with its account's poller, once GitHub confirmed it exists. It
-    /// becomes the poller's open pull request only while it's the active tab ([`sync_active`]).
-    fn watch(&mut self, poller: Entity<Poller>, pull: PullRef, cx: &mut Context<Self>) {
+    /// Watches the pull request with its account's poller, once GitHub confirmed it exists, and
+    /// reads where this Mac's `records` say its files were marked viewed. It becomes the poller's
+    /// open pull request only while it's the active tab ([`sync_active`]).
+    fn watch(
+        &mut self,
+        poller: Entity<Poller>,
+        pull: PullRef,
+        records: Option<ViewedRecords>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(records) = &records {
+            match records.heads(poller.read(cx).login(), &pull) {
+                Ok(heads) => self.viewed_at = heads,
+                Err(error) => log::error!("{pull}: reading where files were viewed: {error:#}"),
+            }
+        }
+        self.records = records;
         poller.update(cx, |poller, cx| poller.watch(pull.clone(), cx));
         self.poll.status = poller.read(cx).status().clone();
         self._subscriptions
@@ -1048,6 +1260,7 @@ impl PrTab {
                 self.set_details(details, cx);
             }
             PollEvent::Summary { pull, summary } if pull == watched => {
+                self.note_latest_head(&summary.head.sha, SystemTime::now());
                 self.poll_succeeded(cx);
                 if self.header.title.as_ref() != Some(&summary.title) {
                     self.header.title = Some(summary.title.clone());
@@ -1071,6 +1284,35 @@ impl PrTab {
         if self.poll.failure.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// GitHub said at `at` that the pull request's head is `head`. Something it said earlier
+    /// doesn't replace something it said later.
+    fn note_latest_head(&mut self, head: &str, at: SystemTime) {
+        if self
+            .latest_head
+            .as_ref()
+            .is_none_or(|(_, seen_at)| at >= *seen_at)
+        {
+            self.latest_head = Some((head.to_string(), at));
+        }
+    }
+
+    /// The diff shows the pull request at `head`.
+    fn set_head(&mut self, head: &str) {
+        if self.head.as_deref() != Some(head) {
+            self.head = Some(head.to_string());
+            self.head_at = Some(SystemTime::now());
+        }
+    }
+
+    /// GitHub's latest head, when GitHub gave it after rozed learned the head on screen and it
+    /// isn't that head.
+    fn newer_head(&self) -> Option<&str> {
+        let (latest, at) = self.latest_head.as_ref()?;
+        let newer =
+            Some(latest) != self.head.as_ref() && self.head_at.is_none_or(|head_at| *at >= head_at);
+        newer.then_some(latest.as_str())
     }
 
     /// The header's title: the pull request's, once known.
@@ -1112,7 +1354,7 @@ impl PrTab {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
                 self.poll.details_at = Some(answer.fetched_at);
-                self.set_details(&answer.details, cx);
+                self.take_details(&answer.details, answer.fetched_at, cx);
             }
         } else if !active && is_open {
             poller.update(cx, |poller, cx| poller.set_open(None, cx));
@@ -1143,6 +1385,332 @@ impl PrTab {
         self.files.toggle_order();
         self.scroll_to_selected();
         cx.notify();
+    }
+
+    /// The file `e` and the movement keys act on: the one the diff shows
+    /// ([`diff_cursor::shown_file`]), by its position in review order and its path. `None` until
+    /// the diff shows a file.
+    fn shown_file(&self, cx: &mut App) -> Option<(usize, String)> {
+        diff_cursor::shown_file(self.diff.as_ref()?, cx)
+    }
+
+    /// The path GitHub knows the listed file at `path` by ([`ViewedMarks::github_path`]).
+    fn github_path(&self, path: &str) -> Option<String> {
+        let previous = self.files.entry(path)?.file.previous_path.as_deref();
+        self.marks.github_path(path, previous)
+    }
+
+    /// Where `path`'s file starts in the diff, once it's there.
+    fn location_in_diff(&self, path: &str, cx: &App) -> Option<Anchor> {
+        let diff = self.diff.as_ref()?;
+        let position = self.files.review_position(path)?;
+        let key = pr_diff::path_key(position, RelPath::from_unix_str(path).ok()?.into_arc());
+        let multi_buffer = diff.read(cx).rhs_editor().read(cx).buffer().clone();
+        multi_buffer.read(cx).location_for_path(&key, cx)
+    }
+
+    /// What the diff says about the file it shows when GitHub says it changed since it was viewed:
+    /// the file, and since when, from the revision this Mac recorded when it was marked viewed.
+    pub fn changed_since_viewed(&self, cx: &mut App) -> Option<(String, String)> {
+        let (_, path) = self.shown_file(cx)?;
+        let github_path = self.github_path(&path)?;
+        let none = Revisions::default();
+        let note = changed_since_viewed(
+            self.revisions.as_ref().unwrap_or(&none),
+            self.marks.state(&github_path),
+            self.viewed_at.get(&github_path).map(String::as_str),
+        )?;
+        Some((path, note))
+    }
+
+    /// The diff's cursor head, on its right side.
+    fn diff_cursor(&self, cx: &App) -> Option<Anchor> {
+        let diff = self.diff.as_ref()?.read(cx);
+        Some(diff.rhs_editor().read(cx).selections.newest_anchor().head())
+    }
+
+    /// Files arrived in the diff. Until the cursor is moved, it stays at the diff's start, in the
+    /// first file in review order whichever file arrived first. An empty editor's cursor sits at
+    /// its end, which would otherwise leave it in the last file.
+    fn park_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cursor_moved {
+            return;
+        }
+        let (Some(diff), Some(head)) = (&self.diff, self.diff_cursor(cx)) else {
+            return;
+        };
+        // Moved since it was parked, though the move's event hasn't arrived yet.
+        if self.parked_cursor.is_some_and(|parked| parked != head) {
+            return;
+        }
+        let rhs = diff.read(cx).rhs_editor().clone();
+        self.parked_cursor = Some(rhs.update(cx, |editor, cx| {
+            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+                selections.select_ranges([Point::zero()..Point::zero()])
+            });
+            editor.selections.newest_anchor().head()
+        }));
+    }
+
+    /// The diff's cursor moved: the list selects the file the diff shows. Where the tab parked it
+    /// isn't a move, but the first real move ends the parking, even one back to the same place.
+    fn diff_cursor_moved(&mut self, cx: &mut Context<Self>) {
+        if !self.cursor_moved {
+            if self.diff_cursor(cx) == self.parked_cursor {
+                return;
+            }
+            self.cursor_moved = true;
+            self.parked_cursor = None;
+        }
+        self.select_shown_file(cx);
+    }
+
+    /// The list selects the file the diff shows, the one `e` acts on.
+    fn select_shown_file(&mut self, cx: &mut Context<Self>) {
+        let Some((_, path)) = self.shown_file(cx) else {
+            return;
+        };
+        if self.files.selected().map(FileEntry::path) != Some(path.as_str()) {
+            self.files.select_path(&path);
+            self.scroll_to_selected();
+            cx.notify();
+        }
+    }
+
+    /// `]f` and `[f`: the next or previous file in review order, which is the diff's order,
+    /// among the files in the diff. They stop at the ends.
+    fn move_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((current, _)) = self.shown_file(cx) else {
+            return;
+        };
+        let positions: Vec<usize> = match forward {
+            true => (current + 1..self.files.len()).collect(),
+            false => (0..current).rev().collect(),
+        };
+        let target = positions
+            .into_iter()
+            .filter_map(|position| self.files.at_review_position(position))
+            .map(|entry| entry.path().to_string())
+            .find(|path| self.location_in_diff(path, cx).is_some());
+        if let Some(path) = target {
+            self.files.select_path(&path);
+            self.selection_moved(window, cx);
+        }
+    }
+
+    fn next_file(&mut self, _: &NextFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_file(true, window, cx);
+    }
+
+    fn previous_file(&mut self, _: &PreviousFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_file(false, window, cx);
+    }
+
+    /// `]c` and `[c`: the next or previous change, across files. The list follows the cursor.
+    fn next_change(&mut self, _: &NextChange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            diff_cursor::go_to_change(diff, Direction::Next, window, cx);
+        }
+    }
+
+    fn previous_change(&mut self, _: &PreviousChange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff) = &self.diff {
+            diff_cursor::go_to_change(diff, Direction::Prev, window, cx);
+        }
+    }
+
+    /// `e`: marks the current file viewed and moves to the next unviewed file, or clears a viewed
+    /// file's mark. The new mark shows at once, and goes back to GitHub's if the write fails.
+    fn toggle_viewed(&mut self, _: &ToggleViewed, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, path)) = self.shown_file(cx) else {
+            self.toast(
+                "The diff is still loading, so there's no file to mark viewed yet.".into(),
+                cx,
+            );
+            return;
+        };
+        let Some((poller, pull)) = self.watched.clone() else {
+            self.toast(
+                "Sign in to mark files viewed: this pull request opened without an account.".into(),
+                cx,
+            );
+            return;
+        };
+        // Every write would fail; marking ahead of GitHub would move past files whose marks then
+        // go back.
+        if self.poll.status.offline.is_some() {
+            self.toast(
+                format!(
+                    "rozed can't reach GitHub, so it can't mark {path} viewed until it's back."
+                ),
+                cx,
+            );
+            return;
+        }
+        if self.poll.status.signed_out {
+            let login = poller.read(cx).login().to_string();
+            self.toast(
+                format!(
+                    "{login} is signed out, so rozed can't mark {path} viewed. Sign in again \
+                     from Accounts… in the rozed menu."
+                ),
+                cx,
+            );
+            return;
+        }
+        let Some(node_id) = self.node_id.clone() else {
+            self.toast(
+                format!(
+                    "Couldn't mark {path} viewed: GitHub hasn't sent this pull request's details \
+                     yet. Try again in a moment."
+                ),
+                cx,
+            );
+            return;
+        };
+        let Some(github_path) = self.github_path(&path) else {
+            self.file_toast(
+                &path,
+                format!(
+                    "GitHub doesn't list {path} in this pull request, so rozed can't mark it \
+                     viewed. GitHub and the local copy see this file's change differently."
+                ),
+                cx,
+            );
+            return;
+        };
+        // GitHub marks a file as of the pull request's latest head (`markFileAsViewed` takes no
+        // commit), so a file is marked only while that's the head on screen. A push inside the
+        // poll interval can still slip through.
+        let marks = self.marks.state(&github_path) != Some(ViewedState::Viewed);
+        if marks && self.newer_head().is_some() {
+            self.newer_push_toast(&path, cx);
+            return;
+        }
+        let toggle = self.marks.toggle(&github_path);
+        self.files.set_viewed(&self.marks.shown());
+        if toggle.mark {
+            // Only to a file the diff shows; the others are still loading.
+            let unviewed: Vec<String> = self
+                .files
+                .unviewed_after(&path)
+                .map(|entry| entry.path().to_string())
+                .collect();
+            match unviewed
+                .iter()
+                .find(|next| self.location_in_diff(next, cx).is_some())
+            {
+                Some(next) => {
+                    self.files.select_path(next);
+                    self.selection_moved(window, cx);
+                }
+                None => {
+                    if let Some(next) = unviewed.first() {
+                        self.toast(
+                            format!(
+                                "{next}, the next unviewed file, is still loading, so the diff \
+                                 stays on {path}."
+                            ),
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
+        let (mark, github_path) = (toggle.mark, toggle.path.clone());
+        let written = ViewedWrite {
+            record: match (toggle.mark, &self.head) {
+                (true, Some(head)) => RecordChange::Record(head.clone()),
+                (true, None) => RecordChange::Keep,
+                (false, _) => RecordChange::Forget,
+            },
+            toggle,
+            pressed_at: SystemTime::now(),
+            records: self.records.clone(),
+            login: poller.read(cx).login().to_string(),
+            pull: pull.clone(),
+            workspace: self.workspace.clone(),
+            toast: toast_id(cx.entity_id(), Some(&path)),
+        };
+        let write = poller.update(cx, |poller, cx| {
+            poller.write(
+                pull,
+                move |client: GithubClient| async move {
+                    if mark {
+                        client.mark_file_as_viewed(&node_id, &github_path).await
+                    } else {
+                        client.unmark_file_as_viewed(&node_id, &github_path).await
+                    }
+                },
+                cx,
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let result = write.await;
+            this.update(cx, |this, cx| {
+                this.viewed_written(&written, result.is_ok(), cx)
+            })
+            .ok();
+            // The tab may have closed, which the write, this Mac's record and the toast outlive.
+            written.finish(result, cx).await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// A toggle's write finished: the file shows the new mark, or GitHub's again if the write
+    /// failed, and on success the tab knows where this Mac records the file was viewed.
+    fn viewed_written(&mut self, written: &ViewedWrite, succeeded: bool, cx: &mut Context<Self>) {
+        self.marks
+            .finish(&written.toggle, succeeded, SystemTime::now());
+        self.files.set_viewed(&self.marks.shown());
+        if succeeded {
+            let path = written.toggle.path.clone();
+            match &written.record {
+                RecordChange::Record(head) => {
+                    self.viewed_at.insert(path, head.clone());
+                }
+                RecordChange::Forget => {
+                    self.viewed_at.remove(&path);
+                }
+                RecordChange::Keep => {}
+            }
+        }
+        cx.notify();
+    }
+
+    /// Shows a toast about the tab, which replaces the tab's last one.
+    fn toast(&self, message: String, cx: &mut Context<Self>) {
+        let id = toast_id(cx.entity_id(), None);
+        show_toast(&self.workspace, id, message, None, cx);
+    }
+
+    /// Shows a toast about `path`, which replaces only the last one about it.
+    fn file_toast(&self, path: &str, message: String, cx: &mut Context<Self>) {
+        let id = toast_id(cx.entity_id(), Some(path));
+        show_toast(&self.workspace, id, message, None, cx);
+    }
+
+    /// Says `e` didn't mark `path` because GitHub has a newer push, and offers to load it.
+    fn newer_push_toast(&self, path: &str, cx: &mut Context<Self>) {
+        let (workspace, tab) = (self.workspace.clone(), cx.entity().downgrade());
+        let load = move |window: &mut Window, cx: &mut App| {
+            let (Some(workspace), Some(tab)) = (workspace.upgrade(), tab.upgrade()) else {
+                return;
+            };
+            workspace.update(cx, |workspace, cx| reopen(workspace, &tab, window, cx));
+        };
+        show_toast(
+            &self.workspace,
+            toast_id(cx.entity_id(), None),
+            format!(
+                "There's a newer push to this pull request than the one on screen, so rozed \
+                 didn't mark {path} viewed: GitHub would mark it as of that push. Load it to mark \
+                 files viewed."
+            ),
+            Some(("Load the newer push", Box::new(load))),
+            cx,
+        );
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
@@ -1194,18 +1762,10 @@ impl PrTab {
         let (Some(diff), Some(entry)) = (&self.diff, self.files.selected()) else {
             return;
         };
-        let Some(position) = self.files.review_position(entry.path()) else {
+        let Some(location) = self.location_in_diff(entry.path(), cx) else {
             return;
         };
-        let Ok(path) = RelPath::from_unix_str(entry.path()) else {
-            return;
-        };
-        let key = pr_diff::path_key(position, path.into_arc());
         let rhs_editor = diff.read(cx).rhs_editor().clone();
-        let multi_buffer = rhs_editor.read(cx).buffer().clone();
-        let Some(location) = multi_buffer.read(cx).location_for_path(&key, cx) else {
-            return;
-        };
         rhs_editor.update(cx, |editor, cx| {
             editor.change_selections(
                 // A jump to another file, which back goes back from.
@@ -1333,6 +1893,37 @@ impl PrTab {
         )
     }
 
+    /// The note above the diff while the current file changed since it was viewed.
+    fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (path, note) = self.changed_since_viewed(cx)?;
+        let colors = cx.theme().colors();
+        Some(
+            h_flex()
+                .id("changed-since-viewed")
+                .w_full()
+                .flex_shrink_0()
+                .px_3()
+                .py_1()
+                .gap_2()
+                .border_b_1()
+                .border_color(colors.border_variant)
+                .bg(colors.panel_background)
+                .child(
+                    Icon::new(IconName::FileDiff)
+                        .size(IconSize::Small)
+                        .color(Color::Warning),
+                )
+                .child(Label::new(path).size(LabelSize::Small))
+                .child(
+                    Label::new(note)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .truncate(),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let order = match self.files.order() {
@@ -1435,7 +2026,7 @@ impl PrTab {
                                     .color(Color::Deleted),
                             )
                         })
-                        .children(viewed_mark(entry.viewed)),
+                        .children(viewed_mark(row, entry.viewed)),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.files.select_row(row);
@@ -1470,6 +2061,116 @@ impl PrTab {
             )
     }
 }
+
+/// The toast that says why a viewed mark couldn't be set or cleared.
+struct ViewedMarkToast;
+
+/// The ID of a viewed-mark toast from the tab `tab`, about the file at `path` or about the tab.
+/// Each file and each tab has its own, so one toast doesn't replace another's.
+fn toast_id(tab: EntityId, path: Option<&str>) -> NotificationId {
+    let id = match path {
+        Some(path) => format!("{}:{path}", tab.as_u64()),
+        None => tab.as_u64().to_string(),
+    };
+    NotificationId::composite::<ViewedMarkToast>(ElementId::Name(id.into()))
+}
+
+/// A toggle's write to GitHub, with what's needed once it finishes, whether or not its tab is
+/// still open.
+struct ViewedWrite {
+    toggle: Toggle,
+    /// What this Mac records about the file once GitHub took the write.
+    record: RecordChange,
+    /// When `e` was pressed, which the record keeps.
+    pressed_at: SystemTime,
+    records: Option<ViewedRecords>,
+    login: String,
+    pull: PullRef,
+    workspace: WeakEntity<Workspace>,
+    /// The toast that says why the write failed, the file's own.
+    toast: NotificationId,
+}
+
+/// How a successful write changes this Mac's record of where a file was viewed.
+enum RecordChange {
+    /// Marked viewed with this head on screen.
+    Record(String),
+    /// Cleared.
+    Forget,
+    /// Marked, but the head on screen isn't known.
+    Keep,
+}
+
+impl ViewedWrite {
+    /// The write finished: on success this Mac records or forgets where the file was viewed; on
+    /// failure a toast says why.
+    async fn finish(self, result: Result<(), GithubError>, cx: &mut AsyncApp) {
+        let Self {
+            toggle,
+            record,
+            pressed_at,
+            records,
+            login,
+            pull,
+            workspace,
+            toast,
+        } = self;
+        if let Err(error) = result {
+            log::warn!("{pull}: {}: {error}", toggle.path);
+            let message = write_failed(&toggle, &login, &error);
+            cx.update(|cx| show_toast(&workspace, toast, message, None, cx));
+            return;
+        }
+        let Some(records) = records else {
+            return;
+        };
+        let path = &toggle.path;
+        let written = match record {
+            RecordChange::Record(head) => {
+                records.record(&login, &pull, path, &head, pressed_at).await
+            }
+            RecordChange::Forget => records.forget(&login, &pull, path).await,
+            RecordChange::Keep => Ok(()),
+        };
+        if let Err(error) = written {
+            log::error!("{pull}: recording where {path} was viewed: {error:#}");
+        }
+    }
+}
+
+/// A toast's button: its label and what it does.
+type ToastButton = (&'static str, Box<dyn Fn(&mut Window, &mut App)>);
+
+/// Shows a toast in `workspace` about a viewed mark, with `button` if there's one.
+fn show_toast(
+    workspace: &WeakEntity<Workspace>,
+    id: NotificationId,
+    message: String,
+    button: Option<ToastButton>,
+    cx: &mut App,
+) {
+    #[cfg(test)]
+    cx.default_global::<ToastLog>().0.push((
+        id.clone(),
+        message.clone(),
+        button.as_ref().map(|(label, _)| label.to_string()),
+    ));
+    let mut toast = Toast::new(id, message);
+    if let Some((label, on_click)) = button {
+        toast = toast.on_click(label, on_click);
+    }
+    workspace
+        .update(cx, |workspace, cx| workspace.show_toast(toast, cx))
+        .ok();
+}
+
+/// The toasts the tabs showed, for tests: each one's ID, text and button.
+#[cfg(test)]
+#[derive(Default)]
+struct ToastLog(Vec<(NotificationId, String, Option<String>)>);
+
+#[cfg(test)]
+impl gpui::Global for ToastLog {}
 
 /// How long to wait before reading GitHub's diff again the first time. Each failure doubles it, up
 /// to 5 minutes, as for the local copy.
@@ -1533,6 +2234,18 @@ fn short(sha: &str) -> &str {
 }
 
 /// GitHub's viewed mark as rozed's review model has it.
+/// Every path GitHub lists for the pull request, when its details list them all: GitHub caps a
+/// pull request's files, and leaves out what it couldn't show.
+fn listed_paths(details: &PullRequestData) -> Option<HashSet<String>> {
+    let files = details.files.as_ref()?;
+    let nodes = files.nodes.as_ref()?;
+    let listed: HashSet<String> = nodes
+        .iter()
+        .map(|node| Some(node.as_ref()?.path.clone()))
+        .collect::<Option<_>>()?;
+    (i64::try_from(nodes.len()).ok() == Some(files.total_count)).then_some(listed)
+}
+
 fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     match state {
         FileViewedState::VIEWED => Some(ViewedState::Viewed),
@@ -1542,8 +2255,8 @@ fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     }
 }
 
-/// How the file list shows a file's viewed mark.
-fn viewed_mark(viewed: Option<ViewedState>) -> Option<AnyElement> {
+/// How the file list shows the viewed mark of the file at `row`.
+fn viewed_mark(row: usize, viewed: Option<ViewedState>) -> Option<AnyElement> {
     match viewed? {
         ViewedState::Viewed => Some(
             Icon::new(IconName::Check)
@@ -1552,9 +2265,16 @@ fn viewed_mark(viewed: Option<ViewedState>) -> Option<AnyElement> {
                 .into_any_element(),
         ),
         ViewedState::Dismissed => Some(
-            Label::new("changed")
-                .size(LabelSize::XSmall)
-                .color(Color::Warning)
+            div()
+                .id(("pr-file-changed", row))
+                .child(
+                    Label::new("changed")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Warning),
+                )
+                .tooltip(Tooltip::text(
+                    "Changed since viewed: a push changed it after it was marked viewed",
+                ))
                 .into_any_element(),
         ),
         ViewedState::Unviewed => None,
@@ -1774,7 +2494,10 @@ async fn load(
     let (owner, name) = pull_request.base.repo.owner_and_name()?;
     let pull = PullRef::new(owner, name, pull.number);
     if let Some(poller) = poller {
-        this.update(cx, |this, cx| this.watch(poller, pull, cx))?;
+        let records = layer
+            .as_ref()
+            .map(|layer| layer.read_with(cx, |layer, _| layer.viewed_records().clone()));
+        this.update(cx, |this, cx| this.watch(poller, pull, records, cx))?;
         workspace.update(cx, |workspace, cx| sync_active(workspace, cx))?;
     }
 
@@ -1843,6 +2566,11 @@ impl Render for PrTab {
             .on_action(cx.listener(Self::toggle_file_list))
             .on_action(cx.listener(Self::toggle_threads))
             .on_action(cx.listener(Self::toggle_file_order))
+            .on_action(cx.listener(Self::toggle_viewed))
+            .on_action(cx.listener(Self::next_file))
+            .on_action(cx.listener(Self::previous_file))
+            .on_action(cx.listener(Self::next_change))
+            .on_action(cx.listener(Self::previous_change))
             .size_full()
             .bg(colors.editor_background)
             .child(self.render_header(cx))
@@ -1856,7 +2584,14 @@ impl Render for PrTab {
                     .when(self.show_file_list, |this| {
                         this.child(self.render_file_list(cx))
                     })
-                    .child(div().flex_1().min_w_0().h_full().child(diff))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .children(self.render_changed_since_viewed(cx))
+                            .child(div().flex_1().min_h_0().w_full().child(diff)),
+                    )
                     .when(self.show_threads, |this| {
                         this.child(self.render_threads(cx))
                     }),
@@ -2892,6 +3627,1579 @@ mod tests {
         );
     }
 
+    /// [`details`] with these files and marks, at the head on screen in these tests.
+    fn details_with(files: &[(&str, &str)]) -> PullRequestData {
+        details_at(HEAD, files)
+    }
+
+    /// [`details`] with these files and marks, with GitHub's head at `head`.
+    fn details_at(head: &str, files: &[(&str, &str)]) -> PullRequestData {
+        let mut details = serde_json::to_value(details("Add b", "UNVIEWED")).unwrap();
+        details["headRefOid"] = head.into();
+        details["files"]["totalCount"] = files.len().into();
+        details["files"]["nodes"] = files
+            .iter()
+            .map(|(path, state)| serde_json::json!({ "path": path, "viewerViewedState": state }))
+            .collect();
+        serde_json::from_value(details).unwrap()
+    }
+
+    /// How GitHub answers a viewed-mark mutation.
+    #[derive(Clone, Copy, Debug)]
+    enum WriteAnswer {
+        Done,
+        Forbidden,
+        RateLimited,
+        Offline,
+    }
+
+    /// GitHub as these tests need it: the viewed-mark mutations answer as each test says, and every
+    /// other request fails as if GitHub were down, so the poller's polls change nothing and it
+    /// doesn't think it's offline.
+    #[derive(Default)]
+    struct WriteGithub {
+        answers: std::sync::Mutex<std::collections::VecDeque<WriteAnswer>>,
+        /// Each mutation's operation and variables.
+        mutations: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    impl WriteGithub {
+        fn answer(&self, answer: WriteAnswer) {
+            self.answers.lock().unwrap().push_back(answer);
+        }
+
+        fn mutations(&self) -> Vec<(String, serde_json::Value)> {
+            self.mutations.lock().unwrap().clone()
+        }
+    }
+
+    impl http_client::HttpClient for WriteGithub {
+        fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
+            None
+        }
+
+        fn proxy(&self) -> Option<&http_client::Url> {
+            None
+        }
+
+        fn send(
+            &self,
+            request: http_client::Request<http_client::AsyncBody>,
+        ) -> futures::future::BoxFuture<
+            'static,
+            anyhow::Result<http_client::Response<http_client::AsyncBody>>,
+        > {
+            use futures::AsyncReadExt as _;
+            let mut body = Vec::new();
+            futures::executor::block_on(request.into_body().read_to_end(&mut body)).unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let operation = body["operationName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            if !operation.ends_with("FileAsViewed") {
+                let unavailable = http_client::Response::builder()
+                    .status(503)
+                    .body(http_client::AsyncBody::from(b"{}".to_vec()))
+                    .unwrap();
+                return Box::pin(async { Ok(unavailable) });
+            }
+            self.mutations
+                .lock()
+                .unwrap()
+                .push((operation.clone(), body["variables"].clone()));
+            let answer = self.answers.lock().unwrap().pop_front().expect("an answer");
+            let field = format!("{}{}", operation[..1].to_lowercase(), &operation[1..]);
+            let field = field.as_str();
+            let (remaining, json) = match answer {
+                WriteAnswer::Offline => {
+                    return Box::pin(async { Err(anyhow::anyhow!("the network is down")) });
+                }
+                WriteAnswer::Done => (
+                    "4999",
+                    serde_json::json!({ "data": { field: { "pullRequest": { "id": "PR_x" } } } }),
+                ),
+                WriteAnswer::Forbidden => (
+                    "4999",
+                    serde_json::json!({
+                        "data": { field: null },
+                        "errors": [{
+                            "type": "FORBIDDEN",
+                            "path": [field],
+                            "message": "Resource not accessible by integration",
+                        }],
+                    }),
+                ),
+                WriteAnswer::RateLimited => (
+                    "0",
+                    serde_json::json!({
+                        "errors": [{
+                            "type": "RATE_LIMITED",
+                            "message": "API rate limit exceeded for user ID 1.",
+                        }],
+                    }),
+                ),
+            };
+            let response = http_client::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .header("x-ratelimit-remaining", remaining)
+                .body(http_client::AsyncBody::from(
+                    serde_json::to_vec(&json).unwrap(),
+                ))
+                .unwrap();
+            Box::pin(async { Ok(response) })
+        }
+    }
+
+    const BOT: &str = "rozed-bot";
+
+    /// The tab signed in as the test bot, with its poller and the database where it records
+    /// viewed files.
+    struct SignedIn {
+        github: std::sync::Arc<WriteGithub>,
+        records: ViewedRecords,
+        pull: PullRef,
+        /// The account's poller, which rozed's GitHub layer keeps after its tabs close.
+        _poller: Entity<Poller>,
+    }
+
+    /// Signs `tab` in as the bot, with `recorded` already in its records of viewed files.
+    async fn sign_in_bot(
+        tab: &Entity<PrTab>,
+        name: &str,
+        recorded: &[(&str, &str)],
+        cx: &mut VisualTestContext,
+    ) -> SignedIn {
+        let github = std::sync::Arc::new(WriteGithub::default());
+        let db = github::db::RozedDb::open_test(name).await;
+        let store = std::sync::Arc::new(
+            credentials_provider::test_support::FakeCredentialsProvider::default(),
+        );
+        let accounts = cx
+            .update(|_, cx| github::accounts::Accounts::load(db.clone(), store, github.clone(), cx))
+            .unwrap();
+        let user = github::AuthenticatedUser {
+            user: github::User {
+                login: BOT.into(),
+                id: 353226052,
+                name: None,
+                avatar_url: None,
+            },
+            scopes: vec!["repo".into()],
+        };
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.add(
+                    user,
+                    github::Token::new("gho_FAKE"),
+                    github::db::AccountSource::DeviceFlow,
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+        let records = ViewedRecords::new(db.clone());
+        let pull = PullRef::new("rozed-dev", "playground", 2);
+        for (path, head) in recorded {
+            records
+                .record(BOT, &pull, path, head, SystemTime::now())
+                .await
+                .unwrap();
+        }
+        let cache = github::cache::PrCache::new(db);
+        let poller = cx.new(|cx| {
+            Poller::new(
+                accounts,
+                BOT,
+                cache,
+                github::poll::PollConfig::default(),
+                cx,
+            )
+        });
+        tab.update(cx, |tab, cx| {
+            tab.set_acting(Acting::Account(BOT.into()), cx);
+            tab.watch(poller.clone(), pull.clone(), Some(records.clone()), cx);
+        });
+        cx.run_until_parked();
+        SignedIn {
+            _poller: poller,
+            github,
+            records,
+            pull,
+        }
+    }
+
+    impl SignedIn {
+        fn recorded(&self) -> HashMap<String, String> {
+            self.records.heads(BOT, &self.pull).unwrap()
+        }
+    }
+
+    fn marks(
+        tab: &Entity<PrTab>,
+        cx: &mut VisualTestContext,
+    ) -> Vec<(String, Option<ViewedState>)> {
+        tab.read_with(cx, |tab, _| {
+            tab.files()
+                .rows()
+                .map(|entry| (entry.path().to_string(), entry.viewed))
+                .collect()
+        })
+    }
+
+    fn selected(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<String> {
+        tab.read_with(cx, |tab, _| {
+            tab.files().selected().map(|entry| entry.path().to_string())
+        })
+    }
+
+    fn mark(path: &str, state: Option<ViewedState>) -> (String, Option<ViewedState>) {
+        (path.to_string(), state)
+    }
+
+    const HEAD: &str = "2222222222222222222222222222222222222222";
+
+    /// A tab on the playground's PR #2 with three files in its diff, a.rs, b.rs and c.rs, each
+    /// with one change, signed in as the bot, with GitHub's marks.
+    async fn three_files<'a>(
+        name: &str,
+        recorded: &[(&str, &str)],
+        github_marks: &[(&str, &str)],
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<PrTab>,
+        SignedIn,
+        &'a mut VisualTestContext,
+    ) {
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+            ("c.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let (workspace, tab, signed_in, _, cx) =
+            signed_in_diff(name, recorded, &files, github_marks, cx).await;
+        (workspace, tab, signed_in, cx)
+    }
+
+    /// A tab on the playground's PR #2 showing a diff of `files`, signed in as the bot, with
+    /// GitHub's marks.
+    async fn signed_in_diff<'a>(
+        name: &str,
+        recorded: &[(&str, &str)],
+        files: &[(&str, String, String)],
+        github_marks: &[(&str, &str)],
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<PrTab>,
+        SignedIn,
+        Entity<SplittableEditor>,
+        &'a mut VisualTestContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let signed_in = sign_in_bot(&tab, name, recorded, cx).await;
+        let editor = show_test_diff(&tab, &workspace, files, cx).await;
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details_with(github_marks), cx)
+        });
+        cx.run_until_parked();
+        (workspace, tab, signed_in, editor, cx)
+    }
+
+    /// Whether the workspace shows the last viewed-mark toast a tab showed.
+    fn has_viewed_toast(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+        let Some((id, _, _)) = toast_log(cx).pop() else {
+            return false;
+        };
+        workspace.read_with(cx, |workspace, _| workspace.has_notification(&id))
+    }
+
+    /// Selects `path` in the list, which moves the diff there.
+    fn go_to(tab: &Entity<PrTab>, path: &str, cx: &mut VisualTestContext) {
+        tab.update_in(cx, |tab, window, cx| {
+            tab.files.select_path(path);
+            tab.selection_moved(window, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// The toasts the tabs showed, oldest first: each one's ID, text and button.
+    fn toast_log(cx: &mut VisualTestContext) -> Vec<(NotificationId, String, Option<String>)> {
+        cx.update(|_, cx| {
+            cx.try_global::<ToastLog>()
+                .map(|log| log.0.clone())
+                .unwrap_or_default()
+        })
+    }
+
+    /// The text of the toasts the tabs showed, oldest first.
+    fn toasts(cx: &mut VisualTestContext) -> Vec<String> {
+        toast_log(cx).into_iter().map(|(_, text, _)| text).collect()
+    }
+
+    /// The file the diff's cursor is in.
+    fn cursor_file(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<String> {
+        let diff = tab.read_with(cx, |tab, _| tab.diff().cloned())?;
+        cx.update(|_, cx| crate::diff_cursor::file_at_cursor(&diff, cx))
+            .map(|(_, path)| path)
+    }
+
+    #[gpui::test]
+    async fn e_before_the_diff_shows_a_file_marks_nothing_and_says_why(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in_bot(&tab, "e_before_the_diff", &[], cx).await;
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified)], &head, cx);
+            tab.set_details(&details_with(&[("a.rs", "UNVIEWED")]), cx);
+        });
+
+        // The list has the file, but the diff doesn't exist yet.
+        cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx),
+            ["The diff is still loading, so there's no file to mark viewed yet."]
+        );
+        assert_eq!(marks(&tab, cx), [mark("a.rs", Some(ViewedState::Unviewed))]);
+        assert_eq!(github.github.mutations(), []);
+
+        // Nor once it exists, until a file is in it.
+        let editor = test_diff_editor(&workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx)
+        });
+        cx.simulate_keystrokes("e");
+        assert_eq!(toasts(cx).len(), 2);
+        assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn e_acts_on_the_file_at_the_top_of_the_view_when_the_cursor_is_out_of_it(
+        cx: &mut TestAppContext,
+    ) {
+        let files = [
+            ("a.rs", String::new(), lines(200, &[])),
+            ("b.rs", String::new(), lines(200, &[])),
+        ];
+        let (_, tab, github, editor, cx) = signed_in_diff(
+            "e_at_the_top",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        // Scrolling doesn't move the cursor, which stays at a.rs's start.
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        rhs.update_in(cx, |editor, window, cx| {
+            editor.set_scroll_position(gpui::point(0., 260.), window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+        // The list follows the view.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "b.rs");
+    }
+
+    #[gpui::test]
+    async fn e_and_the_file_keys_move_only_to_files_in_the_diff(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in_bot(&tab, "e_while_loading", &[], cx).await;
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+            ("c.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let positions = list_test_files(&tab, &files, cx);
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[
+                    ("a.rs", "UNVIEWED"),
+                    ("b.rs", "UNVIEWED"),
+                    ("c.rs", "UNVIEWED"),
+                ]),
+                cx,
+            )
+        });
+        let editor = test_diff_editor(&workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx)
+        });
+        // Only a.rs has arrived.
+        add_test_files(&editor, &files[..1], &positions[..1], cx).await;
+        cx.run_until_parked();
+
+        // There's no file in the diff to move to.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+
+        // e marks a.rs, and says why it stays: b.rs, the next unviewed file, isn't in yet.
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+        assert_ne!(selected(&tab, cx).as_deref(), Some("b.rs"));
+        assert_eq!(
+            toasts(cx),
+            ["b.rs, the next unviewed file, is still loading, so the diff stays on a.rs."]
+        );
+
+        // c.rs arrives before b.rs, and the keys skip b.rs while it isn't in.
+        add_test_files(&editor, &files[2..], &positions[2..], cx).await;
+        cx.run_until_parked();
+        cx.simulate_keystrokes("] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("c.rs"));
+    }
+
+    #[gpui::test]
+    async fn e_marks_the_file_viewed_and_moves_to_the_next_unviewed_one(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_marks",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "DISMISSED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Done);
+
+        // GitHub's head is the head on screen, and the diff's cursor starts in the first file.
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Viewed)),
+                mark("c.rs", Some(Dismissed))
+            ]
+        );
+        // b.rs is viewed, and a file changed since viewed counts as unviewed.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        assert_eq!(
+            github.github.mutations(),
+            [(
+                "MarkFileAsViewed".to_string(),
+                serde_json::json!({ "pullRequestId": "PR_kwDOVk6v9M8AAAABNQwFBw", "path": "a.rs" })
+            )]
+        );
+        // This Mac records the head on screen when the file was marked.
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
+        assert!(!has_viewed_toast(&workspace, cx));
+    }
+
+    const NEWER: &str = "3333333333333333333333333333333333333333";
+
+    /// GitHub's REST view of PR #2 with its head at `head`, as the poller's summary carries it.
+    fn summary_at(head: &str) -> github::PullSummary {
+        serde_json::from_value(serde_json::json!({
+            "number": 2,
+            "title": "Add b",
+            "state": "open",
+            "updated_at": "2026-11-06T09:00:00Z",
+            "head": { "ref": "stack-b", "sha": head },
+            "base": { "ref": "stack-a", "sha": "b046244d9569964088e952243e5e557312322488" },
+        }))
+        .unwrap()
+    }
+
+    #[gpui::test]
+    async fn after_a_newer_push_e_wont_mark_a_file_but_still_clears_one(cx: &mut TestAppContext) {
+        let marks_now = [
+            ("a.rs", "UNVIEWED"),
+            ("b.rs", "VIEWED"),
+            ("c.rs", "UNVIEWED"),
+        ];
+        let (_, tab, github, cx) = three_files("e_after_a_push", &[], &marks_now, cx).await;
+        // GitHub's details say the pull request moved on from the head on screen.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(&details_at(NEWER, &marks_now), cx)
+        });
+        let before = marks(&tab, cx);
+
+        // markFileAsViewed takes no commit, so GitHub would mark a.rs as of the newer push.
+        cx.simulate_keystrokes("e");
+        assert_eq!(marks(&tab, cx), before);
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
+        let toast = toast_log(cx).pop().unwrap();
+        assert_eq!(
+            toast.1,
+            "There's a newer push to this pull request than the one on screen, so rozed didn't \
+             mark a.rs viewed: GitHub would mark it as of that push. Load it to mark files viewed."
+        );
+        assert_eq!(toast.2.as_deref(), Some("Load the newer push"));
+
+        // Clearing a mark is always allowed.
+        go_to(&tab, "b.rs", cx);
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+    }
+
+    #[gpui::test]
+    async fn a_newer_push_in_githubs_summary_also_stops_e_marking(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) =
+            three_files("e_after_a_summary", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        let pull = github.pull.clone();
+        tab.update(cx, |tab, cx| {
+            tab.poll_event(
+                &PollEvent::Summary {
+                    pull,
+                    summary: std::sync::Arc::new(summary_at(NEWER)),
+                },
+                cx,
+            )
+        });
+
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations(), []);
+        assert!(toasts(cx)[0].starts_with("There's a newer push"));
+
+        // Older details, from before the summary, don't bring the old head back.
+        let older = SystemTime::now() - Duration::from_secs(60);
+        tab.update(cx, |tab, cx| {
+            tab.take_details(&details_with(&[("a.rs", "UNVIEWED")]), older, cx)
+        });
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn an_older_head_from_before_the_diff_loaded_doesnt_stop_e(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) =
+            three_files("e_after_saved", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        // What rozed saved, from before this diff's head was pushed.
+        let saved_at = SystemTime::now() - Duration::from_secs(3600);
+        tab.update(cx, |tab, cx| {
+            tab.latest_head = None;
+            tab.take_details(
+                &details_at(
+                    "1111111111111111111111111111111111111111",
+                    &[("a.rs", "UNVIEWED")],
+                ),
+                saved_at,
+                cx,
+            )
+        });
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].0, "MarkFileAsViewed");
+    }
+
+    #[gpui::test]
+    async fn loading_the_newer_push_reopens_the_tab_in_its_place(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let first = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/1", cx);
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/3", cx);
+
+        let reopened = workspace
+            .update_in(cx, |workspace, window, cx| {
+                reopen_with(workspace, &tab, window, cx, |_, _, _| {})
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let tabs = tabs(&workspace, cx);
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0], first);
+        assert_eq!(tabs[1], reopened);
+        assert_ne!(reopened, tab);
+        assert_eq!(
+            reopened.read_with(cx, |tab, _| tab.link().to_string()),
+            "sharkdp/fd#2212"
+        );
+        assert_eq!(active_tab(&workspace, cx), Some(reopened));
+    }
+
+    #[gpui::test]
+    async fn e_wont_mark_a_file_github_doesnt_list(cx: &mut TestAppContext) {
+        // GitHub lists every file of the pull request, and not c.rs.
+        let (_, tab, github, cx) = three_files(
+            "e_unlisted",
+            &[],
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        go_to(&tab, "c.rs", cx);
+
+        cx.simulate_keystrokes("e");
+
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(marks(&tab, cx)[2], mark("c.rs", None));
+        assert_eq!(
+            toasts(cx),
+            [
+                "GitHub doesn't list c.rs in this pull request, so rozed can't mark it viewed. \
+              GitHub and the local copy see this file's change differently."
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn e_marks_a_renamed_file_at_the_path_github_lists(cx: &mut TestAppContext) {
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("new.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        // The local copy sees a rename; GitHub lists the file by its old path.
+        let (_, tab, github, _, cx) = signed_in_diff(
+            "e_renamed",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("old.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let mut renamed = changed("new.rs", Change::Renamed { similarity: 90 });
+        renamed.old.as_mut().unwrap().path = "old.rs".into();
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified), renamed], &head, cx);
+        });
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("new.rs", Some(ViewedState::Unviewed))
+        );
+        go_to(&tab, "new.rs", cx);
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        cx.run_until_parked();
+
+        assert_eq!(github.github.mutations()[0].1["path"], "old.rs");
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("new.rs", Some(ViewedState::Viewed))
+        );
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("old.rs".to_string(), HEAD.to_string())])
+        );
+    }
+
+    #[gpui::test]
+    async fn writes_waiting_when_the_tab_closes_still_record_and_say_why_they_failed(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_then_close",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Done);
+        github.github.answer(WriteAnswer::Done);
+        github.github.answer(WriteAnswer::Forbidden);
+
+        // Writes are a second apart, so the second and third wait while the tab closes.
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        close(&workspace, tab, cx);
+        assert!(tabs(&workspace, cx).is_empty());
+        cx.executor().advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+
+        assert_eq!(github.github.mutations().len(), 3);
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([
+                ("a.rs".to_string(), HEAD.to_string()),
+                ("b.rs".to_string(), HEAD.to_string()),
+            ])
+        );
+        assert_eq!(
+            toasts(cx),
+            [
+                "Couldn't mark c.rs viewed: rozed-bot isn't allowed to (Resource not accessible by \
+              integration). It shows GitHub's mark again."
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn marks_cleared_or_set_elsewhere_update_this_macs_records(cx: &mut TestAppContext) {
+        const R1: &str = "1111111111111111111111111111111111111111";
+        let (_, tab, github, cx) = three_files(
+            "records_follow_github",
+            &[("a.rs", R1), ("b.rs", R1)],
+            &[("a.rs", "VIEWED"), ("b.rs", "VIEWED"), ("c.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let viewed_at =
+            |cx: &mut VisualTestContext| tab.read_with(cx, |tab, _| tab.viewed_at.clone());
+        let both = HashMap::from([
+            ("a.rs".to_string(), R1.to_string()),
+            ("b.rs".to_string(), R1.to_string()),
+        ]);
+        // Marks set before the tab opened keep their records.
+        assert_eq!(github.recorded(), both);
+
+        // a.rs's mark cleared on the web, and b.rs changed by a push.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[
+                    ("a.rs", "UNVIEWED"),
+                    ("b.rs", "DISMISSED"),
+                    ("c.rs", "UNVIEWED"),
+                ]),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let b_only = HashMap::from([("b.rs".to_string(), R1.to_string())]);
+        assert_eq!(github.recorded(), b_only);
+        assert_eq!(viewed_at(cx), b_only);
+
+        // Both marked again on another Mac, at the head GitHub has then.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[("a.rs", "VIEWED"), ("b.rs", "VIEWED"), ("c.rs", "UNVIEWED")]),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let at_head = HashMap::from([
+            ("a.rs".to_string(), HEAD.to_string()),
+            ("b.rs".to_string(), HEAD.to_string()),
+        ]);
+        assert_eq!(github.recorded(), at_head);
+        assert_eq!(viewed_at(cx), at_head);
+    }
+
+    #[gpui::test]
+    async fn each_failed_write_has_its_own_toast_and_the_selection_stays(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_fails_twice",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Forbidden);
+        github.github.answer(WriteAnswer::Forbidden);
+
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+
+        // Both say what failed, one toast a file.
+        let log = toast_log(cx);
+        assert_eq!(log.len(), 2);
+        assert!(
+            log[0].1.starts_with("Couldn't mark a.rs viewed"),
+            "{}",
+            log[0].1
+        );
+        assert!(
+            log[1].1.starts_with("Couldn't mark b.rs viewed"),
+            "{}",
+            log[1].1
+        );
+        assert_ne!(log[0].0, log[1].0);
+        for (id, _, _) in &log {
+            assert!(workspace.read_with(cx, |workspace, _| workspace.has_notification(id)));
+        }
+        // Only the marks went back: the failures don't move the selection.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(ViewedState::Unviewed)),
+                mark("b.rs", Some(ViewedState::Unviewed)),
+                mark("c.rs", Some(ViewedState::Unviewed))
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn while_github_cant_be_reached_e_marks_nothing_and_stays(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files("e_offline", &[], &[("a.rs", "UNVIEWED")], cx).await;
+        tab.update(cx, |tab, _| {
+            tab.poll.status.offline = Some(github::poll::Offline {
+                since: SystemTime::now(),
+                retry_at: SystemTime::now() + Duration::from_secs(30),
+                error: "the network is down".into(),
+            })
+        });
+
+        cx.simulate_keystrokes("e");
+
+        assert_eq!(github.github.mutations(), []);
+        assert_eq!(
+            marks(&tab, cx)[0],
+            mark("a.rs", Some(ViewedState::Unviewed))
+        );
+        assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
+        assert_eq!(
+            toasts(cx),
+            ["rozed can't reach GitHub, so it can't mark a.rs viewed until it's back."]
+        );
+    }
+
+    #[gpui::test]
+    async fn marks_github_read_before_a_write_finished_dont_bring_the_old_mark_back(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, tab, github, cx) = three_files(
+            "e_then_switch_tabs",
+            &[],
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let before_the_write = SystemTime::now() - Duration::from_millis(1);
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx)[0], mark("a.rs", Some(ViewedState::Viewed)));
+
+        // Switching back to the tab hands over the details the poller held from before.
+        let stale = details_with(&[("a.rs", "UNVIEWED"), ("b.rs", "VIEWED")]);
+        tab.update(cx, |tab, cx| tab.take_details(&stale, before_the_write, cx));
+        assert_eq!(
+            marks(&tab, cx)[..2],
+            [
+                mark("a.rs", Some(ViewedState::Viewed)),
+                mark("b.rs", Some(ViewedState::Viewed))
+            ]
+        );
+        // And its record stays.
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
+
+        // Details fetched after the write stand.
+        tab.update(cx, |tab, cx| tab.set_details(&stale, cx));
+        assert_eq!(
+            marks(&tab, cx)[0],
+            mark("a.rs", Some(ViewedState::Unviewed))
+        );
+    }
+
+    #[gpui::test]
+    async fn e_on_a_viewed_file_clears_its_mark(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files(
+            "e_clears",
+            &[("b.rs", "1111111111111111111111111111111111111111")],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        go_to(&tab, "b.rs", cx);
+        github.github.answer(WriteAnswer::Done);
+
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Unviewed)),
+                mark("b.rs", Some(Unviewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        // Clearing a mark stays on the file, and forgets where it was viewed.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
+        assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+        assert_eq!(github.recorded(), HashMap::new());
+
+        // Pressed again, after the second's spacing between writes, it's marked again.
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(Viewed)));
+        assert_eq!(github.github.mutations()[1].0, "MarkFileAsViewed");
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("b.rs".to_string(), HEAD.to_string())])
+        );
+    }
+
+    #[gpui::test]
+    async fn a_mark_that_github_refuses_reverts_and_a_toast_says_why(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_reverts",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        use ViewedState::*;
+        let before = marks(&tab, cx);
+
+        for answer in [
+            WriteAnswer::Forbidden,
+            WriteAnswer::Offline,
+            WriteAnswer::RateLimited,
+        ] {
+            workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
+            go_to(&tab, "a.rs", cx);
+            github.github.answer(answer);
+
+            cx.simulate_keystrokes("e");
+            cx.executor().advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+
+            assert_eq!(marks(&tab, cx), before, "{answer:?}");
+            assert!(has_viewed_toast(&workspace, cx), "{answer:?}");
+            assert_eq!(github.recorded(), HashMap::new(), "{answer:?}");
+            // The selection still moved on; only the mark went back.
+            assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"), "{answer:?}");
+        }
+        assert_eq!(github.github.mutations().len(), 3);
+        assert_eq!(before[0], mark("a.rs", Some(Unviewed)));
+    }
+
+    #[gpui::test]
+    async fn the_new_mark_shows_while_the_write_waits(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files(
+            "e_waits",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(WriteAnswer::Done);
+        github.github.answer(WriteAnswer::Forbidden);
+
+        // The second write waits a second after the first, so its mark shows before GitHub answers.
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Viewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        assert_eq!(github.github.mutations().len(), 1);
+
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        // GitHub took a.rs's mark and refused b.rs's, which goes back and says why.
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Unviewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        assert_eq!(github.github.mutations().len(), 2);
+        assert_eq!(
+            toasts(cx),
+            [
+                "Couldn't mark b.rs viewed: rozed-bot isn't allowed to (Resource not accessible by \
+              integration). It shows GitHub's mark again."
+            ]
+        );
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
+    }
+
+    #[gpui::test]
+    async fn e_says_why_it_cant_mark_without_an_account_or_githubs_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let files = [("a.rs", lines(5, &[]), lines(5, &[3]))];
+        let anonymous = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        anonymous.update(cx, |tab, cx| tab.set_acting(Acting::Anonymous, cx));
+        show_test_diff(&anonymous, &workspace, &files, cx).await;
+
+        cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx),
+            ["Sign in to mark files viewed: this pull request opened without an account."]
+        );
+        assert!(has_viewed_toast(&workspace, cx));
+        assert_eq!(marks(&anonymous, cx), [mark("a.rs", None)]);
+
+        // Signed in, but GitHub hasn't sent the pull request's details, which name it for writes.
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in_bot(&tab, "e_without_details", &[], cx).await;
+        show_test_diff(&tab, &workspace, &files, cx).await;
+
+        cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx)[1..],
+            [
+                "Couldn't mark a.rs viewed: GitHub hasn't sent this pull request's details yet. Try \
+              again in a moment."
+            ]
+        );
+        assert!(has_viewed_toast(&workspace, cx));
+        assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
+        assert_eq!(github.github.mutations(), []);
+        // Each tab's toast is its own, so the first still shows.
+        let first = toast_log(cx)[0].0.clone();
+        assert!(workspace.read_with(cx, |workspace, _| workspace.has_notification(&first)));
+    }
+
+    #[gpui::test]
+    async fn a_file_that_changed_since_it_was_viewed_says_so_when_opened(cx: &mut TestAppContext) {
+        const VIEWED_AT: &str = "1111111111111111111111111111111111111111";
+        let (_, tab, _, cx) = three_files(
+            "changed_since_viewed",
+            &[("b.rs", VIEWED_AT)],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "DISMISSED"),
+                ("c.rs", "VIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        let note = |cx: &mut VisualTestContext| {
+            tab.update(cx, |tab, cx| tab.changed_since_viewed(cx))
+                .map(|(_, note)| note)
+        };
+        assert_eq!(note(cx), None, "a.rs is current, and unviewed");
+
+        // The list shows b.rs changed since viewed; opening it says since when.
+        assert_eq!(
+            marks(&tab, cx)[1],
+            mark("b.rs", Some(ViewedState::Dismissed))
+        );
+        cx.simulate_keystrokes("] f");
+        assert_eq!(
+            note(cx).as_deref(),
+            Some(
+                "Changed since it was viewed. rozed can't show only what changed since then yet, \
+                 so this is the file's whole diff."
+            ),
+            "the head this Mac recorded isn't a revision the tab knows"
+        );
+
+        // With the revision this Mac recorded among the pull request's, it's named.
+        tab.update(cx, |tab, _| {
+            let at = |secs: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + secs);
+            tab.revisions = Some(build_revisions(
+                &[
+                    PushRecord::Polled {
+                        head: VIEWED_AT.into(),
+                        at: at(0),
+                    },
+                    PushRecord::Polled {
+                        head: HEAD.into(),
+                        at: at(60),
+                    },
+                ],
+                &[],
+                HEAD,
+                SystemTime::UNIX_EPOCH,
+            ));
+        });
+        assert_eq!(
+            note(cx).as_deref(),
+            Some(
+                "Changed since you viewed it in r1. rozed can't show only what changed since \
+                 then yet, so this is the file's whole diff."
+            )
+        );
+
+        // A viewed file says nothing.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(note(cx), None);
+    }
+
+    #[gpui::test]
+    async fn the_file_keys_move_between_files_in_review_order(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("Cargo.lock", lines(5, &[]), lines(5, &[2])),
+                ("src/main.rs", lines(5, &[]), lines(5, &[3])),
+                ("tests/main.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+        // The list shows path order; the keys still follow the diff's order, review order.
+        cx.simulate_keystrokes("alt-o");
+
+        // Until something is selected, the first file in review order is the current one.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("tests/main.rs"));
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("Cargo.lock"));
+        cx.simulate_keystrokes("] f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("Cargo.lock"));
+        cx.simulate_keystrokes("[ f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("tests/main.rs"));
+        cx.simulate_keystrokes("[ f [ f");
+        assert_eq!(selected(&tab, cx).as_deref(), Some("src/main.rs"));
+    }
+
+    /// `count` numbered lines, with the lines at `changed` (from 1) edited.
+    fn lines(count: usize, changed: &[usize]) -> String {
+        (1..=count)
+            .map(|line| match changed.contains(&line) {
+                true => format!("line {line} changed\n"),
+                false => format!("line {line}\n"),
+            })
+            .collect()
+    }
+
+    /// Shows a diff of `files`, (path, old text, new text), in `tab`, each file at its place in
+    /// review order. As with the local copy's diff, the tab shows the editor first and the files
+    /// arrive one by one.
+    async fn show_test_diff(
+        tab: &Entity<PrTab>,
+        workspace: &Entity<Workspace>,
+        files: &[(&str, String, String)],
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
+        let positions = list_test_files(tab, files, cx);
+        let editor = test_diff_editor(workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx)
+        });
+        add_test_files(&editor, files, &positions, cx).await;
+        cx.run_until_parked();
+        editor
+    }
+
+    /// Lists `files` in `tab` as the local copy does, and returns where each goes in the diff.
+    fn list_test_files(
+        tab: &Entity<PrTab>,
+        files: &[(&str, String, String)],
+        cx: &mut VisualTestContext,
+    ) -> Vec<usize> {
+        let changed: Vec<_> = files
+            .iter()
+            .map(|(path, _, _)| changed(path, Change::Modified))
+            .collect();
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| tab.copied(&changed, &head, cx))
+    }
+
+    /// An empty side-by-side diff, not shown anywhere yet.
+    fn test_diff_editor(
+        workspace: &Entity<Workspace>,
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
+        let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        let multi_buffer = cx.new(|cx| {
+            let mut multi_buffer = multi_buffer::MultiBuffer::new(Capability::ReadOnly);
+            multi_buffer.set_all_diff_hunks_expanded(cx);
+            multi_buffer
+        });
+        workspace.update_in(cx, |_, window, cx| {
+            let workspace = cx.entity();
+            cx.new(|cx| {
+                SplittableEditor::new(
+                    settings::DiffViewStyle::Split,
+                    multi_buffer,
+                    project,
+                    workspace,
+                    window,
+                    cx,
+                )
+            })
+        })
+    }
+
+    /// Adds `files`, (path, old text, new text), to `editor`, each at its position in `positions`,
+    /// one by one.
+    async fn add_test_files(
+        editor: &Entity<SplittableEditor>,
+        files: &[(&str, String, String)],
+        positions: &[usize],
+        cx: &mut VisualTestContext,
+    ) {
+        for ((path, old, new), position) in files.iter().zip(positions) {
+            let buffer = cx.new(|cx| language::Buffer::local(new.as_str(), cx));
+            let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+            let diff = cx.new(|cx| buffer_diff::BufferDiff::new(&snapshot.text, None, None, cx));
+            diff.update(cx, |diff, cx| {
+                diff.set_base_text(Some(old.as_str().into()), snapshot.text.clone(), cx)
+            })
+            .await;
+            let ranges: Vec<_> = diff.read_with(cx, |diff, cx| {
+                use language::OffsetRangeExt as _;
+                diff.snapshot(cx)
+                    .hunks(&snapshot)
+                    .map(|hunk| hunk.buffer_range.to_point(&snapshot))
+                    .collect()
+            });
+            let key =
+                pr_diff::path_key(*position, RelPath::from_unix_str(path).unwrap().into_arc());
+            editor.update_in(cx, |editor, window, cx| {
+                editor.update_excerpts_for_path(key, buffer, ranges, 3, diff, cx);
+                editor.split(window, cx);
+            });
+        }
+    }
+
+    /// The file the diff's cursor is in, the cursor's row, and the file the list selects.
+    fn cursor(
+        tab: &Entity<PrTab>,
+        editor: &Entity<SplittableEditor>,
+        cx: &mut VisualTestContext,
+    ) -> (Option<String>, u32, Option<String>) {
+        let file = cx.update(|_, cx| crate::diff_cursor::file_at_cursor(editor, cx));
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        let row = rhs.update(cx, |editor, cx| {
+            editor
+                .selections
+                .newest::<language::Point>(&editor.display_snapshot(cx))
+                .head()
+                .row
+        });
+        (file.map(|(_, path)| path), row, selected(tab, cx))
+    }
+
+    #[gpui::test]
+    async fn the_change_keys_move_between_changes_across_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(30, &[]), lines(30, &[2, 25])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+        let file = |cx: &mut VisualTestContext| cursor(&tab, &editor, cx).0;
+        assert_eq!(file(cx).as_deref(), Some("src/a.rs"));
+
+        // Both of a.rs's changes, then on into b.rs, which the list follows.
+        cx.simulate_keystrokes("] c");
+        let (in_file, first, _) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] c");
+        let (in_file, second, _) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/a.rs"));
+        assert!(second > first, "{first} then {second}");
+        cx.simulate_keystrokes("] c");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/b.rs"));
+        assert_eq!(listed.as_deref(), Some("src/b.rs"));
+
+        // The last change stays put.
+        cx.simulate_keystrokes("] c");
+        let last = cursor(&tab, &editor, cx);
+        assert_eq!(last.0.as_deref(), Some("src/c.rs"));
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx), last);
+
+        // And back, across files.
+        cx.simulate_keystrokes("[ c [ c");
+        let (in_file, row, listed) = cursor(&tab, &editor, cx);
+        assert_eq!((in_file.as_deref(), row), (Some("src/a.rs"), second));
+        assert_eq!(listed.as_deref(), Some("src/a.rs"));
+
+        // The first change stays put too.
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(cursor(&tab, &editor, cx).1, first);
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(
+            cursor(&tab, &editor, cx),
+            (Some("src/a.rs".into()), first, Some("src/a.rs".into()))
+        );
+    }
+
+    #[gpui::test]
+    fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let stack = |contexts: &[&str]| -> Vec<gpui::KeyContext> {
+                contexts
+                    .iter()
+                    .map(|context| gpui::KeyContext::parse(context).unwrap())
+                    .collect()
+            };
+            let tab = ["Workspace", "Pane", "PrTab"];
+            let diff = stack(&[&tab[..], &["Editor mode=full multibuffer"]].concat());
+            let file_list = stack(&[&tab[..], &["PrFileList"]].concat());
+            // A comment box in the diff, as milestone 8 adds, or any other text box in the tab.
+            let text_box = stack(
+                &[
+                    &tab[..],
+                    &["Editor mode=full multibuffer", "Editor mode=auto_height"],
+                ]
+                .concat(),
+            );
+            let line = stack(&[&tab[..], &["Editor mode=single_line"]].concat());
+            let rozed = |input: &'static str, contexts: &[gpui::KeyContext]| {
+                let keystrokes: Vec<gpui::Keystroke> = input
+                    .split(' ')
+                    .map(|key| gpui::Keystroke::parse(key).unwrap())
+                    .collect();
+                let (bindings, pending) = keymap.bindings_for_input(&keystrokes, contexts);
+                let actions: Vec<&str> = bindings
+                    .iter()
+                    .map(|binding| binding.action().name())
+                    .filter(|name| name.starts_with("review_ui::"))
+                    .collect();
+                (actions, pending)
+            };
+
+            for (keys, action) in [
+                ("e", "review_ui::ToggleViewed"),
+                ("] f", "review_ui::NextFile"),
+                ("[ f", "review_ui::PreviousFile"),
+                ("] c", "review_ui::NextChange"),
+                ("[ c", "review_ui::PreviousChange"),
+                ("alt-o", "review_ui::ToggleFileOrder"),
+            ] {
+                assert_eq!(rozed(keys, &diff).0, [action], "{keys} in the diff");
+                assert_eq!(
+                    rozed(keys, &file_list).0,
+                    [action],
+                    "{keys} in the file list"
+                );
+                for contexts in [&text_box, &line] {
+                    assert_eq!(rozed(keys, contexts).0, [""; 0], "{keys} in a text box");
+                }
+            }
+            // A bracket types at once, not waiting for a second key.
+            for prefix in ["]", "["] {
+                assert!(rozed(prefix, &diff).1, "{prefix} waits in the diff");
+                assert!(!rozed(prefix, &text_box).1, "{prefix} types in a text box");
+            }
+        });
+    }
+
+    #[gpui::test]
+    async fn the_change_keys_skip_folded_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[2, 4])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[3])),
+            ],
+            cx,
+        )
+        .await;
+        // b.rs is collapsed, as a generated file starts, or as its header's chevron folds it.
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        rhs.update(cx, |editor, cx| {
+            let multi_buffer = editor.buffer().read(cx);
+            let snapshot = multi_buffer.snapshot(cx);
+            let b = multi_buffer
+                .all_buffers_iter()
+                .map(|buffer| buffer.read(cx).remote_id())
+                .find(|id| {
+                    snapshot
+                        .path_for_buffer(*id)
+                        .is_some_and(|key| key.path.as_unix_str() == "src/b.rs")
+                })
+                .unwrap();
+            editor.fold_buffers([b], cx);
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] c");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/c.rs"));
+        assert_eq!(listed.as_deref(), Some("src/c.rs"));
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        // b.rs stays folded.
+        assert!(rhs.read_with(cx, |editor, cx| editor.has_any_buffer_folded(cx)));
+    }
+
+    #[gpui::test]
+    async fn a_change_key_back_to_where_the_cursor_started_moves_the_list_with_it(
+        cx: &mut TestAppContext,
+    ) {
+        // An added first file: its one change starts at its first row, where the cursor starts.
+        let files = [
+            ("a.rs", String::new(), lines(3, &[])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let (_, tab, github, editor, cx) = signed_in_diff(
+            "back_to_the_start",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        assert_eq!(cursor(&tab, &editor, cx), (Some("a.rs".into()), 0, None));
+
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx).2.as_deref(), Some("b.rs"));
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(
+            cursor(&tab, &editor, cx),
+            (Some("a.rs".into()), 0, Some("a.rs".into()))
+        );
+
+        // `e` marks the file read, not the one the list showed before.
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
+    }
+
+    #[gpui::test]
+    async fn the_diffs_cursor_starts_in_the_first_file_in_review_order(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        // Files arrive in git's order; the diff shows them in review order.
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("Cargo.lock", lines(5, &[]), lines(5, &[2])),
+                ("src/main.rs", lines(5, &[]), lines(5, &[3])),
+                ("tests/main.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+
+        let (in_file, row, listed) = cursor(&tab, &editor, cx);
+        assert_eq!((in_file.as_deref(), row), (Some("src/main.rs"), 0));
+        // Where the tab put the cursor isn't a move, so the list still selects nothing.
+        assert_eq!(listed, None);
+        cx.simulate_keystrokes("] f");
+        assert_eq!(
+            cursor(&tab, &editor, cx).0.as_deref(),
+            Some("tests/main.rs")
+        );
+    }
+
+    /// Builds a diff of `files` out of sight, then shows it in `tab`, as the local copy's diff
+    /// replaces GitHub's.
+    async fn show_built_diff(
+        tab: &Entity<PrTab>,
+        workspace: &Entity<Workspace>,
+        files: &[(&str, String, String)],
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
+        let positions = list_test_files(tab, files, cx);
+        let editor = test_diff_editor(workspace, cx);
+        add_test_files(&editor, files, &positions, cx).await;
+        cx.run_until_parked();
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx)
+        });
+        cx.run_until_parked();
+        editor
+    }
+
+    #[gpui::test]
+    async fn a_diff_shown_with_its_files_in_starts_in_its_first_file(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_built_diff(
+            &tab,
+            &workspace,
+            &[
+                ("Cargo.lock", lines(5, &[]), lines(5, &[2])),
+                ("src/main.rs", lines(5, &[]), lines(5, &[3])),
+                ("tests/main.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+
+        // Not at the end, in the last file, where an editor's cursor starts.
+        assert_eq!(
+            cursor(&tab, &editor, cx),
+            (Some("src/main.rs".into()), 0, None)
+        );
+    }
+
+    #[gpui::test]
+    async fn the_file_keys_move_the_diffs_cursor_to_each_file(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let editor = show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("src/a.rs", lines(30, &[]), lines(30, &[2, 25])),
+                ("src/b.rs", lines(5, &[]), lines(5, &[3])),
+                ("src/c.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
+
+        // From the cursor's file, even before the list selected anything.
+        cx.simulate_keystrokes("] f");
+        let (in_file, _, listed) = cursor(&tab, &editor, cx);
+        assert_eq!(in_file.as_deref(), Some("src/b.rs"));
+        assert_eq!(listed.as_deref(), Some("src/b.rs"));
+
+        // From a change deep in a file, the previous file is the one before it.
+        cx.simulate_keystrokes("] c [ f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/a.rs"));
+        cx.simulate_keystrokes("] f ] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("src/c.rs"));
+    }
+
     #[gpui::test]
     async fn reopening_a_pull_request_switches_to_its_tab(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
@@ -3677,6 +5985,27 @@ mod tests {
         let local = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
         assert!(!local.read_with(cx, |diff, _| diff.is_split()));
         assert_eq!(scrolled_to(&local, cx), Some(at_top));
+    }
+
+    #[gpui::test]
+    async fn a_cursor_never_moved_starts_the_local_copys_diff_in_its_first_file(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, PULL, cx);
+        show_github_files(
+            &tab,
+            vec![github_file("a.txt", 50), github_file("b.txt", 60)],
+            cx,
+        );
+
+        let _local_copy = show_local_copy(&tab, cx);
+
+        let local = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        // At the diff's first row, not at its end in b.txt, where the local copy's editor's
+        // cursor starts.
+        let (in_file, row, _) = cursor(&tab, &local, cx);
+        assert_eq!((in_file.as_deref(), row), (Some("a.txt"), 0));
     }
 
     #[gpui::test]

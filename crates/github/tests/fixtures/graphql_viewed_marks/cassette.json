@@ -1,0 +1,6 @@
+{
+  "description": "PR #2's one file marked viewed and its mark cleared, reading the PullRequest query before, between and after: UNVIEWED, VIEWED, UNVIEWED",
+  "recorded_at": "2026-11-06T14:54:07Z",
+  "repo": "rozed-dev/playground",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

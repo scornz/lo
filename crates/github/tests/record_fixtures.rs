@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
+use github::queries::FileViewedState;
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
@@ -252,6 +253,98 @@ fn graphql_not_found() {
                 .pull_request("rozed-dev", "does-not-exist", 1)
                 .await
                 .unwrap_err();
+        },
+    );
+}
+
+/// PR #2's one file, the only file the recordings mark viewed. They leave it unviewed.
+const PR_2_FILE: &str = "stack-b.md";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_viewed_marks() {
+    record_graphql(
+        "graphql_viewed_marks",
+        "PR #2's one file marked viewed and its mark cleared, reading the PullRequest query \
+         before, between and after: UNVIEWED, VIEWED, UNVIEWED",
+        |client| async move {
+            let state = || async {
+                let pr = client
+                    .pull_request("rozed-dev", "playground", 2)
+                    .await
+                    .unwrap();
+                let file = pr
+                    .files
+                    .unwrap()
+                    .nodes
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .next();
+                (pr.id, file.unwrap().viewer_viewed_state)
+            };
+            let (id, before) = state().await;
+            assert_eq!(
+                before,
+                FileViewedState::UNVIEWED,
+                "start from an unviewed file"
+            );
+            client.mark_file_as_viewed(&id, PR_2_FILE).await.unwrap();
+            assert_eq!(state().await.1, FileViewedState::VIEWED);
+            client.unmark_file_as_viewed(&id, PR_2_FILE).await.unwrap();
+            assert_eq!(state().await.1, FileViewedState::UNVIEWED);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_mark_file_as_viewed_not_found() {
+    record_graphql(
+        "graphql_mark_file_as_viewed_not_found",
+        "markFileAsViewed on a pull request node ID that names nothing",
+        |client| async move {
+            client
+                .mark_file_as_viewed("PR_kwDOVk6v9M8AAAAAAAAAAA", "README.md")
+                .await
+                .unwrap_err();
+        },
+    );
+}
+
+/// A path PR #2 doesn't have.
+const NOT_IN_PR_2: &str = "not-in-this-pull-request.md";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_mark_file_as_viewed_unlisted_path() {
+    record_graphql(
+        "graphql_mark_file_as_viewed_unlisted_path",
+        "markFileAsViewed on PR #2 with a path the pull request doesn't have, reading the \
+         PullRequest query before and after; PR #2's one file stays unviewed",
+        |client| async move {
+            let state = || async {
+                let pr = client
+                    .pull_request("rozed-dev", "playground", 2)
+                    .await
+                    .unwrap();
+                let files: Vec<(String, FileViewedState)> = pr
+                    .files
+                    .unwrap()
+                    .nodes
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .map(|file| (file.path, file.viewer_viewed_state))
+                    .collect();
+                (pr.id, files)
+            };
+            let unviewed = vec![(PR_2_FILE.to_string(), FileViewedState::UNVIEWED)];
+            let (id, before) = state().await;
+            assert_eq!(before, unviewed, "start from an unviewed file");
+            let answer = client.mark_file_as_viewed(&id, NOT_IN_PR_2).await;
+            eprintln!("markFileAsViewed on {NOT_IN_PR_2}: {answer:?}");
+            assert_eq!(state().await.1, unviewed, "PR #2's one file stays unviewed");
         },
     );
 }

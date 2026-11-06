@@ -63,6 +63,24 @@ pub struct PullRequestCheck;
 )]
 pub struct OpenPullRequests;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "graphql/schema.graphql",
+    query_path = "graphql/mark_file_as_viewed.graphql",
+    response_derives = "Debug, Clone, PartialEq",
+    variables_derives = "Debug, Clone"
+)]
+pub struct MarkFileAsViewed;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "graphql/schema.graphql",
+    query_path = "graphql/unmark_file_as_viewed.graphql",
+    response_derives = "Debug, Clone, PartialEq",
+    variables_derives = "Debug, Clone"
+)]
+pub struct UnmarkFileAsViewed;
+
 pub type ViewerData = viewer::ViewerViewer;
 pub type PullRequestData = pull_request::PullRequestRepositoryPullRequest;
 pub type PullRequestFile = pull_request::PullRequestRepositoryPullRequestFilesNodes;
@@ -155,6 +173,14 @@ impl Pager {
         }
         Ok(Some(cursor))
     }
+}
+
+/// A viewed-mark mutation's answer: GitHub names the pull request it changed. Without errors, a
+/// missing one is an answer rozed doesn't understand, so it isn't taken as done.
+fn marked<T>(pull_request: Option<T>) -> Result<(), GithubError> {
+    pull_request.map(|_| ()).ok_or_else(|| {
+        GithubError::Decode("GitHub didn't say which pull request it changed".into())
+    })
 }
 
 fn not_found(what: String) -> GithubError {
@@ -265,6 +291,45 @@ impl GithubClient {
         .repository
         .and_then(|repository| repository.pull_request)
         .ok_or_else(|| not_found(format!("pull request {owner}/{name}#{number}")))
+    }
+
+    /// Marks one of a pull request's files viewed for the signed-in user (`markFileAsViewed`).
+    /// `pull_request_id` is the pull request's node ID, its details' `id`. GitHub's mark is per
+    /// user, and it resets to "changed since viewed" when a push changes the file.
+    pub async fn mark_file_as_viewed(
+        &self,
+        pull_request_id: &str,
+        path: &str,
+    ) -> Result<(), GithubError> {
+        let data = self
+            .graphql::<MarkFileAsViewed>(mark_file_as_viewed::Variables {
+                pull_request_id: pull_request_id.to_string(),
+                path: path.to_string(),
+            })
+            .await?;
+        marked(
+            data.mark_file_as_viewed
+                .and_then(|payload| payload.pull_request),
+        )
+    }
+
+    /// Clears the signed-in user's viewed mark on one of a pull request's files
+    /// (`unmarkFileAsViewed`), as [`Self::mark_file_as_viewed`] sets it.
+    pub async fn unmark_file_as_viewed(
+        &self,
+        pull_request_id: &str,
+        path: &str,
+    ) -> Result<(), GithubError> {
+        let data = self
+            .graphql::<UnmarkFileAsViewed>(unmark_file_as_viewed::Variables {
+                pull_request_id: pull_request_id.to_string(),
+                path: path.to_string(),
+            })
+            .await?;
+        marked(
+            data.unmark_file_as_viewed
+                .and_then(|payload| payload.pull_request),
+        )
     }
 
     /// A repository's open pull requests, newest first, up to [`MAX_OPEN_PULL_REQUESTS`].
