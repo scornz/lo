@@ -8,6 +8,9 @@ use std::ops::{Range, RangeInclusive};
 /// The fewest matching lines a move has.
 const MIN_LINES: usize = 3;
 
+/// The most edited lines a move has in a row.
+const MAX_EDITS_IN_A_ROW: usize = 2;
+
 /// One file's changed lines, as a line diff produces them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileChanges {
@@ -257,6 +260,8 @@ struct Candidate {
     delta: isize,
     /// How many of its lines match.
     matched: usize,
+    /// How many of its lines were edited.
+    edited: usize,
 }
 
 impl Candidate {
@@ -264,10 +269,12 @@ impl Candidate {
         self.new.start.wrapping_add_signed(self.delta)..self.new.end.wrapping_add_signed(self.delta)
     }
 
-    /// Longer blocks first, then the one that lands first, then the one that came from first.
+    /// Longer blocks first, then the one with fewer edits, then the one that lands first, then the
+    /// one that came from first.
     fn rank(&self) -> impl Ord {
         (
             self.matched,
+            Reverse(self.edited),
             Reverse(self.new.start),
             Reverse(self.old().start),
         )
@@ -328,20 +335,87 @@ impl Finder<'_> {
             }
             let new = self.walk(seed);
             walked = Some((seed, new.end));
-            candidates.extend(self.block(new, seed.delta));
+            self.blocks(new, seed.delta, &mut candidates);
         }
         candidates
     }
 
-    /// The added lines `new`, lined up with the deleted lines `delta` away, as a candidate move if
-    /// they make one.
-    fn block(&self, new: Range<usize>, delta: isize) -> Option<Candidate> {
-        let matched = new.clone().filter(|&new| self.same(new, delta)).count();
-        (matched >= MIN_LINES).then_some(Candidate {
-            new,
-            delta,
-            matched,
-        })
+    /// The candidate moves among the added lines `new`, lined up with the deleted lines `delta`
+    /// away. `new` has no more than [`MAX_EDITS_IN_A_ROW`] edited lines in a row.
+    ///
+    /// A stretch that starts and ends with matching lines, matches on at least
+    /// [`MIN_LINES`] lines and on at least two thirds of its lines is a candidate. A stretch short
+    /// of two thirds gives way to its longest stretch that isn't, and what's either side of that
+    /// is tried again.
+    fn blocks(&self, new: Range<usize>, delta: isize, out: &mut impl Extend<Candidate>) {
+        let mut stretches = vec![new];
+        while let Some(stretch) = stretches.pop() {
+            let stretch = self.trim(stretch, delta);
+            let matched = stretch.clone().filter(|&new| self.same(new, delta)).count();
+            if matched < MIN_LINES {
+                continue;
+            }
+            let edited = stretch.len() - matched;
+            if matched >= 2 * edited {
+                out.extend([Candidate {
+                    new: stretch,
+                    delta,
+                    matched,
+                    edited,
+                }]);
+                continue;
+            }
+            let longest = self.longest_two_thirds(stretch.clone(), delta);
+            stretches.push(stretch.start..longest.start);
+            stretches.push(longest.end..stretch.end);
+            stretches.push(longest);
+        }
+    }
+
+    /// `new` without the edited lines at either end.
+    fn trim(&self, mut new: Range<usize>, delta: isize) -> Range<usize> {
+        while !new.is_empty() && !self.same(new.start, delta) {
+            new.start += 1;
+        }
+        while !new.is_empty() && !self.same(new.end - 1, delta) {
+            new.end -= 1;
+        }
+        new
+    }
+
+    /// The longest stretch of `new` that matches on at least two thirds of its lines. `new` starts
+    /// with a matching line, so it's never empty.
+    fn longest_two_thirds(&self, new: Range<usize>, delta: isize) -> Range<usize> {
+        // A matching line scores 1 and an edited line -2, so a stretch matches on two thirds of its
+        // lines when its score is at least 0: when the running score where it ends is at least the
+        // running score where it starts. Find the furthest-apart such pair of positions.
+        let mut score = Vec::with_capacity(new.len() + 1);
+        score.push(0_isize);
+        for line in new.clone() {
+            let step = if self.same(line, delta) { 1 } else { -2 };
+            score.push(score[score.len() - 1] + step);
+        }
+        // The lowest score at or before each position, and the highest at or after it.
+        let mut lowest = score.clone();
+        for i in 1..lowest.len() {
+            lowest[i] = lowest[i].min(lowest[i - 1]);
+        }
+        let mut highest = score;
+        for i in (0..highest.len() - 1).rev() {
+            highest[i] = highest[i].max(highest[i + 1]);
+        }
+        let (mut start, mut end, mut longest) = (0, 0, 0..0);
+        while start < lowest.len() && end < highest.len() {
+            if lowest[start] <= highest[end] {
+                if end - start > longest.len() {
+                    longest = start..end;
+                }
+                end += 1;
+            } else {
+                start += 1;
+            }
+        }
+        new.start + longest.start..new.start + longest.end
     }
 
     /// Takes candidates longest first, giving each line to at most one move. A candidate that
@@ -372,7 +446,7 @@ impl Finder<'_> {
                 while end < candidate.new.end && free(end) {
                     end += 1;
                 }
-                queue.extend(self.block(start..end, delta));
+                self.blocks(start..end, delta, &mut queue);
                 start = end;
             }
         }
@@ -393,16 +467,27 @@ impl Finder<'_> {
         self.new.lines[new].id == self.old.lines[new.wrapping_add_signed(delta)].id
     }
 
-    /// The matching lines around `seed` along its lineup.
+    /// The lines around `seed` along its lineup, out to the last matching lines before more than
+    /// [`MAX_EDITS_IN_A_ROW`] edited lines in a row, or the end of either run.
     fn walk(&self, seed: Seed) -> Range<usize> {
         let lane = self.lane(seed);
         let mut start = seed.new;
-        while start > lane.start && self.same(start - 1, seed.delta) {
-            start -= 1;
+        let mut at = seed.new;
+        while at > lane.start {
+            at -= 1;
+            if self.same(at, seed.delta) {
+                start = at;
+            } else if start - at > MAX_EDITS_IN_A_ROW {
+                break;
+            }
         }
         let mut end = seed.new + 1;
-        while end < lane.end && self.same(end, seed.delta) {
-            end += 1;
+        for at in seed.new + 1..lane.end {
+            if self.same(at, seed.delta) {
+                end = at + 1;
+            } else if at + 1 - end > MAX_EDITS_IN_A_ROW {
+                break;
+            }
         }
         start..end
     }
