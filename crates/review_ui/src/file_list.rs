@@ -168,6 +168,16 @@ impl FileList {
             .position(|&index| self.entries[index].path() == path)
     }
 
+    /// Each entry's position in review order, by its index in the entries: where the diff shows
+    /// each file.
+    pub fn review_positions(&self) -> Vec<usize> {
+        let mut positions = vec![0; self.entries.len()];
+        for (position, &index) in self.review_order.iter().enumerate() {
+            positions[index] = position;
+        }
+        positions
+    }
+
     /// Takes GitHub's viewed marks, by path. Files GitHub doesn't list keep no mark.
     pub fn set_viewed(&mut self, viewed: &HashMap<String, ViewedState>) {
         for entry in &mut self.entries {
@@ -329,6 +339,8 @@ mod tests {
         assert_eq!(list.review_position("tests/lib.rs"), Some(2));
         assert_eq!(list.review_position("Cargo.lock"), Some(4));
         assert_eq!(list.review_position("missing.rs"), None);
+        // Entries are in path order here, so this lists each path's place in review order.
+        assert_eq!(list.review_positions(), [4, 0, 1, 3, 2]);
     }
 
     #[test]

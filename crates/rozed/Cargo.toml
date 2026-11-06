@@ -30,7 +30,6 @@ node_runtime.workspace = true
 paths.workspace = true
 project.workspace = true
 release_channel.workspace = true
-repo_cache.workspace = true
 reqwest_client.workspace = true
 review_ui.workspace = true
 serde_json.workspace = true

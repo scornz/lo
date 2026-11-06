@@ -17,14 +17,13 @@ use anyhow::Context as _;
 use assets::Assets;
 use client::{Client, UserStore};
 use db::kvp::KeyValueStore;
-use editor::{Editor, MultiBuffer};
 use fs::RealFs;
 use gpui::{
-    App, AppContext as _, Bounds, Context, Menu, MenuItem, Task, TaskExt as _, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Bounds, Menu, MenuItem, Task, TitlebarOptions, WindowBounds,
+    WindowOptions, px, size,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
-use language::{Capability, LanguageRegistry};
+use language::LanguageRegistry;
 use node_runtime::NodeRuntime;
 use project::Project;
 use release_channel::AppVersion;
@@ -37,16 +36,12 @@ use workspace::notifications::NotifyTaskExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
 use review_ui::pr_link::PrLink;
-use review_ui::{local_copies, local_project, pr_diff, trust};
+use review_ui::{Trust, local_copies, local_project, trust};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
-
-/// A GitHub token to sign in with, until milestone 3's accounts. rozed reads it at launch and
-/// removes it from its environment, so no child process inherits it.
-const TOKEN_VAR: &str = "ROZED_GITHUB_TOKEN";
 
 const USAGE: &str = "usage: rozed [--trust] [<pull request link>]
 example: rozed https://github.com/sharkdp/fd/pull/2212
@@ -105,13 +100,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let token = std::env::var(TOKEN_VAR)
-        .ok()
-        .map(repo_cache::Token::new)
-        .filter(|token| !token.expose().is_empty());
     // SAFETY: no other thread exists yet, so nothing reads the environment concurrently.
     unsafe {
-        std::env::remove_var(TOKEN_VAR);
         std::env::set_var(SHELL_ENV_GUARD, std::process::id().to_string());
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
@@ -154,7 +144,7 @@ fn main() {
         // Before anything reads settings. Again below, once every language is known.
         forced_settings::apply(&[], None, cx);
         // Checks git and cleans up old clones in the background.
-        local_copies::init(token, cx);
+        local_copies::init(cx);
 
         let http = http_client(cx);
         cx.set_http_client(http.clone());
@@ -221,7 +211,8 @@ fn main() {
         editor::init(cx);
         workspace::init(app_state.clone(), cx);
         command_palette::init(cx);
-        accounts_ui::init(cx);
+        let accounts = accounts_ui::init(cx);
+        review_ui::init(accounts, cx);
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
         cx.set_menus([Menu::new("rozed").items([
@@ -372,8 +363,7 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
     }
 }
 
-/// Opens rozed's window: a workspace showing the pull request, or without one this file,
-/// read-only.
+/// Opens rozed's window, with the pull request in a tab, or without one the box to open one.
 fn open_window(
     app_state: Arc<AppState>,
     options: Options,
@@ -385,18 +375,11 @@ fn open_window(
         trust,
     } = options;
     let trust = if trust {
-        pr_diff::Trust::Checkout
+        Trust::Checkout
     } else {
-        pr_diff::Trust::Untrusted
+        Trust::Untrusted
     };
-    let mut window_options = (app_state.build_window_options)(None, cx);
-    if let Some(pull_request) = &pull_request {
-        log::info!("opening {pull_request}");
-        window_options.titlebar = Some(TitlebarOptions {
-            title: Some(format!("{pull_request} - rozed").into()),
-            ..Default::default()
-        });
-    }
+    let window_options = (app_state.build_window_options)(None, cx);
     let window = cx
         .open_window(window_options, |window, cx| {
             theme_settings::setup_ui_font(window, cx);
@@ -408,19 +391,16 @@ fn open_window(
             cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
         })
         .context("opening rozed's window")?;
+    log::info!("window open {:?} after launch", launched.elapsed());
     window.update(cx, |multi_workspace, window, cx| {
         let workspace = multi_workspace.workspace().clone();
         match pull_request {
             Some(pull_request) => {
-                let weak_workspace = workspace.downgrade();
-                window
-                    .spawn(cx, async move |cx| {
-                        pr_diff::open(weak_workspace, pull_request, trust, launched, cx).await
-                    })
-                    .detach_and_notify_err(workspace.downgrade(), window, cx);
+                workspace.update(cx, |workspace, cx| {
+                    review_ui::open(workspace, pull_request, trust, window, cx)
+                });
             }
             None => {
-                workspace.update(cx, |workspace, cx| show_source(workspace, window, cx));
                 // Opening a pull request reports a missing or old git itself. Without one, say
                 // so as soon as the launch check finds it.
                 let check = local_copies::cache(cx);
@@ -431,36 +411,6 @@ fn open_window(
         }
     })?;
     Ok(())
-}
-
-/// Shows rozed's own `main.rs` in a read-only editor, highlighted as Rust. Built the way Zed shows
-/// its bundled files: a project buffer created with its language, so nothing resets it to plain
-/// text.
-fn show_source(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
-    let rust = workspace.app_state().languages.language_for_name("Rust");
-    let project = workspace.project().clone();
-    cx.spawn_in(window, async move |workspace, cx| {
-        let rust = rust.await?;
-        workspace.update_in(cx, |workspace, window, cx| {
-            let buffer = project.update(cx, |project, cx| {
-                project.create_local_buffer(include_str!("main.rs"), Some(rust), false, cx)
-            });
-            buffer.update(cx, |buffer, cx| {
-                buffer.set_capability(Capability::ReadOnly, cx)
-            });
-            let multi_buffer =
-                cx.new(|cx| MultiBuffer::singleton(buffer, cx).with_title("main.rs".into()));
-            let editor = cx.new(|cx| {
-                let mut editor =
-                    Editor::for_multibuffer(multi_buffer, Some(project.clone()), window, cx);
-                editor.set_read_only(true);
-                editor.set_should_serialize(false, cx);
-                editor
-            });
-            workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
-        })
-    })
-    .detach_and_log_err(cx);
 }
 
 #[cfg(test)]

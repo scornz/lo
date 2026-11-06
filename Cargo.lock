@@ -8257,6 +8257,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "buffer_diff",
+ "chrono",
  "db",
  "editor",
  "futures",
@@ -8266,6 +8267,7 @@ dependencies = [
  "http_client",
  "language",
  "log",
+ "menu",
  "multi_buffer",
  "paths",
  "project",
@@ -8395,7 +8397,6 @@ dependencies = [
  "paths",
  "project",
  "release_channel",
- "repo_cache",
  "reqwest_client",
  "review_ui",
  "semver",

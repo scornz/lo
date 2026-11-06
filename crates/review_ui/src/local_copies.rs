@@ -10,14 +10,13 @@ use std::sync::Arc;
 use futures::FutureExt as _;
 use futures::future::Shared;
 use gpui::{App, Global, Task};
-use repo_cache::{Git, RepoCache, Token};
+use repo_cache::{Git, RepoCache};
 
 /// The cache, once git has been checked.
 type Ready = Result<Arc<RepoCache>, Arc<repo_cache::Error>>;
 
 struct LocalCopies {
     ready: Shared<Task<Ready>>,
-    token: Option<Token>,
 }
 
 impl Global for LocalCopies {}
@@ -28,9 +27,8 @@ pub fn cache_dir() -> PathBuf {
     paths::temp_dir().clone()
 }
 
-/// Checks git and cleans up the cache in the background. `token` signs git and GitHub's API in
-/// for every repository; milestone 3's accounts replace it.
-pub fn init(token: Option<Token>, cx: &mut App) {
+/// Checks git and cleans up the cache in the background.
+pub fn init(cx: &mut App) {
     let ready = cx
         .background_executor()
         .spawn(async move {
@@ -46,16 +44,11 @@ pub fn init(token: Option<Token>, cx: &mut App) {
             Ok(Arc::new(cache))
         })
         .shared();
-    cx.set_global(LocalCopies { ready, token });
+    cx.set_global(LocalCopies { ready });
 }
 
 /// The cache, once [`init`]'s check is done, or why rozed can't use git.
 pub fn cache(cx: &App) -> impl Future<Output = anyhow::Result<Arc<RepoCache>>> + use<> {
     let ready = cx.global::<LocalCopies>().ready.clone();
     async move { ready.await.map_err(|error| anyhow::anyhow!("{error}")) }
-}
-
-/// The token to sign in with, if rozed has one.
-pub fn token(cx: &App) -> Option<Token> {
-    cx.global::<LocalCopies>().token.clone()
 }

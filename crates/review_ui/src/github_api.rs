@@ -1,15 +1,16 @@
-//! The one GitHub API call the spike makes: reading a pull request, signed in when rozed has a
-//! token. Milestone 3's `github` crate replaces it.
+//! GitHub's REST view of a pull request (`GET /repos/{owner}/{repo}/pulls/{number}`): what the tab
+//! needs to copy it locally, and when it opened. Signed in, it's read with the account's client;
+//! without an account, anonymously, which works for public repositories only.
 
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
+use chrono::{DateTime, Utc};
 use futures::AsyncReadExt as _;
+use github::{GithubClient, GithubError};
 use http_client::http::{HeaderMap, StatusCode};
 use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, RedirectPolicy, Request};
 use serde::Deserialize;
-
-use repo_cache::Token;
 
 use crate::pr_link::PrLink;
 
@@ -17,8 +18,17 @@ use crate::pr_link::PrLink;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PullRequest {
     pub title: String,
+    /// The author. GitHub leaves it null for a deleted account.
+    pub user: Option<User>,
+    /// When the pull request was opened, where its revisions start.
+    pub created_at: DateTime<Utc>,
     pub head: Head,
     pub base: Base,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct User {
+    pub login: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -56,28 +66,39 @@ impl BaseRepo {
     }
 }
 
-/// `GET /repos/{owner}/{repo}/pulls/{number}`. With `token`, signed in, so private repositories
-/// work. Without one, it works for public repositories only and counts against GitHub's 60
-/// requests an hour per IP address.
+/// Reads the pull request with `login`'s client.
+pub async fn fetch_as(
+    client: &GithubClient,
+    login: &str,
+    link: &PrLink,
+) -> anyhow::Result<PullRequest> {
+    let path = format!("/repos/{}/{}/pulls/{}", link.owner, link.repo, link.number);
+    match client.get::<serde_json::Value>(&path).await {
+        Ok(body) => parse_pull_request(&body.to_string())
+            .with_context(|| format!("reading GitHub's answer for {link}")),
+        Err(GithubError::NotFound { .. }) => {
+            bail!("GitHub has no pull request {link}, or {login} can't see it")
+        }
+        Err(error) => Err(anyhow::Error::new(error).context(format!("asking GitHub for {link}"))),
+    }
+}
+
+/// `GET /repos/{owner}/{repo}/pulls/{number}` without signing in. It works for public
+/// repositories only and counts against GitHub's 60 requests an hour per IP address.
 pub async fn fetch_pull_request(
     http: Arc<dyn HttpClient>,
     link: &PrLink,
-    token: Option<&Token>,
 ) -> anyhow::Result<PullRequest> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/pulls/{}",
         link.owner, link.repo, link.number
     );
-    let mut request = Request::get(&url)
+    let request = Request::get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        // A renamed repository answers with a redirect to its new name. rozed's HTTP client
-        // drops the token on a redirect to another host.
-        .follow_redirects(RedirectPolicy::FollowAll);
-    if let Some(token) = token {
-        request = request.header("Authorization", format!("Bearer {}", token.expose()));
-    }
-    let request = request.body(AsyncBody::empty())?;
+        // A renamed repository answers with a redirect to its new name.
+        .follow_redirects(RedirectPolicy::FollowAll)
+        .body(AsyncBody::empty())?;
     let mut response = http
         .send(request)
         .await
@@ -88,13 +109,7 @@ pub async fn fetch_pull_request(
         .read_to_string(&mut body)
         .await
         .with_context(|| format!("reading GitHub's answer for {link}"))?;
-    check_status(
-        response.status(),
-        response.headers(),
-        &body,
-        link,
-        token.is_some(),
-    )?;
+    check_status(response.status(), response.headers(), &body, link)?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
 }
 
@@ -104,7 +119,6 @@ fn check_status(
     headers: &HeaderMap,
     body: &str,
     link: &PrLink,
-    signed_in: bool,
 ) -> anyhow::Result<()> {
     if status.is_success() {
         return Ok(());
@@ -113,20 +127,15 @@ fn check_status(
         .get("x-ratelimit-remaining")
         .is_some_and(|remaining| remaining == "0");
     if rate_limited && matches!(status.as_u16(), 403 | 429) {
-        if signed_in {
-            bail!("GitHub's rate limit for the token is used up; try again later");
-        }
         bail!(
-            "GitHub's limit of 60 requests an hour without signing in is used up; try again later"
+            "GitHub's limit of 60 requests an hour without signing in is used up; sign in from \
+             Accounts… in the rozed menu, or try again later"
         );
     }
     if status == StatusCode::NOT_FOUND {
-        if signed_in {
-            bail!("GitHub has no pull request {link}, or the token can't see it");
-        }
         bail!(
-            "GitHub has no public pull request {link}. rozed can't sign in yet, so it opens \
-             pull requests in public repositories only, unless ROZED_GITHUB_TOKEN holds a token"
+            "GitHub has no public pull request {link}, and no account rozed is signed in to can \
+             see it. Sign in from Accounts… in the rozed menu"
         );
     }
     let message = serde_json::from_str::<serde_json::Value>(body)
@@ -163,6 +172,8 @@ mod tests {
       "number": 2212,
       "title": "Honor explicit use-jemalloc requests",
       "state": "open",
+      "user": { "login": "voidsipp", "id": 1 },
+      "created_at": "2026-03-02T10:20:30Z",
       "head": {
         "sha": "22c70acc6992c0c51cb68527b87adf114d01acbc",
         "ref": "fix/1822-explicit-jemalloc",
@@ -230,12 +241,12 @@ mod tests {
     }
 
     fn fetch(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), None))
+        futures::executor::block_on(fetch_pull_request(http, &fd_2212()))
     }
 
     fn fetch_signed_in(http: Arc<Canned>) -> anyhow::Result<PullRequest> {
-        let token = Token::new("gho_secret");
-        futures::executor::block_on(fetch_pull_request(http, &fd_2212(), Some(&token)))
+        let client = GithubClient::new(http, github::Token::new("gho_secret"));
+        futures::executor::block_on(fetch_as(&client, "rozed-bot", &fd_2212()))
     }
 
     #[test]
@@ -246,6 +257,10 @@ mod tests {
             pull_request,
             PullRequest {
                 title: "Honor explicit use-jemalloc requests".into(),
+                user: Some(User {
+                    login: "voidsipp".into()
+                }),
+                created_at: "2026-03-02T10:20:30Z".parse().unwrap(),
                 head: Head {
                     sha: "22c70acc6992c0c51cb68527b87adf114d01acbc".into()
                 },
@@ -275,21 +290,33 @@ mod tests {
     }
 
     #[test]
-    fn signs_in_with_a_token() {
+    fn signed_in_it_reads_with_the_accounts_client() {
         let http = Canned::new(200, FD_2212);
         let pull_request = fetch_signed_in(http.clone()).unwrap();
-        assert_eq!(
-            pull_request.base.repo.owner_and_name().unwrap(),
-            ("sharkdp", "fd")
-        );
+        assert_eq!(pull_request, fetch(Canned::new(200, FD_2212)).unwrap());
         let request = http.request.lock().unwrap().take().unwrap();
-        assert_eq!(request.headers()["Authorization"], "Bearer gho_secret");
+        assert_eq!(
+            request.uri(),
+            "https://api.github.com/repos/sharkdp/fd/pulls/2212"
+        );
+        assert_eq!(request.headers()["Authorization"], "token gho_secret");
 
         let error = fetch_signed_in(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "GitHub has no pull request sharkdp/fd#2212, or the token can't see it"
+            "GitHub has no pull request sharkdp/fd#2212, or rozed-bot can't see it"
         );
+        let error = fetch_signed_in(Canned::new(500, r#"{"message":"Server Error"}"#)).unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "asking GitHub for sharkdp/fd#2212: GitHub answered 500: Server Error"
+        );
+    }
+
+    #[test]
+    fn a_deleted_author_is_no_author() {
+        let body = FD_2212.replace(r#"{ "login": "voidsipp", "id": 1 }"#, "null");
+        assert_eq!(parse_pull_request(&body).unwrap().user, None);
     }
 
     #[test]
@@ -305,10 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_private_pull_request_says_only_public_ones_open() {
+    fn a_missing_or_private_pull_request_says_to_sign_in() {
         let error = fetch(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
         assert!(
-            error.to_string().contains("public repositories only"),
+            error.to_string().contains("Sign in from Accounts…"),
             "{error}"
         );
     }
