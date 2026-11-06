@@ -9,12 +9,15 @@ use github::accounts::Accounts;
 use github::cache::PrCache;
 use github::db::RozedDb;
 use github::poll::{PollConfig, Poller};
+use github::viewed::ViewedRecords;
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 /// The accounts, the cache and the pollers, once rozed's database is open.
 pub struct GithubLayer {
     accounts: Entity<Accounts>,
     cache: PrCache,
+    /// Where each account marked files viewed on this Mac.
+    viewed: ViewedRecords,
     /// One per account that has a tab, by lowercased login.
     pollers: HashMap<String, Entity<Poller>>,
 }
@@ -32,7 +35,9 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
     let ready = cx
         .spawn(async move |cx| {
             let (accounts, db) = accounts.await?;
-            Some(cx.new(|_| GithubLayer::new(accounts, PrCache::new(db))))
+            Some(cx.new(|_| {
+                GithubLayer::new(accounts, PrCache::new(db.clone()), ViewedRecords::new(db))
+            }))
         })
         .shared();
     cx.set_global(GlobalLayer(ready));
@@ -53,16 +58,22 @@ pub fn loaded(cx: &App) -> Option<Entity<GithubLayer>> {
 }
 
 impl GithubLayer {
-    pub fn new(accounts: Entity<Accounts>, cache: PrCache) -> Self {
+    pub fn new(accounts: Entity<Accounts>, cache: PrCache, viewed: ViewedRecords) -> Self {
         Self {
             accounts,
             cache,
+            viewed,
             pollers: HashMap::new(),
         }
     }
 
     pub fn accounts(&self) -> &Entity<Accounts> {
         &self.accounts
+    }
+
+    /// Where each account marked files viewed on this Mac.
+    pub fn viewed_records(&self) -> &ViewedRecords {
+        &self.viewed
     }
 
     /// The account's poller, started the first time a tab asks for it.

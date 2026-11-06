@@ -14,6 +14,7 @@ pub mod pr_tab;
 mod read_only;
 pub mod tabs;
 pub mod trust;
+pub mod viewed_marks;
 
 use github::accounts::Accounts;
 use github::db::RozedDb;

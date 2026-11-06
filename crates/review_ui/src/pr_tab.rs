@@ -9,9 +9,11 @@ use std::time::{Instant, SystemTime};
 use anyhow::anyhow;
 use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
+use futures::FutureExt as _;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{PullRef, Target};
+use github::viewed::ViewedRecords;
+use github::{GithubClient, GithubError, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -23,7 +25,8 @@ use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 use util::rel_path::RelPath;
 use workspace::item::{Item, ItemEvent, TabContentParams};
-use workspace::{ItemNavHistory, Workspace};
+use workspace::notifications::NotificationId;
+use workspace::{ItemNavHistory, Toast, Workspace};
 
 use crate::account::{self, AccountDecision, Acting};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
@@ -32,6 +35,7 @@ use crate::github_layer;
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
+use crate::viewed_marks::{Toggle, ViewedMarks, write_failed};
 
 actions!(
     review_ui,
@@ -42,6 +46,9 @@ actions!(
         ToggleThreads,
         /// Switches the file list between review order and path order.
         ToggleFileOrder,
+        /// Marks the current file viewed and moves to the next unviewed file, or clears the mark
+        /// of a viewed file.
+        ToggleViewed,
     ]
 );
 
@@ -55,6 +62,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-o", ToggleFileOrder, Some(KEY_CONTEXT)),
+        KeyBinding::new("e", ToggleViewed, Some(KEY_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // The workspace binds escape to stop following a collaborator.
         KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
@@ -154,8 +162,16 @@ pub struct PrTab {
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
-    /// GitHub's viewed marks, by path, kept for when the files arrive.
-    viewed: HashMap<String, ViewedState>,
+    /// GitHub's viewed marks, and the ones being set, kept for when the files arrive.
+    marks: ViewedMarks,
+    /// The pull request's GraphQL node ID, which writes name it by.
+    node_id: Option<String>,
+    /// The head on screen: GitHub's at first, then the one the local copy fetched.
+    head: Option<String>,
+    /// Where this Mac's records say each file was marked viewed, by path.
+    viewed_at: HashMap<String, String>,
+    /// This Mac's records of where files were marked viewed, once signed in.
+    records: Option<ViewedRecords>,
     revisions: Option<Revisions>,
     status: Status,
     diff: Option<Entity<SplittableEditor>>,
@@ -197,7 +213,11 @@ impl PrTab {
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
-            viewed: HashMap::new(),
+            marks: ViewedMarks::default(),
+            node_id: None,
+            head: None,
+            viewed_at: HashMap::new(),
+            records: None,
             revisions: None,
             status: Status::Loading("Finding an account that can see it…".into()),
             diff: None,
@@ -295,6 +315,7 @@ impl PrTab {
             self.key.canonical = Some((owner.to_string(), name.to_string()));
         }
         self.created_at = Some(pull_request.created_at.into());
+        self.head = Some(pull_request.head.sha.clone());
         self.status = Status::Loading("Copying it locally…".into());
         self.changed(cx);
     }
@@ -314,14 +335,15 @@ impl PrTab {
             .flatten()
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
+        self.node_id = Some(details.id.clone());
+        let marks_changed = self.marks.set_github(viewed);
         // A change of title makes the workspace report the active item changed, which comes back
         // here through `set_active`, so only a real change is reported.
-        if header == self.header && viewed == self.viewed {
+        if header == self.header && !marks_changed {
             return;
         }
         self.header = header;
-        self.viewed = viewed;
-        self.files.set_viewed(&self.viewed);
+        self.files.set_viewed(&self.marks.shown());
         self.changed(cx);
     }
 
@@ -335,8 +357,9 @@ impl PrTab {
     ) -> Vec<usize> {
         let mut list = FileList::new(files.iter().map(FileEntry::from_local).collect());
         list.set_order(self.files.order());
-        list.set_viewed(&self.viewed);
+        list.set_viewed(&self.marks.shown());
         self.files = list;
+        self.head = Some(head.as_str().to_string());
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let now = SystemTime::now();
@@ -371,8 +394,21 @@ impl PrTab {
     }
 
     /// Watches the pull request with its account's poller, which shows what's cached at once and
-    /// keeps it up to date.
-    fn watch(&mut self, poller: Entity<Poller>, pull: PullRef, cx: &mut Context<Self>) {
+    /// keeps it up to date, and reads where this Mac's `records` say its files were marked viewed.
+    fn watch(
+        &mut self,
+        poller: Entity<Poller>,
+        pull: PullRef,
+        records: Option<ViewedRecords>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(records) = &records {
+            match records.heads(poller.read(cx).login(), &pull) {
+                Ok(heads) => self.viewed_at = heads,
+                Err(error) => log::error!("{pull}: reading where files were viewed: {error:#}"),
+            }
+        }
+        self.records = records;
         let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull.clone()), cx));
         if let Some(answer) = answer {
             self.set_details(&answer.details, cx);
@@ -447,6 +483,126 @@ impl PrTab {
         self.files.toggle_order();
         self.scroll_to_selected();
         cx.notify();
+    }
+
+    /// The file `e` and the movement keys act on: the one selected in the list, or the first in
+    /// review order.
+    fn current_path(&self) -> Option<String> {
+        self.files
+            .selected()
+            .or_else(|| self.files.at_review_position(0))
+            .map(|entry| entry.path().to_string())
+    }
+
+    /// `e`: marks the current file viewed and moves to the next unviewed file, or clears a viewed
+    /// file's mark. The new mark shows at once, and goes back to GitHub's if the write fails.
+    fn toggle_viewed(&mut self, _: &ToggleViewed, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.current_path() else {
+            return;
+        };
+        let Some((poller, pull)) = self.watched.clone() else {
+            self.toast(
+                "Sign in to mark files viewed: this pull request opened without an account.".into(),
+                cx,
+            );
+            return;
+        };
+        let Some(node_id) = self.node_id.clone() else {
+            self.toast(
+                format!(
+                    "Couldn't mark {path} viewed: GitHub hasn't sent this pull request's details \
+                     yet. Try again in a moment."
+                ),
+                cx,
+            );
+            return;
+        };
+        let toggle = self.marks.toggle(&path);
+        self.files.set_viewed(&self.marks.shown());
+        if toggle.mark
+            && let Some(next) = self.files.next_unviewed(&path)
+        {
+            let next = next.path().to_string();
+            self.files.select_path(&next);
+            self.selection_moved(window, cx);
+        }
+        let mark = toggle.mark;
+        let write = poller.update(cx, |poller, cx| {
+            poller.write(
+                pull,
+                move |client: GithubClient| async move {
+                    if mark {
+                        client.mark_file_as_viewed(&node_id, &path).await
+                    } else {
+                        client.unmark_file_as_viewed(&node_id, &path).await
+                    }
+                },
+                cx,
+            )
+        });
+        let head = self.head.clone();
+        cx.spawn(async move |this, cx| {
+            let result = write.await;
+            this.update(cx, |this, cx| this.viewed_written(toggle, head, result, cx))
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// A toggle's write finished: on success this Mac records or forgets where the file was
+    /// viewed; on failure the file shows GitHub's mark again and a toast says why.
+    fn viewed_written(
+        &mut self,
+        toggle: Toggle,
+        head: Option<String>,
+        result: Result<(), GithubError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.marks.finish(&toggle, result.is_ok());
+        self.files.set_viewed(&self.marks.shown());
+        cx.notify();
+        let Some((poller, pull)) = self.watched.clone() else {
+            return;
+        };
+        let login = poller.read(cx).login().to_string();
+        if let Err(error) = result {
+            log::warn!("{pull}: {}: {error}", toggle.path);
+            self.toast(write_failed(&toggle, &login, &error), cx);
+            return;
+        }
+        let Some(records) = self.records.clone() else {
+            return;
+        };
+        let path = toggle.path;
+        let write = match head.filter(|_| toggle.mark) {
+            Some(head) => {
+                self.viewed_at.insert(path.clone(), head.clone());
+                let now = SystemTime::now();
+                async move { records.record(&login, &pull, &path, &head, now).await }.boxed_local()
+            }
+            None => {
+                self.viewed_at.remove(&path);
+                async move { records.forget(&login, &pull, &path).await }.boxed_local()
+            }
+        };
+        cx.spawn(async move |_, _| {
+            if let Err(error) = write.await {
+                log::error!("recording where a file was viewed: {error:#}");
+            }
+        })
+        .detach();
+    }
+
+    fn toast(&self, message: String, cx: &mut Context<Self>) {
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.show_toast(
+                    Toast::new(NotificationId::unique::<ViewedMarkToast>(), message),
+                    cx,
+                )
+            })
+            .ok();
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
@@ -765,6 +921,9 @@ impl PrTab {
     }
 }
 
+/// The toast that says why a viewed mark couldn't be set or cleared.
+struct ViewedMarkToast;
+
 /// GitHub's viewed mark as rozed's review model has it.
 fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
     match state {
@@ -883,7 +1042,10 @@ async fn load(
             let number = i64::try_from(link.number)?;
             let pull = PullRef::new(&link.owner, &link.repo, number);
             let poller = layer.update(cx, |layer, cx| layer.poller(login, cx));
-            this.update(cx, |this, cx| this.watch(poller.clone(), pull, cx))?;
+            let records = layer.read_with(cx, |layer, _| layer.viewed_records().clone());
+            this.update(cx, |this, cx| {
+                this.watch(poller.clone(), pull, Some(records), cx)
+            })?;
             let accounts = layer.read_with(cx, |layer, _| layer.accounts().clone());
             let client = accounts
                 .update(cx, |accounts, cx| accounts.client(login, cx))
@@ -956,6 +1118,7 @@ impl Render for PrTab {
             .on_action(cx.listener(Self::toggle_file_list))
             .on_action(cx.listener(Self::toggle_threads))
             .on_action(cx.listener(Self::toggle_file_order))
+            .on_action(cx.listener(Self::toggle_viewed))
             .size_full()
             .bg(colors.editor_background)
             .child(self.render_header(cx))
@@ -1074,6 +1237,8 @@ impl Item for PrTab {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::time::Duration;
 
     use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
@@ -1332,6 +1497,448 @@ mod tests {
                 Some(ViewedState::Dismissed)
             );
         });
+    }
+
+    /// [`details`] with these files and marks.
+    fn details_with(files: &[(&str, &str)]) -> PullRequestData {
+        let mut details = serde_json::to_value(details("Add b", "UNVIEWED")).unwrap();
+        details["files"]["totalCount"] = files.len().into();
+        details["files"]["nodes"] = files
+            .iter()
+            .map(|(path, state)| serde_json::json!({ "path": path, "viewerViewedState": state }))
+            .collect();
+        serde_json::from_value(details).unwrap()
+    }
+
+    /// How GitHub answers a viewed-mark mutation.
+    #[derive(Clone, Copy, Debug)]
+    enum Answer {
+        Done,
+        Forbidden,
+        RateLimited,
+        Offline,
+    }
+
+    /// GitHub as these tests need it: the viewed-mark mutations answer as each test says, and every
+    /// other request fails as if offline, so the poller's polls change nothing.
+    #[derive(Default)]
+    struct FakeGithub {
+        answers: std::sync::Mutex<std::collections::VecDeque<Answer>>,
+        /// Each mutation's operation and variables.
+        mutations: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    impl FakeGithub {
+        fn answer(&self, answer: Answer) {
+            self.answers.lock().unwrap().push_back(answer);
+        }
+
+        fn mutations(&self) -> Vec<(String, serde_json::Value)> {
+            self.mutations.lock().unwrap().clone()
+        }
+    }
+
+    impl http_client::HttpClient for FakeGithub {
+        fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
+            None
+        }
+
+        fn proxy(&self) -> Option<&http_client::Url> {
+            None
+        }
+
+        fn send(
+            &self,
+            request: http_client::Request<http_client::AsyncBody>,
+        ) -> futures::future::BoxFuture<
+            'static,
+            anyhow::Result<http_client::Response<http_client::AsyncBody>>,
+        > {
+            use futures::AsyncReadExt as _;
+            let mut body = Vec::new();
+            futures::executor::block_on(request.into_body().read_to_end(&mut body)).unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let operation = body["operationName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            if !operation.ends_with("FileAsViewed") {
+                return Box::pin(async { Err(anyhow!("the network is down")) });
+            }
+            self.mutations
+                .lock()
+                .unwrap()
+                .push((operation.clone(), body["variables"].clone()));
+            let answer = self.answers.lock().unwrap().pop_front().expect("an answer");
+            let field = format!("{}{}", operation[..1].to_lowercase(), &operation[1..]);
+            let field = field.as_str();
+            let (remaining, json) = match answer {
+                Answer::Offline => return Box::pin(async { Err(anyhow!("the network is down")) }),
+                Answer::Done => (
+                    "4999",
+                    serde_json::json!({ "data": { field: { "pullRequest": { "id": "PR_x" } } } }),
+                ),
+                Answer::Forbidden => (
+                    "4999",
+                    serde_json::json!({
+                        "data": { field: null },
+                        "errors": [{
+                            "type": "FORBIDDEN",
+                            "path": [field],
+                            "message": "Resource not accessible by integration",
+                        }],
+                    }),
+                ),
+                Answer::RateLimited => (
+                    "0",
+                    serde_json::json!({
+                        "errors": [{
+                            "type": "RATE_LIMITED",
+                            "message": "API rate limit exceeded for user ID 1.",
+                        }],
+                    }),
+                ),
+            };
+            let response = http_client::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .header("x-ratelimit-remaining", remaining)
+                .body(http_client::AsyncBody::from(
+                    serde_json::to_vec(&json).unwrap(),
+                ))
+                .unwrap();
+            Box::pin(async { Ok(response) })
+        }
+    }
+
+    const BOT: &str = "rozed-bot";
+
+    /// The tab signed in as the test bot, with its poller and the database where it records
+    /// viewed files.
+    struct SignedIn {
+        github: std::sync::Arc<FakeGithub>,
+        records: ViewedRecords,
+        pull: PullRef,
+    }
+
+    /// Signs `tab` in as the bot, with `recorded` already in its records of viewed files.
+    async fn sign_in(
+        tab: &Entity<PrTab>,
+        name: &str,
+        recorded: &[(&str, &str)],
+        cx: &mut VisualTestContext,
+    ) -> SignedIn {
+        let github = std::sync::Arc::new(FakeGithub::default());
+        let db = github::db::RozedDb::open_test(name).await;
+        let store = std::sync::Arc::new(
+            credentials_provider::test_support::FakeCredentialsProvider::default(),
+        );
+        let accounts = cx
+            .update(|_, cx| github::accounts::Accounts::load(db.clone(), store, github.clone(), cx))
+            .unwrap();
+        let user = github::AuthenticatedUser {
+            user: github::User {
+                login: BOT.into(),
+                id: 353226052,
+                name: None,
+                avatar_url: None,
+            },
+            scopes: vec!["repo".into()],
+        };
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.add(
+                    user,
+                    github::Token::new("gho_FAKE"),
+                    github::db::AccountSource::DeviceFlow,
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+        let records = ViewedRecords::new(db.clone());
+        let pull = PullRef::new("rozed-dev", "playground", 2);
+        for (path, head) in recorded {
+            records
+                .record(BOT, &pull, path, head, SystemTime::now())
+                .await
+                .unwrap();
+        }
+        let cache = github::cache::PrCache::new(db);
+        let poller = cx.new(|cx| {
+            Poller::new(
+                accounts,
+                BOT,
+                cache,
+                github::poll::PollConfig::default(),
+                cx,
+            )
+        });
+        tab.update(cx, |tab, cx| {
+            tab.set_acting(Acting::Account(BOT.into()), cx);
+            tab.watch(poller, pull.clone(), Some(records.clone()), cx);
+        });
+        cx.run_until_parked();
+        SignedIn {
+            github,
+            records,
+            pull,
+        }
+    }
+
+    impl SignedIn {
+        fn recorded(&self) -> HashMap<String, String> {
+            self.records.heads(BOT, &self.pull).unwrap()
+        }
+    }
+
+    fn marks(
+        tab: &Entity<PrTab>,
+        cx: &mut VisualTestContext,
+    ) -> Vec<(String, Option<ViewedState>)> {
+        tab.read_with(cx, |tab, _| {
+            tab.files()
+                .rows()
+                .map(|entry| (entry.path().to_string(), entry.viewed))
+                .collect()
+        })
+    }
+
+    fn selected(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<String> {
+        tab.read_with(cx, |tab, _| {
+            tab.files().selected().map(|entry| entry.path().to_string())
+        })
+    }
+
+    fn mark(path: &str, state: Option<ViewedState>) -> (String, Option<ViewedState>) {
+        (path.to_string(), state)
+    }
+
+    const HEAD: &str = "2222222222222222222222222222222222222222";
+
+    /// A tab on the playground's PR #2 with three files, signed in as the bot, with GitHub's marks.
+    async fn three_files<'a>(
+        name: &str,
+        recorded: &[(&str, &str)],
+        github_marks: &[(&str, &str)],
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<PrTab>,
+        SignedIn,
+        &'a mut VisualTestContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let signed_in = sign_in(&tab, name, recorded, cx).await;
+        let files = [
+            changed("a.rs", Change::Modified),
+            changed("b.rs", Change::Modified),
+            changed("c.rs", Change::Modified),
+        ];
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(&files, &head, cx);
+            tab.set_details(&details_with(github_marks), cx);
+        });
+        cx.run_until_parked();
+        (workspace, tab, signed_in, cx)
+    }
+
+    fn has_viewed_toast(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.has_notification(&NotificationId::unique::<ViewedMarkToast>())
+        })
+    }
+
+    #[gpui::test]
+    async fn e_marks_the_file_viewed_and_moves_to_the_next_unviewed_one(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_marks",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "DISMISSED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(Answer::Done);
+
+        // With nothing selected, the current file is the first in review order.
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Viewed)),
+                mark("c.rs", Some(Dismissed))
+            ]
+        );
+        // b.rs is viewed, and a file changed since viewed counts as unviewed.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
+        assert_eq!(
+            github.github.mutations(),
+            [(
+                "MarkFileAsViewed".to_string(),
+                serde_json::json!({ "pullRequestId": "PR_kwDOVk6v9M8AAAABNQwFBw", "path": "a.rs" })
+            )]
+        );
+        // This Mac records the head on screen when the file was marked.
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("a.rs".to_string(), HEAD.to_string())])
+        );
+        assert!(!has_viewed_toast(&workspace, cx));
+    }
+
+    #[gpui::test]
+    async fn e_on_a_viewed_file_clears_its_mark(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files(
+            "e_clears",
+            &[("b.rs", "1111111111111111111111111111111111111111")],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        tab.update(cx, |tab, _| tab.files.select_path("b.rs"));
+        github.github.answer(Answer::Done);
+
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Unviewed)),
+                mark("b.rs", Some(Unviewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        // Clearing a mark stays on the file, and forgets where it was viewed.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
+        assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+        assert_eq!(github.recorded(), HashMap::new());
+
+        // Pressed again, after the second's spacing between writes, it's marked again.
+        github.github.answer(Answer::Done);
+        cx.simulate_keystrokes("e");
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(Viewed)));
+        assert_eq!(github.github.mutations()[1].0, "MarkFileAsViewed");
+        assert_eq!(
+            github.recorded(),
+            HashMap::from([("b.rs".to_string(), HEAD.to_string())])
+        );
+    }
+
+    #[gpui::test]
+    async fn a_mark_that_github_refuses_reverts_and_a_toast_says_why(cx: &mut TestAppContext) {
+        let (workspace, tab, github, cx) = three_files(
+            "e_reverts",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "VIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        use ViewedState::*;
+        let before = marks(&tab, cx);
+
+        for answer in [Answer::Forbidden, Answer::Offline, Answer::RateLimited] {
+            workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
+            tab.update(cx, |tab, _| tab.files.select_path("a.rs"));
+            github.github.answer(answer);
+
+            cx.simulate_keystrokes("e");
+            cx.executor().advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+
+            assert_eq!(marks(&tab, cx), before, "{answer:?}");
+            assert!(has_viewed_toast(&workspace, cx), "{answer:?}");
+            assert_eq!(github.recorded(), HashMap::new(), "{answer:?}");
+            // The selection still moved on; only the mark went back.
+            assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"), "{answer:?}");
+        }
+        assert_eq!(github.github.mutations().len(), 3);
+        assert_eq!(before[0], mark("a.rs", Some(Unviewed)));
+    }
+
+    #[gpui::test]
+    async fn the_new_mark_shows_while_the_write_waits(cx: &mut TestAppContext) {
+        let (_, tab, github, cx) = three_files(
+            "e_waits",
+            &[],
+            &[
+                ("a.rs", "UNVIEWED"),
+                ("b.rs", "UNVIEWED"),
+                ("c.rs", "UNVIEWED"),
+            ],
+            cx,
+        )
+        .await;
+        github.github.answer(Answer::Done);
+        github.github.answer(Answer::Forbidden);
+
+        // The second write waits a second after the first, so its mark shows before GitHub answers.
+        cx.simulate_keystrokes("e");
+        cx.simulate_keystrokes("e");
+
+        use ViewedState::*;
+        assert_eq!(
+            marks(&tab, cx),
+            [
+                mark("a.rs", Some(Viewed)),
+                mark("b.rs", Some(Viewed)),
+                mark("c.rs", Some(Unviewed))
+            ]
+        );
+        assert_eq!(github.github.mutations().len(), 1);
+
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(Unviewed)));
+    }
+
+    #[gpui::test]
+    async fn e_says_why_it_cant_mark_without_an_account_or_githubs_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let anonymous = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        let head: Oid = HEAD.parse().unwrap();
+        anonymous.update(cx, |tab, cx| {
+            tab.set_acting(Acting::Anonymous, cx);
+            tab.copied(&[changed("src/main.rs", Change::Modified)], &head, cx);
+        });
+
+        cx.simulate_keystrokes("e");
+        assert!(has_viewed_toast(&workspace, cx));
+        assert_eq!(marks(&anonymous, cx), [mark("src/main.rs", None)]);
+
+        // Signed in, but GitHub hasn't sent the pull request's details, which name it for writes.
+        workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in(&tab, "e_without_details", &[], cx).await;
+        tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified)], &head, cx);
+        });
+
+        cx.simulate_keystrokes("e");
+        assert!(has_viewed_toast(&workspace, cx));
+        assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
+        assert_eq!(github.github.mutations(), []);
     }
 
     #[gpui::test]
