@@ -26,12 +26,9 @@ fn printenv_prints_the_environment_as_json() {
     // this JSON back.
     let output = rozed(&["--printenv"]);
     assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.trim_start().starts_with('{'), "{stdout}");
-    assert!(
-        stdout.contains(r#""ROZED_CLI_TEST": "printed""#),
-        "{stdout}"
-    );
+    let env: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&output.stdout).expect("--printenv printed a JSON object");
+    assert_eq!(env["ROZED_CLI_TEST"], "printed");
 }
 
 #[test]

@@ -340,12 +340,23 @@ fn show_source(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<
 mod tests {
     use super::*;
 
+    /// Whether `version` parses the way Zed's `release_channel` parses rozed's at startup.
+    fn is_semver(version: &str) -> bool {
+        semver::Version::parse(version).is_ok()
+    }
+
     #[test]
     fn version_is_semver() {
-        let parts: Vec<&str> = version().split('.').collect();
-        assert_eq!(parts.len(), 3, "{} isn't major.minor.patch", version());
-        for part in parts {
-            assert!(part.parse::<u64>().is_ok(), "{part} isn't a number");
+        assert!(is_semver(version()), "{} isn't semver", version());
+    }
+
+    #[test]
+    fn semver_includes_pre_releases_and_build_metadata() {
+        for version in ["0.2.0", "0.2.0-beta.1", "1.0.0-rc.1+build.5"] {
+            assert!(is_semver(version), "{version}");
+        }
+        for version in ["0.2", "0.2.0.1", "v0.2.0", "0.2.0-"] {
+            assert!(!is_semver(version), "{version}");
         }
     }
 }
