@@ -2041,6 +2041,12 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "diff_extras"
 version = "0.1.0"
+dependencies = [
+ "tree-sitter",
+ "tree-sitter-json",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
 
 [[package]]
 name = "diffy"
