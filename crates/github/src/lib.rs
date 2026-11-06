@@ -6,10 +6,22 @@
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod cassette;
+mod client;
+mod error;
+mod graphql;
+mod rate_limit;
 #[cfg(any(test, feature = "test-support"))]
 pub mod record;
 #[cfg(any(test, feature = "test-support"))]
 pub mod replay;
 mod token;
+mod user;
 
+pub use client::{
+    API_URL, API_VERSION, ClientState, Conditional, GithubClient, RestResponse, user_agent,
+};
+pub use error::{CLIENT_ID, GithubError, HelpLink, SsoHeader, approval_url};
+pub use graphql::{GraphQlError, GraphQlResponse};
+pub use rate_limit::{GraphQlRateLimit, RateLimit, RateLimits};
 pub use token::{Token, TokenKind};
+pub use user::{AuthenticatedUser, SCOPES, User, missing_scopes, parse_scopes};
