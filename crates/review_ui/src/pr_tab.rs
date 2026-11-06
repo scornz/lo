@@ -6,12 +6,11 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::{Instant, SystemTime};
 
-use anyhow::anyhow;
 use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
-use github::{PullRef, Target};
+use github::{HelpLink, PullRef, Target};
 use gpui::{
     AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
@@ -25,7 +24,7 @@ use util::rel_path::RelPath;
 use workspace::item::{Item, ItemEvent, TabContentParams};
 use workspace::{ItemNavHistory, Workspace};
 
-use crate::account::{self, AccountDecision, Acting};
+use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
 use crate::github_api::{self, PullRequest};
 use crate::github_layer;
@@ -159,6 +158,8 @@ pub struct PrTab {
     viewed: HashMap<String, ViewedState>,
     revisions: Option<Revisions>,
     status: Status,
+    /// GitHub's links for fixing why the tab failed, such as authorizing single sign-on.
+    help_links: Vec<HelpLink>,
     /// What the tab should tell about what its diff shows, under its header.
     banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
@@ -205,6 +206,7 @@ impl PrTab {
             viewed: HashMap::new(),
             revisions: None,
             status: Status::Loading("Finding an account that can see it…".into()),
+            help_links: Vec::new(),
             banners,
             diff: None,
             show_file_list: true,
@@ -222,7 +224,12 @@ impl PrTab {
         self._load = Some(cx.spawn_in(window, async move |this, cx| {
             if let Err(error) = load(this.clone(), link.clone(), trust, opened, cx).await {
                 log::error!("{link}: {error:#}");
+                let links = error
+                    .downcast_ref::<Refusal>()
+                    .map(|refusal| refusal.links.clone())
+                    .unwrap_or_default();
                 this.update(cx, |this, cx| {
+                    this.help_links = links;
                     this.set_status(Status::Failed(format!("{error:#}").into()), cx)
                 })
                 .ok();
@@ -256,6 +263,11 @@ impl PrTab {
 
     pub fn status(&self) -> &Status {
         &self.status
+    }
+
+    /// GitHub's links for fixing why the tab failed.
+    pub fn help_links(&self) -> &[HelpLink] {
+        &self.help_links
     }
 
     pub fn banners(&self) -> &Entity<Banners> {
@@ -872,7 +884,7 @@ async fn load(
             );
             Acting::Account(logins[0].clone())
         }
-        AccountDecision::Refuse(message) => return Err(anyhow!(message)),
+        AccountDecision::Refuse(refusal) => return Err(refusal.into()),
     };
     log::info!(
         "{link}: opening {}",
@@ -904,19 +916,7 @@ async fn load(
         }
         _ => {
             let http = cx.update(|_, cx| cx.http_client())?;
-            match github_api::fetch_pull_request(http, &link).await {
-                Ok(pull_request) => (pull_request, None),
-                Err(error) => {
-                    let problems = account::problems(found.as_ref());
-                    if problems.is_empty() {
-                        return Err(error);
-                    }
-                    return Err(error.context(format!(
-                        "the accounts that couldn't check it said: {}",
-                        problems.join("; ")
-                    )));
-                }
-            }
+            (github_api::fetch_pull_request(http, &link).await?, None)
         }
     };
     this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
@@ -946,17 +946,28 @@ impl Focusable for PrTab {
 impl Render for PrTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let diff: AnyElement = match (&self.diff, &self.status) {
-            (_, Status::Failed(error)) => v_flex()
-                .size_full()
-                .p_4()
-                .gap_2()
-                .child(Label::new("rozed couldn't open this pull request").color(Color::Error))
-                .child(Label::new(error.clone()).size(LabelSize::Small))
-                .into_any_element(),
-            (Some(diff), _) => diff.clone().into_any_element(),
-            (None, _) => div().size_full().into_any_element(),
-        };
+        let diff: AnyElement =
+            match (&self.diff, &self.status) {
+                (_, Status::Failed(error)) => v_flex()
+                    .size_full()
+                    .p_4()
+                    .gap_2()
+                    .child(Label::new("rozed couldn't open this pull request").color(Color::Error))
+                    .child(Label::new(error.clone()).size(LabelSize::Small))
+                    .when(!self.help_links.is_empty(), |this| {
+                        this.child(h_flex().gap_2().children(
+                            self.help_links.iter().enumerate().map(|(index, link)| {
+                                let url = link.url().to_string();
+                                Button::new(("help-link", index), link.label())
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(move |_, _, cx| cx.open_url(&url))
+                            }),
+                        ))
+                    })
+                    .into_any_element(),
+                (Some(diff), _) => diff.clone().into_any_element(),
+                (None, _) => div().size_full().into_any_element(),
+            };
         v_flex()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
@@ -1098,10 +1109,10 @@ mod tests {
     use gpui::{TestAppContext, VisualTestContext};
     use project::{FakeFs, Project};
     use repo_cache::{Change, FileMode, FileVersion, LineCounts};
-    use workspace::MultiWorkspace;
+    use workspace::{MultiWorkspace, SaveIntent};
 
     use crate::github_api::{Base, BaseRepo, Head, User};
-    use crate::test_support::{FakeGithub, FakePull, GitServer, anonymous, sign_in};
+    use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -1237,6 +1248,18 @@ mod tests {
         tab
     }
 
+    /// Closes `tab`, as its close button does.
+    fn close(workspace: &Entity<Workspace>, tab: &Entity<PrTab>, cx: &mut VisualTestContext) {
+        let pane = workspace
+            .read_with(cx, |workspace, _| workspace.pane_for(tab))
+            .unwrap();
+        pane.update_in(cx, |pane, window, cx| {
+            pane.close_item_by_id(tab.entity_id(), SaveIntent::Skip, window, cx)
+        })
+        .detach();
+        cx.run_until_parked();
+    }
+
     fn status(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Status {
         tab.read_with(cx, |tab, _| tab.status().clone())
     }
@@ -1327,6 +1350,114 @@ mod tests {
                 .any(|request| request.ends_with("as nobody")),
             "{requests:#?}"
         );
+    }
+
+    /// GitHub's answer when an organization's SAML single sign-on hasn't authorized a token.
+    fn needs_sso() -> Answer {
+        Answer::new(
+            403,
+            r#"{"message":"Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization."}"#,
+        )
+        .header(
+            "x-github-sso",
+            "required; url=https://github.com/orgs/acme/sso?authorization_request=A1",
+        )
+    }
+
+    fn help_links(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Vec<String> {
+        tab.read_with(cx, |tab, _| {
+            tab.help_links()
+                .iter()
+                .map(|link| link.url().to_string())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    async fn when_no_account_can_check_it_the_tab_says_why_with_githubs_link(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        // A public repository, which would open without signing in.
+        public_pull(&github, &git, "acme/app", 7);
+        github.answer("gho_WORK", "/repos/acme/app", needs_sso());
+        sign_in(&github, &[("work", "gho_WORK")], cx).await;
+
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/7", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.contains("work: Resource protected by organization SAML enforcement."),
+            "{message}"
+        );
+        assert_eq!(
+            help_links(&tab, cx),
+            ["https://github.com/orgs/acme/sso?authorization_request=A1"]
+        );
+        let requests = github.requests();
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.ends_with("as nobody")),
+            "{requests:#?}"
+        );
+        tab.read_with(cx, |tab, _| assert_eq!(tab.acting(), None));
+    }
+
+    #[gpui::test]
+    async fn a_remembered_account_that_cant_check_is_never_swapped_for_another(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("acme/api", 12, &[("a.rs", "a\n")], &[("a.rs", "b\n")]);
+        github.add_pull(pull);
+        github.let_see("gho_WORK", "acme/api");
+        github.let_see("gho_HOME", "acme/api");
+        let (accounts, _) =
+            sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("acme", "work", cx)
+            })
+            .await
+            .unwrap();
+        github.answer("gho_WORK", "/repos/acme/api", needs_sso());
+
+        let tab = open_loaded(&workspace, "github.com/acme/api/pull/12", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(
+            message.starts_with("work, the account rozed uses for acme, couldn't check acme/api"),
+            "{message}"
+        );
+        assert_eq!(
+            help_links(&tab, cx),
+            ["https://github.com/orgs/acme/sso?authorization_request=A1"]
+        );
+        let requests = github.requests();
+        assert!(
+            !requests.iter().any(|request| request.contains("/pulls/")),
+            "{requests:#?}"
+        );
+
+        // Signed out, it isn't swapped either.
+        close(&workspace, &tab, cx);
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("work", github::accounts::SignedOut::Refused, cx)
+        });
+        let tab = open_loaded(&workspace, "github.com/acme/api/pull/12", cx);
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("the tab opened: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("work is signed out"), "{message}");
     }
 
     #[gpui::test]

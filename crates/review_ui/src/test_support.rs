@@ -51,6 +51,11 @@ impl Answer {
             body: body.into(),
         }
     }
+
+    pub fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
+    }
 }
 
 #[derive(Default)]
@@ -59,6 +64,8 @@ struct State {
     /// The repositories each token can see, lowercased `owner/name`. Public ones need no token.
     sees: HashMap<String, Vec<String>>,
     public: Vec<String>,
+    /// Answers that win over the rest, by token (`""` for none) and path.
+    answers: HashMap<(String, String), Answer>,
     /// Each request, as `GET /path as token`.
     requests: Vec<String>,
 }
@@ -86,6 +93,14 @@ impl FakeGithub {
         self.0.lock().public.push(repo.to_ascii_lowercase());
     }
 
+    /// Answers `path` asked with `token` (`""` for none) with `answer`.
+    pub fn answer(&self, token: &str, path: &str, answer: Answer) {
+        self.0
+            .lock()
+            .answers
+            .insert((token.to_string(), path.to_string()), answer);
+    }
+
     /// The requests made since the last call, as `GET /path as token`.
     pub fn requests(&self) -> Vec<String> {
         std::mem::take(&mut self.0.lock().requests)
@@ -95,6 +110,9 @@ impl FakeGithub {
         let mut state = self.0.lock();
         let who = if token.is_empty() { "nobody" } else { token };
         state.requests.push(format!("{method} {path} as {who}"));
+        if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
+            return Ok(answer.clone());
+        }
         let not_found = || Answer::new(404, r#"{"message":"Not Found"}"#);
         let Some(rest) = path.strip_prefix("/repos/") else {
             return Ok(not_found());
