@@ -1220,7 +1220,7 @@ esac
         );
         let sso = &found.problems[1].1;
         assert_eq!(
-            sso.help_link().unwrap().url,
+            sso.help_link().unwrap().url(),
             "https://github.com/orgs/acme/sso?authorization_request=X"
         );
 

@@ -22,9 +22,17 @@ use crate::user::{AuthenticatedUser, SCOPES};
 
 pub const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 pub const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+/// Where the user enters the code. rozed opens this rather than the `verification_uri` GitHub's
+/// answer names, so an answer from anything posing as GitHub can't open another page or app.
+pub const VERIFICATION_URL: &str = "https://github.com/login/device";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// GitHub's minimum gap between polls.
 const MIN_INTERVAL: Duration = Duration::from_secs(5);
+/// The longest gap between polls rozed accepts. GitHub's are seconds; a bigger number is a
+/// broken answer, and left as is would overflow the clock.
+const MAX_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// The longest a code is waited for. GitHub's codes last 15 minutes.
+const MAX_EXPIRES_IN: Duration = Duration::from_secs(60 * 60);
 /// How much `slow_down` adds when it doesn't say the new interval.
 const SLOW_DOWN_STEP: Duration = Duration::from_secs(5);
 /// Polls wait a little longer than the interval, so clock drift never earns a `slow_down`.
@@ -35,13 +43,11 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub struct DeviceCodes {
     device_code: String,
-    /// The code the user types on GitHub, e.g. `50B0-5666`.
+    /// The code the user types on GitHub, at [`VERIFICATION_URL`], e.g. `50B0-5666`.
     pub user_code: String,
-    /// Where the user types it: `https://github.com/login/device`.
-    pub verification_uri: String,
-    /// How long the codes are good for.
+    /// How long the codes are good for, at most an hour.
     pub expires_in: Duration,
-    /// The minimum gap between polls.
+    /// The minimum gap between polls, between 5 seconds and 5 minutes.
     pub interval: Duration,
 }
 
@@ -49,7 +55,6 @@ impl fmt::Debug for DeviceCodes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeviceCodes")
             .field("user_code", &self.user_code)
-            .field("verification_uri", &self.verification_uri)
             .field("expires_in", &self.expires_in)
             .field("interval", &self.interval)
             .finish_non_exhaustive()
@@ -87,9 +92,13 @@ enum Poll {
 struct CodesResponse {
     device_code: String,
     user_code: String,
-    verification_uri: String,
     expires_in: u64,
     interval: u64,
+}
+
+/// A poll interval GitHub gave, kept within [`MIN_INTERVAL`] and [`MAX_INTERVAL`].
+fn clamp_interval(interval: Duration) -> Duration {
+    interval.clamp(MIN_INTERVAL, MAX_INTERVAL)
 }
 
 #[derive(Deserialize)]
@@ -162,9 +171,8 @@ pub async fn request_codes(http: &Arc<dyn HttpClient>) -> Result<DeviceCodes, De
     Ok(DeviceCodes {
         device_code: codes.device_code,
         user_code: codes.user_code,
-        verification_uri: codes.verification_uri,
-        expires_in: Duration::from_secs(codes.expires_in),
-        interval: Duration::from_secs(codes.interval),
+        expires_in: Duration::from_secs(codes.expires_in).min(MAX_EXPIRES_IN),
+        interval: clamp_interval(Duration::from_secs(codes.interval)),
     })
 }
 
@@ -203,8 +211,8 @@ pub async fn wait_for_token(
     codes: &DeviceCodes,
     executor: &BackgroundExecutor,
 ) -> Result<Token, DeviceFlowError> {
-    let deadline = executor.now() + codes.expires_in;
-    let mut interval = codes.interval.max(MIN_INTERVAL);
+    let deadline = executor.now() + codes.expires_in.min(MAX_EXPIRES_IN);
+    let mut interval = clamp_interval(codes.interval);
     loop {
         let wait = interval.mul_f64(INTERVAL_MARGIN);
         if executor.now() + wait >= deadline {
@@ -224,9 +232,7 @@ pub async fn wait_for_token(
         match parse_poll(status, &body) {
             Poll::Pending => {}
             Poll::SlowDown(new_interval) => {
-                interval = new_interval
-                    .unwrap_or(interval + SLOW_DOWN_STEP)
-                    .max(MIN_INTERVAL);
+                interval = clamp_interval(new_interval.unwrap_or(interval + SLOW_DOWN_STEP));
                 log::info!("GitHub asked to poll every {interval:?}");
             }
             Poll::Token(token) => return Ok(token),
@@ -298,13 +304,74 @@ mod tests {
         let codes = DeviceCodes {
             device_code: "secret-device-code".into(),
             user_code: "50B0-5666".into(),
-            verification_uri: "https://github.com/login/device".into(),
             expires_in: Duration::from_secs(899),
             interval: Duration::from_secs(5),
         };
         let debug = format!("{codes:?}");
         assert!(!debug.contains("secret"), "{debug}");
         assert!(debug.contains("50B0-5666"), "{debug}");
+    }
+
+    use crate::cassette::{Interaction, RecordedRequest, RecordedResponse};
+    use crate::replay::ReplayHttpClient;
+
+    /// A replay answering the device code request, then every poll, with these bodies.
+    fn github_answering(
+        codes: serde_json::Value,
+        polls: &[serde_json::Value],
+    ) -> Arc<dyn HttpClient> {
+        let interaction = |url: &str, body: &serde_json::Value| Interaction {
+            request: RecordedRequest {
+                method: "POST".into(),
+                url: url.into(),
+                body: Some(match url {
+                    DEVICE_CODE_URL => {
+                        format!("client_id={CLIENT_ID}&scope=repo+read%3Aorg+workflow")
+                    }
+                    _ => format!(
+                        "client_id={CLIENT_ID}&device_code=d&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                    ),
+                }),
+                ..Default::default()
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: Default::default(),
+                body: Some(body.clone()),
+                body_text: None,
+            },
+        };
+        let interactions = std::iter::once(interaction(DEVICE_CODE_URL, &codes))
+            .chain(polls.iter().map(|poll| interaction(ACCESS_TOKEN_URL, poll)));
+        Arc::new(ReplayHttpClient::from_interactions("synthetic", interactions).unwrap())
+    }
+
+    #[gpui::test]
+    async fn absurd_numbers_from_github_are_clamped(cx: &mut gpui::TestAppContext) {
+        let http = github_answering(
+            serde_json::json!({
+                "device_code": "d",
+                "user_code": "FAKE-1234",
+                "verification_uri": "file:///Applications/Calculator.app",
+                "expires_in": u64::MAX,
+                "interval": u64::MAX,
+            }),
+            &[serde_json::json!({"error": "slow_down", "interval": u64::MAX})],
+        );
+        let codes = request_codes(&http).await.unwrap();
+        assert_eq!(codes.expires_in, MAX_EXPIRES_IN);
+        assert_eq!(codes.interval, MAX_INTERVAL);
+        // Waiting doesn't overflow the clock, and gives up when the clamped code expires.
+        let result = wait_for_token(&http, &codes, &cx.executor()).await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::Expired)),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn rozed_opens_only_githubs_page() {
+        assert_eq!(VERIFICATION_URL, "https://github.com/login/device");
     }
 
     #[test]

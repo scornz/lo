@@ -139,7 +139,6 @@ enum SignInStep {
     RequestingCode,
     WaitingForUser {
         user_code: SharedString,
-        verification_uri: String,
         expires_at: Instant,
     },
     Finishing,
@@ -347,10 +346,9 @@ impl AccountsModal {
                 this.update(cx, |this, cx| {
                     // Copy the code and open GitHub's page, so the user only has to paste.
                     cx.write_to_clipboard(ClipboardItem::new_string(codes.user_code.clone()));
-                    cx.open_url(&codes.verification_uri);
+                    cx.open_url(device_flow::VERIFICATION_URL);
                     this.mode = Mode::SignIn(SignInStep::WaitingForUser {
                         user_code: codes.user_code.clone().into(),
-                        verification_uri: codes.verification_uri.clone(),
                         expires_at: Instant::now() + codes.expires_in,
                     });
                     this.start_ticker(cx);
@@ -577,13 +575,9 @@ impl AccountsModal {
                     self.start_import(cx);
                 }
             }
-            Mode::SignIn(SignInStep::WaitingForUser {
-                user_code,
-                verification_uri,
-                ..
-            }) => {
+            Mode::SignIn(SignInStep::WaitingForUser { user_code, .. }) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(user_code.to_string()));
-                cx.open_url(verification_uri);
+                cx.open_url(device_flow::VERIFICATION_URL);
             }
             Mode::Import(ImportStep::Choose { .. }) => self.import_chosen(cx),
             _ => {}
@@ -655,10 +649,7 @@ fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
             )
             .into(),
             is_error: false,
-            link: Some(HelpLink {
-                label: "Revoke on GitHub",
-                url: AUTHORIZED_APPS_URL.to_string(),
-            }),
+            link: HelpLink::new("Revoke on GitHub", AUTHORIZED_APPS_URL),
         },
     }
 }
@@ -773,7 +764,6 @@ impl AccountsModal {
                 .into_any_element(),
             SignInStep::WaitingForUser {
                 user_code,
-                verification_uri,
                 expires_at,
             } => {
                 let remaining = expires_at.saturating_duration_since(Instant::now());
@@ -781,7 +771,7 @@ impl AccountsModal {
                     .read_from_clipboard()
                     .and_then(|item| item.text())
                     .is_some_and(|text| text == user_code.as_ref());
-                let (code, uri) = (user_code.clone(), verification_uri.clone());
+                let code = user_code.clone();
                 v_flex()
                     .gap_2()
                     .items_center()
@@ -819,7 +809,9 @@ impl AccountsModal {
                             .child(
                                 Button::new("open-github", "Open github.com/login/device")
                                     .end_icon(Icon::new(IconName::ArrowUpRight))
-                                    .on_click(move |_, _, cx| cx.open_url(&uri)),
+                                    .on_click(move |_, _, cx| {
+                                        cx.open_url(device_flow::VERIFICATION_URL)
+                                    }),
                             ),
                     )
                     .child(
@@ -941,9 +933,9 @@ impl AccountsModal {
             )
             .child(Label::new(notice.message.clone()).size(LabelSize::Small))
             .children(notice.link.clone().map(|link| {
-                Button::new("help-link", link.label)
+                Button::new("help-link", link.label())
                     .end_icon(Icon::new(IconName::ArrowUpRight))
-                    .on_click(move |_, _, cx| cx.open_url(&link.url))
+                    .on_click(move |_, _, cx| cx.open_url(link.url()))
             }))
             .into_any_element()
     }
@@ -1033,9 +1025,24 @@ mod tests {
         }
     }
 
+    /// The successful sign-in, with GitHub's answer naming another page to enter the code on.
+    fn sign_in_naming(verification_uri: &str) -> Arc<dyn HttpClient> {
+        let dir = github::cassette::fixtures_dir().join("device_flow_success");
+        let (_, interactions) = github::cassette::read_cassette(&dir).unwrap();
+        let interactions = interactions.into_iter().map(|(_, mut interaction)| {
+            if interaction.request.url == device_flow::DEVICE_CODE_URL {
+                interaction.response.body.as_mut().unwrap()["verification_uri"] =
+                    verification_uri.into();
+            }
+            interaction
+        });
+        Arc::new(ReplayHttpClient::from_interactions("sign_in", interactions).unwrap())
+    }
+
     #[gpui::test]
     async fn signing_in_shows_the_code_then_adds_the_account(cx: &mut TestAppContext) {
-        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("device_flow_success");
+        // Whatever page GitHub's answer names, rozed opens GitHub's own.
+        let http = sign_in_naming("file:///Applications/Calculator.app");
         let accounts = accounts("ui_sign_in", http.clone(), cx).await;
         let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
 
@@ -1186,7 +1193,7 @@ esac
                 "Removed signed-in. rozed stays authorized on GitHub until you revoke it there."
             );
             assert_eq!(
-                notice.link.as_ref().map(|link| link.url.as_str()),
+                notice.link.as_ref().map(HelpLink::url),
                 Some("https://github.com/settings/applications")
             );
         });
@@ -1234,7 +1241,7 @@ esac
             "acme hasn't approved rozed. Request approval on GitHub."
         );
         assert_eq!(
-            notice.link.unwrap().url,
+            notice.link.unwrap().url(),
             "https://github.com/settings/connections/applications/Ov23liBORqwRdiPzqsPP"
         );
 
@@ -1246,10 +1253,10 @@ esac
         assert!(notice.is_error);
         assert_eq!(
             notice.link,
-            Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: "https://github.com/orgs/acme/sso?authorization_request=X".into()
-            })
+            HelpLink::new(
+                "Authorize on GitHub",
+                "https://github.com/orgs/acme/sso?authorization_request=X"
+            )
         );
 
         let plain = Notice::error(&anyhow!("gh couldn't list its accounts: boom"));

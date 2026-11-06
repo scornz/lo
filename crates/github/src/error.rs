@@ -94,11 +94,35 @@ fn graphql_messages(errors: &[GraphQlError]) -> String {
     }
 }
 
-/// A link that helps the user fix an error, labelled for a button.
+/// A link that helps the user fix an error, labelled for a button. It's always an `https` page
+/// on github.com: GitHub's answers can name a link, such as the single sign-on URL, and rozed
+/// opens nothing else they name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelpLink {
-    pub label: &'static str,
-    pub url: String,
+    label: &'static str,
+    url: String,
+}
+
+impl HelpLink {
+    /// A link to `url`, if it's an `https` page on github.com.
+    pub fn new(label: &'static str, url: impl Into<String>) -> Option<Self> {
+        let url = url.into();
+        let parsed = http_client::Url::parse(&url).ok()?;
+        let on_github = parsed.scheme() == "https"
+            && parsed.host_str() == Some("github.com")
+            && parsed.port().is_none()
+            && parsed.username().is_empty()
+            && parsed.password().is_none();
+        on_github.then_some(Self { label, url })
+    }
+
+    pub fn label(&self) -> &'static str {
+        self.label
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
 }
 
 impl GithubError {
@@ -106,14 +130,12 @@ impl GithubError {
     /// to approve rozed.
     pub fn help_link(&self) -> Option<HelpLink> {
         match self {
-            Self::SsoRequired { url: Some(url), .. } => Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: url.clone(),
-            }),
-            Self::OAuthAppRestricted { .. } => Some(HelpLink {
-                label: "Request approval on GitHub",
-                url: approval_url(),
-            }),
+            Self::SsoRequired { url: Some(url), .. } => {
+                HelpLink::new("Authorize on GitHub", url.as_str())
+            }
+            Self::OAuthAppRestricted { .. } => {
+                HelpLink::new("Request approval on GitHub", approval_url())
+            }
             _ => None,
         }
     }
@@ -347,11 +369,38 @@ mod tests {
         );
         assert_eq!(
             error.help_link(),
-            Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: "https://github.com/orgs/acme/sso?authorization_request=ABC".into()
-            })
+            HelpLink::new(
+                "Authorize on GitHub",
+                "https://github.com/orgs/acme/sso?authorization_request=ABC"
+            )
         );
+    }
+
+    #[test]
+    fn help_links_open_only_https_pages_on_github() {
+        let sso = |url: &str| GithubError::SsoRequired {
+            message: "SAML".into(),
+            url: Some(url.into()),
+        };
+        for url in [
+            "file:///Applications/Calculator.app",
+            "x-apple-systempreferences:com.apple.preference",
+            "http://github.com/orgs/acme/sso",
+            "https://github.com.evil.example/orgs/acme/sso",
+            "https://evil.example/github.com/orgs/acme/sso",
+            "https://gist.github.com/x",
+            "https://user@github.com/orgs/acme/sso",
+        ] {
+            assert_eq!(sso(url).help_link(), None, "{url}");
+        }
+        let link = sso("https://github.com/orgs/acme/sso?authorization_request=X")
+            .help_link()
+            .unwrap();
+        assert_eq!(
+            link.url(),
+            "https://github.com/orgs/acme/sso?authorization_request=X"
+        );
+        assert_eq!(link.label(), "Authorize on GitHub");
     }
 
     #[test]
@@ -372,7 +421,7 @@ mod tests {
         assert_eq!(org.as_deref(), Some("rozed-dev"));
         assert!(documentation_url.is_some());
         assert_eq!(
-            error.help_link().unwrap().url,
+            error.help_link().unwrap().url(),
             "https://github.com/settings/connections/applications/Ov23liBORqwRdiPzqsPP"
         );
     }
