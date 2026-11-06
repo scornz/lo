@@ -218,7 +218,7 @@ async fn show(
         }
     });
 
-    let title = format!("{link}: {pr_title}");
+    let title = format!("{link}: {}", crate::window_title::without_bidi(pr_title));
     let multi_buffer = cx.new(|cx| {
         let mut multi_buffer = MultiBuffer::new(Capability::ReadOnly).with_title(title.clone());
         multi_buffer.set_all_diff_hunks_expanded(cx);

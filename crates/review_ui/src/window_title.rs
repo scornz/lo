@@ -23,16 +23,13 @@ pub fn for_pull_request(repo: &str, number: u64, title: Option<&str>) -> String 
     }
 }
 
-/// `text` without the characters that change the direction text after them reads in, which a
-/// pull request's author could use to make its title look like something else.
+/// `text` without the characters that turn the direction of the text after them around until
+/// they're closed (embeddings, overrides and isolates), which a pull request's author could use
+/// to make its title read as something else. The marks right-to-left text places numbers and
+/// punctuation with (LRM, RLM, ALM) stay: they change no more than their neighbours.
 pub fn without_bidi(text: &str) -> String {
     text.chars()
-        .filter(|c| {
-            !matches!(
-                c,
-                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-            )
-        })
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
         .collect()
 }
 
@@ -106,10 +103,14 @@ mod tests {
             for_pull_request(
                 "a/b",
                 1,
-                Some("Fix \u{202E}gpj.exe\u{202C} \u{2067}x\u{2069}\u{200F}")
+                Some("Fix \u{202E}gpj.exe\u{202C} \u{2067}x\u{2069}")
             ),
             "a/b#1 — Fix gpj.exe x"
         );
-        assert_eq!(without_bidi("שלום \u{061C}1"), "שלום 1");
+        // The marks that place numbers in right-to-left text stay.
+        assert_eq!(
+            without_bidi("שלום \u{200F}1\u{061C}"),
+            "שלום \u{200F}1\u{061C}"
+        );
     }
 }
