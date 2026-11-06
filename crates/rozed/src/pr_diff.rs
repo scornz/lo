@@ -46,6 +46,7 @@ use repo_cache::{
 
 use crate::github_api::{self, PullRequest};
 use crate::local_copies;
+use crate::pr_banner::{BannerKind, Banners, BannersAddon};
 use crate::pr_link::PrLink;
 use crate::trust;
 
@@ -59,8 +60,10 @@ pub enum Trust {
     Checkout,
 }
 
-/// Fetches the pull request, copies it locally and shows it in a new tab of `workspace`.
-/// `launched` is when rozed started, for timing.
+/// Fetches the pull request, copies it locally and shows it in a new tab of `workspace`, from git
+/// first. When `trust` asks for a checkout, it's made in the background, and each file whose
+/// checkout copy matches the head switches to the checkout's project buffer when it's ready, or a
+/// banner says why there's none. `launched` is when rozed started, for timing.
 pub async fn open(
     workspace: WeakEntity<Workspace>,
     link: PrLink,
@@ -97,35 +100,24 @@ pub async fn open(
     );
 
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
-    let checkout = match trust {
-        Trust::Untrusted => {
-            log::info!("{link}: not trusted, so no checkout and no language servers");
-            None
-        }
-        Trust::Checkout => {
-            let dir = cx
-                .background_spawn({
-                    let (local, number) = (local.clone(), link.number);
-                    async move { local.repo.checkout(number, &local.head) }
-                })
-                .await
-                .with_context(|| format!("checking {link} out"))?;
-            cx.update(|_, cx| trust::trust_checkout(&project, &dir, cx))??;
-            let (worktree, _) = project
-                .update(cx, |project, cx| {
-                    project.find_or_create_worktree(&dir, true, cx)
-                })
-                .await
-                .with_context(|| format!("opening {}", dir.display()))?;
-            let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
-            log::info!(
-                "{link}: trusted, so language servers start in {}",
-                dir.display()
-            );
-            Some(Checkout { dir, worktree_id })
-        }
-    };
     let languages = project.read_with(cx, |project, _| project.languages().clone());
+    let banners = cx.new(|_| Banners::default());
+    banners.update(cx, |banners, cx| {
+        if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
+            banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
+        }
+        if trust == Trust::Checkout {
+            banners.show(
+                BannerKind::CheckingOut,
+                Severity::Info,
+                format!(
+                    "Checking {link} out for language servers. Until it's ready, every file \
+                     shows from git."
+                ),
+                cx,
+            );
+        }
+    });
 
     let title = format!("{link}: {}", pull_request.title);
     let multi_buffer = cx.new(|cx| {
@@ -149,6 +141,12 @@ pub async fn open(
             editor.rhs_editor().update(cx, |editor, cx| {
                 editor.set_show_bookmarks(false, cx);
                 editor.set_show_breakpoints(false, cx);
+                editor.register_addon(BannersAddon(banners.clone()));
+                // Keeps the clone open, so no cleanup removes it or its checkout while the tab
+                // shows it.
+                editor.register_addon(OpenClone {
+                    _repo: local.repo.clone(),
+                });
             });
             editor
         });
@@ -157,14 +155,16 @@ pub async fn open(
     })?;
 
     let target = Target {
-        repo_name: &link.repo,
+        repo_name: &local.name,
         project: &project,
-        checkout: checkout.as_ref(),
+        checkout: None,
         languages: &languages,
         editor: &editor,
     };
     let mut headers = FileHeaders::default();
     let mut folded = HashSet::new();
+    // Each file's buffer and what it shows, for switching to the checkout.
+    let mut shown_files = Vec::with_capacity(local.files.len());
     // Files whose header says they couldn't be shown, and files not loaded.
     let mut not_shown = 0;
     let mut not_loaded = 0;
@@ -173,20 +173,21 @@ pub async fn open(
             .background_spawn({
                 let repo = local.repo.clone();
                 let file = file.clone();
-                let checkout = checkout.as_ref().map(|checkout| checkout.dir.clone());
-                async move { plan_file(&repo, &file, checkout.as_deref()) }
+                async move { plan_file(&repo, &file, None) }
             })
             .await;
         let shown = match target.add_file(index, file, plan.clone(), cx).await {
-            Ok(shown) => Ok(shown),
+            Ok(shown) => Ok((shown, plan)),
             Err(error) => {
+                let plan = FilePlan::failed(&error);
                 target
-                    .add_file(index, file, FilePlan::failed(&error), cx)
+                    .add_file(index, file, plan.clone(), cx)
                     .await
+                    .map(|shown| (shown, plan))
             }
         };
         match shown {
-            Ok(shown) => {
+            Ok((shown, plan)) => {
                 headers.statuses.insert(shown.buffer_id, status(file));
                 if let Some(badge) = shown.badge {
                     headers.badges.insert(shown.buffer_id, badge);
@@ -200,11 +201,13 @@ pub async fn open(
                 if shown.folded {
                     folded.insert(shown.buffer_id);
                 }
+                shown_files.push(Some((shown.buffer_id, plan)));
             }
             // Only when even the placeholder that says why can't be shown.
             Err(error) => {
                 not_shown += 1;
                 log::error!("{link}: can't show {}: {error:#}", file.display_path());
+                shown_files.push(None);
             }
         }
         if index == 0 {
@@ -247,16 +250,202 @@ pub async fn open(
             )
         })?;
     }
+
+    if trust == Trust::Untrusted {
+        log::info!("{link}: not trusted, so no checkout and no language servers");
+        return Ok(());
+    }
+    let checkout = check_out(&local, &link, &project, cx).await;
+    banners.update(cx, |banners, cx| banners.hide(BannerKind::CheckingOut, cx));
+    let checkout = match checkout {
+        Ok(checkout) => checkout,
+        Err(error) => {
+            log::warn!("{link}: {error:#}");
+            banners.update(cx, |banners, cx| {
+                banners.show(
+                    BannerKind::CheckoutFailed,
+                    Severity::Warning,
+                    format!(
+                        "rozed couldn't check {link} out, so language servers are off and every \
+                         file shows from git: {error:#}"
+                    ),
+                    cx,
+                )
+            });
+            return Ok(());
+        }
+    };
+    let target = Target {
+        checkout: Some(&checkout),
+        ..target
+    };
+    for (index, (file, shown)) in local.files.iter().zip(&shown_files).enumerate() {
+        let Some((buffer_id, first)) = shown else {
+            continue;
+        };
+        let plan = cx
+            .background_spawn({
+                let repo = local.repo.clone();
+                let file = file.clone();
+                let dir = checkout.dir.clone();
+                async move { plan_file(&repo, &file, Some(&dir)) }
+            })
+            .await;
+        match swap(first, plan) {
+            Swap::Keep => {}
+            Swap::Warn(warning) => {
+                log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
+                update_headers(&editor, cx, |headers| {
+                    headers.warnings.insert(*buffer_id, warning);
+                });
+            }
+            Swap::ToCheckout(plan) => match target.add_file(index, file, plan, cx).await {
+                Ok(shown) => update_headers(&editor, cx, |headers| {
+                    headers.move_to(*buffer_id, shown.buffer_id);
+                    if let Some(badge) = shown.badge {
+                        headers.badges.insert(shown.buffer_id, badge);
+                    }
+                }),
+                Err(error) => log::warn!(
+                    "{link}: can't show {} from the checkout, so it stays from git: {error:#}",
+                    file.display_path()
+                ),
+            },
+        }
+    }
+    log::info!(
+        "{link}: checkout ready and swapped in {:?} after launch",
+        launched.elapsed()
+    );
     Ok(())
+}
+
+/// Checks the head out, trusts that checkout and nothing else, and opens it as a folder of
+/// `project`, so language servers start there.
+async fn check_out(
+    local: &Arc<LocalPullRequest>,
+    link: &PrLink,
+    project: &Entity<Project>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<Checkout> {
+    let dir = cx
+        .background_spawn({
+            let (local, number) = (local.clone(), link.number);
+            async move { local.repo.checkout(number, &local.head) }
+        })
+        .await
+        .with_context(|| format!("checking {link} out"))?;
+    cx.update(|_, cx| trust::trust_checkout(project, &dir, cx))??;
+    let (worktree, _) = project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(&dir, true, cx)
+        })
+        .await
+        .with_context(|| format!("opening {}", dir.display()))?;
+    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    log::info!(
+        "{link}: trusted, so language servers start in {}",
+        dir.display()
+    );
+    Ok(Checkout { dir, worktree_id })
+}
+
+/// What a file shown from git does once the checkout is ready.
+#[derive(Debug, PartialEq)]
+enum Swap {
+    /// Shows the checkout's project buffer, planned so.
+    ToCheckout(FilePlan),
+    /// Stays from git, and its header says why: the checkout's copy differs from the head's.
+    Warn(Warning),
+    /// Stays as it is.
+    Keep,
+}
+
+/// What a file whose first plan, without a checkout, was `first` does with `with_checkout`, its
+/// plan once the checkout is ready. Only a file shown from git can switch.
+fn swap(first: &FilePlan, with_checkout: FilePlan) -> Swap {
+    let from_git = matches!(
+        first.content,
+        Content::Diff {
+            new: NewSide::Git(_),
+            ..
+        }
+    );
+    if !from_git {
+        return Swap::Keep;
+    }
+    match with_checkout {
+        FilePlan {
+            content:
+                Content::Diff {
+                    new: NewSide::Checkout,
+                    ..
+                },
+            ..
+        } => Swap::ToCheckout(with_checkout),
+        FilePlan {
+            warning: Some(warning),
+            ..
+        } => Swap::Warn(warning),
+        _ => Swap::Keep,
+    }
+}
+
+/// Changes the file headers of `editor`'s pull request.
+fn update_headers(
+    editor: &Entity<SplittableEditor>,
+    cx: &mut AsyncWindowContext,
+    change: impl FnOnce(&mut FileHeaders),
+) {
+    editor.update(cx, |editor, cx| {
+        editor.rhs_editor().update(cx, |editor, cx| {
+            if let Some(headers) = editor.addon_mut::<FileHeaders>() {
+                change(headers);
+            }
+            cx.notify();
+        })
+    });
+}
+
+/// What the banner says when the head shown isn't the one GitHub's API reports, because GitHub
+/// no longer has that one. `None` when it is GitHub's head.
+fn head_banner(link: &PrLink, head: &Oid, head_source: &HeadSource) -> Option<String> {
+    match head_source {
+        // GitHub moves refs/pull/<n>/head a moment after a push; the API's head is what shows.
+        HeadSource::PullRef | HeadSource::Api { .. } => None,
+        HeadSource::PullRefNotApi { api } => Some(format!(
+            "GitHub says this pull request's head is {}, which GitHub no longer has. This shows \
+             refs/pull/{}/head, {}, instead.",
+            api.short(7),
+            link.number,
+            head.short(7)
+        )),
+    }
+}
+
+/// Keeps a pull request's clone open while its tab is, so no rozed's cleanup removes the clone or
+/// its checkout from under it.
+struct OpenClone {
+    _repo: Repo,
+}
+
+impl Addon for OpenClone {
+    fn to_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// A pull request in the local copy.
 struct LocalPullRequest {
     repo: Repo,
+    /// The repository's canonical name, GitHub's, which starts each file's full path.
+    name: String,
     /// The commit the diff starts from: where the head branched from the base branch.
     base: Oid,
     /// The head shown: GitHub's, checked against `refs/pull/<n>/head`.
     head: Oid,
+    /// Where the head came from.
+    head_source: HeadSource,
     /// What changed between `base` and `head`, in git's order.
     files: Vec<ChangedFile>,
 }
@@ -272,6 +461,14 @@ fn copy(
     // The repository's canonical name, not the link's, so a renamed one keeps its clone.
     let (owner, name) = pull_request.base.repo.owner_and_name()?;
     let repo = cache.open(owner, name, token)?;
+    // A SHA from the API that isn't one only turns off what it's for, and says so.
+    let api_oid = |what: &str, sha: &str| match sha.parse::<Oid>() {
+        Ok(oid) => Some(oid),
+        Err(error) => {
+            log::warn!("{link}: GitHub's API gave a {what} that isn't a commit ID: {error}");
+            None
+        }
+    };
     let fetched = repo
         .with_progress({
             let link = link.clone();
@@ -286,9 +483,15 @@ fn copy(
         })
         .fetch_pull(&PullRequestRefs {
             number: link.number,
-            head: pull_request.head.sha.parse().ok(),
+            head: api_oid(
+                "head, so the head isn't checked against it,",
+                &pull_request.head.sha,
+            ),
             base_branch: pull_request.base.branch.clone(),
-            base: pull_request.base.sha.parse().ok(),
+            base: api_oid(
+                "base, so a deleted base branch can't fall back to it,",
+                &pull_request.base.sha,
+            ),
         })?;
     match &fetched.head_source {
         HeadSource::PullRef => {}
@@ -316,8 +519,10 @@ fn copy(
     let files = repo.changed_files(&base, &fetched.head)?;
     Ok(LocalPullRequest {
         repo,
+        name: name.to_string(),
         base,
         head: fetched.head,
+        head_source: fetched.head_source,
         files,
     })
 }
@@ -510,10 +715,11 @@ fn try_plan_file(
         .filter(|old| **old != new_bytes && normalized(old) == normalized(&new_bytes))
         .map(|_| SharedString::from("line endings only"));
     let old_text = old_bytes.map(text);
+    let new_text = text(new_bytes.clone());
     let from_git = |warning: Option<Warning>| FilePlan {
         warning,
         badge: badge.clone(),
-        ..FilePlan::diff(old_text.clone(), NewSide::Git(text(new_bytes.clone())))
+        ..FilePlan::diff(old_text.clone(), NewSide::Git(new_text.clone()))
     };
     // A submodule is never a file in the checkout.
     let Some(checkout) = checkout.filter(|_| new.mode != FileMode::Submodule) else {
@@ -880,6 +1086,20 @@ struct FileHeaders {
     warnings: HashMap<BufferId, Warning>,
 }
 
+impl FileHeaders {
+    /// Moves what the header of buffer `from` shows to buffer `to`, which replaced it, leaving out
+    /// any warning: the new buffer is the checkout's, which matched.
+    fn move_to(&mut self, from: BufferId, to: BufferId) {
+        if let Some(status) = self.statuses.remove(&from) {
+            self.statuses.insert(to, status);
+        }
+        if let Some(badge) = self.badges.remove(&from) {
+            self.badges.insert(to, badge);
+        }
+        self.warnings.remove(&from);
+    }
+}
+
 impl Addon for FileHeaders {
     fn to_any(&self) -> &dyn std::any::Any {
         self
@@ -1110,6 +1330,51 @@ mod tests {
     }
 
     #[test]
+    fn a_head_github_no_longer_has_gets_a_banner() {
+        let link: PrLink = "https://github.com/sharkdp/fd/pull/2212".parse().unwrap();
+        let oid = |c: char| -> Oid { c.to_string().repeat(40).parse().unwrap() };
+        let banner = |head_source| head_banner(&link, &oid('a'), &head_source);
+
+        assert_eq!(banner(HeadSource::PullRef), None);
+        // GitHub moves refs/pull/<n>/head a moment after a push, and rozed shows the API's head.
+        assert_eq!(banner(HeadSource::Api { pull_ref: oid('b') }), None);
+        assert_eq!(
+            banner(HeadSource::PullRefNotApi { api: oid('c') }),
+            Some(
+                "GitHub says this pull request's head is ccccccc, which GitHub no longer has. \
+                 This shows refs/pull/2212/head, aaaaaaa, instead."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn only_files_shown_from_git_swap_to_the_checkout() {
+        let warning = Warning {
+            label: "Checkout differs: shown from git".into(),
+            detail: "detail".into(),
+        };
+        let from_checkout = FilePlan::diff(None, NewSide::Checkout);
+        let differs = FilePlan {
+            warning: Some(warning.clone()),
+            ..FilePlan::diff(None, from_git("text"))
+        };
+        let shown_from_git = FilePlan::diff(None, from_git("text"));
+        let placeholder = FilePlan::placeholder("(binary file not shown)", false, true);
+
+        assert_eq!(
+            swap(&shown_from_git, from_checkout.clone()),
+            Swap::ToCheckout(from_checkout.clone())
+        );
+        assert_eq!(swap(&shown_from_git, differs), Swap::Warn(warning));
+        assert_eq!(swap(&shown_from_git, shown_from_git.clone()), Swap::Keep);
+        // A placeholder or a deleted file never comes from the checkout.
+        assert_eq!(swap(&placeholder, from_checkout.clone()), Swap::Keep);
+        let deleted = FilePlan::diff(Some("text".into()), NewSide::Deleted);
+        assert_eq!(swap(&deleted, from_checkout), Swap::Keep);
+    }
+
+    #[test]
     fn line_endings_normalize_to_newlines() {
         assert_eq!(normalized(b"a\r\nb\rc\n"), b"a\nb\nc\n");
         assert_eq!(normalized(b"a\nb"), b"a\nb");
@@ -1146,8 +1411,10 @@ mod tests {
         let files = repo.changed_files(&base, &fetched.head).unwrap();
         let local = LocalPullRequest {
             repo,
+            name: "repo".into(),
             base,
             head: fetched.head,
+            head_source: fetched.head_source,
             files,
         };
         let checkout = checkout.then(|| local.repo.checkout(1, &local.head).unwrap());
