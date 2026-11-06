@@ -1296,11 +1296,16 @@ async fn poll(
                 let writes = this.update(cx, |this, cx| {
                     this.finish(*job, ticket, result, &client, cx)
                 })?;
-                for write in writes {
-                    if let Err(error) = write.await {
-                        log::warn!("writing the cache: {error:#}");
-                    }
-                }
+                // Off the main thread: encoding a PR's details can take a while.
+                executor
+                    .spawn(async move {
+                        for write in writes {
+                            if let Err(error) = write.await {
+                                log::warn!("writing the cache: {error:#}");
+                            }
+                        }
+                    })
+                    .await;
             }
         }
     }
