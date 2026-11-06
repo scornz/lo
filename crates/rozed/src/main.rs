@@ -6,7 +6,6 @@
 mod accounts_ui;
 mod forced_settings;
 mod http;
-mod keymap;
 mod rust_toolchain;
 
 use std::io::IsTerminal as _;
@@ -38,6 +37,7 @@ use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 use review_ui::pr_link::PrLink;
 use review_ui::{OpenBox, Trust, local_copies, local_project, trust};
 
+use crate::forced_settings::Servers;
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
@@ -142,7 +142,12 @@ fn main() {
         gpui_tokio::init(cx);
         settings::init(cx);
         // Before anything reads settings. Again below, once every language is known.
-        forced_settings::apply(&[], None, cx);
+        let servers = if options.trust {
+            Servers::RustAnalyzer { toolchain: None }
+        } else {
+            Servers::None
+        };
+        forced_settings::apply(&[], servers, cx);
         // Checks git and cleans up old clones in the background.
         local_copies::init(cx);
 
@@ -177,7 +182,14 @@ fn main() {
                 ),
             }
         }
-        forced_settings::apply(&languages.language_names(), rust_toolchain.as_deref(), cx);
+        let servers = if options.trust {
+            Servers::RustAnalyzer {
+                toolchain: rust_toolchain.as_deref(),
+            }
+        } else {
+            Servers::None
+        };
+        forced_settings::apply(&languages.language_names(), servers, cx);
 
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
@@ -221,7 +233,7 @@ fn main() {
             MenuItem::separator(),
             MenuItem::action("Quit rozed", zed_actions::Quit),
         ])]);
-        keymap::load(cx);
+        review_ui::keymap::load(cx);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

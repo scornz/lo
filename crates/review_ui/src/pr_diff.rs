@@ -351,7 +351,11 @@ pub(crate) async fn show_local_copy(
     let checkout = check_out(&local, &link, &project, cx).await;
     banners.update(cx, |banners, cx| banners.hide(BannerKind::CheckingOut, cx));
     let checkout = match checkout {
-        Ok(checkout) => checkout,
+        Ok(checkout) => {
+            // Its worktree, and the language servers in it, go with the last tab using it.
+            tab.update(cx, |tab, _| tab.uses_checkout(checkout.worktree_id))?;
+            checkout
+        }
         Err(error) => {
             log::warn!("{link}: {error:#}");
             banners.update(cx, |banners, cx| {

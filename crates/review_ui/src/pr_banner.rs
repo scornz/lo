@@ -21,6 +21,8 @@ pub enum BannerKind {
     LocalCopyFailed,
     /// GitHub's diff couldn't be read, so nothing shows until the local copy is ready.
     GithubDiffFailed,
+    /// The header shows what rozed saved about the pull request, not what GitHub says now.
+    Saved,
 }
 
 /// One banner: its kind, how serious it is, and what it says.
