@@ -19,7 +19,8 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///   head no source dated, such as a force-push's `before`, just before the push that replaced it.
 ///   Where the chain loops because a head was pushed again, its latest push decides.
 /// - **Previous head and forced.** The activity API is trusted first, then force-push events,
-///   then check suites. A check suite never says whether its push was forced.
+///   then check suites. With no source's word, the previous head is the revision before, and
+///   ancestry in the current commits tells whether the push was forced when it can.
 pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions {
     let mut heads = Heads::default();
     for record in records {
@@ -46,10 +47,12 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions 
             let previous = head
                 .previous()
                 .or_else(|| Some(seen[order[position.checked_sub(1)?]].head));
+            let forced = (head.forced())
+                .or_else(|| forced_by_ancestry(previous?, head.head, &positions, &heads.index));
             Revision {
                 head: head.head.to_string(),
                 previous: previous.map(str::to_string),
-                forced: head.forced(),
+                forced,
                 pushed_at: match (head.exact(), latest[index]) {
                     (Some(at), _) => PushedAt::Exact(at),
                     (None, Some(by)) => PushedAt::By(by),
@@ -60,6 +63,22 @@ pub fn build_revisions(records: &[PushRecord], commits: &[String]) -> Revisions 
         })
         .collect();
     Revisions { list }
+}
+
+/// Whether the push from `previous` to `head` was forced, as far as the current commits tell. A
+/// push from an ancestor wasn't. A push back to an ancestor was, and so was a push over a revision
+/// that's no longer in the current commits, since that one can't be the new head's ancestor.
+fn forced_by_ancestry(
+    previous: &str,
+    head: &str,
+    positions: &HashMap<&str, usize>,
+    revisions: &HashMap<&str, usize>,
+) -> Option<bool> {
+    let head = *positions.get(head)?;
+    match positions.get(previous) {
+        Some(&previous) => (previous != head).then_some(previous > head),
+        None => revisions.contains_key(previous).then_some(true),
+    }
 }
 
 /// The heads that must come after each head: the heads whose push replaced it, and its nearest
@@ -581,6 +600,76 @@ mod tests {
             revisions.latest().unwrap().sources,
             [Source::Poller, Source::Git].into()
         );
+    }
+
+    fn forced(revisions: &Revisions) -> Vec<Option<bool>> {
+        revisions.iter().map(|revision| revision.forced).collect()
+    }
+
+    #[test]
+    fn a_push_from_an_ancestor_was_not_forced() {
+        let commits = ["a1", "c2", "a2"].map(String::from);
+        let revisions = build_revisions(&[polled("a1", 5), polled("a2", 25)], &commits);
+
+        assert_eq!(forced(&revisions), [None, Some(false)]);
+    }
+
+    #[test]
+    fn a_push_over_a_revision_rebased_away_was_forced() {
+        let commits = ["b0", "b1"].map(String::from);
+        let revisions = build_revisions(&[polled("a1", 5), polled("b1", 25)], &commits);
+
+        assert_eq!(heads(&revisions), ["a1", "b1"]);
+        assert_eq!(forced(&revisions), [None, Some(true)]);
+    }
+
+    #[test]
+    fn a_push_back_to_an_ancestor_was_forced() {
+        // The author reset the branch from a2 to a1, then pushed a3 on top of a2 again.
+        let commits = ["a1", "a2", "a3"].map(String::from);
+        let revisions = build_revisions(
+            &[
+                polled("a2", 10),
+                check_suite("a2", "a1", 20),
+                polled("a3", 30),
+            ],
+            &commits,
+        );
+
+        assert_eq!(heads(&revisions), ["a2", "a1", "a3"]);
+        assert_eq!(forced(&revisions), [None, Some(true), Some(false)]);
+    }
+
+    #[test]
+    fn forced_is_unknown_when_neither_head_is_in_the_current_commits() {
+        let commits = ["b1"].map(String::from);
+        let revisions = build_revisions(&[polled("a1", 5), polled("a2", 25)], &commits);
+
+        assert_eq!(heads(&revisions), ["a1", "a2", "b1"]);
+        assert_eq!(forced(&revisions)[1], None);
+    }
+
+    #[test]
+    fn forced_is_unknown_when_the_previous_head_is_no_revision() {
+        // x0 was the branch's head before the pull request opened, and was force-pushed over.
+        let commits = ["a1"].map(String::from);
+        let revisions = build_revisions(&[check_suite("x0", "a1", 10)], &commits);
+
+        assert_eq!(forced(&revisions), [None]);
+    }
+
+    #[test]
+    fn a_source_saying_whether_the_push_was_forced_wins_over_ancestry() {
+        let commits = ["a1", "a2"].map(String::from);
+        let revisions = build_revisions(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, true),
+            ],
+            &commits,
+        );
+
+        assert_eq!(forced(&revisions), [Some(false), Some(true)]);
     }
 
     #[test]

@@ -105,7 +105,7 @@ pub struct Revision {
     /// names the head it replaced, which can be a commit pushed before the pull request opened.
     pub previous: Option<String>,
     /// Whether the push was forced: `Some(true)` for a force-push, `Some(false)` for a normal push,
-    /// `None` when no source says.
+    /// `None` when no source says and the current commits can't tell.
     pub forced: Option<bool>,
     /// When it was pushed.
     pub pushed_at: PushedAt,
