@@ -60,6 +60,11 @@ impl ViewedMarks {
         }
     }
 
+    /// GitHub's own mark on `path`, as last read or as a write that GitHub took set it.
+    pub fn github_state(&self, path: &str) -> Option<ViewedState> {
+        self.github.get(path).copied()
+    }
+
     /// Every file's mark as [`Self::state`] gives it, by path.
     pub fn shown(&self) -> HashMap<String, ViewedState> {
         let mut shown = self.github.clone();

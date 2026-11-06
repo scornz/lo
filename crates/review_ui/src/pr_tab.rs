@@ -572,6 +572,7 @@ impl PrTab {
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
         self.node_id = Some(details.id.clone());
+        self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
         let listed_changed = self.marks.set_listed(listed_paths(details));
         let marks_changed = self.marks.set_github(viewed) || listed_changed;
         // A change of title makes the workspace report the active item changed, which comes back
@@ -582,6 +583,63 @@ impl PrTab {
         self.header = header;
         self.files.set_viewed(&self.marks.shown());
         self.changed(cx);
+    }
+
+    /// GitHub's `marks`, read at `head`, changed in ways rozed's own writes don't explain, so this
+    /// Mac's records follow them (design §6): a file GitHub says isn't viewed has no record, and a
+    /// file marked viewed again elsewhere is recorded at `head`. A file changed since viewed keeps
+    /// its record, which is what it's for.
+    fn follow_marks_set_elsewhere(
+        &mut self,
+        marks: &HashMap<String, ViewedState>,
+        head: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let changes: Vec<(String, Option<String>)> = marks
+            .iter()
+            .filter(|(path, _)| !self.marks.is_pending(path))
+            .filter_map(|(path, state)| match state {
+                ViewedState::Unviewed if self.viewed_at.contains_key(path) => {
+                    Some((path.clone(), None))
+                }
+                ViewedState::Viewed
+                    if matches!(
+                        self.marks.github_state(path),
+                        Some(ViewedState::Unviewed | ViewedState::Dismissed)
+                    ) =>
+                {
+                    Some((path.clone(), Some(head.to_string())))
+                }
+                _ => None,
+            })
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        for (path, head) in &changes {
+            match head {
+                Some(head) => self.viewed_at.insert(path.clone(), head.clone()),
+                None => self.viewed_at.remove(path),
+            };
+        }
+        let (Some(records), Some((poller, pull))) = (self.records.clone(), self.watched.clone())
+        else {
+            return;
+        };
+        let login = poller.read(cx).login().to_string();
+        let now = SystemTime::now();
+        cx.spawn(async move |_, _| {
+            for (path, head) in changes {
+                let written = match head {
+                    Some(head) => records.record(&login, &pull, &path, &head, now).await,
+                    None => records.forget(&login, &pull, &path).await,
+                };
+                if let Err(error) = written {
+                    log::error!("{pull}: recording where {path} was viewed: {error:#}");
+                }
+            }
+        })
+        .detach();
     }
 
     /// The local copy listed the pull request's files: lists them, builds its revisions, and
@@ -3391,6 +3449,57 @@ mod tests {
               integration). It shows GitHub's mark again."
             ]
         );
+    }
+
+    #[gpui::test]
+    async fn marks_cleared_or_set_elsewhere_update_this_macs_records(cx: &mut TestAppContext) {
+        const R1: &str = "1111111111111111111111111111111111111111";
+        let (_, tab, github, cx) = three_files(
+            "records_follow_github",
+            &[("a.rs", R1), ("b.rs", R1)],
+            &[("a.rs", "VIEWED"), ("b.rs", "VIEWED"), ("c.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        let viewed_at =
+            |cx: &mut VisualTestContext| tab.read_with(cx, |tab, _| tab.viewed_at.clone());
+        let both = HashMap::from([
+            ("a.rs".to_string(), R1.to_string()),
+            ("b.rs".to_string(), R1.to_string()),
+        ]);
+        // Marks set before the tab opened keep their records.
+        assert_eq!(github.recorded(), both);
+
+        // a.rs's mark cleared on the web, and b.rs changed by a push.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[
+                    ("a.rs", "UNVIEWED"),
+                    ("b.rs", "DISMISSED"),
+                    ("c.rs", "UNVIEWED"),
+                ]),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let b_only = HashMap::from([("b.rs".to_string(), R1.to_string())]);
+        assert_eq!(github.recorded(), b_only);
+        assert_eq!(viewed_at(cx), b_only);
+
+        // Both marked again on another Mac, at the head GitHub has then.
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[("a.rs", "VIEWED"), ("b.rs", "VIEWED"), ("c.rs", "UNVIEWED")]),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let at_head = HashMap::from([
+            ("a.rs".to_string(), HEAD.to_string()),
+            ("b.rs".to_string(), HEAD.to_string()),
+        ]);
+        assert_eq!(github.recorded(), at_head);
+        assert_eq!(viewed_at(cx), at_head);
     }
 
     #[gpui::test]
