@@ -2,8 +2,8 @@
 # breakages. script/zed-latest.sh does the work: it replays rozed's patches onto the release in a
 # scratch copy of Zed and runs CI's checks there. Nothing is pushed.
 #
-# While the release breaks rozed, one open issue labelled zed-update holds the latest report. The
-# run itself stays green; it fails only when the script can't run.
+# While the latest release breaks rozed, one open issue labelled zed-update holds the latest report.
+# The run itself stays green; it fails only when the script can't run, such as on a failed download.
 name: weekly-zed
 
 on:
@@ -11,6 +11,13 @@ on:
     # Thursdays at 07:23 UTC. Zed's stable releases usually come out on Wednesdays.
     - cron: "23 7 * * 4"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          A Zed release to build against instead of the latest, such as v1.28.0-pre. Its report goes
+          to the job summary only, not the zed-update issue.
+        required: false
+        type: string
 
 permissions: {}
 
@@ -37,40 +44,65 @@ jobs:
         with:
           persist-credentials: false
 
-      # cmake, pinned in mise.toml, builds wasmtime for Zed's tree-sitter.
+      # cmake, pinned in mise.toml, builds wasmtime for Zed's tree-sitter. No cache: this job runs
+      # code from Zed's release and its dependencies, and it runs on main, whose cache entries every
+      # pull request's CI restores. Nothing else in the job caches either.
       - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
         with:
           install_args: cmake
+          cache: false
 
       # rozed's toolchain, which runs `cargo xtask`. The script installs the release's if it differs.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install && rustc --version && cmake --version
 
-      # No Rust cache: a week apart, a new Zed release rebuilds most of the tree anyway, and GitHub
-      # evicts caches unused for a week.
-
-      - name: Find Zed's latest release
+      # The tag goes to git and into the report, so it must look like one of Zed's.
+      - name: Choose the Zed release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          tag=$(gh api repos/zed-industries/zed/releases/latest --jq .tag_name)
-          echo "Zed's latest release is $tag."
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_TAG" ]; then
+            tag=$INPUT_TAG
+            skip_pinned=false
+          else
+            tag=$(gh api repos/zed-industries/zed/releases/latest --jq .tag_name)
+            # When it's the release rozed pins, ci.yml already builds it.
+            skip_pinned=true
+          fi
+          pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-pre)?$'
+          if ! [[ $tag =~ $pattern ]]; then
+            echo "That isn't a Zed release tag, such as v1.28.0 or v1.28.0-pre." >&2
+            exit 1
+          fi
+          echo "Building against Zed $tag."
+          {
+            echo "tag=$tag"
+            echo "skip_pinned=$skip_pinned"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build rozed against it
         id: build
         env:
           TAG: ${{ steps.release.outputs.tag }}
+          SKIP_PINNED: ${{ steps.release.outputs.skip_pinned }}
         run: |
           dir=$RUNNER_TEMP/zed-latest
+          args=(--tag "$TAG" --dir "$dir")
+          if [ "$SKIP_PINNED" = true ]; then args+=(--skip-pinned); fi
+          # The build's output can hold lines that read as workflow commands, so they're off until it
+          # ends.
+          resume=$(uuidgen)
+          echo "::stop-commands::$resume"
           status=0
-          script/zed-latest.sh --tag "$TAG" --dir "$dir" || status=$?
+          script/zed-latest.sh "${args[@]}" || status=$?
+          echo "::$resume::"
           case $status in
             0) result=pass ;;
             1)
               result=broken
-              echo "::warning title=Zed $TAG breaks rozed::The zed-update issue has the report."
+              echo "::warning title=Zed $TAG breaks rozed::The job summary has the report."
               ;;
             *) exit "$status" ;;
           esac
@@ -84,11 +116,13 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
-  # Opens or updates the zed-update issue while the release breaks rozed, and closes it once rozed
-  # builds. It runs no repository code.
+  # Opens or updates the zed-update issue while the latest release breaks rozed, and closes it once
+  # rozed builds. It runs no repository code. Only the weekly check manages the issue: not a run of
+  # another branch's copy of this workflow, and not a dispatch against a tag of someone's choosing.
   issue:
     name: issue
     needs: build
+    if: github.ref == 'refs/heads/main' && !inputs.tag
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -102,21 +136,33 @@ jobs:
     steps:
       - name: Open, update or close the zed-update issue
         run: |
-          issue=$(gh issue list --label zed-update --state open --limit 1 --json number --jq '.[0].number // empty')
+          # Open zed-update issues, oldest first. Unlike gh's search, the REST list sees an issue as
+          # soon as it's created.
+          issues=$(gh api "repos/$GH_REPO/issues?labels=zed-update&state=open&sort=created&direction=asc&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')
 
           if [ "$RESULT" = pass ]; then
-            if [ -n "$issue" ]; then
+            for issue in $issues; do
               gh issue close "$issue" --comment "rozed builds and passes its checks against Zed $TAG ([run]($RUN_URL))."
-            fi
+            done
             exit 0
           fi
 
-          title="Zed $TAG breaks rozed"
+          # The report is the build's output, so it's untrusted Markdown: an @ in it can't mention
+          # anyone, and it's cut to stay under GitHub's 65,536-character limit. The run's link and any
+          # note come first, where a code block the cut leaves open can't swallow them.
           body=$RUNNER_TEMP/body.md
-          printf '%s\n\nFrom the weekly build against Zed'\''s latest release ([run](%s)). The issue closes when a later run passes.\n' \
-            "$REPORT" "$RUN_URL" > "$body"
+          printf 'From the weekly build against Zed'\''s latest release ([run](%s)). The issue closes when a later run passes.\n\n' \
+            "$RUN_URL" > "$body"
+          printf '%s\n' "$REPORT" | perl -CSD -0777 -pe '
+            s/\@(?!\x{200D})/\@\x{200D}/g;
+            $_ = "_The report is cut short; the run'\''s job summary and logs have all of it._\n\n" . substr($_, 0, 60000) . "\n"
+              if length > 60000;
+          ' >> "$body"
 
-          if [ -z "$issue" ]; then
+          title="Zed $TAG breaks rozed"
+          oldest=$(printf '%s\n' "$issues" | head -n 1)
+          if [ -z "$oldest" ]; then
             if [ "$(gh label list --search zed-update --json name --jq 'any(.[]; .name == "zed-update")')" != true ]; then
               gh label create zed-update --color d93f0b --description "rozed doesn't build against Zed's latest release"
             fi
@@ -124,9 +170,13 @@ jobs:
             exit 0
           fi
 
-          old_title=$(gh issue view "$issue" --json title --jq .title)
-          gh issue edit "$issue" --title "$title" --body-file "$body"
+          old_title=$(gh issue view "$oldest" --json title --jq .title)
+          gh issue edit "$oldest" --title "$title" --body-file "$body"
           # Editing notifies nobody, so say when a newer release breaks rozed too.
           if [ "$old_title" != "$title" ]; then
-            gh issue comment "$issue" --body "Zed $TAG breaks rozed too. The description has its report ([run]($RUN_URL))."
+            gh issue comment "$oldest" --body "Zed $TAG breaks rozed too. The description has its report ([run]($RUN_URL))."
           fi
+          # The oldest holds the report; any others are duplicates of it.
+          for issue in $(printf '%s\n' "$issues" | tail -n +2); do
+            gh issue close "$issue" --duplicate-of "$oldest"
+          done
