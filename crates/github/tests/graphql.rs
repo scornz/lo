@@ -203,6 +203,124 @@ fn partial_data_keeps_the_errors_and_their_type() {
     assert_eq!(response.errors[0].r#type.as_deref(), Some("NOT_FOUND"));
 }
 
+/// PR #2's one file and its viewed mark, and the pull request's node ID.
+fn pr_2_marks(client: &GithubClient) -> (String, Vec<(String, FileViewedState)>) {
+    let pr = block_on(client.pull_request("rozed-dev", "playground", 2)).unwrap();
+    let files = pr
+        .files
+        .unwrap()
+        .nodes
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|file| (file.path, file.viewer_viewed_state))
+        .collect();
+    (pr.id, files)
+}
+
+#[test]
+fn a_file_is_marked_viewed_and_the_mark_cleared() {
+    let (client, http) = client("graphql_viewed_marks");
+    let (id, before) = pr_2_marks(&client);
+    assert_eq!(
+        before,
+        [("stack-b.md".to_string(), FileViewedState::UNVIEWED)]
+    );
+
+    block_on(client.mark_file_as_viewed(&id, "stack-b.md")).unwrap();
+    assert_eq!(
+        pr_2_marks(&client).1,
+        [("stack-b.md".to_string(), FileViewedState::VIEWED)]
+    );
+
+    block_on(client.unmark_file_as_viewed(&id, "stack-b.md")).unwrap();
+    assert_eq!(
+        pr_2_marks(&client).1,
+        [("stack-b.md".to_string(), FileViewedState::UNVIEWED)]
+    );
+
+    // Each mutation names the pull request by its node ID, and the file by its path.
+    let mutations: Vec<(String, serde_json::Value)> = http
+        .seen()
+        .iter()
+        .filter_map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let operation = body["operationName"].as_str()?.to_string();
+            operation
+                .ends_with("FileAsViewed")
+                .then(|| (operation, body["variables"].clone()))
+        })
+        .collect();
+    let variables = serde_json::json!({ "pullRequestId": id, "path": "stack-b.md" });
+    assert_eq!(
+        mutations,
+        [
+            ("MarkFileAsViewed".to_string(), variables.clone()),
+            ("UnmarkFileAsViewed".to_string(), variables),
+        ]
+    );
+}
+
+#[test]
+fn marking_a_file_of_a_pull_request_that_doesnt_exist_fails() {
+    let (client, _) = client("graphql_mark_file_as_viewed_not_found");
+    let error =
+        block_on(client.mark_file_as_viewed(MISSING_PULL_REQUEST, "README.md")).unwrap_err();
+    let GithubError::NotFound { message, .. } = &error else {
+        panic!("expected not found, got {error:?}");
+    };
+    assert!(message.contains(MISSING_PULL_REQUEST), "{message}");
+}
+
+#[test]
+fn marking_a_path_the_pull_request_doesnt_have_is_refused() {
+    let (client, _) = client("graphql_mark_file_as_viewed_unlisted_path");
+    let (id, before) = pr_2_marks(&client);
+
+    let error =
+        block_on(client.mark_file_as_viewed(&id, "not-in-this-pull-request.md")).unwrap_err();
+
+    let GithubError::GraphQl { errors } = &error else {
+        panic!("expected GitHub's refusal, got {error:?}");
+    };
+    assert_eq!(errors[0].r#type.as_deref(), Some("UNPROCESSABLE"));
+    assert_eq!(errors[0].message, "Filepath must be part of pull request");
+    // PR #2's one file is still unviewed.
+    assert_eq!(
+        before,
+        [("stack-b.md".to_string(), FileViewedState::UNVIEWED)]
+    );
+    assert_eq!(pr_2_marks(&client).1, before);
+}
+
+/// A pull request node ID that names nothing.
+const MISSING_PULL_REQUEST: &str = "PR_kwDOVk6v9M8AAAAAAAAAAA";
+
+#[test]
+fn a_viewed_mark_answer_without_its_pull_request_isnt_taken_as_done() {
+    use synthetic::*;
+    let variables = serde_json::json!({ "pullRequestId": "PR_x", "path": "a.rs" });
+    let http = replay(vec![
+        (
+            "MarkFileAsViewed",
+            variables.clone(),
+            serde_json::json!({ "markFileAsViewed": { "pullRequest": null } }),
+        ),
+        (
+            "UnmarkFileAsViewed",
+            variables,
+            serde_json::json!({ "unmarkFileAsViewed": null }),
+        ),
+    ]);
+    let client = client_for(&http);
+    for error in [
+        block_on(client.mark_file_as_viewed("PR_x", "a.rs")).unwrap_err(),
+        block_on(client.unmark_file_as_viewed("PR_x", "a.rs")).unwrap_err(),
+    ] {
+        assert!(matches!(error, GithubError::Decode(_)), "{error:?}");
+    }
+}
+
 /// Synthetic GraphQL answers, for what GitHub can't be made to do on demand.
 mod synthetic {
     use std::sync::Arc;

@@ -36,6 +36,19 @@ impl RepoLock {
         Ok(Self { _file: file })
     }
 
+    /// [`Self::acquire_shared`], on a lock file that's already there; `None` when there's none,
+    /// and nothing is written.
+    pub fn acquire_shared_existing(path: &Path) -> Result<Option<Self>, Error> {
+        let file = match File::options().write(true).open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::io(format!("opening {}", path.display()))(error)),
+        };
+        file.lock_shared()
+            .map_err(Error::io(format!("locking {}", path.display())))?;
+        Ok(Some(Self { _file: file }))
+    }
+
     /// The lock at `path`, or `None` if someone else holds it, alone or shared.
     pub fn try_acquire(path: &Path) -> Result<Option<Self>, Error> {
         let file = open(path)?;

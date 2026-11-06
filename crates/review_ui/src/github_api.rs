@@ -3,13 +3,15 @@
 //! without an account, anonymously, which works for public repositories only.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use chrono::{DateTime, Utc};
+use futures::FutureExt as _;
 use github::{GithubClient, GithubError};
-use gpui::{App, Global};
-use http_client::HttpClient;
+use gpui::{App, BackgroundExecutor, Global};
 use http_client::http::{HeaderMap, StatusCode};
+use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, Request};
 use serde::Deserialize;
 
 use crate::pr_link::PrLink;
@@ -136,6 +138,35 @@ pub async fn fetch_pull_request(
     let body = String::from_utf8_lossy(&response.body);
     check_status(response.status, &response.headers, &body, link, can_sign_in)?;
     parse_pull_request(&body).with_context(|| format!("reading GitHub's answer for {link}"))
+}
+
+/// How long the check that GitHub answers waits for an answer.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Whether it's worth loading from GitHub again: `GET /rate_limit` without signing in, which
+/// doesn't count against any rate limit, got an answer with any status within
+/// [`ANSWER_TIMEOUT`], or failed in a way waiting won't fix, such as a proxy that refuses it,
+/// which loading then reports. `executor`'s clock bounds the wait too, whatever the client does
+/// with the request's own timeout.
+pub async fn github_answers(http: Arc<dyn HttpClient>, executor: BackgroundExecutor) -> bool {
+    let request = Request::get("https://api.github.com/rate_limit")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(ANSWER_TIMEOUT)
+        .body(AsyncBody::empty());
+    let Ok(request) = request else {
+        return false;
+    };
+    let send = http.send(request).fuse();
+    let timer = executor.timer(ANSWER_TIMEOUT).fuse();
+    futures::pin_mut!(send, timer);
+    futures::select_biased! {
+        answer = send => match answer {
+            Ok(_) => true,
+            Err(error) => !GithubError::Network(error).is_retryable(),
+        },
+        _ = timer => false,
+    }
 }
 
 /// Turns an unsuccessful answer into an error that says what to do about it.

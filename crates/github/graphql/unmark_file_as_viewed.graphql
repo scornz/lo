@@ -1,0 +1,8 @@
+# Clears the signed-in user's viewed mark on one of a pull request's files.
+mutation UnmarkFileAsViewed($pullRequestId: ID!, $path: String!) {
+  unmarkFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
+    pullRequest {
+      id
+    }
+  }
+}

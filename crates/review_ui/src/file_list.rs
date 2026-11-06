@@ -182,11 +182,44 @@ impl FileList {
         positions
     }
 
-    /// Takes GitHub's viewed marks, by path. Files GitHub doesn't list keep no mark.
+    /// The entry at `position` in review order, which is the diff's order.
+    pub fn at_review_position(&self, position: usize) -> Option<&FileEntry> {
+        self.entries.get(*self.review_order.get(position)?)
+    }
+
+    /// The file `e` moves to after marking `path` viewed: the next one after it in review order
+    /// that isn't viewed, going round to the start. Changed since viewed, or with no mark known,
+    /// counts as unviewed. `None` when every other file is viewed.
+    pub fn next_unviewed(&self, path: &str) -> Option<&FileEntry> {
+        self.unviewed_after(path).next()
+    }
+
+    /// The files after `path` in review order that aren't viewed, going round to the start, as
+    /// [`Self::next_unviewed`] counts them.
+    pub fn unviewed_after(&self, path: &str) -> impl Iterator<Item = &FileEntry> {
+        let from = self.review_position(path);
+        let count = self.review_order.len();
+        from.into_iter()
+            .flat_map(move |from| (1..count).map(move |step| (from + step) % count))
+            .filter_map(|position| self.at_review_position(position))
+            .filter(|entry| entry.viewed != Some(ViewedState::Viewed))
+    }
+
+    /// Takes GitHub's viewed marks, by path. A rename GitHub lists by its old path shows that
+    /// path's mark. Files GitHub doesn't list keep no mark.
     pub fn set_viewed(&mut self, viewed: &HashMap<String, ViewedState>) {
         for entry in &mut self.entries {
-            entry.viewed = viewed.get(entry.path()).copied();
+            let previous = entry.file.previous_path.as_deref();
+            entry.viewed = viewed
+                .get(&entry.file.path)
+                .or_else(|| viewed.get(previous?))
+                .copied();
         }
+    }
+
+    /// The entry for `path`.
+    pub fn entry(&self, path: &str) -> Option<&FileEntry> {
+        self.entries.iter().find(|entry| entry.path() == path)
     }
 
     /// The selected row, in the list's order.
@@ -375,6 +408,109 @@ mod tests {
 
         list.set_viewed(&HashMap::new());
         assert!(list.rows().all(|entry| entry.viewed.is_none()));
+    }
+
+    fn marked(paths: &[(&str, Option<ViewedState>)]) -> FileList {
+        let mut list = list(&paths.iter().map(|(path, _)| *path).collect::<Vec<_>>());
+        let marks: HashMap<String, ViewedState> = paths
+            .iter()
+            .filter_map(|(path, state)| Some((path.to_string(), (*state)?)))
+            .collect();
+        list.set_viewed(&marks);
+        list
+    }
+
+    fn next_unviewed<'a>(list: &'a FileList, path: &str) -> Option<&'a str> {
+        list.next_unviewed(path).map(FileEntry::path)
+    }
+
+    #[test]
+    fn the_next_unviewed_file_is_the_next_in_review_order_that_isnt_viewed() {
+        use ViewedState::*;
+        // Review order: README.md, src/lib.rs, tests/lib.rs, src/main.rs, Cargo.lock.
+        let list = marked(&[
+            ("Cargo.lock", None),
+            ("README.md", Some(Unviewed)),
+            ("src/lib.rs", Some(Viewed)),
+            ("src/main.rs", Some(Dismissed)),
+            ("tests/lib.rs", Some(Viewed)),
+        ]);
+
+        // Viewed files are skipped; changed since viewed counts as unviewed.
+        assert_eq!(next_unviewed(&list, "README.md"), Some("src/main.rs"));
+        // A file with no mark known counts as unviewed.
+        assert_eq!(next_unviewed(&list, "src/main.rs"), Some("Cargo.lock"));
+    }
+
+    #[test]
+    fn the_next_unviewed_file_goes_round_to_the_start() {
+        use ViewedState::*;
+        let list = marked(&[
+            ("Cargo.lock", Some(Viewed)),
+            ("README.md", Some(Unviewed)),
+            ("src/lib.rs", Some(Viewed)),
+            ("src/main.rs", Some(Viewed)),
+            ("tests/lib.rs", Some(Unviewed)),
+        ]);
+
+        assert_eq!(next_unviewed(&list, "Cargo.lock"), Some("README.md"));
+        assert_eq!(next_unviewed(&list, "src/main.rs"), Some("README.md"));
+        assert_eq!(next_unviewed(&list, "README.md"), Some("tests/lib.rs"));
+    }
+
+    #[test]
+    fn with_every_other_file_viewed_there_is_no_next_unviewed_file() {
+        use ViewedState::*;
+        let list = marked(&[
+            ("Cargo.lock", Some(Viewed)),
+            ("README.md", Some(Unviewed)),
+            ("src/lib.rs", Some(Viewed)),
+            ("src/main.rs", Some(Viewed)),
+            ("tests/lib.rs", Some(Viewed)),
+        ]);
+
+        // The file itself doesn't count, viewed or not.
+        assert_eq!(next_unviewed(&list, "README.md"), None);
+        assert_eq!(next_unviewed(&list, "missing.rs"), None);
+        assert_eq!(next_unviewed(&self::list(&["one.rs"]), "one.rs"), None);
+    }
+
+    #[test]
+    fn the_next_unviewed_file_follows_review_order_whatever_the_lists() {
+        use ViewedState::*;
+        let mut list = marked(&[
+            ("Cargo.lock", Some(Unviewed)),
+            ("README.md", Some(Viewed)),
+            ("src/lib.rs", Some(Unviewed)),
+            ("src/main.rs", Some(Unviewed)),
+            ("tests/lib.rs", Some(Unviewed)),
+        ]);
+        list.toggle_order();
+
+        // In path order src/main.rs would come next; in review order tests/lib.rs does.
+        assert_eq!(next_unviewed(&list, "src/lib.rs"), Some("tests/lib.rs"));
+        assert_eq!(
+            list.at_review_position(4).map(FileEntry::path),
+            Some("Cargo.lock")
+        );
+        assert_eq!(list.at_review_position(5), None);
+    }
+
+    #[test]
+    fn a_renamed_file_shows_the_mark_github_keeps_at_its_old_path() {
+        use ViewedState::*;
+        let mut entries = list(&["new.rs", "other.rs"]).entries;
+        entries[0].file.previous_path = Some("old.rs".into());
+        let mut list = FileList::new(entries);
+        let marks: HashMap<String, ViewedState> = [("old.rs", Viewed), ("other.rs", Unviewed)]
+            .into_iter()
+            .map(|(path, state)| (path.to_string(), state))
+            .collect();
+
+        list.set_viewed(&marks);
+
+        assert_eq!(list.entry("new.rs").unwrap().viewed, Some(Viewed));
+        assert_eq!(list.entry("other.rs").unwrap().viewed, Some(Unviewed));
     }
 
     fn version(path: &str) -> Option<FileVersion> {

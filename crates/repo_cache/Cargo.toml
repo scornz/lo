@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 log.workspace = true
+# Names a branch's ref by its hash, whatever the branch is called.
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

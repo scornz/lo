@@ -158,6 +158,39 @@ impl GithubError {
         matches!(self, Self::Unauthorized { .. })
     }
 
+    /// Whether GitHub couldn't be reached at all: no connection could be made, as when the Mac
+    /// is offline, has no route or DNS answer, or goes through a proxy that's down. A request
+    /// that connected and then timed out isn't, nor is a TLS failure, a proxy that refused the
+    /// request, or any answer GitHub gave.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Self::Network(error) => is_connection_failure(error),
+            _ => false,
+        }
+    }
+
+    /// Whether trying again soon may get an answer: GitHub couldn't be reached
+    /// ([`Self::is_unreachable`]), or a request got no answer in time or lost its connection, as
+    /// on a connection kept from before the Mac slept. A TLS failure or a proxy's refusal isn't:
+    /// waiting doesn't fix those.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Network(error) => is_connection_failure(error) || is_lost_answer(error),
+            _ => false,
+        }
+    }
+
+    /// Whether waiting may fix it, with nothing for the user to do: [`Self::is_retryable`], a
+    /// rate limit, or a server error or `429` from GitHub. A refused token, single sign-on, an
+    /// organization's restriction or "not found" isn't.
+    pub fn is_waitable(&self) -> bool {
+        match self {
+            Self::RateLimited { .. } => true,
+            Self::Api { status, .. } => *status >= 500 || *status == 429,
+            _ => self.is_retryable(),
+        }
+    }
+
     /// The error for an unsuccessful REST response, or a GraphQL one that failed before running.
     pub fn from_response(status: u16, headers: &HeaderMap, body: &[u8]) -> Self {
         #[derive(Deserialize, Default)]
@@ -359,9 +392,144 @@ impl SsoHeader {
     }
 }
 
+/// Whether an HTTP client's `error` says no connection could be made. rozed's client is
+/// reqwest, built on hyper-util, which wraps everything that goes wrong before a request is sent
+/// in `client error (Connect)`: looking up the host, opening the TCP connection, the TLS
+/// handshake and a proxy's answer to `CONNECT`. Only the first two mean the network is missing,
+/// and hyper-util names them `dns error` and `tcp connect error`, with the OS's error under them
+/// (its connect timeout too). A client that isn't hyper-util's counts when its innermost error is
+/// the OS's refusal or lack of a route.
+pub fn is_connection_failure(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    let named = error.chain().any(|cause| {
+        let text = cause.to_string();
+        text == "tcp connect error" || text == "dns error"
+    });
+    let innermost = error
+        .chain()
+        .last()
+        .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                ErrorKind::ConnectionRefused
+                    | ErrorKind::NotConnected
+                    | ErrorKind::AddrNotAvailable
+                    | ErrorKind::NetworkUnreachable
+                    | ErrorKind::HostUnreachable
+                    | ErrorKind::NetworkDown
+            )
+        });
+    named || innermost
+}
+
+/// Whether a request was sent, or about to be, and got no answer: it timed out (reqwest's
+/// `operation timed out`, or the OS's), or its connection went away under it (hyper-util's
+/// `client error (SendRequest)`, a reset or a closed connection), as with a pooled connection
+/// that died while the Mac slept, or a proxy couldn't open the tunnel to GitHub (reqwest's
+/// `unsuccessful tunnel`, which a proxy that can't reach GitHub answers with, or `unexpected eof
+/// while tunneling`).
+fn is_lost_answer(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    error.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                ErrorKind::TimedOut
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            )
+        {
+            return true;
+        }
+        let text = cause.to_string();
+        text == "operation timed out"
+            || text == "client error (SendRequest)"
+            || text == "unsuccessful tunnel"
+            || text == "unexpected eof while tunneling"
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_failure_to_connect_means_github_cant_be_reached() {
+        let network = |error: anyhow::Error| GithubError::Network(error);
+        let io = |kind: std::io::ErrorKind| anyhow::Error::new(std::io::Error::from(kind));
+        // A proxy that's down, and no network at all.
+        assert!(network(io(std::io::ErrorKind::ConnectionRefused)).is_unreachable());
+        assert!(network(io(std::io::ErrorKind::NetworkDown)).is_unreachable());
+        assert!(
+            network(
+                io(std::io::ErrorKind::HostUnreachable).context("error sending request for url")
+            )
+            .is_unreachable()
+        );
+        // hyper's errors around the OS's, as reqwest nests them.
+        let dns = anyhow::anyhow!("failed to lookup address information: nodename nor servname")
+            .context("dns error")
+            .context("client error (Connect)")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(network(dns).is_unreachable());
+        let connect_timeout = io(std::io::ErrorKind::TimedOut)
+            .context("tcp connect error")
+            .context("client error (Connect)")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(network(connect_timeout).is_unreachable());
+
+        // Connected, and then slow, or cut off: worth trying again, but not offline.
+        let slow = anyhow::anyhow!("operation timed out")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(!network(slow).is_unreachable());
+        let slow = anyhow::anyhow!("operation timed out")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(network(slow).is_retryable());
+        assert!(!network(io(std::io::ErrorKind::TimedOut)).is_unreachable());
+        assert!(network(io(std::io::ErrorKind::TimedOut)).is_retryable());
+        assert!(!network(io(std::io::ErrorKind::ConnectionReset)).is_unreachable());
+        assert!(network(io(std::io::ErrorKind::ConnectionReset)).is_retryable());
+        // A TLS failure or a proxy's refusal, which hyper-util also calls a connect error.
+        let proxy = anyhow::anyhow!("proxy authentication required")
+            .context("client error (Connect)")
+            .context("error sending request for url (https://api.github.com/user)");
+        assert!(!network(proxy).is_unreachable());
+        let proxy =
+            anyhow::anyhow!("proxy authentication required").context("client error (Connect)");
+        assert!(!network(proxy).is_retryable());
+        // A proxy that can't open the tunnel, as when it can't reach GitHub itself.
+        let tunnel = || anyhow::anyhow!("unsuccessful tunnel").context("client error (Connect)");
+        assert!(network(tunnel()).is_retryable());
+        assert!(!network(tunnel()).is_unreachable());
+        // Waiting fixes a server error or a rate limit, not a refusal.
+        let api = |status| GithubError::Api {
+            status,
+            message: "x".into(),
+            documentation_url: None,
+            errors: Vec::new(),
+        };
+        assert!(api(502).is_waitable());
+        assert!(api(429).is_waitable());
+        assert!(!api(403).is_waitable());
+        assert!(
+            !GithubError::SsoRequired {
+                message: "x".into(),
+                url: None
+            }
+            .is_waitable()
+        );
+        // Any answer.
+        assert!(
+            !GithubError::NotFound {
+                message: "Not Found".into(),
+                documentation_url: None
+            }
+            .is_unreachable()
+        );
+    }
 
     use http_client::http::{HeaderName, HeaderValue};
 

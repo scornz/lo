@@ -479,17 +479,6 @@ pub(crate) fn carry_over(
     to_load
 }
 
-/// The path of the file the diff's cursor is in. The right-hand editor holds the cursor; side by
-/// side, Zed keeps it beside the left-hand one's.
-pub(crate) fn file_at_cursor(diff: &Entity<SplittableEditor>, cx: &App) -> Option<String> {
-    let editor = diff.read(cx).rhs_editor().read(cx);
-    let snapshot = editor.buffer().read(cx).snapshot(cx);
-    let head = editor.selections.newest_anchor().head();
-    let (buffer, _) = snapshot.excerpt_containing(head..head)?;
-    let key = snapshot.path_for_buffer(buffer.remote_id())?;
-    Some(key.path.as_unix_str().to_string())
-}
-
 /// The rows of a file that show: its fixed rows, its whole text, or each change (with the lines
 /// around it, which the diff adds). A file with images shows its last row too, which they sit
 /// under. A file with no changes shows whole, collapsed. Also returns whether those are bare
@@ -1163,6 +1152,7 @@ mod tests {
                     link,
                     title,
                     local,
+                    std::time::SystemTime::now(),
                     Trust::Untrusted,
                     Instant::now(),
                     cx,
@@ -1566,17 +1556,16 @@ mod tests {
                 tab.files().selected().map(|entry| entry.path().to_string())
             })
         };
-        // The list selects the lockfile, and the diff's cursor then moves to b.txt.
+        // The list follows the diff, so it selects b.txt; then j and k select the lockfile.
+        select(&diff, "b.txt", cx);
+        assert_eq!(selected(cx).as_deref(), Some("b.txt"));
         cx.update(|window, cx| window.focus(&list, cx));
-        for _ in 0..2 {
+        for key in ["j", "k", "k"] {
             if selected(cx).as_deref() != Some("Cargo.lock") {
-                cx.simulate_keystrokes("j");
+                cx.simulate_keystrokes(key);
             }
         }
         assert_eq!(selected(cx).as_deref(), Some("Cargo.lock"));
-        select(&diff, "b.txt", cx);
-        cx.update(|window, cx| window.focus(&list, cx));
-        cx.run_until_parked();
 
         cx.simulate_keystrokes("alt-a");
         assert!(!is_folded(&diff, "Cargo.lock", cx));
@@ -1726,6 +1715,7 @@ mod tests {
                 title: format!("{PULL}: test"),
                 repo_name: "repo".into(),
                 head: None,
+                listed_at: std::time::SystemTime::now(),
             };
             tab.show_github_files(source, files, window, cx)
         });

@@ -1,0 +1,9 @@
+# Marks one of a pull request's files viewed for the signed-in user, as the "Viewed" box on
+# GitHub's files tab does.
+mutation MarkFileAsViewed($pullRequestId: ID!, $path: String!) {
+  markFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
+    pullRequest {
+      id
+    }
+  }
+}

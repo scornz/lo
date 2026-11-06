@@ -60,6 +60,14 @@ impl GitVersion {
         patch: 0,
     };
 
+    /// The first git that can be told not to download what a partial clone lacks
+    /// (`GIT_NO_LAZY_FETCH`), so a missing object is an error rather than a fetch.
+    pub const NO_LAZY_FETCH: GitVersion = GitVersion {
+        major: 2,
+        minor: 44,
+        patch: 0,
+    };
+
     /// Parses `git --version`'s output, such as `git version 2.39.5 (Apple Git-154)`.
     pub fn parse(output: &str) -> Option<Self> {
         let version = output.trim().strip_prefix("git version ")?;

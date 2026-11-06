@@ -459,6 +459,11 @@ pub(crate) mod tests {
 
     #[test]
     fn reading_an_images_header_skips_a_huge_colour_profile() {
+        if !crate::preview_pool::tests::alone(
+            "file_display::tests::reading_an_images_header_skips_a_huge_colour_profile",
+        ) {
+            return;
+        }
         // 3 MB that inflate to 480 MiB as the header is read, without a limit.
         let png = crate::image_preview::tests::png_of_zeros(1, 1, 8, Some(480 << 20));
         let sampler = crate::preview_pool::tests::PeakSampler::start();

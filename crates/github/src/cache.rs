@@ -453,6 +453,25 @@ impl PrCache {
             )
             .collect())
     }
+
+    /// Forgets that `pull` was opened under that name, once GitHub named its repository
+    /// otherwise: after a rename or transfer, the pull request is listed once, by its name now.
+    pub async fn forget_recent(&self, pull: &PullRef) -> Result<()> {
+        let key = (
+            HOST.to_string(),
+            pull.repo.owner.clone(),
+            pull.repo.name.clone(),
+            pull.number,
+        );
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    DELETE FROM recent_prs WHERE host = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4
+                ))?(key)
+            })
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -919,6 +938,41 @@ mod tests {
             // Reopening moves it to the top and keeps the title it had.
             cache.record_recent(recent(1, None, 300)).await.unwrap();
             assert_eq!(cache.recent(1).unwrap(), [recent(1, Some("one"), 300)]);
+        });
+    }
+
+    #[test]
+    fn a_pull_request_opened_by_an_old_name_can_be_forgotten_under_it() {
+        block_on(async {
+            let (cache, _) = cache("cache_recent_forget").await;
+            let recent = |repo: &str, number, opened_at| RecentPr {
+                pull: PullRef::new("rozed-dev", repo, number),
+                title: None,
+                account: "bot".into(),
+                opened_at: at(opened_at),
+            };
+            cache
+                .record_recent(recent("playground", 2, 100))
+                .await
+                .unwrap();
+            cache
+                .record_recent(recent("renamed", 2, 200))
+                .await
+                .unwrap();
+            cache
+                .record_recent(recent("playground", 3, 300))
+                .await
+                .unwrap();
+
+            cache
+                .forget_recent(&PullRef::new("Rozed-Dev", "Playground", 2))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                cache.recent(10).unwrap(),
+                [recent("playground", 3, 300), recent("renamed", 2, 200)]
+            );
         });
     }
 }

@@ -17,14 +17,14 @@ use crate::support::{Remote, Server, git, missing_objects, packs};
 /// base ── trunk_tip      (trunk)
 ///   └── head             (refs/pull/1/head, branch feature)
 /// ```
-struct PullRequest {
-    remote: Remote,
-    base: Oid,
-    head: Oid,
-    trunk_tip: Oid,
+pub(crate) struct PullRequest {
+    pub remote: Remote,
+    pub base: Oid,
+    pub head: Oid,
+    pub trunk_tip: Oid,
 }
 
-fn pull_request(server: &Server) -> PullRequest {
+pub(crate) fn pull_request(server: &Server) -> PullRequest {
     let remote = server.repo("owner", "repo");
     remote
         .write("README.md", "# repo\n")
@@ -51,7 +51,7 @@ fn pull_request(server: &Server) -> PullRequest {
 }
 
 /// Pull request `number` into `base_branch`, as an API that knows nothing else describes it.
-fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
+pub(crate) fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
     PullRequestRefs {
         number,
         head: None,
@@ -60,7 +60,7 @@ fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
     }
 }
 
-fn fetch(repo: &Repo, number: u64) -> FetchedPull {
+pub(crate) fn fetch(repo: &Repo, number: u64) -> FetchedPull {
     repo.fetch_pull(&refs(number, "trunk")).unwrap()
 }
 

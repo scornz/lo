@@ -66,40 +66,105 @@ impl Global for GlobalAccounts {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountChoice {
     Account(String),
-    /// Several accounts can see the repo and none was chosen for its owner yet: ask, then
-    /// [`Accounts::remember_account_for_owner`].
+    /// Several accounts can see the repo and none of them was chosen for it: ask, then remember
+    /// the answer for the owner, or for the repo alone when the owner's account is another one
+    /// (see [`Remembered::owner`]).
     Ask(Vec<String>),
-    /// The account remembered for the owner can't check the repo just now: it's signed out, its
-    /// token can't be read, or GitHub didn't answer yes or "not found". The problems say why.
-    /// rozed doesn't fall back to another account, which would review as someone else.
+    /// The account remembered for the repo, its own or its owner's, can't check the repo just
+    /// now: it's signed out, its token can't be read, or GitHub didn't answer yes or "not
+    /// found". The problems say why. rozed doesn't fall back to another account, which would
+    /// review as someone else.
     Unavailable(String),
     /// No signed-in account can see it, as far as GitHub said.
     None,
 }
 
+/// The accounts remembered for a repository: one chosen for it alone, because the owner's
+/// couldn't see it, and the one chosen for its owner. Removed accounts aren't remembered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Remembered {
+    pub repo: Option<String>,
+    pub owner: Option<String>,
+}
+
+impl Remembered {
+    /// The account that opens the repo, which is never swapped for another: its own, else its
+    /// owner's.
+    pub fn chosen(&self) -> Option<&str> {
+        self.repo.as_deref().or(self.owner.as_deref())
+    }
+
+    /// The remembered account among `logins`, the repo's own first.
+    pub fn pick<'a>(&self, logins: &'a [String]) -> Option<&'a String> {
+        let find = |login: &str| logins.iter().find(|l| l.eq_ignore_ascii_case(login));
+        self.repo
+            .as_deref()
+            .and_then(find)
+            .or_else(|| self.owner.as_deref().and_then(find))
+    }
+}
+
 /// What [`Accounts::account_for_repo`] found.
 #[derive(Debug)]
 pub struct RepoAccount {
+    /// The repo's owner and name as GitHub names it now (its `full_name`), which can differ from
+    /// those asked about after a rename or transfer. As asked when no account could see it.
+    pub owner: String,
+    pub name: String,
     pub choice: AccountChoice,
+    /// The accounts that can see the repo.
+    pub visible: Vec<String>,
+    /// The accounts remembered for the repo, by the name GitHub gives it now.
+    pub remembered: Remembered,
     /// The accounts GitHub gave an answer other than yes or "not found", with its error: a
-    /// refused token, a rate limit, single sign-on, an org's OAuth restriction or a server
-    /// error. [`GithubError::help_link`] has GitHub's link to fix it, where there is one.
+    /// refused token, a rate limit, single sign-on, an org's OAuth restriction or a server error.
+    /// [`GithubError::help_link`] has GitHub's link to fix it, where there is one.
     pub problems: Vec<(String, GithubError)>,
 }
 
-/// Picks among the accounts that can see a repo: the only one, else the one remembered for the
-/// owner, else ask.
-pub fn choose_account(visible: &[String], remembered: Option<&str>) -> AccountChoice {
+/// Picks among the accounts that can see a repo: the only one, else the one remembered for it,
+/// its own before its owner's, else ask.
+pub fn choose_account(visible: &[String], remembered: &Remembered) -> AccountChoice {
     match visible {
         [] => AccountChoice::None,
         [only] => AccountChoice::Account(only.clone()),
-        several => match remembered
-            .and_then(|login| several.iter().find(|v| v.eq_ignore_ascii_case(login)))
-        {
+        several => match remembered.pick(several) {
             Some(login) => AccountChoice::Account(login.clone()),
             None => AccountChoice::Ask(several.to_vec()),
         },
     }
+}
+
+/// The error for accounts whose checks got no answer, out of `checked` accounts checked: the one
+/// that says most plainly that GitHub can't be reached, whichever account it was, and which
+/// account it was when others got an answer.
+fn no_answer(mut unanswered: Vec<(String, GithubError)>, checked: usize) -> anyhow::Error {
+    let plainest = unanswered
+        .iter()
+        .position(|(_, error)| error.is_unreachable())
+        .or_else(|| {
+            unanswered
+                .iter()
+                .position(|(_, error)| error.is_retryable())
+        })
+        .unwrap_or(0);
+    let all = unanswered.len() == checked;
+    let (login, error) = unanswered.swap_remove(plainest);
+    let error = anyhow::Error::new(error);
+    if all {
+        error
+    } else {
+        error.context(format!(
+            "{login}'s check got no answer, so rozed can't tell yet which account to use"
+        ))
+    }
+}
+
+/// The owner and name in a `/repos/{owner}/{repo}` answer's `full_name`.
+fn full_name(answer: &serde_json::Value) -> Option<(String, String)> {
+    let (owner, name) = answer.get("full_name")?.as_str()?.split_once('/')?;
+    check_repo_name(owner, name).ok()?;
+    Some((owner.to_string(), name.to_string()))
 }
 
 /// Refuses an owner or repository name GitHub wouldn't give, before it goes into a path.
@@ -456,14 +521,19 @@ impl Accounts {
     }
 
     /// Picks the account to open `owner/repo` with: the one that can see it; if several can, the
-    /// one remembered for the owner; else [`AccountChoice::Ask`]. The accounts are checked at
-    /// once, each in its own queue when `queue_for` gives one (each poller's, so a check waits
-    /// behind that account's polls rather than adding to them).
+    /// one remembered for the repo, its own before its owner's; else [`AccountChoice::Ask`]. The
+    /// accounts are checked at once, each in its own queue when `queue_for` gives one (each
+    /// poller's, so a check waits behind that account's polls rather than adding to them).
+    ///
+    /// The choices are read under the name GitHub gives the repo now, from its `full_name`, so a
+    /// link to a renamed or transferred repo uses its current owner's choice.
     ///
     /// Only GitHub's "not found" counts as an account not seeing the repo; any other answer is a
-    /// problem to show, and a network error fails the whole check. The account remembered for
-    /// the owner is never swapped for another: if it's signed out, its token can't be read or
-    /// GitHub gave it any answer but yes or "not found", the choice is
+    /// problem to show. An account whose check got no answer might see it, so unless the chosen
+    /// account can see it, the check fails with a [`GithubError::Network`] to try again later:
+    /// the one that says most plainly GitHub can't be reached, whatever the accounts' order. The
+    /// remembered account is never swapped for another: if it's signed out, its token can't be
+    /// read or GitHub gave it any answer but yes or "not found", the choice is
     /// [`AccountChoice::Unavailable`], with a problem that says why.
     pub fn account_for_repo(
         &mut self,
@@ -475,23 +545,7 @@ impl Accounts {
         if let Err(error) = check_repo_name(owner, repo) {
             return Task::ready(Err(error));
         }
-        let remembered = match self.remembered_account(owner) {
-            Ok(remembered) => remembered,
-            Err(error) => return Task::ready(Err(error)),
-        };
-        if let Some(login) = &remembered
-            && self.is_signed_out(login)
-        {
-            let problem = GithubError::Unauthorized {
-                message: format!(
-                    "{login} is signed out; sign in again from Accounts… in the rozed menu"
-                ),
-            };
-            return Task::ready(Ok(RepoAccount {
-                choice: AccountChoice::Unavailable(login.clone()),
-                problems: vec![(login.clone(), problem)],
-            }));
-        }
+        let asked = (owner.to_string(), repo.to_string());
         let path = format!("/repos/{owner}/{repo}");
         let checks: Vec<_> = self
             .accounts
@@ -525,34 +579,75 @@ impl Accounts {
             .collect();
         cx.spawn(async move |this, cx| {
             let answers = futures::future::join_all(checks).await;
-            let mut visible = Vec::new();
-            let mut problems = Vec::new();
-            for (login, answer) in answers {
-                match answer {
-                    Ok(_) => visible.push(login),
-                    Err(GithubError::NotFound { .. }) => {}
-                    Err(error @ GithubError::Network(_)) => return Err(error.into()),
-                    // A missing token signed the account out, as signing out before the check
-                    // would have, so it isn't checked; unless it's the one for the owner.
-                    Err(GithubError::TokenUnavailable(_))
-                        if this.read_with(cx, |this, _| this.is_signed_out(&login))?
-                            && remembered.as_deref().is_none_or(|remembered| {
-                                !remembered.eq_ignore_ascii_case(&login)
-                            }) => {}
-                    // A refused token has signed the account out (see `Self::refused`).
-                    Err(error) => problems.push((login, error)),
+            let (owner, name) = answers
+                .iter()
+                .find_map(|(_, answer)| full_name(answer.as_ref().ok()?))
+                .unwrap_or(asked);
+            this.read_with(cx, |this, _| {
+                let remembered = this.remembered(&owner, &name)?;
+                let chosen = remembered.chosen().map(str::to_string);
+                let is_chosen = |login: &str| {
+                    chosen
+                        .as_deref()
+                        .is_some_and(|chosen| chosen.eq_ignore_ascii_case(login))
+                };
+                let mut visible = Vec::new();
+                let mut problems = Vec::new();
+                let mut unanswered = Vec::new();
+                let checked = answers.len();
+                for (login, answer) in answers {
+                    match answer {
+                        Ok(_) => visible.push(login),
+                        Err(GithubError::NotFound { .. }) => {}
+                        Err(error @ GithubError::Network(_)) => unanswered.push((login, error)),
+                        // A missing token signed the account out, as signing out before the
+                        // check would have, so it isn't checked; unless it's the chosen one.
+                        Err(GithubError::TokenUnavailable(_))
+                            if this.is_signed_out(&login) && !is_chosen(&login) => {}
+                        // A refused token has signed the account out (see `Self::refused`).
+                        Err(error) => problems.push((login, error)),
+                    }
                 }
-            }
-            let unavailable = remembered.as_deref().and_then(|remembered| {
-                problems
-                    .iter()
-                    .find(|(login, _)| login.eq_ignore_ascii_case(remembered))
-            });
-            let choice = match unavailable {
-                Some((login, _)) => AccountChoice::Unavailable(login.clone()),
-                None => choose_account(&visible, remembered.as_deref()),
-            };
-            Ok(RepoAccount { choice, problems })
+                // A signed-out account isn't checked, so the chosen one is a problem by itself.
+                if let Some(login) = &chosen
+                    && this.is_signed_out(login)
+                    && !problems.iter().any(|(problem, _)| is_chosen(problem))
+                {
+                    let message = format!(
+                        "{login} is signed out; sign in again from Accounts… in the rozed menu"
+                    );
+                    problems.push((login.clone(), GithubError::Unauthorized { message }));
+                }
+                let unavailable = problems.iter().find(|(login, _)| is_chosen(login));
+                let choice = match unavailable {
+                    Some((login, _)) => AccountChoice::Unavailable(login.clone()),
+                    // An account that got no answer might see the repo, which could change the
+                    // choice, unless the chosen account can see it: so it isn't made yet, and the
+                    // check fails to be tried again, never quietly opening as another account.
+                    None if !unanswered.is_empty() && !visible.iter().any(|v| is_chosen(v)) => {
+                        return Err(no_answer(unanswered, checked));
+                    }
+                    None => choose_account(&visible, &remembered),
+                };
+                Ok(RepoAccount {
+                    owner,
+                    name,
+                    choice,
+                    visible,
+                    remembered,
+                    problems,
+                })
+            })?
+        })
+    }
+
+    /// The accounts remembered for `owner/repo`: its own and its owner's. An account that's since
+    /// been removed isn't remembered any more.
+    pub fn remembered(&self, owner: &str, repo: &str) -> Result<Remembered> {
+        let present = |login: String| self.account(&login).map(|account| account.login.clone());
+        Ok(Remembered {
+            repo: self.db.repo_account(HOST, owner, repo)?.and_then(present),
+            owner: self.db.owner_account(HOST, owner)?.and_then(present),
         })
     }
 
@@ -578,6 +673,23 @@ impl Accounts {
         cx.background_spawn(
             async move { db.set_owner_account(HOST.to_string(), owner, login).await },
         )
+    }
+
+    /// Remembers the account to use for one repo, whose owner's account can't see it. The
+    /// owner's choice stays for its other repos.
+    pub fn remember_account_for_repo(
+        &self,
+        owner: &str,
+        repo: &str,
+        login: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        let db = self.db.clone();
+        let (owner, repo, login) = (owner.to_string(), repo.to_string(), login.to_string());
+        cx.background_spawn(async move {
+            db.set_repo_account(HOST.to_string(), owner, repo, login)
+                .await
+        })
     }
 }
 
@@ -669,12 +781,17 @@ mod tests {
         &'static str,
     );
 
-    /// Answers `GET /repos/...` with 200 for the tokens in `sees`, 401 for `revoked`, else 404,
-    /// and `GET /user` with the token's owner from `owners`, else 401.
+    /// Answers `GET /repos/...` with 200 for the tokens in `sees`, naming the repository
+    /// `full_name` when it's set, 401 for `revoked`, no answer for `unreachable`, else 404, and
+    /// `GET /user` with the token's owner from `owners`, else 401.
     #[derive(Default)]
     struct ByToken {
         sees: Vec<&'static str>,
+        full_name: Option<&'static str>,
         revoked: Vec<&'static str>,
+        unreachable: Vec<&'static str>,
+        /// Tokens whose requests connect and then time out.
+        slow: Vec<&'static str>,
         owners: Vec<(&'static str, &'static str)>,
         /// Other answers to `GET /repos/...`.
         answers: Vec<Answer>,
@@ -726,17 +843,29 @@ mod tests {
                 let response = response.body(AsyncBody::from(*body)).unwrap();
                 return Box::pin(async move { Ok(response) });
             }
-            let status = if self.sees.contains(&token.as_str()) {
-                200
+            if self.unreachable.contains(&token.as_str()) {
+                return Box::pin(async {
+                    Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into())
+                });
+            }
+            if self.slow.contains(&token.as_str()) {
+                return Box::pin(async { Err(anyhow!("operation timed out")) });
+            }
+            let (status, body) = if self.sees.contains(&token.as_str()) {
+                let body = match self.full_name {
+                    Some(name) => format!(r#"{{"full_name":"{name}"}}"#),
+                    None => r#"{"message":"x"}"#.to_string(),
+                };
+                (200, body)
             } else if self.revoked.contains(&token.as_str()) {
-                401
+                (401, r#"{"message":"x"}"#.to_string())
             } else {
-                404
+                (404, r#"{"message":"x"}"#.to_string())
             };
             Box::pin(async move {
                 Ok(Response::builder()
                     .status(status)
-                    .body(AsyncBody::from(r#"{"message":"x"}"#))
+                    .body(AsyncBody::from(body))
                     .unwrap())
             })
         }
@@ -1201,23 +1330,42 @@ esac
     #[test]
     fn choosing_an_account() {
         let logins = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-        assert_eq!(choose_account(&[], Some("a")), AccountChoice::None);
+        let owner = |login: &str| Remembered {
+            repo: None,
+            owner: Some(login.into()),
+        };
+        assert_eq!(choose_account(&[], &owner("a")), AccountChoice::None);
         assert_eq!(
-            choose_account(&logins(&["a"]), Some("b")),
+            choose_account(&logins(&["a"]), &owner("b")),
             AccountChoice::Account("a".into())
         );
         assert_eq!(
-            choose_account(&logins(&["a", "b"]), Some("B")),
+            choose_account(&logins(&["a", "b"]), &owner("B")),
             AccountChoice::Account("b".into())
         );
         assert_eq!(
-            choose_account(&logins(&["a", "b"]), Some("c")),
+            choose_account(&logins(&["a", "b"]), &owner("c")),
             AccountChoice::Ask(logins(&["a", "b"]))
         );
         assert_eq!(
-            choose_account(&logins(&["a", "b"]), None),
+            choose_account(&logins(&["a", "b"]), &Remembered::default()),
             AccountChoice::Ask(logins(&["a", "b"]))
         );
+        // The repository's own account wins over its owner's, while it can see it.
+        let both = Remembered {
+            repo: Some("c".into()),
+            owner: Some("a".into()),
+        };
+        assert_eq!(
+            choose_account(&logins(&["a", "b", "c"]), &both),
+            AccountChoice::Account("c".into())
+        );
+        assert_eq!(
+            choose_account(&logins(&["a", "b"]), &both),
+            AccountChoice::Account("a".into())
+        );
+        assert_eq!(both.chosen(), Some("c"));
+        assert_eq!(owner("a").chosen(), Some("a"));
     }
 
     #[gpui::test]
@@ -1290,6 +1438,7 @@ esac
                     GithubError::OAuthAppRestricted { .. } => "oauth restricted",
                     GithubError::Api { status: 502, .. } => "502",
                     GithubError::TokenUnavailable(_) => "token unavailable",
+                    GithubError::Network(_) => "network",
                     _ => "other",
                 };
                 (login.as_str(), kind)
@@ -1417,6 +1566,196 @@ esac
         assert_eq!(found.choice, AccountChoice::Unavailable("work".into()));
         assert_eq!(problems(&found), [("work", "token unavailable")]);
         accounts.read_with(cx, |accounts, _| assert!(!accounts.is_signed_out("work")));
+    }
+
+    #[gpui::test]
+    async fn the_choice_is_read_under_the_repositorys_current_owner(cx: &mut TestAppContext) {
+        // alice/tool was transferred to bigorg, and GitHub answers for it by its name now.
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_WORK", "gho_HOME"],
+            full_name: Some("BigOrg/tool"),
+            ..Default::default()
+        });
+        let (accounts, _, _) = setup("account_for_repo_transferred", http, cx).await;
+        for (login, token) in [("home", "gho_HOME"), ("work", "gho_WORK")] {
+            add_with(&accounts, login, token, AccountSource::DeviceFlow, cx).await;
+        }
+        for (owner, login) in [("alice", "home"), ("bigorg", "work")] {
+            accounts
+                .update(cx, |accounts, cx| {
+                    accounts.remember_account_for_owner(owner, login, cx)
+                })
+                .await
+                .unwrap();
+        }
+
+        let found = accounts
+            .update(cx, |accounts, cx| {
+                accounts.account_for_repo("alice", "tool", |_| None, cx)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (found.owner.as_str(), found.name.as_str()),
+            ("BigOrg", "tool")
+        );
+        assert_eq!(found.choice, AccountChoice::Account("work".into()));
+        assert_eq!(found.remembered.owner.as_deref(), Some("work"));
+    }
+
+    #[gpui::test]
+    async fn a_repositorys_own_account_is_used_where_its_owners_cant_see_it(
+        cx: &mut TestAppContext,
+    ) {
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_HOME", "gho_PERSONAL"],
+            full_name: Some("acme/secret"),
+            ..Default::default()
+        });
+        let (accounts, _, _) = setup("account_for_repo_per_repo", http, cx).await;
+        for (login, token) in [
+            ("home", "gho_HOME"),
+            ("personal", "gho_PERSONAL"),
+            ("work", "gho_WORK"),
+        ] {
+            add_with(&accounts, login, token, AccountSource::DeviceFlow, cx).await;
+        }
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("acme", "work", cx)
+            })
+            .await
+            .unwrap();
+        let account_for_secret = |cx: &mut TestAppContext| {
+            accounts.update(cx, |accounts, cx| {
+                accounts.account_for_repo("acme", "secret", |_| None, cx)
+            })
+        };
+
+        // work, the owner's account, can't see it, and two others can.
+        let found = account_for_secret(cx).await.unwrap();
+        assert_eq!(
+            found.choice,
+            AccountChoice::Ask(vec!["home".into(), "personal".into()])
+        );
+        assert_eq!(found.remembered.owner.as_deref(), Some("work"));
+        assert_eq!(found.remembered.repo, None);
+
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_repo("acme", "secret", "personal", cx)
+            })
+            .await
+            .unwrap();
+        let found = account_for_secret(cx).await.unwrap();
+        assert_eq!(found.choice, AccountChoice::Account("personal".into()));
+        // The owner's choice stays for its other repositories.
+        accounts.read_with(cx, |accounts, _| {
+            assert_eq!(
+                accounts.remembered_account("acme").unwrap().as_deref(),
+                Some("work")
+            );
+            assert_eq!(
+                accounts.remembered("acme", "app").unwrap(),
+                Remembered {
+                    repo: None,
+                    owner: Some("work".into())
+                }
+            );
+        });
+
+        // Signed out, the repository's own account isn't swapped for the other.
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("personal", SignedOut::Refused, cx)
+        });
+        let found = account_for_secret(cx).await.unwrap();
+        assert_eq!(found.choice, AccountChoice::Unavailable("personal".into()));
+        assert_eq!(problems(&found), [("personal", "unauthorized")]);
+    }
+
+    #[gpui::test]
+    async fn only_when_no_account_gets_an_answer_is_github_out_of_reach(cx: &mut TestAppContext) {
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_HOME"],
+            unreachable: vec!["gho_DOWN"],
+            ..Default::default()
+        });
+        let (accounts, _, _) = setup("account_for_repo_unreachable", http, cx).await;
+        add_with(&accounts, "down", "gho_DOWN", AccountSource::DeviceFlow, cx).await;
+
+        // The one account's check got no answer.
+        let error = account_for_repo_result(&accounts, cx).await.unwrap_err();
+        let github = error.downcast_ref::<GithubError>().unwrap();
+        assert!(github.is_unreachable(), "{error:#}");
+
+        // Another account can see it, but down might too, so nothing is chosen yet, rather than
+        // quietly opening as home.
+        add_with(&accounts, "home", "gho_HOME", AccountSource::DeviceFlow, cx).await;
+        let error = account_for_repo_result(&accounts, cx).await.unwrap_err();
+        assert!(
+            format!("{error:#}").starts_with("down's check got no answer"),
+            "{error:#}"
+        );
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.downcast_ref::<GithubError>().is_some()),
+            "{error:#}"
+        );
+
+        // Once home is the owner's account, down's answer can't change anything.
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("acme", "home", cx)
+            })
+            .await
+            .unwrap();
+        let found = account_for_repo(&accounts, cx).await;
+        assert_eq!(found.choice, AccountChoice::Account("home".into()));
+        assert_eq!(found.visible, ["home"]);
+
+        // When down is the owner's account, it's tried again rather than refused.
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("acme", "down", cx)
+            })
+            .await
+            .unwrap();
+        assert!(account_for_repo_result(&accounts, cx).await.is_err());
+    }
+
+    #[gpui::test]
+    async fn with_no_answer_from_any_account_the_verdict_doesnt_depend_on_their_order(
+        cx: &mut TestAppContext,
+    ) {
+        for (slow, down) in [("aslow", "zdown"), ("zslow", "adown")] {
+            let http = Arc::new(ByToken {
+                slow: vec!["gho_SLOW"],
+                unreachable: vec!["gho_DOWN"],
+                ..Default::default()
+            });
+            let (accounts, _, _) = setup(&format!("account_for_repo_order_{slow}"), http, cx).await;
+            for (login, token) in [(slow, "gho_SLOW"), (down, "gho_DOWN")] {
+                add_with(&accounts, login, token, AccountSource::DeviceFlow, cx).await;
+            }
+
+            let error = account_for_repo_result(&accounts, cx).await.unwrap_err();
+
+            let github = error.downcast_ref::<GithubError>().unwrap();
+            assert!(github.is_unreachable(), "{slow}, {down}: {error:#}");
+        }
+    }
+
+    async fn account_for_repo_result(
+        accounts: &Entity<Accounts>,
+        cx: &mut TestAppContext,
+    ) -> Result<RepoAccount> {
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.account_for_repo("acme", "app", |_| None, cx)
+            })
+            .await
     }
 
     #[gpui::test]

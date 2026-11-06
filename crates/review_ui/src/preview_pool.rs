@@ -441,6 +441,29 @@ pub(crate) mod tests {
         }
     }
 
+    /// Set when a test runs alone, in a process of its own.
+    const ALONE_ENV: &str = "ROZED_TEST_ALONE";
+
+    /// Whether this is `test` running alone in a process of its own, where other tests don't
+    /// move the process's memory. Otherwise, runs it so, checks it passed, and returns false.
+    pub(crate) fn alone(test: &str) -> bool {
+        if std::env::var_os(ALONE_ENV).is_some() {
+            return true;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([test, "--exact", "--nocapture", "--test-threads=1"])
+            .env(ALONE_ENV, "1")
+            .output()
+            .unwrap();
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{test}, alone: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        false
+    }
+
     /// The most this process's resident memory grows over its start, sampled every millisecond.
     pub(crate) struct PeakSampler {
         stop: Arc<AtomicBool>,
@@ -574,6 +597,11 @@ pub(crate) mod tests {
 
     #[test]
     fn bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat() {
+        if !alone(
+            "preview_pool::tests::bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat",
+        ) {
+            return;
+        }
         let limits = Limits {
             deadline: Duration::from_secs(2),
             max_resident: 512 * MIB,

@@ -35,7 +35,7 @@ use workspace::notifications::NotifyTaskExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
 use review_ui::pr_link::PrLink;
-use review_ui::{OpenBox, Trust, local_copies, local_project, trust};
+use review_ui::{Trust, local_copies, local_project, trust};
 
 use crate::forced_settings::Servers;
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
@@ -379,7 +379,8 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
     }
 }
 
-/// Opens rozed's window, with the pull request in a tab, or without one the box to open one.
+/// Opens rozed's window, with the pull request in a tab, or without one the pull requests opened
+/// recently.
 fn open_window(
     app_state: Arc<AppState>,
     options: Options,
@@ -417,7 +418,9 @@ fn open_window(
                 });
             }
             None => {
-                workspace.update(cx, |workspace, cx| OpenBox::toggle(workspace, window, cx));
+                workspace.update(cx, |workspace, cx| {
+                    review_ui::recent_prs::show(workspace, window, cx)
+                });
                 // Opening a pull request reports a missing or old git itself. Without one, say
                 // so as soon as the launch check finds it.
                 let check = local_copies::cache(cx);

@@ -63,6 +63,10 @@ pub enum Error {
         crate::attributes::MAX_ATTRIBUTE_FILES
     )]
     TooManyAttributeFiles { found: usize },
+    /// Fetching or checking out with a clone opened to read offline
+    /// ([`crate::RepoCache::open_offline`]), which never writes.
+    #[error("{name}'s local copy was opened to read offline, so it can't {what}")]
+    ReadOnly { name: String, what: &'static str },
     /// A git command failed for a reason none of the other variants covers.
     #[error("`{command}` failed: {message}")]
     Git { command: String, message: String },

@@ -1,6 +1,6 @@
 //! Reading attributes from a commit's `.gitattributes` files.
 
-use repo_cache::{Attribute, Error, Oid, PullRequestRefs, Repo};
+use repo_cache::{Attribute, Error, Git, GitVersion, Oid, PullRequestRefs, Repo, RepoCache};
 use tempfile::TempDir;
 
 use crate::support::{Server, blob_id, missing_objects, packs};
@@ -77,6 +77,7 @@ struct Pull {
     work: std::path::PathBuf,
     _server: Server,
     _cache_dir: TempDir,
+    cache: RepoCache,
     repo: Repo,
 }
 
@@ -107,6 +108,7 @@ fn pull(files: &[(String, &str)]) -> Pull {
         work: remote.work.clone(),
         _server: server,
         _cache_dir: cache_dir,
+        cache,
         repo,
     }
 }
@@ -334,5 +336,38 @@ fn past_the_limit_no_gitattributes_are_read() {
         p.repo
             .attribute(&p.head, "linguist-generated", &paths[1..])
             .is_ok()
+    );
+}
+
+#[test]
+fn offline_the_gitattributes_read_only_if_the_clone_has_them() {
+    let p = pull(&files([
+        (".gitattributes", "*.txt linguist-generated\n"),
+        ("a.txt", "a\n"),
+    ]));
+    let blob = blob_id(&p.work, &p.head, ".gitattributes");
+    let offline = p.cache.open_offline("owner", "repo").unwrap().unwrap();
+    let before = packs(offline.git_dir());
+
+    // The server is still there, so a read that could download would.
+    let unread = offline.attribute(&p.head, "linguist-generated", &[b"a.txt"]);
+    assert!(unread.is_err(), "{unread:?}");
+    assert_eq!(packs(offline.git_dir()), before, "nothing downloaded");
+    assert!(missing_objects(offline.git_dir(), p.head.as_str()).contains(&blob));
+    if Git::find().unwrap().version() < GitVersion::NO_LAZY_FETCH {
+        assert!(matches!(unread, Err(Error::ReadOnly { .. })), "{unread:?}");
+        return;
+    }
+
+    // Once read online, they read offline too.
+    assert_eq!(
+        linguist_generated(&p.repo, &p.head, &["a.txt"]),
+        [Attribute::Set]
+    );
+    assert_eq!(
+        offline
+            .attribute(&p.head, "linguist-generated", &[b"a.txt"])
+            .unwrap(),
+        [Attribute::Set]
     );
 }

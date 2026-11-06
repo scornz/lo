@@ -9,19 +9,12 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 
 use crate::git::{EMPTY_TREE, GitVersion, failure_message};
+use crate::repo::NO_LAZY_FETCH_VAR;
 use crate::{Error, Oid, Repo};
 
 /// The most `.gitattributes` files rozed reads for one question: each is a download in a partial
 /// clone.
 pub const MAX_ATTRIBUTE_FILES: usize = 200;
-
-/// The first git that can be told not to download what a partial clone lacks
-/// (`GIT_NO_LAZY_FETCH`).
-const NO_LAZY_FETCH: GitVersion = GitVersion {
-    major: 2,
-    minor: 44,
-    patch: 0,
-};
 
 /// How many paths go on one command line.
 const PATHS_PER_COMMAND: usize = 1000;
@@ -125,8 +118,8 @@ impl Repo {
             attribute,
         ]);
         // They're all here now: nothing more downloads, one at a time.
-        if self.git_version() >= NO_LAZY_FETCH {
-            command = command.env("GIT_NO_LAZY_FETCH", "1");
+        if self.git_version() >= GitVersion::NO_LAZY_FETCH {
+            command = command.env(NO_LAZY_FETCH_VAR, "1");
         }
         let display = command.display();
         let finished = command.finish(Some(&input))?;
@@ -199,28 +192,38 @@ impl Repo {
     }
 
     /// Downloads those of `files`, `.gitattributes` files in `rev`, that the clone lacks, in one
-    /// batch.
+    /// batch. A clone opened to read offline downloads nothing: it fails unless it has them all.
     fn download_attribute_files(&self, rev: &Oid, files: &[(Vec<u8>, Oid)]) -> Result<(), Error> {
         if files.is_empty() {
             return Ok(());
         }
-        // Counting a diff's lines needs its files, and git downloads the ones it lacks together
-        // first.
-        self.run(
-            self.git()
-                .args(["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z"])
-                .args([EMPTY_TREE, rev.as_str(), "--"])
-                .args(files.iter().map(|(path, _)| OsStr::from_bytes(path))),
-        )?;
-        // An older git downloads anything still missing as it reads it; a newer one is told not
-        // to, so it mustn't be missing anything.
-        if self.git_version() < NO_LAZY_FETCH {
-            return Ok(());
+        if self.is_offline() {
+            // An older git can't be told not to download what it reads.
+            if self.git_version() < GitVersion::NO_LAZY_FETCH {
+                return Err(Error::ReadOnly {
+                    name: self.git_dir().display().to_string(),
+                    what: "read .gitattributes without downloading them on this git",
+                });
+            }
+        } else {
+            // Counting a diff's lines needs its files, and git downloads the ones it lacks
+            // together first.
+            self.run(
+                self.git()
+                    .args(["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z"])
+                    .args([EMPTY_TREE, rev.as_str(), "--"])
+                    .args(files.iter().map(|(path, _)| OsStr::from_bytes(path))),
+            )?;
+            // An older git downloads anything still missing as it reads it; a newer one is told
+            // not to, so it mustn't be missing anything.
+            if self.git_version() < GitVersion::NO_LAZY_FETCH {
+                return Ok(());
+            }
         }
         let input: String = files.iter().map(|(_, oid)| format!("{oid}\n")).collect();
         let output = self
             .git()
-            .env("GIT_NO_LAZY_FETCH", "1")
+            .env(NO_LAZY_FETCH_VAR, "1")
             .args(["cat-file", "--batch-check=%(objectname)"])
             .run_with_input(Some(input.as_bytes()))?;
         let output = String::from_utf8_lossy(&output);
@@ -231,9 +234,9 @@ impl Repo {
         match missing.first() {
             None => Ok(()),
             Some(oid) => Err(Error::Git {
-                command: "git diff --numstat".into(),
+                command: "git cat-file --batch-check".into(),
                 message: format!(
-                    "didn't download {} of the .gitattributes files, such as {oid}",
+                    "the clone lacks {} of the .gitattributes files, such as {oid}",
                     missing.len()
                 ),
             }),
