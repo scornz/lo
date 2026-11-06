@@ -1,24 +1,30 @@
 //! The signed-in accounts: their tokens, their database rows, and which one opens a PR.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use credentials_provider::CredentialsProvider;
-use futures::channel::oneshot;
+use futures::StreamExt as _;
+use futures::channel::{mpsc, oneshot};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use http_client::HttpClient;
 
-use crate::client::GithubClient;
+use crate::client::{GithubClient, OnUnauthorized};
 use crate::credentials::{HOST, server_for};
 use crate::db::{Account, AccountSource, RozedDb};
 use crate::error::GithubError;
+use crate::gh_import;
 use crate::token::Token;
 use crate::user::AuthenticatedUser;
 
 /// Every account rozed is signed in to, as a GPUI model. Views observe it to redraw when an
 /// account is added, removed or signed out.
+///
+/// Its clients handle a `401` themselves: GitHub refusing a token signs the account out, after
+/// one more read of the token from `gh` for an account imported from it ([`Self::refused`]).
 pub struct Accounts {
     db: RozedDb,
     store: Arc<dyn CredentialsProvider>,
@@ -28,6 +34,18 @@ pub struct Accounts {
     signed_out: HashSet<String>,
     /// Clients for accounts whose token has been read, by lowercased login.
     clients: HashMap<String, GithubClient>,
+    /// Where clients report a refused token. [`Self::refused`] handles one at a time.
+    refusals: mpsc::UnboundedSender<Refusal>,
+    /// The `gh` to re-read tokens from, when not searched for.
+    gh: Option<PathBuf>,
+    _handle_refusals: Task<()>,
+}
+
+/// A client's report that GitHub refused `token`, waiting for a token to retry with.
+struct Refusal {
+    login: String,
+    token: Token,
+    reply: oneshot::Sender<Option<Token>>,
 }
 
 struct GlobalAccounts(Entity<Accounts>);
@@ -73,20 +91,65 @@ fn now() -> i64 {
 
 impl Accounts {
     /// Reads the accounts from the database.
-    pub fn new(
+    pub fn load(
         db: RozedDb,
         store: Arc<dyn CredentialsProvider>,
         http: Arc<dyn HttpClient>,
-    ) -> Result<Self> {
+        cx: &mut App,
+    ) -> Result<Entity<Self>> {
         let accounts = db.accounts().context("reading accounts")?;
-        Ok(Self {
-            db,
-            store,
-            http,
-            accounts,
-            signed_out: HashSet::new(),
-            clients: HashMap::new(),
-        })
+        Ok(cx.new(|cx| {
+            let (refusals, mut received) = mpsc::unbounded::<Refusal>();
+            let handle_refusals = cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                while let Some(refusal) = received.next().await {
+                    let Ok(retry) = this.update(cx, |this, cx| {
+                        this.refused(&refusal.login, refusal.token, cx)
+                    }) else {
+                        break;
+                    };
+                    refusal.reply.send(retry.await).ok();
+                }
+            });
+            Self {
+                db,
+                store,
+                http,
+                accounts,
+                signed_out: HashSet::new(),
+                clients: HashMap::new(),
+                refusals,
+                gh: None,
+                _handle_refusals: handle_refusals,
+            }
+        }))
+    }
+
+    /// Re-reads `gh` accounts' tokens from this `gh` instead of searching for one.
+    pub fn set_gh_path(&mut self, gh: PathBuf) {
+        self.gh = Some(gh);
+    }
+
+    /// A client for `login` whose refused tokens come back to [`Self::refused`].
+    fn new_client(&self, login: &str, token: Token) -> GithubClient {
+        let refusals = self.refusals.clone();
+        let login = login.to_string();
+        let hook: OnUnauthorized = Arc::new(move |token| {
+            let (reply, retry) = oneshot::channel();
+            let refusal = Refusal {
+                login: login.clone(),
+                token,
+                reply,
+            };
+            let sent = refusals.unbounded_send(refusal).is_ok();
+            Box::pin(async move {
+                if sent {
+                    retry.await.ok().flatten()
+                } else {
+                    None
+                }
+            })
+        });
+        GithubClient::new(self.http.clone(), token).with_unauthorized_hook(hook)
     }
 
     pub fn global(cx: &App) -> Option<Entity<Self>> {
@@ -129,7 +192,6 @@ impl Accounts {
     ) -> Task<Result<Account>> {
         let store = self.store.clone();
         let db = self.db.clone();
-        let http = self.http.clone();
         let existing = self.account(&user.user.login).cloned();
         let added_at = existing
             .as_ref()
@@ -173,7 +235,15 @@ impl Accounts {
                     this.accounts.push(account.clone());
                     this.accounts.sort_by_key(|a| (a.added_at, key(&a.login)));
                     this.signed_out.remove(&login);
-                    this.clients.insert(login, GithubClient::new(http, token));
+                    // The account's clients share their token, so they all switch to the new
+                    // one. Any handed out before a sign-out take it when GitHub refuses theirs.
+                    match this.clients.get(&login) {
+                        Some(client) => client.set_token(token),
+                        None => {
+                            let client = this.new_client(&account.login, token);
+                            this.clients.insert(login, client);
+                        }
+                    }
                     cx.notify();
                 })?;
                 Ok(account)
@@ -235,12 +305,73 @@ impl Accounts {
         }
     }
 
-    /// Notes an error from a request made with `login`'s token, signing it out on a `401`.
-    pub fn report_error(&mut self, login: &str, error: &GithubError, cx: &mut Context<Self>) {
-        if error.is_unauthorized() {
-            log::info!("GitHub refused {login}'s token; marking the account signed out");
-            self.mark_signed_out(login, cx);
+    /// GitHub refused `token`, `login`'s token: returns the token to retry with, or `None`.
+    ///
+    /// Every client [`Self::client`] hands out calls this on a `401`. A token that has been
+    /// replaced since, by signing in again or by an earlier call, is answered with the new one.
+    /// An account imported from `gh` gets its token from `gh` once more, since `gh`'s
+    /// short-lived tokens expire within hours and `gh` refreshes them; if that fails, or for any
+    /// other account, the account is signed out (design §11 "Signed out").
+    pub fn refused(
+        &mut self,
+        login: &str,
+        token: Token,
+        cx: &mut Context<Self>,
+    ) -> Task<Option<Token>> {
+        let Some(account) = self.account(login).cloned() else {
+            return Task::ready(None);
+        };
+        if self.is_signed_out(login) {
+            return Task::ready(None);
         }
+        if let Some(current) = self.clients.get(&key(login)).map(GithubClient::token)
+            && current != token
+        {
+            return Task::ready(Some(current));
+        }
+        if account.source != AccountSource::Gh {
+            log::info!("GitHub refused {login}'s token; signing the account out");
+            self.mark_signed_out(login, cx);
+            return Task::ready(None);
+        }
+        log::info!("GitHub refused {login}'s token; reading it from gh again");
+        let (gh, http) = (self.gh.clone(), self.http.clone());
+        let login = account.login;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.background_executor().clone();
+            let reread = async {
+                let gh = match gh {
+                    Some(gh) => gh,
+                    None => executor
+                        .spawn(async { gh_import::find_gh() })
+                        .await
+                        .context("rozed couldn't find gh")?,
+                };
+                let (user, new_token) =
+                    gh_import::import_account(http, gh, login.clone(), executor).await?;
+                if new_token == token {
+                    bail!("gh has no newer token");
+                }
+                this.update(cx, |this, cx| {
+                    this.add(user, new_token.clone(), AccountSource::Gh, cx)
+                })?
+                .await?;
+                anyhow::Ok(new_token)
+            }
+            .await;
+            match reread {
+                Ok(new_token) => Some(new_token),
+                Err(error) => {
+                    log::info!(
+                        "couldn't read {login}'s token from gh again ({error:#}); signing the \
+                         account out"
+                    );
+                    this.update(cx, |this, cx| this.mark_signed_out(&login, cx))
+                        .ok();
+                    None
+                }
+            }
+        })
     }
 
     /// A client for the account, reading its token from the store the first time.
@@ -256,7 +387,6 @@ impl Accounts {
             return Task::ready(Err(anyhow!("no account {login}")));
         };
         let store = self.store.clone();
-        let http = self.http.clone();
         cx.spawn(async move |this, cx| {
             let stored = store
                 .read_credentials(&server_for(&account.login), cx)
@@ -268,11 +398,13 @@ impl Accounts {
             };
             let token =
                 Token::new(String::from_utf8(token).context("the stored token isn't text")?);
-            let client = GithubClient::new(http, token);
             this.update(cx, |this, _| {
-                this.clients.insert(key(&account.login), client.clone())
-            })?;
-            Ok(client)
+                let client = this.new_client(&account.login, token);
+                this.clients
+                    .entry(key(&account.login))
+                    .or_insert(client)
+                    .clone()
+            })
         })
     }
 
@@ -299,7 +431,7 @@ impl Accounts {
             .iter()
             .map(|login| (login.clone(), self.client(login, cx)))
             .collect();
-        cx.spawn(async move |this, cx| {
+        cx.background_spawn(async move {
             let mut visible = Vec::new();
             for (login, client) in clients {
                 let Ok(client) = client.await else {
@@ -307,9 +439,8 @@ impl Accounts {
                 };
                 match client.get::<serde_json::Value>(&path).await {
                     Ok(_) => visible.push(login),
-                    Err(error @ GithubError::Unauthorized { .. }) => {
-                        this.update(cx, |this, cx| this.report_error(&login, &error, cx))?;
-                    }
+                    // The client's hook has signed the account out.
+                    Err(GithubError::Unauthorized { .. }) => {}
                     Err(GithubError::Network(error)) => return Err(error),
                     // Not found, or hidden by SSO or an org's OAuth restriction.
                     Err(_) => {}
@@ -404,10 +535,13 @@ mod tests {
         }
     }
 
-    /// Answers `GET /repos/...` with 200 for the tokens in `sees`, 401 for `revoked`, else 404.
+    /// Answers `GET /repos/...` with 200 for the tokens in `sees`, 401 for `revoked`, else 404,
+    /// and `GET /user` with the token's owner from `owners`, else 401.
+    #[derive(Default)]
     struct ByToken {
         sees: Vec<&'static str>,
         revoked: Vec<&'static str>,
+        owners: Vec<(&'static str, &'static str)>,
     }
 
     impl HttpClient for ByToken {
@@ -430,6 +564,19 @@ mod tests {
                 .and_then(|v| v.strip_prefix("token "))
                 .unwrap_or_default()
                 .to_string();
+            if request.uri().path() == "/user" {
+                let owner = self.owners.iter().find(|(t, _)| *t == token);
+                let response = match owner {
+                    Some((_, login)) => Response::builder()
+                        .status(200)
+                        .header("x-oauth-scopes", "read:org, repo, workflow")
+                        .body(AsyncBody::from(format!(r#"{{"login":"{login}","id":1}}"#))),
+                    None => Response::builder()
+                        .status(401)
+                        .body(AsyncBody::from(r#"{"message":"Bad credentials"}"#)),
+                };
+                return Box::pin(async move { Ok(response.unwrap()) });
+            }
             let status = if self.sees.contains(&token.as_str()) {
                 200
             } else if self.revoked.contains(&token.as_str()) {
@@ -465,15 +612,14 @@ mod tests {
     ) -> (Entity<Accounts>, Arc<KeychainLike>, RozedDb) {
         let db = RozedDb::open_test(name).await;
         let store = Arc::new(KeychainLike::default());
-        let accounts = cx.new(|_| Accounts::new(db.clone(), store.clone(), http).unwrap());
+        let accounts = cx
+            .update(|cx| Accounts::load(db.clone(), store.clone(), http, cx))
+            .unwrap();
         (accounts, store, db)
     }
 
     fn no_http() -> Arc<dyn HttpClient> {
-        Arc::new(ByToken {
-            sees: vec![],
-            revoked: vec![],
-        })
+        Arc::new(ByToken::default())
     }
 
     #[gpui::test]
@@ -501,7 +647,9 @@ mod tests {
         });
 
         // After a restart the account is still there, and its token is read from the store.
-        let restarted = cx.new(|_| Accounts::new(db.clone(), store.clone(), no_http()).unwrap());
+        let restarted = cx
+            .update(|cx| Accounts::load(db.clone(), store.clone(), no_http(), cx))
+            .unwrap();
         restarted.read_with(cx, |accounts, _| {
             assert_eq!(accounts.accounts(), std::slice::from_ref(&account));
         });
@@ -669,35 +817,51 @@ mod tests {
         assert_eq!(db.accounts().unwrap(), []);
     }
 
+    async fn add_with(
+        accounts: &Entity<Accounts>,
+        login: &str,
+        token: &str,
+        source: AccountSource,
+        cx: &mut TestAppContext,
+    ) {
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.add(user(login, 1), Token::new(token), source, cx)
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn client(
+        accounts: &Entity<Accounts>,
+        login: &str,
+        cx: &mut TestAppContext,
+    ) -> GithubClient {
+        accounts
+            .update(cx, |accounts, cx| accounts.client(login, cx))
+            .await
+            .unwrap()
+    }
+
+    const REPO: &str = "/repos/acme/app";
+
     #[gpui::test]
-    async fn a_401_signs_only_that_account_out(cx: &mut TestAppContext) {
-        let (accounts, _, _) = setup("signed_out", no_http(), cx).await;
-        for (login, id) in [("a", 1), ("b", 2)] {
-            accounts
-                .update(cx, |accounts, cx| {
-                    accounts.add(
-                        user(login, id),
-                        Token::new("gho_FAKE"),
-                        AccountSource::DeviceFlow,
-                        cx,
-                    )
-                })
-                .await
-                .unwrap();
-        }
-        let error = GithubError::Unauthorized {
-            message: "Bad credentials".into(),
-        };
-        accounts.update(cx, |accounts, cx| {
-            accounts.report_error("A", &error, cx);
-            accounts.report_error(
-                "b",
-                &GithubError::NotFound {
-                    message: "Not Found".into(),
-                    documentation_url: None,
-                },
-                cx,
-            );
+    async fn a_401_from_any_request_signs_only_that_account_out(cx: &mut TestAppContext) {
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_B", "gho_NEW"],
+            revoked: vec!["gho_A"],
+            ..Default::default()
+        });
+        let (accounts, _, _) = setup("signed_out", http, cx).await;
+        add_with(&accounts, "a", "gho_A", AccountSource::DeviceFlow, cx).await;
+        add_with(&accounts, "b", "gho_B", AccountSource::DeviceFlow, cx).await;
+        let a = client(&accounts, "A", cx).await;
+        let b = client(&accounts, "b", cx).await;
+
+        let error = a.get::<serde_json::Value>(REPO).await.unwrap_err();
+        assert!(error.is_unauthorized(), "{error:?}");
+        b.get::<serde_json::Value>(REPO).await.unwrap();
+        accounts.read_with(cx, |accounts, _| {
             assert!(accounts.is_signed_out("a"));
             assert!(!accounts.is_signed_out("b"));
         });
@@ -705,19 +869,118 @@ mod tests {
             .update(cx, |accounts, cx| accounts.client("a", cx))
             .await;
         assert!(result.is_err());
-        // Signing in again clears it.
-        accounts
-            .update(cx, |accounts, cx| {
-                accounts.add(
-                    user("a", 1),
-                    Token::new("gho_NEW"),
-                    AccountSource::DeviceFlow,
-                    cx,
-                )
-            })
-            .await
-            .unwrap();
+
+        // Signing in again clears it, and clients made before pick up the new token.
+        add_with(&accounts, "a", "gho_NEW", AccountSource::DeviceFlow, cx).await;
         accounts.read_with(cx, |accounts, _| assert!(!accounts.is_signed_out("a")));
+        a.get::<serde_json::Value>(REPO).await.unwrap();
+        assert_eq!(a.token().expose(), "gho_NEW");
+    }
+
+    /// A fake `gh` that prints the token in `token` next to it for `a`, counting its runs.
+    struct FakeGh {
+        dir: tempfile::TempDir,
+    }
+
+    impl FakeGh {
+        fn new(token: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = tempfile::tempdir().unwrap();
+            let gh = dir.path().join("gh");
+            std::fs::write(
+                &gh,
+                r#"#!/bin/sh
+echo run >> "$(dirname "$0")/runs"
+case "$*" in
+  "auth token --hostname github.com --user a") cat "$(dirname "$0")/token" ;;
+  *) exit 1 ;;
+esac
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::write(dir.path().join("token"), token).unwrap();
+            Self { dir }
+        }
+
+        fn path(&self) -> std::path::PathBuf {
+            self.dir.path().join("gh")
+        }
+
+        fn runs(&self) -> usize {
+            std::fs::read_to_string(self.dir.path().join("runs"))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        }
+    }
+
+    #[gpui::test]
+    async fn a_401_reads_a_gh_accounts_token_from_gh_again(cx: &mut TestAppContext) {
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_FRESH"],
+            revoked: vec!["gho_OLD"],
+            owners: vec![("gho_FRESH", "a")],
+        });
+        let (accounts, store, _) = setup("gh_refresh", http, cx).await;
+        let gh = FakeGh::new("gho_FRESH");
+        accounts.update(cx, |accounts, _| accounts.set_gh_path(gh.path()));
+        add_with(&accounts, "a", "gho_OLD", AccountSource::Gh, cx).await;
+        let a = client(&accounts, "a", cx).await;
+        let other = a.clone();
+
+        // gh's short-lived token expired; gh hands out its refreshed one, and the request is
+        // retried with it.
+        a.get::<serde_json::Value>(REPO).await.unwrap();
+        assert_eq!(gh.runs(), 1);
+        assert_eq!(other.token().expose(), "gho_FRESH");
+        assert_eq!(
+            store.fake.state.lock().keys.get(&server_for("a")),
+            Some(&b"gho_FRESH".to_vec())
+        );
+        accounts.read_with(cx, |accounts, _| assert!(!accounts.is_signed_out("a")));
+    }
+
+    #[gpui::test]
+    async fn requests_refused_together_read_gh_once(cx: &mut TestAppContext) {
+        let http = Arc::new(ByToken {
+            sees: vec!["gho_FRESH"],
+            revoked: vec!["gho_OLD"],
+            owners: vec![("gho_FRESH", "a")],
+        });
+        let (accounts, _, _) = setup("gh_refresh_together", http, cx).await;
+        let gh = FakeGh::new("gho_FRESH");
+        accounts.update(cx, |accounts, _| accounts.set_gh_path(gh.path()));
+        add_with(&accounts, "a", "gho_OLD", AccountSource::Gh, cx).await;
+        let a = client(&accounts, "a", cx).await;
+        let other = a.clone();
+        let (first, second) = futures::join!(
+            a.get::<serde_json::Value>(REPO),
+            other.get::<serde_json::Value>(REPO)
+        );
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(gh.runs(), 1);
+    }
+
+    #[gpui::test]
+    async fn a_gh_account_is_signed_out_when_gh_has_nothing_newer(cx: &mut TestAppContext) {
+        let http = Arc::new(ByToken {
+            revoked: vec!["gho_OLD"],
+            ..Default::default()
+        });
+        let (accounts, _, _) = setup("gh_refresh_fails", http, cx).await;
+        let gh = FakeGh::new("gho_OLD");
+        accounts.update(cx, |accounts, _| accounts.set_gh_path(gh.path()));
+        add_with(&accounts, "a", "gho_OLD", AccountSource::Gh, cx).await;
+        let a = client(&accounts, "a", cx).await;
+
+        let error = a.get::<serde_json::Value>(REPO).await.unwrap_err();
+        assert!(error.is_unauthorized(), "{error:?}");
+        accounts.read_with(cx, |accounts, _| assert!(accounts.is_signed_out("a")));
+        // Signed out, the next refusal doesn't ask gh again.
+        a.get::<serde_json::Value>(REPO).await.unwrap_err();
+        assert_eq!(gh.runs(), 1);
     }
 
     #[gpui::test]
@@ -770,6 +1033,7 @@ mod tests {
         let http = Arc::new(ByToken {
             sees: vec!["gho_WORK", "gho_HOME"],
             revoked: vec!["gho_REVOKED"],
+            ..Default::default()
         });
         let (accounts, _, _) = setup("account_for_repo", http, cx).await;
         for (login, token) in [

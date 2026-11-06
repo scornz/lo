@@ -79,20 +79,16 @@ pub fn init(cx: &mut App) {
     let store = github::credentials::token_store();
     let path = github::db::default_path();
     cx.spawn(async move |cx| {
-        let loaded = match RozedDb::open(&path).await {
-            Ok(db) => Accounts::new(db, store, http),
-            Err(error) => Err(error),
-        };
-        cx.update(|cx| match loaded {
-            Ok(accounts) => {
-                let accounts = cx.new(|_| accounts);
-                Accounts::set_global(accounts, cx);
-            }
-            Err(error) => {
-                log::error!("accounts are unavailable: {error:#}");
-                cx.set_global(AccountsUnavailable(format!("{error:#}").into()));
-            }
-        })
+        let db = RozedDb::open(&path).await;
+        cx.update(
+            |cx| match db.and_then(|db| Accounts::load(db, store, http, cx)) {
+                Ok(accounts) => Accounts::set_global(accounts, cx),
+                Err(error) => {
+                    log::error!("accounts are unavailable: {error:#}");
+                    cx.set_global(AccountsUnavailable(format!("{error:#}").into()));
+                }
+            },
+        )
     })
     .detach();
 }
@@ -1021,7 +1017,7 @@ mod tests {
     ) -> Entity<Accounts> {
         let db = RozedDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
-        cx.new(|_| Accounts::new(db, store, http).unwrap())
+        cx.update(|cx| Accounts::load(db, store, http, cx)).unwrap()
     }
 
     /// Runs what's ready without moving the fake clock, so a sign-in stops at its next poll.
