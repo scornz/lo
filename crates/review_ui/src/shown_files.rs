@@ -343,13 +343,15 @@ fn ranges(file: &ShownFile, cx: &App) -> (Vec<Range<Point>>, bool) {
 }
 
 /// Shows the rows of `path` that [`ranges`] says, and its images under them.
+/// It ends folded when `fold` says so, or as it was when `fold` is `None`.
 pub(crate) fn show_rows(
     diff: &Entity<SplittableEditor>,
     path: &str,
+    fold: Option<bool>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some((ranges, bare, key, buffer, file_diff)) = read(diff, cx, |files| {
+    let Some((ranges, bare, key, buffer, buffer_id, file_diff)) = read(diff, cx, |files| {
         let file = files.get(path)?;
         let (ranges, bare) = ranges(file, cx);
         Some((
@@ -357,12 +359,15 @@ pub(crate) fn show_rows(
             bare,
             file.key.clone(),
             file.buffer.clone(),
+            file.buffer_id,
             file.diff.clone(),
         ))
     })
     .flatten() else {
         return;
     };
+    let rhs = diff.read(cx).rhs_editor().clone();
+    let fold = fold.unwrap_or_else(|| rhs.read(cx).is_buffer_folded(buffer_id, cx));
     let whole = buffer.read(cx).max_point();
     diff.update(cx, |diff, cx| {
         let context = if bare {
@@ -376,6 +381,19 @@ pub(crate) fn show_rows(
             diff.remove_excerpts_for_path(key.clone(), cx);
         }
         diff.update_excerpts_for_path(key, buffer, ranges, context, file_diff, cx);
+    });
+    // Zed unfolds a file whose excerpts were removed once it hears of it, after this, so the fold
+    // the file ends with comes after that.
+    let rhs = rhs.downgrade();
+    window.defer(cx, move |_, cx| {
+        rhs.update(cx, |rhs, cx| {
+            if fold {
+                rhs.fold_buffers([buffer_id], cx);
+            } else {
+                rhs.unfold_buffer(buffer_id, cx);
+            }
+        })
+        .ok();
     });
     show_images(diff, path, window, cx);
 }
@@ -444,7 +462,7 @@ pub(crate) fn expand(
     let Some(whole) = whole else {
         return Expanded::Nothing;
     };
-    show_rows(diff, path, window, cx);
+    show_rows(diff, path, Some(false), window, cx);
     if whole {
         Expanded::Whole
     } else {
@@ -524,31 +542,27 @@ async fn set_whitespace_hidden(
             (Some(Collapsed::WhitespaceOnly), false) => Some(None),
             _ => None,
         };
-        let buffer_id = update(diff, cx, |files, headers| {
+        let current = update(diff, cx, |files, headers| {
             let file = files.files.get_mut(path)?;
             // Loaded again since: that file follows the setting itself.
             if file.diff != file_diff {
                 return None;
             }
             file.whitespace_hidden = hide;
-            let buffer_id = file.buffer_id;
             if let Some(collapsed) = &collapse {
                 file.collapsed = collapsed.clone();
-                headers.set_collapsed(buffer_id, collapsed.clone());
+                headers.set_collapsed(file.buffer_id, collapsed.clone());
             }
-            Some(buffer_id)
+            Some(())
         })
         .flatten();
-        let Some(buffer_id) = buffer_id else {
+        if current.is_none() {
             return;
-        };
-        show_rows(diff, path, window, cx);
-        let rhs = diff.read(cx).rhs_editor().clone();
-        match collapse {
-            Some(Some(_)) => rhs.update(cx, |rhs, cx| rhs.fold_buffers([buffer_id], cx)),
-            Some(None) => rhs.update(cx, |rhs, cx| rhs.unfold_buffer(buffer_id, cx)),
-            None => {}
         }
+        // A file that's whitespace only folds, one that no longer is opens, and any other keeps
+        // its fold.
+        let fold = collapse.map(|collapsed| collapsed.is_some());
+        show_rows(diff, path, fold, window, cx);
     })
 }
 
@@ -1173,6 +1187,58 @@ mod tests {
         assert_eq!((hunks("a.txt", cx), hunks("b.txt", cx)), (1, 2));
         assert!(!is_folded(&diff, "a.txt", cx));
         assert_eq!(collapsed_label(&diff, "a.txt", cx), None);
+    }
+
+    #[gpui::test]
+    async fn alt_w_keeps_collapsed_and_folded_files_folded(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let (diff, _copy) = show(
+            &tab,
+            &[
+                Entry::File("Cargo.lock", lines("lock", 40).as_bytes()),
+                Entry::File("api.pb.go", lines("gen", 40).as_bytes()),
+                Entry::File("a.txt", lines("a", 40).as_bytes()),
+                Entry::File("b.txt", lines("b", 40).as_bytes()),
+            ],
+            &[
+                Entry::File(".gitattributes", b"*.pb.go linguist-generated\n"),
+                Entry::File(
+                    "Cargo.lock",
+                    changed("lock", 40, 20)
+                        .replace("lock 3\n", "  lock 3\n")
+                        .as_bytes(),
+                ),
+                Entry::File("api.pb.go", changed("gen", 40, 20).as_bytes()),
+                Entry::File(
+                    "a.txt",
+                    changed("a", 40, 20).replace("a 3\n", "  a 3\n").as_bytes(),
+                ),
+                Entry::File("b.txt", changed("b", 40, 30).as_bytes()),
+            ],
+            cx,
+        );
+        // The reviewer folds a.txt by hand.
+        let a = file(&diff, "a.txt", cx, |file, _| file.buffer_id);
+        diff.update(cx, |diff, cx| {
+            diff.rhs_editor()
+                .update(cx, |rhs, cx| rhs.fold_buffers([a], cx))
+        });
+        cx.run_until_parked();
+        let folded = |cx: &mut VisualTestContext| {
+            ["Cargo.lock", "api.pb.go", "a.txt", "b.txt"].map(|path| is_folded(&diff, path, cx))
+        };
+        assert_eq!(folded(cx), [true, true, true, false]);
+
+        for press in 1..=2 {
+            select(&diff, "b.txt", cx);
+            cx.simulate_keystrokes("alt-w");
+            cx.run_until_parked();
+            assert_eq!(
+                folded(cx),
+                [true, true, true, false],
+                "after {press} presses"
+            );
+        }
     }
 
     #[gpui::test]
