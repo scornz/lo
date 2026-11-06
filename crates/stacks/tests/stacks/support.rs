@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use stacks::convert::{Plan, Reason, Step, plan_conversion};
+use stacks::convert::{Facts, Plan, Reason, Step, plan_conversion};
 use stacks::{NativeStackEntry, PullRequest, Retarget, Rule, Stacks, State};
 
 /// An open pull request from `head` (a branch in the base repository) into `base`, with one commit,
@@ -128,9 +128,14 @@ pub fn render(stacks: &Stacks) -> String {
     lines.join("\n")
 }
 
-/// Plans converting the path through `layer`, among `prs` with no trunk branches.
+/// Plans converting the path through `layer`, among `prs` with no trunk branches, in a repo with
+/// the Stacks API and nothing in its merge queue.
 pub fn plan(prs: &[PullRequest], layer: u64) -> Result<Plan, Vec<Reason>> {
-    plan_conversion(&Stacks::find(prs, &[]), layer)
+    let facts = Facts {
+        stacks_api: true,
+        queued: &[],
+    };
+    plan_conversion(&Stacks::find(prs, &[]), layer, &facts)
 }
 
 /// Plans converting the path through `layer` and checks the rendered plan against `expected`, one

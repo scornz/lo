@@ -34,28 +34,62 @@ pub enum Step {
     AddToStack { stack: u64, prs: Vec<u64> },
 }
 
+/// What only the caller knows, beyond the stacks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Facts<'a> {
+    /// Whether the repository has the Stacks API: false once `GET /repos/{owner}/{repo}/stacks`
+    /// has answered 404, as on a GitHub Enterprise Server without stacks. GitHub has no setting that
+    /// turns stacks on.
+    pub stacks_api: bool,
+    /// The open pull requests in a merge queue: `isInMergeQueue`.
+    pub queued: &'a [u64],
+}
+
 /// Why "Make this a GitHub stack" isn't offered.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     /// The pull request asked about isn't a layer: it isn't open, or wasn't passed to
-    /// [`Stacks::find`].
+    /// [`Stacks::find`]. The only reason given when it applies.
     NotOpen,
+    /// The repository doesn't have the Stacks API.
+    NoStacksApi,
     /// The path holds one pull request, and a stack needs two. On a bottom layer with several
     /// layers on it, the tree forks right above it, so the path is that layer alone.
     TooShort,
+    /// A pull request in the path comes from a fork. A GitHub stack holds only pull requests from
+    /// the repository itself.
+    FromFork { pr: u64 },
+    /// A pull request in the path is in a merge queue, which is already merging it.
+    Queued { pr: u64 },
 }
 
 /// Plans converting the path through `layer` into a GitHub stack. Each layer that isn't on the
 /// branch the stack needs moves there first (its [`Layer::retarget_to`](crate::Layer)), and then
 /// the stack is created.
 ///
-/// When it isn't offered, the error lists why.
-pub fn plan_conversion(stacks: &Stacks, layer: u64) -> Result<Plan, Vec<Reason>> {
+/// When it isn't offered, the error lists every reason: those about the repository and the path
+/// first, then those about each pull request in it, bottom to top.
+pub fn plan_conversion(stacks: &Stacks, layer: u64, facts: &Facts) -> Result<Plan, Vec<Reason>> {
     let Some((root, path)) = path_through(stacks, layer) else {
         return Err(vec![Reason::NotOpen]);
     };
+    let mut reasons = Vec::new();
+    if !facts.stacks_api {
+        reasons.push(Reason::NoStacksApi);
+    }
     if path.len() < 2 {
-        return Err(vec![Reason::TooShort]);
+        reasons.push(Reason::TooShort);
+    }
+    for &pr in &path {
+        if !stacks.prs[&pr].head_in_base_repo {
+            reasons.push(Reason::FromFork { pr });
+        }
+        if facts.queued.contains(&pr) {
+            reasons.push(Reason::Queued { pr });
+        }
+    }
+    if !reasons.is_empty() {
+        return Err(reasons);
     }
     let mut steps: Vec<Step> = path
         .iter()
