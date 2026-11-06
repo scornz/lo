@@ -6,7 +6,8 @@
 //!
 //! A new thread's draft is kept on the revision it was written on. When a push makes another
 //! revision the latest, [`Drafts::on_older_revisions`] says where each such draft goes on the
-//! latest one, or that it's stranded there, so no text is lost.
+//! latest one, or that it's stranded there, so no text is lost. [`Drafts::prune`] drops them once
+//! the app learns their revision is gone.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -178,6 +179,22 @@ impl Drafts {
                     .filter(|place| on_latest(place) && taken.insert(place.clone())),
             })
             .collect()
+    }
+
+    /// Removes the new threads' drafts on `pull_request`, by any account, written on revisions
+    /// that `exists` says are gone, such as one force-pushed away that GitHub no longer has.
+    /// Returns how many it removed, so the app saves when any were.
+    pub fn prune(
+        &mut self,
+        pull_request: &PullRequestId,
+        mut exists: impl FnMut(&str) -> bool,
+    ) -> usize {
+        let before = self.drafts.len();
+        self.drafts.retain(|key, _| match &key.place {
+            Place::Thread { commit, .. } if key.pull_request.is(pull_request) => exists(commit),
+            _ => true,
+        });
+        before - self.drafts.len()
     }
 
     /// Every draft, ordered by key, for the app to save. Keys come back lowercased.
@@ -452,5 +469,23 @@ mod tests {
         });
 
         assert_eq!(older[0].on_latest, None);
+    }
+
+    #[test]
+    fn pruning_removes_new_threads_drafts_on_revisions_that_are_gone() {
+        let mut drafts = Drafts::new();
+        drafts.set(key("alice", 7, on("a1", "src/parse.rs", Some(10))), "Gone");
+        drafts.set(key("bob", 7, on("a1", "README.md", None)), "Bob's, gone");
+        drafts.set(key("alice", 7, on("a2", "src/parse.rs", Some(10))), "Kept");
+        drafts.set(key("alice", 7, Place::Summary), "Summary");
+        drafts.set(key("alice", 8, on("a1", "src/parse.rs", Some(10))), "On #8");
+
+        // r1 was force-pushed away, and GitHub no longer has it.
+        let removed = drafts.prune(&pull_request(7), |commit| commit != "a1");
+
+        assert_eq!(removed, 2);
+        let left: Vec<_> = drafts.iter().map(|(_, text)| text).collect();
+        assert_eq!(left, ["Kept", "Summary", "On #8"]);
+        assert_eq!(drafts.prune(&pull_request(7), |commit| commit != "a1"), 0);
     }
 }
