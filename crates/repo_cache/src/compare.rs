@@ -1,16 +1,13 @@
 //! Comparing two revisions of a pull request so that only what its author changed shows, even
 //! across a rebase (design §6, "Rebase-aware comparison").
 
-use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::diff::ChangedFile;
 use crate::git::{Finished, failure_message};
 use crate::{Error, Oid, Repo, RepoCache};
 
-/// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<pin>`.
+/// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<process ID>`.
 const REPLAYS: &str = "refs/rozed/replays/";
 
 /// One revision of a pull request, as git sees it: its head, and the commit its changes start
@@ -32,9 +29,13 @@ pub struct Revision {
 
 /// What changed between two revisions, from [`Repo::compare_revisions`].
 ///
-/// A clean replay's tree is pinned in the clone while the comparison, or any copy of it, is
-/// kept, so its files stay readable. Dropping the last copy removes the pin, which runs git once.
-#[derive(Clone, Debug)]
+/// A replayed tree ([`Self::old`] after a clean replay) and the files merged into it exist only
+/// in the clone. Each is pinned at `refs/rozed/replays/<tree>/<process ID>` the first time this
+/// process makes it, and stays pinned while the process has the clone open: the next
+/// [`RepoCache::open`] of the clone with no rozed having it open removes the pins. So keep a
+/// [`Repo`] of the clone open while showing a comparison. A comparison holds none, and dropping one
+/// runs nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Comparison {
     /// The files that changed, as [`Repo::changed_files`] lists them, from [`Self::old`] to
     /// [`Self::new`].
@@ -46,7 +47,6 @@ pub struct Comparison {
     pub new: Oid,
     /// Whether the old revision was replayed onto the new base, and how that went.
     pub replay: Replay,
-    _pin: Option<Arc<ReplayPin>>,
 }
 
 /// Whether [`Repo::compare_revisions`] replayed the old revision onto the new base.
@@ -59,8 +59,8 @@ pub enum Replay {
     Clean,
     /// Replaying the old revision onto the new base conflicted, so the comparison is of the
     /// heads and also shows what changed between the bases, which the UI says. `paths` are the
-    /// paths git left conflicted, as bytes (see [`crate::FileVersion::path`]). Some conflicts,
-    /// such as over where a renamed folder's files go, leave none.
+    /// paths git left conflicted, as bytes (see [`crate::FileVersion::path`]). Some conflicts
+    /// leave none.
     Conflicted { paths: Vec<Vec<u8>> },
 }
 
@@ -71,11 +71,11 @@ impl Repo {
     /// When the bases differ, as after a rebase, the old revision's changes are replayed onto
     /// the new base in the clone (`git merge-tree --write-tree --merge-base=<old base> <new
     /// base> <old head>`, following folders the base renamed), and the tree that makes is
-    /// compared with the new head. Changes that
-    /// came with the new base then cancel out. When the bases match, it compares the heads. When
-    /// the replay conflicts, it compares the heads too, and says which paths conflicted
-    /// ([`Replay::Conflicted`]); any other failure is an error. Whether the heads match doesn't
-    /// matter, only the bases: an unchanged head whose base moved still gets the replay.
+    /// compared with the new head. Changes that came with the new base then cancel out. When
+    /// the bases match, it compares the heads. When the replay conflicts, it compares the heads
+    /// too, and says which paths conflicted ([`Replay::Conflicted`]); any other failure is an
+    /// error. Whether the heads match doesn't matter, only the bases: an unchanged head whose
+    /// base moved still gets the replay.
     ///
     /// For a layer of a stack whose lower layer got a new push, the bases are the lower layer's
     /// heads that each revision contains (see [`Revision::base`]). A base that isn't its head or
@@ -87,9 +87,8 @@ impl Repo {
     /// replay of changes each made on one side alone needs none. Then, like
     /// [`Repo::changed_files`], both sides of every changed file download in one batch.
     ///
-    /// A clean replay's tree is pinned at `refs/rozed/replays/<tree>/<pin>` while the comparison
-    /// is kept (see [`Comparison`]). The replay writes no other ref. Its objects stay in the clone
-    /// unreferenced, and comparing the same revisions again makes the same tree.
+    /// A clean replay's tree is pinned (see [`Comparison`]). The replay writes no other ref, and
+    /// comparing the same revisions again makes the same tree.
     pub fn compare_revisions(&self, old: &Revision, new: &Revision) -> Result<Comparison, Error> {
         // Checked without downloading: git would download a missing commit with all its history,
         // with no progress shown and no ref keeping it.
@@ -113,24 +112,19 @@ impl Repo {
                 old: old.head.clone(),
                 new: new.head.clone(),
                 replay,
-                _pin: None,
             })
         };
         if old.base == new.base {
             return plain(Replay::SameBase);
         }
-        match self.replay(old, &new.base)? {
-            Replayed::Clean(tree) => {
-                // Pinned first, so nothing can remove the tree while it's being compared.
-                let pin = ReplayPin::new(self, &tree)?;
-                Ok(Comparison {
-                    files: self.changed_files(&tree, &new.head)?,
-                    old: tree,
-                    new: new.head.clone(),
-                    replay: Replay::Clean,
-                    _pin: Some(Arc::new(pin)),
-                })
-            }
+        // Pinned before it's compared, so nothing can remove the tree meanwhile.
+        match self.replay_pinned(|| self.replay(old, &new.base))? {
+            Replayed::Clean(tree) => Ok(Comparison {
+                files: self.changed_files(&tree, &new.head)?,
+                old: tree,
+                new: new.head.clone(),
+                replay: Replay::Clean,
+            }),
             Replayed::Conflicted(paths) => {
                 log::info!(
                     "{}: replaying {} onto {} conflicted in {} files, so comparing the heads",
@@ -165,6 +159,85 @@ impl Repo {
         let finished = command.finish(None)?;
         read_replay(display, &finished)
     }
+
+    /// Runs `replay` and pins the tree of a clean replay, the first time this process makes it.
+    ///
+    /// The tree is checked once pinned, since it can be gone by then: merge-tree only refreshes a
+    /// tree it finds packed, and with git older than 2.52 another rozed's full repack, which
+    /// listed what's reachable before the pin, can delete the pack. Replaying again writes it
+    /// anew, so a tree that's gone is replayed once more.
+    fn replay_pinned(
+        &self,
+        mut replay: impl FnMut() -> Result<Replayed, Error>,
+    ) -> Result<Replayed, Error> {
+        let mut failure = None;
+        for attempt in 0..2 {
+            let replayed = replay()?;
+            let Replayed::Clean(tree) = &replayed else {
+                return Ok(replayed);
+            };
+            // Held while pinning, so this process writes each pin once.
+            let mut pinned = self
+                .pinned_replays()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if pinned.contains(tree) {
+                return Ok(replayed);
+            }
+            let error = match self.pin_replay(tree) {
+                Ok(true) => {
+                    pinned.insert(tree.clone());
+                    return Ok(replayed);
+                }
+                Ok(false) => Error::Git {
+                    command: "git merge-tree".into(),
+                    message: format!("the tree it wrote, {tree}, was gone once pinned"),
+                },
+                Err(error) => error,
+            };
+            let again = if attempt == 0 {
+                ", so replaying again"
+            } else {
+                ""
+            };
+            log::warn!(
+                "{}: can't pin replayed tree {tree}{again}: {error}",
+                self.name()
+            );
+            failure = Some(error);
+        }
+        Err(failure.expect("each attempt that doesn't return fails"))
+    }
+
+    /// Pins `tree` at `refs/rozed/replays/<tree>/<process ID>`, and says whether the tree is
+    /// there once pinned.
+    fn pin_replay(&self, tree: &Oid) -> Result<bool, Error> {
+        let reference = format!("{REPLAYS}{tree}/{}", std::process::id());
+        // No lock: a ref only this process writes, always to the same tree, which git writes
+        // atomically.
+        self.run(self.git().args(["update-ref", &reference, tree.as_str()]))?;
+        self.has_tree(tree)
+    }
+
+    /// Whether tree `oid` is in the clone. Never downloads anything.
+    fn has_tree(&self, oid: &Oid) -> Result<bool, Error> {
+        // `--missing` stops rev-list from downloading what's missing, and the filter from
+        // listing anything in the tree.
+        let finished = self
+            .git()
+            .args([
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                "--missing=allow-any",
+                "--filter=tree:0",
+                oid.as_str(),
+                "--",
+            ])
+            .finish(None)?;
+        Ok(finished.status.success()
+            && String::from_utf8_lossy(&finished.stdout).trim() == oid.as_str())
+    }
 }
 
 /// Reads how `git merge-tree`, run as `display`, went.
@@ -197,7 +270,8 @@ fn read_replay(display: String, finished: &Finished) -> Result<Replayed, Error> 
 
 impl RepoCache {
     /// Removes every replay pin from the clone at `git_dir`. Only for a clone no rozed has open,
-    /// where a pin is one a rozed that crashed left behind.
+    /// where every pin is one a rozed left when it quit or crashed: a rozed pins a tree for as
+    /// long as it has the clone open, and quitting runs no destructors anyway.
     pub(crate) fn remove_left_replay_pins(&self, git_dir: &Path) -> Result<(), Error> {
         let deletes = self
             .git(git_dir)
@@ -243,63 +317,171 @@ fn parse_merge_tree(output: &[u8]) -> Option<(Oid, Vec<Vec<u8>>)> {
     Some((tree, paths))
 }
 
-/// A ref keeping a replayed tree in the clone, removed when dropped. Each comparison has its own,
-/// named for this process, so one dropped never unpins a tree another comparison, or another
-/// rozed, still shows. The clone stays open while it's kept, so cleanup leaves it alone.
-struct ReplayPin {
-    repo: Repo,
-    reference: String,
-    tree: Oid,
-}
-
-impl ReplayPin {
-    fn new(repo: &Repo, tree: &Oid) -> Result<Self, Error> {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let reference = format!(
-            "{REPLAYS}{tree}/{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        // No lock: one ref, which nothing else writes, and git writes it atomically.
-        repo.run(repo.git().args(["update-ref", &reference, tree.as_str()]))?;
-        Ok(Self {
-            repo: repo.clone(),
-            reference,
-            tree: tree.clone(),
-        })
-    }
-}
-
-impl Drop for ReplayPin {
-    fn drop(&mut self) {
-        let command =
-            self.repo
-                .git()
-                .args(["update-ref", "-d", &self.reference, self.tree.as_str()]);
-        if let Err(error) = self.repo.run(command) {
-            log::warn!(
-                "{}: can't unpin {}: {error}",
-                self.repo.name(),
-                self.reference
-            );
-        }
-    }
-}
-
-impl fmt::Debug for ReplayPin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.reference)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::cell::Cell;
+    use std::fs;
     use std::os::unix::process::ExitStatusExt as _;
-    use std::process::ExitStatus;
+    use std::process::{Command, ExitStatus};
+
+    use tempfile::TempDir;
+
+    use crate::Git;
+
+    /// The test's own git in `dir`, without the user's config.
+    fn plain_git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "rozed test")
+            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_NAME", "rozed test")
+            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    /// A clone with one commit fetched, served over `file://`.
+    struct Fixture {
+        _dir: TempDir,
+        repo: Repo,
+        /// The fetched commit's tree.
+        tree: Oid,
+        /// A tree only the server has.
+        unfetched: Oid,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = TempDir::new().unwrap();
+            let server = dir.path().join("remotes/owner/repo.git");
+            fs::create_dir_all(&server).unwrap();
+            plain_git(&server, &["init", "-q", "--bare"]);
+            plain_git(&server, &["config", "uploadpack.allowFilter", "true"]);
+            plain_git(
+                &server,
+                &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            );
+            let work = dir.path().join("work");
+            fs::create_dir_all(&work).unwrap();
+            plain_git(&work, &["init", "-q", "-b", "trunk"]);
+            let commit = |file: &str| {
+                fs::write(work.join(file), format!("{file}\n")).unwrap();
+                plain_git(&work, &["add", "-A"]);
+                plain_git(&work, &["commit", "-q", "-m", file]);
+                let server = server.to_str().unwrap();
+                let branch = format!("HEAD:refs/heads/{}", file.replace('.', "-"));
+                plain_git(&work, &["push", "-q", server, &branch]);
+                let commit: Oid = plain_git(&work, &["rev-parse", "HEAD"]).parse().unwrap();
+                let tree = plain_git(&work, &["rev-parse", "HEAD^{tree}"])
+                    .parse()
+                    .unwrap();
+                (commit, tree)
+            };
+            let (fetched, tree) = commit("a.txt");
+            let (_, unfetched) = commit("b.txt");
+            let remotes = dir.path().join("remotes");
+            let cache = RepoCache::new(dir.path().join("cache"), Git::find().unwrap())
+                .unwrap()
+                .with_remote_base(format!("file://{}", remotes.display()));
+            let repo = cache.open("owner", "repo", None).unwrap();
+            repo.fetch_commit(&fetched).unwrap();
+            Self {
+                _dir: dir,
+                repo,
+                tree,
+                unfetched,
+            }
+        }
+
+        fn pins(&self) -> String {
+            plain_git(
+                self.repo.git_dir(),
+                &["for-each-ref", "--format=%(objectname)", REPLAYS],
+            )
+        }
+
+        fn packs(&self) -> usize {
+            fs::read_dir(self.repo.git_dir().join("objects/pack"))
+                .unwrap()
+                .count()
+        }
+    }
+
+    #[test]
+    fn tells_whether_a_tree_is_here_without_downloading_it() {
+        let clone = Fixture::new();
+        let packs = clone.packs();
+
+        assert!(clone.repo.has_tree(&clone.tree).unwrap());
+        assert!(!clone.repo.has_tree(&clone.unfetched).unwrap());
+        assert!(!clone.repo.has_tree(&UNKNOWN.parse().unwrap()).unwrap());
+        assert_eq!(clone.packs(), packs);
+    }
+
+    /// A tree another rozed's full repack deleted between the replay and its pin is replayed
+    /// again, which writes it anew. Here the first replay names a tree that's nowhere, as one
+    /// made in the clone and deleted from it is.
+    #[test]
+    fn a_replayed_tree_gone_by_the_time_its_pinned_is_replayed_again() {
+        let clone = Fixture::new();
+        let replays = Cell::new(0);
+
+        let replayed = clone
+            .repo
+            .replay_pinned(|| {
+                replays.set(replays.get() + 1);
+                let tree = match replays.get() {
+                    1 => UNKNOWN.parse().unwrap(),
+                    _ => clone.tree.clone(),
+                };
+                Ok(Replayed::Clean(tree))
+            })
+            .unwrap();
+
+        assert!(matches!(replayed, Replayed::Clean(tree) if tree == clone.tree));
+        assert_eq!(replays.get(), 2);
+        assert_eq!(clone.pins(), clone.tree.as_str());
+
+        // Pinned once: replaying it again pins nothing more.
+        clone
+            .repo
+            .replay_pinned(|| Ok(Replayed::Clean(clone.tree.clone())))
+            .unwrap();
+        assert_eq!(clone.pins(), clone.tree.as_str());
+    }
+
+    #[test]
+    fn a_replayed_tree_still_gone_after_a_second_replay_is_an_error() {
+        let clone = Fixture::new();
+        let replays = Cell::new(0);
+
+        let error = clone
+            .repo
+            .replay_pinned(|| {
+                replays.set(replays.get() + 1);
+                Ok(Replayed::Clean(UNKNOWN.parse().unwrap()))
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Git { .. }), "{error:?}");
+        assert_eq!(replays.get(), 2);
+        assert_eq!(clone.pins(), "");
+    }
 
     const TREE: &str = "f74d6ab317132cd8ec8c2165016f89a7d9e03caa";
+    /// An object that's nowhere.
+    const UNKNOWN: &str = "3333333333333333333333333333333333333333";
 
     fn finished(code: i32, stdout: &[u8], stderr: &str) -> Finished {
         Finished {

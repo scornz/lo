@@ -1,6 +1,7 @@
 //! Comparing two revisions of a pull request, across a rebase.
 
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 
 use repo_cache::{
@@ -736,70 +737,83 @@ fn a_folder_the_base_renamed_takes_the_authors_new_file_along() {
     );
 }
 
+/// Each replayed tree is pinned once per process, at a ref named for it, and stays pinned while
+/// the process has the clone open. Nothing runs git when a comparison goes.
 #[test]
-fn a_replayed_tree_is_pinned_only_while_its_comparison_is_kept() {
+fn a_replayed_tree_is_pinned_once_and_stays_pinned_while_the_clone_is_open() {
     let Rebased { f, m1, m2, r1, r2 } = rebased();
     let old = Revision { base: m1, head: r1 };
     let new = Revision { base: m2, head: r2 };
 
     let comparison = f.repo.compare_revisions(&old, &new).unwrap();
 
-    let pins = f.replay_pins();
-    assert_eq!(pins.len(), 1, "{pins:?}");
-    assert_eq!(pins[0].0, comparison.old.as_str());
-    assert!(
-        pins[0]
-            .1
-            .starts_with(&format!("refs/rozed/replays/{}/", comparison.old)),
-        "{pins:?}"
+    let pin = (
+        comparison.old.to_string(),
+        format!(
+            "refs/rozed/replays/{}/{}",
+            comparison.old,
+            std::process::id()
+        ),
     );
-    // A copy shares the pin, and a second comparison of the same revisions pins its own.
-    let copy = comparison.clone();
+    assert_eq!(f.replay_pins(), std::slice::from_ref(&pin));
+    // Comparing the same revisions again, here or through another `Repo` of the clone, makes
+    // the same tree, which is pinned already.
     let again = f.repo.compare_revisions(&old, &new).unwrap();
+    let other = f.cache.open("owner", "repo", None).unwrap();
+    let through_other = other.compare_revisions(&old, &new).unwrap();
     assert_eq!(again.old, comparison.old);
-    assert_eq!(f.replay_pins().len(), 2);
+    assert_eq!(through_other.old, comparison.old);
+    assert_eq!(f.replay_pins(), std::slice::from_ref(&pin));
 
-    drop(comparison);
-    assert_eq!(f.replay_pins().len(), 2);
-    drop(copy);
-    assert_eq!(f.replay_pins().len(), 1);
-    drop(again);
-    assert_eq!(f.replay_pins(), []);
-    // Nothing else of the replay is in a ref, and fetching still works with none left.
+    // Dropping comparisons, or taking their files and dropping the rest, leaves the pin.
+    let files = f.repo.compare_revisions(&old, &new).unwrap().files;
+    let Comparison { old: tree, .. } = f.repo.compare_revisions(&old, &new).unwrap();
+    drop((comparison, again, through_other, other));
+    assert_eq!(f.replay_pins(), [pin]);
+    assert_eq!(paths(&files), ["c.txt"]);
+    assert_eq!(f.read(&tree, "c.txt"), Some(text("c", &[])));
+
+    // Nothing else of the replay is in a ref, and fetching still works.
     let refs = git(f.repo.git_dir(), &["for-each-ref", "--format=%(refname)"]);
     assert!(
         refs.lines()
-            .all(|name| name.starts_with("refs/rozed/pull/")),
+            .all(|name| name.starts_with("refs/rozed/pull/")
+                || name.starts_with("refs/rozed/replays/")),
         "{refs}"
     );
     f.push(1, "trunk");
 }
 
-/// A pin is a ref to a tree whose files are partly on the server, which repacking a partial clone
-/// and fetching into it must take in stride.
+/// A comparison holds no `Repo`, so a view that keeps one keeps neither the clone open nor the
+/// `Repo`'s progress callback, which may hold the view.
 #[test]
-fn a_pinned_replay_survives_a_repack_and_fetches() {
-    let (f, old, new) = content_merges();
-    let comparison = f.repo.compare_revisions(&old, &new).unwrap();
-    let merged = [(6, "line 6, the PR's"), (19, "line 19, trunk's")];
-    // The merged c.txt, without r2's change to line 12, was made here and is nowhere else.
-    let replayed_c = git(
-        f.repo.git_dir(),
-        &["rev-parse", &format!("{}:c.txt", comparison.old)],
-    );
-    assert!(!f.remote.has(&replayed_c.parse().unwrap()));
+fn a_comparison_keeps_no_repo_or_progress_callback() {
+    let Rebased { f, m1, m2, r1, r2 } = rebased();
+    let view = Arc::new(());
+    let repo = f.repo.with_progress({
+        let view = view.clone();
+        move |_| {
+            let _ = &view;
+        }
+    });
 
-    // A fetch, with a tree pinned among the refs.
-    f.remote.switch("trunk").write("f.txt", "f\n");
-    f.remote.commit("m3");
-    f.remote.publish("refs/heads/trunk");
-    f.remote.switch("feature-2");
-    f.push(1, "trunk");
-    // Everything repacked with the server gone, as maintenance at launch does, then fully, as
-    // it does with git older than 2.52.
-    let moved = f.remote.git_dir.with_extension("moved");
-    fs::rename(&f.remote.git_dir, &moved).unwrap();
-    // A child process another test thread starts as the fetch lets go of the clone's lock can
+    let comparison = repo
+        .compare_revisions(
+            &Revision { base: m1, head: r1 },
+            &Revision { base: m2, head: r2 },
+        )
+        .unwrap();
+    drop(repo);
+
+    assert_eq!(Arc::strong_count(&view), 1);
+    assert_eq!(comparison.replay, Replay::Clean);
+}
+
+/// What `git` in `git_dir` does to drop what no ref reaches, with the server gone: repack at
+/// launch, as rozed's maintenance does, then fully, as it does with git older than 2.52, then
+/// prune, as `git gc` would.
+fn repack_and_prune(f: &Fixture) {
+    // A child process another test thread starts as a fetch lets go of the clone's lock can
     // hold it for an instant, and maintenance skips a locked clone, so this allows a moment.
     let mut repacked = Vec::new();
     for _ in 0..100 {
@@ -810,19 +824,74 @@ fn a_pinned_replay_survives_a_repack_and_fetches() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(repacked, ["owner/repo"]);
+    let git_dir = f.repo.git_dir();
     git(
-        f.repo.git_dir(),
+        git_dir,
         &["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
     );
+    git(git_dir, &["prune", "--expire=now"]);
+}
 
-    assert_eq!(f.read(&comparison.old, "a.txt"), Some(text("a", &merged)));
-    assert_eq!(f.read(&comparison.old, "c.txt"), Some(text("c", &merged)));
-    // What was never downloaded still downloads.
-    fs::rename(&moved, &f.remote.git_dir).unwrap();
-    assert_eq!(
-        f.read(&comparison.old, "untouched.txt"),
-        Some(text("untouched", &[]))
-    );
+/// Whether the clone at `git_dir` has `oid`, which must not be downloadable.
+fn has_object(git_dir: &std::path::Path, oid: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["cat-file", "-e", oid])
+        .current_dir(git_dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// A pin is a ref to a tree whose files are partly on the server, which repacking a partial clone
+/// and fetching into it must take in stride. Without it, the files merged into the tree, which
+/// exist only in the clone, go.
+#[test]
+fn a_pinned_replay_survives_repacking_and_pruning_and_an_unpinned_one_doesnt() {
+    let merged = [(6, "line 6, the PR's"), (19, "line 19, trunk's")];
+    for pinned in [true, false] {
+        let (f, old, new) = content_merges();
+        let comparison = f.repo.compare_revisions(&old, &new).unwrap();
+        // The merged c.txt, without r2's change to line 12, was made here and is nowhere else.
+        let replayed_c = git(
+            f.repo.git_dir(),
+            &["rev-parse", &format!("{}:c.txt", comparison.old)],
+        );
+        assert!(!f.remote.has(&replayed_c.parse().unwrap()));
+        if !pinned {
+            for (_, name) in f.replay_pins() {
+                git(f.repo.git_dir(), &["update-ref", "-d", &name]);
+            }
+        }
+
+        // A fetch, with a tree pinned among the refs.
+        f.remote.switch("trunk").write("f.txt", "f\n");
+        f.remote.commit("m3");
+        f.remote.publish("refs/heads/trunk");
+        f.remote.switch("feature-2");
+        f.push(1, "trunk");
+        let moved = f.remote.git_dir.with_extension("moved");
+        fs::rename(&f.remote.git_dir, &moved).unwrap();
+        repack_and_prune(&f);
+
+        assert_eq!(has_object(f.repo.git_dir(), &replayed_c), pinned);
+        assert_eq!(
+            has_object(f.repo.git_dir(), comparison.old.as_str()),
+            pinned
+        );
+        if pinned {
+            assert_eq!(f.read(&comparison.old, "a.txt"), Some(text("a", &merged)));
+            assert_eq!(f.read(&comparison.old, "c.txt"), Some(text("c", &merged)));
+            // What was never downloaded still downloads.
+            fs::rename(&moved, &f.remote.git_dir).unwrap();
+            assert_eq!(
+                f.read(&comparison.old, "untouched.txt"),
+                Some(text("untouched", &[]))
+            );
+        }
+    }
 }
 
 /// Pull request #1 changes line 6 of a.txt, b.txt and c.txt; trunk then changes line 19 of each,
@@ -1003,8 +1072,10 @@ fn a_commit_the_clone_lacks_is_an_error_and_never_downloaded() {
     assert_eq!(f.replay_pins(), []);
 }
 
+/// Pins outlive the process that made them: a rozed that quits runs no destructors, and one that
+/// crashes can't. Opening the clone with no rozed having it open removes them all.
 #[test]
-fn pins_a_crash_left_behind_go_once_nobody_has_the_clone_open() {
+fn pins_go_once_the_clone_is_opened_with_no_rozed_having_it_open() {
     let Rebased { f, m1, m2, r1, r2 } = rebased();
     let comparison = f
         .repo
@@ -1013,21 +1084,24 @@ fn pins_a_crash_left_behind_go_once_nobody_has_the_clone_open() {
             &Revision { base: m2, head: r2 },
         )
         .unwrap();
-    let tree = comparison.old.clone();
-    drop(comparison);
-    // What a rozed that crashed while showing the comparison leaves.
-    let left = format!("refs/rozed/replays/{tree}/99999-0");
-    git(f.repo.git_dir(), &["update-ref", &left, tree.as_str()]);
+    let tree = comparison.old.to_string();
+    let own = format!("refs/rozed/replays/{tree}/{}", std::process::id());
+    // What another rozed that showed the comparison left when it quit.
+    let left = format!("refs/rozed/replays/{tree}/99999");
+    git(f.repo.git_dir(), &["update-ref", &left, &tree]);
+    let mut pins = vec![(tree.clone(), own), (tree.clone(), left)];
+    pins.sort();
 
-    // Another window opening the clone leaves it, since this one might be showing it.
+    // Another window opening the clone leaves them, since this one might be showing them.
     let other = f.cache.open("owner", "repo", None).unwrap();
-    assert_eq!(f.replay_pins(), [(tree.to_string(), left.clone())]);
+    assert_eq!(f.replay_pins(), pins);
     drop(other);
 
+    // Once no `Repo` has the clone open, even while a comparison is kept, opening it removes
+    // them. A child process another test thread starts at that moment can hold the in-use lock
+    // for an instant, so this allows a moment.
     let Fixture { repo, cache, .. } = f;
     drop(repo);
-    // Opening it with no other open removes it. A child process another test thread starts at
-    // that moment can hold the in-use lock for an instant, so this allows a moment.
     let mut reopened = cache.open("owner", "repo", None).unwrap();
     for _ in 0..100 {
         if replay_pins(&reopened).is_empty() {
@@ -1038,4 +1112,5 @@ fn pins_a_crash_left_behind_go_once_nobody_has_the_clone_open() {
         reopened = cache.open("owner", "repo", None).unwrap();
     }
     assert_eq!(replay_pins(&reopened), []);
+    drop(comparison);
 }

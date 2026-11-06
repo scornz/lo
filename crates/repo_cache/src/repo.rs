@@ -1,5 +1,6 @@
 //! One repository's clone: fetching into it and reading from it.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::unix::ffi::OsStrExt as _;
@@ -29,8 +30,8 @@ use crate::{Error, FetchFailure};
 /// - `refs/rozed/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
 /// - `refs/rozed/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
 /// - `refs/rozed/commits/<oid>`: commits fetched by ID.
-/// - `refs/rozed/replays/<tree>/<pin>`: a tree [`Repo::compare_revisions`] replayed, while a
-///   [`crate::Comparison`] shows it.
+/// - `refs/rozed/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
+///   while that process has the clone open (see [`crate::Comparison`]).
 #[derive(Clone)]
 pub struct Repo {
     shared: Arc<Shared>,
@@ -50,6 +51,8 @@ struct Shared {
     _in_use: RepoLock,
     token: Option<Token>,
     cat_file: Mutex<Option<CatFile>>,
+    /// The replayed trees this open clone has pinned, each once, never unpinned while it's open.
+    replays: Mutex<HashSet<Oid>>,
 }
 
 /// A pull request to fetch, as GitHub's API describes it.
@@ -129,6 +132,7 @@ impl Repo {
                 _in_use: in_use,
                 token,
                 cat_file: Mutex::new(None),
+                replays: Mutex::new(HashSet::new()),
             }),
             progress: None,
         }
@@ -146,6 +150,11 @@ impl Repo {
 
     pub(crate) fn checkouts_dir(&self) -> &Path {
         &self.shared.checkouts_dir
+    }
+
+    /// The replayed trees this open clone has pinned (see [`crate::Comparison`]).
+    pub(crate) fn pinned_replays(&self) -> &Mutex<HashSet<Oid>> {
+        &self.shared.replays
     }
 
     /// This repository, reporting the progress of its fetches to `progress`. The first fetch

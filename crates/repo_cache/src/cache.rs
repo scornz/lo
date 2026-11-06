@@ -156,7 +156,8 @@ impl RepoCache {
     /// a renamed or transferred repository then keeps one clone.
     ///
     /// Opening a clone no rozed has open removes the pins of replayed trees (see
-    /// [`crate::Comparison`]) that a rozed which crashed left in it.
+    /// [`crate::Comparison`]) that rozeds which have since quit or crashed left in it. A clone
+    /// some rozed always has open keeps them, as many as the comparisons it was shown.
     pub fn open(&self, owner: &str, repo: &str, token: Option<Token>) -> Result<Repo, Error> {
         check_name("repository owner", owner)?;
         check_name("repository name", repo)?;
@@ -168,8 +169,8 @@ impl RepoCache {
             let _lock = RepoLock::acquire(&lock_path)?;
             if git_dir.join("HEAD").is_file() {
                 self.update_remote(&git_dir, &url)?;
-                // With the clone open nowhere, no comparison shows a replayed tree, so any pin
-                // left is a crashed rozed's.
+                // With the clone open nowhere, no comparison shows a replayed tree, so every pin
+                // is one a rozed left when it quit or crashed.
                 if let Some(_alone) = RepoLock::try_acquire(&in_use_path)?
                     && let Err(error) = self.remove_left_replay_pins(&git_dir)
                 {
