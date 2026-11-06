@@ -1075,6 +1075,18 @@ impl Item for PrTab {
         }
     }
 
+    /// Keeps files and folders dropped on the tab from the pane, which would open them. The
+    /// window already ends such drags (`read_only`); this is the second line.
+    fn handle_drop(
+        &self,
+        _: &workspace::Pane,
+        dropped: &dyn std::any::Any,
+        _: &mut Window,
+        _: &mut App,
+    ) -> bool {
+        dropped.is::<gpui::ExternalPaths>()
+    }
+
     fn on_removed(&self, cx: &mut Context<Self>) {
         if let Some((poller, pull)) = self.watched.clone() {
             poller.update(cx, |poller, cx| poller.unwatch(&pull, cx));
@@ -1119,7 +1131,17 @@ mod tests {
     /// actions.
     async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
         init(cx);
-        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let fs = FakeFs::new(cx.executor());
+        // A repository elsewhere on disk, which nothing in rozed should open.
+        fs.insert_tree(
+            "/elsewhere",
+            serde_json::json!({
+                "Cargo.toml": "[package]\nname = \"elsewhere\"\n",
+                "src": { "main.rs": "fn main() {}\n" },
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [], cx).await;
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
         let workspace =
@@ -1574,6 +1596,65 @@ mod tests {
         assert!(!has_box(cx));
         assert_eq!(tabs(&workspace, cx), vec![fd.clone(), playground]);
         assert_eq!(active_tab(&workspace, cx), Some(fd));
+    }
+
+    /// Drags `path` from Finder and drops it at the middle of the window.
+    fn drop_file(path: &str, cx: &mut VisualTestContext) {
+        let position = gpui::point(px(500.), px(400.));
+        cx.simulate_event(gpui::FileDropEvent::Entered {
+            position,
+            paths: gpui::ExternalPaths([std::path::PathBuf::from(path)].into_iter().collect()),
+        });
+        cx.simulate_event(gpui::FileDropEvent::Pending { position });
+        cx.simulate_event(gpui::FileDropEvent::Submit { position });
+        cx.run_until_parked();
+    }
+
+    fn worktrees(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> usize {
+        workspace.read_with(cx, |workspace, cx| {
+            workspace.project().read(cx).worktrees(cx).count()
+        })
+    }
+
+    #[gpui::test]
+    async fn a_file_dropped_on_an_empty_pane_opens_nothing(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+
+        drop_file("/elsewhere/src/main.rs", cx);
+        drop_file("/elsewhere", cx);
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(workspace.items(cx).count(), 0)
+        });
+        assert_eq!(worktrees(&workspace, cx), 0);
+    }
+
+    #[gpui::test]
+    async fn a_file_dropped_on_a_pull_requests_tab_opens_nothing(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+
+        drop_file("/elsewhere/src/main.rs", cx);
+
+        assert_eq!(tabs(&workspace, cx), vec![tab.clone()]);
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(workspace.items(cx).count(), 1)
+        });
+        assert_eq!(worktrees(&workspace, cx), 0);
+
+        // Even if a drop reaches the tab, the tab keeps it from the pane.
+        let dropped = gpui::ExternalPaths(
+            [std::path::PathBuf::from("/elsewhere/src/main.rs")]
+                .into_iter()
+                .collect(),
+        );
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let swallowed = cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                tab.update(cx, |tab, cx| tab.handle_drop(pane, &dropped, window, cx))
+            })
+        });
+        assert!(swallowed);
     }
 
     #[gpui::test]

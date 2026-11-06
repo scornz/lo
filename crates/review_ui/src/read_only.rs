@@ -1,10 +1,10 @@
 //! Keeps rozed's window read-only where Zed's workspace would offer to create or edit files: no
 //! welcome page and no "+" menu in a pane, no new file on a double click in the tab bar or an
-//! empty pane, and any editor the workspace opens, such as the one a file header's "Open File"
-//! opens, is read-only.
+//! empty pane, nothing opened from files dropped on the window, and any editor the workspace
+//! opens, such as the one a file header's "Open File" opens, is read-only.
 
 use editor::Editor;
-use gpui::{App, Context, Entity, InteractiveElement as _};
+use gpui::{App, Context, Entity, ExternalPaths, InteractiveElement as _};
 use workspace::item::ItemHandle;
 use workspace::{NewFile, Pane, Workspace};
 
@@ -13,9 +13,18 @@ pub(crate) fn configure_workspace(workspace: &mut Workspace, cx: &mut Context<Wo
     for pane in workspace.panes().to_vec() {
         configure_pane(&pane, cx);
     }
-    // A double click in the tab bar or an empty pane sends NewFile, which no key sends.
     workspace.register_action_renderer(|div, _, _, _| {
-        div.capture_action(|_: &NewFile, _, cx| cx.stop_propagation())
+        div
+            // A double click in the tab bar or an empty pane sends NewFile, which no key sends.
+            .capture_action(|_: &NewFile, _, cx| cx.stop_propagation())
+            // A pane opens files and folders dropped on it, as a worktree Zed trusts to run
+            // language servers in. rozed never opens a path it didn't create, so a drag from
+            // Finder ends as soon as it enters the window, before any pane can take the drop.
+            .on_drag_move::<ExternalPaths>(|_, window, cx| {
+                if cx.stop_active_drag(window) {
+                    log::info!("not opening files dragged onto rozed's window");
+                }
+            })
     });
 }
 
