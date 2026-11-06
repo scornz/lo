@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use symbol_index::{Grammar, queries};
+use symbol_index::{FileSymbols, Grammar, queries};
 
 pub static RUST: LazyLock<Grammar> =
     LazyLock::new(|| Grammar::new(tree_sitter_rust::LANGUAGE.into(), queries::RUST).unwrap());
@@ -37,3 +37,33 @@ pub static PYTHON: LazyLock<Grammar> =
 
 pub static GO: LazyLock<Grammar> =
     LazyLock::new(|| Grammar::new(tree_sitter_go::LANGUAGE.into(), queries::GO).unwrap());
+
+/// A file's definitions as `kind name`, with `< parent` when one encloses it.
+pub fn definitions(symbols: &FileSymbols) -> Vec<String> {
+    symbols
+        .definitions()
+        .iter()
+        .map(|definition| {
+            let mut line = format!("{} {}", definition.kind, definition.name);
+            if let Some(parent) = symbols.parent(definition) {
+                line.push_str(&format!(" < {}", parent.name));
+            }
+            line
+        })
+        .collect()
+}
+
+/// A file's references as `kind name`, with `in definition` when one encloses it.
+pub fn references(symbols: &FileSymbols) -> Vec<String> {
+    symbols
+        .references()
+        .iter()
+        .map(|reference| {
+            let mut line = format!("{} {}", reference.kind, reference.name);
+            if let Some(enclosing) = symbols.enclosing(reference) {
+                line.push_str(&format!(" in {}", enclosing.name));
+            }
+            line
+        })
+        .collect()
+}
