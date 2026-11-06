@@ -17,9 +17,15 @@ const REPLAYS: &str = "refs/rozed/replays/";
 /// from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Revision {
-    /// Where the revision's changes start: the merge base of `head` with the base branch as it
-    /// was when the revision was pushed. For a layer of a stack, the head of the layer below it,
-    /// as it was then.
+    /// Where the revision's changes start, which must be `head` or one of its ancestors: the
+    /// merge base of `head` with the base branch as it was when the revision was pushed. For a
+    /// layer of a stack, the newest head of the layer below that `head` contains. That's not
+    /// always the lower layer's head when the revision was pushed: after the lower layer is
+    /// force-pushed, the upper layer keeps the old one until it's restacked. Nor is it GitHub's
+    /// `base.sha`, the base branch's tip.
+    ///
+    /// Ancestry can't catch one wrong base: `head` itself, as for a pull request that landed by
+    /// a fast-forward or a merge commit, whose base branch then contains its head.
     pub base: Oid,
     pub head: Oid,
 }
@@ -70,8 +76,9 @@ impl Repo {
     /// ([`Replay::Conflicted`]); any other failure is an error. Whether the heads match doesn't
     /// matter, only the bases: an unchanged head whose base moved still gets the replay.
     ///
-    /// For a layer of a stack whose lower layer got a new push, pass the lower layer's old and
-    /// new heads as the bases.
+    /// For a layer of a stack whose lower layer got a new push, the bases are the lower layer's
+    /// heads that each revision contains (see [`Revision::base`]). A base that isn't its head or
+    /// one of its ancestors is [`Error::BaseNotAncestor`].
     ///
     /// Every commit must be in the clone already: fetch them first with [`Repo::fetch_pull`] or
     /// [`Repo::fetch_commit`]. A missing one is [`Error::NotFetched`], and is never downloaded.
@@ -88,6 +95,15 @@ impl Repo {
         for oid in [&old.base, &old.head, &new.base, &new.head] {
             if !self.has_commit(oid)? {
                 return Err(Error::NotFetched { oid: oid.clone() });
+            }
+        }
+        // A base the head doesn't contain would show the changes between them as the author's.
+        for revision in [old, new] {
+            if !self.is_ancestor(&revision.base, &revision.head)? {
+                return Err(Error::BaseNotAncestor {
+                    base: revision.base.clone(),
+                    head: revision.head.clone(),
+                });
             }
         }
         let plain = |replay| -> Result<Comparison, Error> {

@@ -445,6 +445,169 @@ fn a_stacked_layer_compares_across_its_lower_layers_force_push() {
     );
 }
 
+/// A stack whose upper layer (#2) gets a fix after its lower layer (#1) was amended and
+/// force-pushed, and is restacked onto the amended lower layer after that:
+///
+/// ```text
+/// m1 ── l1 ── u1 ── u1b     (lower, upper, then upper's fix, still on l1)
+///  └─── l1' ── u2           (lower amended; upper restacked onto it)
+/// ```
+struct Restacked {
+    f: Fixture,
+    l1: Oid,
+    l1_amended: Oid,
+    u1: Oid,
+    u1b: Oid,
+    u2: Oid,
+}
+
+fn restacked() -> Restacked {
+    let f = fixture();
+    let remote = &f.remote;
+    remote.write("a.txt", text("a", &[]));
+    remote.commit("m1");
+    remote.publish("refs/heads/trunk");
+    remote
+        .switch("lower")
+        .write("lower.txt", text("lower", &[]));
+    let l1 = remote.commit("lower layer");
+    remote.publish("refs/heads/lower");
+    remote
+        .switch("upper")
+        .write("upper.txt", text("upper", &[]));
+    remote.commit("upper layer");
+    let u1 = f.push(2, "lower");
+    remote
+        .switch("lower")
+        .write("lower.txt", text("lower", &[(2, "lower line 2, amended")]));
+    let l1_amended = remote.amend("lower layer, amended");
+    remote.publish("refs/heads/lower");
+    let fixed = text("upper", &[(9, "upper line 9, fixed")]);
+    remote.switch("upper").write("upper.txt", &fixed);
+    remote.commit("fix upper layer");
+    let u1b = f.push(2, "lower");
+    remote
+        .switch("lower")
+        .switch("upper-2")
+        .write("upper.txt", &fixed);
+    remote.commit("upper layer, fixed");
+    let u2 = f.push(2, "lower");
+    Restacked {
+        f,
+        l1,
+        l1_amended,
+        u1,
+        u1b,
+        u2,
+    }
+}
+
+/// A base the head doesn't contain would show the changes between the two as the author's, with
+/// nothing to warn about.
+#[test]
+fn a_base_that_isnt_an_ancestor_of_its_head_is_an_error() {
+    let Restacked {
+        f,
+        l1,
+        l1_amended,
+        u1,
+        u1b,
+        u2,
+    } = restacked();
+    let not_ancestor = |error: Error, base: &Oid, head: &Oid| {
+        assert!(
+            matches!(&error, Error::BaseNotAncestor { base: b, head: h } if b == base && h == head),
+            "{error:?}"
+        );
+    };
+    // The lower layer's head when u1b was pushed, which u1b doesn't contain.
+    let error = f
+        .repo
+        .compare_revisions(
+            &Revision {
+                base: l1_amended.clone(),
+                head: u1b.clone(),
+            },
+            &Revision {
+                base: l1_amended.clone(),
+                head: u2.clone(),
+            },
+        )
+        .unwrap_err();
+    not_ancestor(error, &l1_amended, &u1b);
+    let error = f
+        .repo
+        .compare_revisions(
+            &Revision { base: l1, head: u1 },
+            &Revision {
+                base: l1_amended.clone(),
+                head: u1b.clone(),
+            },
+        )
+        .unwrap_err();
+    not_ancestor(error, &l1_amended, &u1b);
+
+    // The base branch's tip, as GitHub's `base.sha` gives it, after the base branch moved on.
+    let Rebased { f, m2, r1, r2, .. } = rebased();
+    let error = f
+        .repo
+        .compare_revisions(
+            &Revision {
+                base: m2.clone(),
+                head: r1.clone(),
+            },
+            &Revision {
+                base: m2.clone(),
+                head: r2,
+            },
+        )
+        .unwrap_err();
+    not_ancestor(error, &m2, &r1);
+    assert_eq!(f.replay_pins(), []);
+}
+
+/// A layer's base is the newest head of the layer below that its head contains: u1b's is still
+/// l1, since it was pushed before the restack.
+#[test]
+fn a_stacked_layer_starts_at_the_newest_lower_head_it_contains() {
+    let Restacked {
+        f,
+        l1,
+        l1_amended,
+        u1,
+        u1b,
+        u2,
+    } = restacked();
+    assert!(f.repo.is_ancestor(&l1, &u1b).unwrap());
+    assert!(!f.repo.is_ancestor(&l1_amended, &u1b).unwrap());
+    let u1b = Revision {
+        base: l1.clone(),
+        head: u1b,
+    };
+
+    // The fix, and only the fix.
+    let fix = f
+        .repo
+        .compare_revisions(&Revision { base: l1, head: u1 }, &u1b)
+        .unwrap();
+    assert_eq!(fix.replay, Replay::SameBase);
+    assert_eq!(paths(&fix.files), ["upper.txt"]);
+
+    // The restack changed nothing of the author's.
+    let restack = f
+        .repo
+        .compare_revisions(
+            &u1b,
+            &Revision {
+                base: l1_amended,
+                head: u2,
+            },
+        )
+        .unwrap();
+    assert_eq!(restack.replay, Replay::Clean);
+    assert_eq!(restack.files, []);
+}
+
 #[test]
 fn renames_across_a_rebase_show_only_what_the_author_renamed() {
     let f = fixture();

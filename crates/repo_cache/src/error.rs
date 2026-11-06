@@ -42,6 +42,14 @@ pub enum Error {
     /// [`crate::Repo::fetch_commit`].
     #[error("commit {} isn't in the local copy", oid.short(7))]
     NotFetched { oid: Oid },
+    /// A [`crate::Revision`] whose base isn't its head or one of its ancestors, so its changes
+    /// can't be told from the base's.
+    #[error(
+        "commit {} isn't an ancestor of {}, so it can't be its base",
+        base.short(7),
+        head.short(7)
+    )]
+    BaseNotAncestor { base: Oid, head: Oid },
     /// The disk is full. The UI offers to clear the cache.
     #[error("the disk is full")]
     DiskFull,
@@ -439,8 +447,13 @@ mod tests {
             "commit 22c70ac is no longer available"
         );
         assert_eq!(
-            Error::NotFetched { oid }.to_string(),
+            Error::NotFetched { oid: oid.clone() }.to_string(),
             "commit 22c70ac isn't in the local copy"
+        );
+        let head: Oid = "6178079fd3a1b8f5f2a8a3e5c0b7a6a0f0e1d2c3".parse().unwrap();
+        assert_eq!(
+            Error::BaseNotAncestor { base: oid, head }.to_string(),
+            "commit 22c70ac isn't an ancestor of 6178079, so it can't be its base"
         );
     }
 }
