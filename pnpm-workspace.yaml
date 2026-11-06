@@ -1,0 +1,3 @@
+# pnpm blocks dependency install scripts unless allowed here.
+allowBuilds:
+  lefthook: true

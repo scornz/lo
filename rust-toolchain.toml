@@ -1,0 +1,5 @@
+# Zed's pinned toolchain. Keep it equal to third_party/zed/rust-toolchain.toml.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
