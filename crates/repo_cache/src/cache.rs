@@ -311,8 +311,8 @@ impl RepoCache {
     /// The `(owner, repo)` of every clone, as their folders name them (lowercase).
     fn clones(&self) -> Result<Vec<(String, String)>, Error> {
         let mut clones = Vec::new();
-        for owner in read_dir_if_exists(&self.repos_dir())? {
-            for clone in read_dir_if_exists(&owner)? {
+        for owner in real_dirs(&self.repos_dir())? {
+            for clone in real_dirs(&owner)? {
                 let (Some(owner), Some(repo)) = (
                     file_name(&owner),
                     file_name(&clone)
@@ -341,8 +341,8 @@ impl RepoCache {
 
     /// Removes the checkouts of clones that no longer exist.
     fn remove_orphaned_checkouts(&self) -> Result<(), Error> {
-        for owner in read_dir_if_exists(&self.checkouts_root())? {
-            for checkouts in read_dir_if_exists(&owner)? {
+        for owner in real_dirs(&self.checkouts_root())? {
+            for checkouts in real_dirs(&owner)? {
                 let (Some(owner_name), Some(repo)) = (file_name(&owner), file_name(&checkouts))
                 else {
                     continue;
@@ -385,7 +385,33 @@ fn temporary_path(root: &Path, extension: &str) -> Result<PathBuf, Error> {
 /// Moves `path`, in the cache at `root`, into a new folder in its `tmp/`, then deletes it from
 /// there. Nothing ever finds it half deleted at its own path, where git would look for it. Fine if
 /// it's gone already.
+///
+/// A path behind a symlink, or outside the cache, is left alone: renaming it would follow the link
+/// and take whatever it points at.
 pub(crate) fn trash(root: &Path, path: &Path) -> Result<(), Error> {
+    let Some(parent) = path
+        .parent()
+        .and_then(|parent| parent.strip_prefix(root).ok())
+    else {
+        log::warn!("not removing {}, which isn't in the cache", path.display());
+        return Ok(());
+    };
+    let mut folder = root.to_path_buf();
+    for component in parent.components() {
+        folder.push(component);
+        match fs::symlink_metadata(&folder) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            _ => {
+                log::warn!(
+                    "not removing {}: {} isn't a folder",
+                    path.display(),
+                    folder.display()
+                );
+                return Ok(());
+            }
+        }
+    }
     let trash = temporary_path(root, "trash")?;
     fs::create_dir(&trash).map_err(Error::io(format!("creating {}", trash.display())))?;
     let moved = trash.join(path.file_name().unwrap_or("removed".as_ref()));
@@ -428,6 +454,14 @@ fn disk_usage(path: &Path) -> Result<u64, Error> {
         }
     }
     Ok(total)
+}
+
+/// The folders in `dir`, or none if it doesn't exist. Symlinks are left out, even to folders, so
+/// cleanup never deletes what a link points at.
+fn real_dirs(dir: &Path) -> Result<Vec<PathBuf>, Error> {
+    let mut dirs = read_dir_if_exists(dir)?;
+    dirs.retain(|path| fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()));
+    Ok(dirs)
 }
 
 /// The entries in `dir`, or none if it doesn't exist.

@@ -1,9 +1,12 @@
 //! The cache's size, clearing it, and removing what nobody used for a month.
 
 use std::fs::{self, File};
+use std::os::unix::fs::symlink;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use repo_cache::{PullRequestRefs, Repo, RepoCache};
+use tempfile::TempDir;
 
 use crate::support::Server;
 
@@ -40,13 +43,33 @@ fn use_repo(cache: &RepoCache, name: &str) -> Repo {
 
 /// Makes `repo` look last opened `days` ago.
 fn last_opened_days_ago(repo: &Repo, days: u64) {
+    stamp_days_ago(repo.git_dir(), days);
+}
+
+/// Writes a last-used stamp `days` old into `dir`.
+fn stamp_days_ago(dir: &Path, days: u64) {
     let then = SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
     let seconds = then.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    fs::write(
-        repo.git_dir().join("rozed-last-used"),
-        format!("{seconds}\n"),
-    )
-    .unwrap();
+    fs::write(dir.join("rozed-last-used"), format!("{seconds}\n")).unwrap();
+}
+
+/// A folder outside the cache, holding files cleanup must never touch, laid out like what it
+/// removes: `old.git`, an unused clone; `ghost`, an orphaned checkout; `old/pull-1`, a checkout.
+fn outside_folder() -> TempDir {
+    let outside = TempDir::new().unwrap();
+    for dir in ["old.git", "ghost", "old/pull-1"] {
+        fs::create_dir_all(outside.path().join(dir)).unwrap();
+        fs::write(outside.path().join(dir).join("keep.txt"), "important\n").unwrap();
+    }
+    stamp_days_ago(&outside.path().join("old.git"), 365);
+    outside
+}
+
+/// Whether every file in [`outside_folder`] is still there.
+fn untouched(outside: &TempDir) -> bool {
+    ["old.git", "ghost", "old/pull-1"]
+        .iter()
+        .all(|dir| outside.path().join(dir).join("keep.txt").is_file())
 }
 
 #[test]
@@ -155,4 +178,69 @@ fn opening_a_clone_keeps_it() {
         cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn cleanup_never_follows_a_symlinked_owner_folder() {
+    let server = server();
+    let (dir, cache) = server.cache();
+    let old = use_repo(&cache, "old");
+    last_opened_days_ago(&old, 31);
+    let outside = outside_folder();
+    // Owner folders that are symlinks to a folder outside the cache: one with what looks like an
+    // unused clone, one with what looks like an orphaned checkout.
+    symlink(outside.path(), dir.path().join("repos/github.com/someone")).unwrap();
+    symlink(
+        outside.path(),
+        dir.path().join("checkouts/github.com/someone"),
+    )
+    .unwrap();
+
+    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+
+    assert!(untouched(&outside));
+    // The real unused clone still goes.
+    assert!(!old.git_dir().exists());
+}
+
+#[test]
+fn cleanup_never_follows_a_symlinked_repository_or_checkouts_folder() {
+    let server = server();
+    let (dir, cache) = server.cache();
+    let old = use_repo(&cache, "old");
+    last_opened_days_ago(&old, 31);
+    let outside = outside_folder();
+    // The unused clone's checkouts, and an orphaned repository's, are symlinks out of the cache.
+    let checkouts = dir.path().join("checkouts/github.com/owner");
+    fs::remove_dir_all(checkouts.join("old")).unwrap();
+    symlink(outside.path().join("old"), checkouts.join("old")).unwrap();
+    symlink(outside.path().join("ghost"), checkouts.join("ghost")).unwrap();
+    symlink(
+        outside.path().join("old.git"),
+        dir.path().join("repos/github.com/owner/stale.git"),
+    )
+    .unwrap();
+
+    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+
+    assert!(untouched(&outside));
+    assert!(!old.git_dir().exists());
+}
+
+#[test]
+fn cleanup_never_follows_a_symlink_above_a_clones_checkouts() {
+    let server = server();
+    let (dir, cache) = server.cache();
+    let old = use_repo(&cache, "old");
+    last_opened_days_ago(&old, 31);
+    let outside = outside_folder();
+    // The owner folder above the unused clone's checkouts is a symlink out of the cache.
+    let checkouts = dir.path().join("checkouts/github.com/owner");
+    fs::remove_dir_all(&checkouts).unwrap();
+    symlink(outside.path(), &checkouts).unwrap();
+
+    cache.remove_unused(RepoCache::UNUSED_FOR).unwrap();
+
+    assert!(untouched(&outside));
+    assert!(!old.git_dir().exists());
 }
