@@ -36,6 +36,7 @@ use crate::pr_banner::{self, BannerKind, Banners};
 use crate::pr_diff::{self, Trust};
 use crate::pr_link::PrLink;
 use crate::tabs::{TabKey, find_tab};
+use crate::window_title;
 
 actions!(
     review_ui,
@@ -582,6 +583,15 @@ impl PrTab {
             (None, Status::Failed(_)) => "Not opened".to_string(),
             (None, _) => "Loading…".to_string(),
         }
+    }
+
+    /// The window's title while this is the active tab.
+    pub fn window_title(&self) -> String {
+        window_title::for_pull_request(
+            &self.repo_name(),
+            self.link().number,
+            self.header.title.as_deref(),
+        )
     }
 
     /// Who the header says the tab acts as.
@@ -1376,12 +1386,12 @@ mod tests {
 
     use github::cache::PrCache;
     use gpui::{TestAppContext, VisualTestContext};
-    use project::{FakeFs, Project};
     use repo_cache::{Change, FileMode, FileVersion, LineCounts};
-    use workspace::MultiWorkspace;
 
     use crate::github_api::{Base, BaseRepo, Head, User};
-    use crate::test_support::{Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in};
+    use crate::test_support::{
+        Answer, FakeGithub, FakePull, GitServer, anonymous, sign_in, workspace,
+    };
 
     #[test]
     fn tab_titles_fit_the_repository_number_and_title() {
@@ -1394,40 +1404,6 @@ mod tests {
             tab_title("fd", 2212, Some("Honor explicit use-jemalloc requests now")),
             "fd#2212 Honor explicit use-jemalloc req…"
         );
-    }
-
-    /// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
-    /// keymap, and rozed's changes to every workspace.
-    fn init(cx: &mut TestAppContext) {
-        crate::trust::tests::init_test(cx);
-        cx.update(|cx| {
-            command_palette_hooks::init(cx);
-            editor::init(cx);
-            crate::init_workspaces(cx);
-            crate::keymap::load(cx);
-        });
-    }
-
-    /// A window like rozed's: a workspace in a `MultiWorkspace`, which renders the workspace's
-    /// actions.
-    async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
-        init(cx);
-        let fs = FakeFs::new(cx.executor());
-        // A repository elsewhere on disk, which nothing in rozed should open.
-        fs.insert_tree(
-            "/elsewhere",
-            serde_json::json!({
-                "Cargo.toml": "[package]\nname = \"elsewhere\"\n",
-                "src": { "main.rs": "fn main() {}\n" },
-            }),
-        )
-        .await;
-        let project = Project::test(fs, [], cx).await;
-        let (multi_workspace, cx) =
-            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
-        let workspace =
-            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
-        (workspace, cx)
     }
 
     fn link(link: &str) -> PrLink {
@@ -1929,6 +1905,60 @@ mod tests {
             assert!(tab.is_file_list_shown());
             assert!(tab.is_threads_panel_shown());
         });
+    }
+
+    #[gpui::test]
+    async fn the_window_is_titled_after_the_active_pull_request(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        public_pull(&github, &git, "sharkdp/fd", 2212);
+        public_pull(&github, &git, "sharkdp/bat", 3000);
+        anonymous(&github, cx);
+
+        // Until GitHub answers, the title is the link's.
+        let fd = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
+        assert_eq!(cx.window_title().as_deref(), Some("sharkdp/fd#2212"));
+        fd.update_in(cx, |tab, window, cx| tab.load(window, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("sharkdp/fd#2212 — Pull request 2212")
+        );
+
+        // It follows the active tab.
+        let bat = open_loaded(&workspace, "github.com/sharkdp/bat/pull/3000", cx);
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("sharkdp/bat#3000 — Pull request 3000")
+        );
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.activate_item(&fd, true, true, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("sharkdp/fd#2212 — Pull request 2212")
+        );
+
+        // And the active pull request's title.
+        fd.update(cx, |tab, cx| {
+            tab.set_details(
+                &details("Honor explicit use-jemalloc requests", "VIEWED"),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.window_title().as_deref(),
+            Some("sharkdp/fd#2212 — Honor explicit use-jemalloc requests")
+        );
+
+        // With none open, it's rozed's.
+        close(&workspace, fd, cx);
+        close(&workspace, bat, cx);
+        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
     }
 
     /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.

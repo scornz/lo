@@ -34,6 +34,10 @@ pub const FORCED_SETTINGS: &str = r#"{
   "auto_install_extensions": { "html": false },
   // Only rozed decides which worktrees are trusted to run language servers (`review_ui::trust`).
   "session": { "trust_all_worktrees": false },
+  // rozed titles its window after the active pull request (`review_ui::window_title`). Zed's
+  // title names the project's folders, "empty project" in rozed; this one never changes, so Zed
+  // never sets it again over rozed's.
+  "window_title_format": "rozed",
   // No inline git blame. In rozed's partial clone, blaming a file downloads each earlier version
   // of it, one request at a time: about 900 for sharkdp/fd#2212.
   "git": { "inline_blame": { "enabled": false } },
@@ -161,6 +165,10 @@ mod tests {
             Some(&false)
         );
         assert_eq!(content.session.unwrap().trust_all_worktrees, Some(false));
+        assert_eq!(
+            content.workspace.window_title_format.as_deref(),
+            Some("rozed")
+        );
     }
 
     /// User settings that ask for everything the forced settings turn off.

@@ -14,12 +14,48 @@ use github::accounts::Accounts;
 use github::cache::PrCache;
 use github::db::{AccountSource, RozedDb};
 use github::{AuthenticatedUser, Token, User};
-use gpui::{Entity, Task, TestAppContext};
+use gpui::{Entity, Task, TestAppContext, VisualTestContext};
 use http_client::http::HeaderValue;
 use http_client::{AsyncBody, HttpClient, Request, Response, Url};
 use parking_lot::Mutex;
+use project::{FakeFs, Project};
 use repo_cache::{Git, RepoCache};
 use tempfile::TempDir;
+use workspace::{MultiWorkspace, Workspace};
+
+/// Sets the app up as rozed does: the command palette, the editor, the tab's keys over Zed's
+/// keymap, and rozed's changes to every workspace.
+pub fn init(cx: &mut TestAppContext) {
+    crate::trust::tests::init_test(cx);
+    cx.update(|cx| {
+        command_palette_hooks::init(cx);
+        editor::init(cx);
+        crate::init_workspaces(cx);
+        crate::keymap::load(cx);
+    });
+}
+
+/// A window like rozed's: a workspace in a `MultiWorkspace`, which renders the workspace's
+/// actions.
+pub async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+    init(cx);
+    let fs = FakeFs::new(cx.executor());
+    // A repository elsewhere on disk, which nothing in rozed should open.
+    fs.insert_tree(
+        "/elsewhere",
+        serde_json::json!({
+            "Cargo.toml": "[package]\nname = \"elsewhere\"\n",
+            "src": { "main.rs": "fn main() {}\n" },
+        }),
+    )
+    .await;
+    let project = Project::test(fs, [], cx).await;
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    let workspace =
+        multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+    (workspace, cx)
+}
 
 /// A pull request the fake GitHub has.
 #[derive(Clone, Debug)]

@@ -19,10 +19,11 @@ pub mod tabs;
 #[cfg(test)]
 mod test_support;
 pub mod trust;
+pub mod window_title;
 
 use github::accounts::Accounts;
 use github::db::RozedDb;
-use gpui::{App, Entity, Task};
+use gpui::{App, Context, Entity, Task, Window};
 use workspace::Workspace;
 
 pub use open_box::{OpenBox, OpenPullRequest};
@@ -48,17 +49,15 @@ pub fn init_workspaces(cx: &mut App) {
             return;
         };
         read_only::configure_workspace(workspace, cx);
+        // After the workspace titles the window for the first time.
+        cx.defer_in(window, |workspace, window, cx| {
+            window_title::update(workspace, window, cx)
+        });
         workspace.register_action(|workspace, _: &OpenPullRequest, window, cx| {
             OpenBox::toggle(workspace, window, cx)
         });
         let this = cx.entity();
-        cx.subscribe_in(&this, window, |workspace, _, event, _, cx| match event {
-            workspace::Event::ActiveItemChanged => pr_tab::sync_active(workspace, cx),
-            workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
-            workspace::Event::ItemAdded { item } => read_only::item_added(item.as_ref(), cx),
-            _ => {}
-        })
-        .detach();
+        cx.subscribe_in(&this, window, workspace_event).detach();
         // In the background, every account's polling slows down.
         cx.observe_window_activation(window, |_, window, cx| {
             let foreground = window.is_window_active();
@@ -69,4 +68,24 @@ pub fn init_workspaces(cx: &mut App) {
         .detach();
     })
     .detach();
+}
+
+/// Keeps the window's tabs, panes and title as rozed has them when the workspace changes.
+fn workspace_event(
+    workspace: &mut Workspace,
+    _: &Entity<Workspace>,
+    event: &workspace::Event,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    match event {
+        // Also when the active tab's title changes, which the workspace reports so.
+        workspace::Event::ActiveItemChanged => {
+            pr_tab::sync_active(workspace, cx);
+            window_title::update(workspace, window, cx);
+        }
+        workspace::Event::PaneAdded(pane) => read_only::configure_pane(pane, cx),
+        workspace::Event::ItemAdded { item } => read_only::item_added(item.as_ref(), cx),
+        _ => {}
+    }
 }
