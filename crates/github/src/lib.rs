@@ -15,6 +15,7 @@ pub mod device_flow;
 mod error;
 pub mod gh_import;
 mod graphql;
+pub mod patch;
 pub mod poll;
 mod pulls;
 pub mod queries;
