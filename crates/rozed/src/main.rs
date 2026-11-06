@@ -5,6 +5,7 @@
 
 mod forced_settings;
 mod http;
+mod keymap;
 mod trust;
 
 use std::io::IsTerminal as _;
@@ -27,7 +28,7 @@ use project::Project;
 use release_channel::AppVersion;
 use reqwest_client::ReqwestClient;
 use session::{AppSession, Session};
-use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, Settings as _, SettingsAssets};
+use settings::Settings as _;
 use theme::ActiveTheme as _;
 use util::ResultExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
@@ -159,7 +160,7 @@ fn main() {
         cx.set_menus([
             Menu::new("rozed").items([MenuItem::action("Quit rozed", zed_actions::Quit)])
         ]);
-        load_keymaps(cx);
+        keymap::load(cx);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -226,37 +227,6 @@ fn http_client(cx: &mut App) -> Arc<dyn HttpClient> {
         ReqwestClient::proxy_and_user_agent(proxy, &user_agent).expect("starting the HTTP client")
     };
     Arc::new(ZedHostGuard::new(Arc::new(reqwest)))
-}
-
-/// Loads Zed's default macOS keymap. Bindings for actions from Zed crates rozed doesn't include
-/// (the agent, terminal, debugger and so on) are skipped.
-fn load_keymaps(cx: &mut App) {
-    for path in [
-        settings::DEFAULT_KEYMAP_PATH,
-        settings::SPECIFIC_OVERRIDES_KEYMAP_PATH,
-    ] {
-        let content = util::asset_str::<SettingsAssets>(path);
-        let mut bindings = match KeymapFile::load(&content, cx) {
-            KeymapFileLoadResult::Success { key_bindings } => key_bindings,
-            KeymapFileLoadResult::SomeFailedToLoad {
-                key_bindings,
-                error_message,
-            } => {
-                log::debug!(
-                    "skipped bindings in {path} for actions rozed doesn't have: {error_message}"
-                );
-                key_bindings
-            }
-            KeymapFileLoadResult::JsonParseFailure { error } => {
-                log::error!("can't parse {path}: {error:#}");
-                continue;
-            }
-        };
-        for binding in &mut bindings {
-            binding.set_meta(KeybindSource::Default.meta());
-        }
-        cx.bind_keys(bindings);
-    }
 }
 
 fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
