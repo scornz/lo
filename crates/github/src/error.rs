@@ -88,6 +88,11 @@ pub enum GithubError {
     #[error("couldn't reach GitHub: {0:#}")]
     Network(anyhow::Error),
 
+    /// The account's token couldn't be read, such as from a locked Keychain. The account is still
+    /// signed in; trying again later may work.
+    #[error("couldn't read the account's token: {0}")]
+    TokenUnavailable(String),
+
     /// The answer wasn't what rozed expected.
     #[error("couldn't read GitHub's answer: {0}")]
     Decode(String),

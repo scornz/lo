@@ -11,7 +11,7 @@ use futures::StreamExt as _;
 use futures::channel::mpsc;
 use futures::future::{BoxFuture, FutureExt as _};
 use gpui::{
-    AppContext as _, AsyncApp, Context, Entity, EventEmitter, Subscription, Task, WeakEntity,
+    App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Subscription, Task, WeakEntity,
 };
 
 use super::governor::{
@@ -73,7 +73,7 @@ pub struct PollStatus {
     pub signed_out: bool,
 }
 
-/// GitHub couldn't be reached.
+/// GitHub couldn't be reached, or the account's token couldn't be read (a locked Keychain).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Offline {
     /// When the first request failed.
@@ -575,9 +575,18 @@ impl Poller {
             .update(cx, |accounts, cx| accounts.client(&login, cx));
         let queue = self.queue.clone();
         cx.spawn(async move |this, cx| {
-            let client = client.await.map_err(|error| GithubError::Unauthorized {
-                message: format!("{error:#}"),
-            })?;
+            let client = match client.await {
+                Ok(client) => client,
+                Err(error) => {
+                    let signed_out = this.read_with(cx, |this, cx| this.account_signed_out(cx));
+                    let message = format!("{error:#}");
+                    return Err(if signed_out.unwrap_or(true) {
+                        GithubError::Unauthorized { message }
+                    } else {
+                        GithubError::TokenUnavailable(message)
+                    });
+                }
+            };
             let result = queue.write(|| request(client.clone())).await;
             let forget = this.update(cx, |this, cx| {
                 this.limits = client.rate_limits();
@@ -771,27 +780,7 @@ impl Poller {
             }
             Err(GithubError::Network(error)) => {
                 self.schedule(&target, |schedule| schedule.served(ticket));
-                let attempts = self.offline.as_ref().map_or(0, |o| o.attempts) + 1;
-                let wait = backoff(
-                    attempts,
-                    self.config.offline_first_wait,
-                    self.config.offline_max_wait,
-                    self.config.jitter,
-                    jitter_sample(),
-                );
-                log::info!("couldn't reach GitHub ({error:#}); trying again in {wait:?}");
-                let since = self.offline.as_ref().map_or(wall, |o| o.status.since);
-                self.offline = Some(OfflineState {
-                    attempts,
-                    retry_at: now + wait,
-                    status: Offline {
-                        since,
-                        retry_at: wall + wait,
-                        error: format!("{error:#}"),
-                    },
-                });
-                // Details shown from the cache now carry their age.
-                cx.notify();
+                self.back_off(format!("{error:#}"), now, wall, cx);
             }
             Err(GithubError::RateLimited {
                 secondary,
@@ -1101,9 +1090,57 @@ impl Poller {
         Some(value)
     }
 
-    fn lost_client(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
-        log::info!("not polling for {}: {error:#}", self.login);
-        self.signed_out = true;
+    /// Waits longer each time before trying again, while GitHub can't be reached or the
+    /// account's token can't be read, and says so in the status.
+    fn back_off(&mut self, error: String, now: Instant, wall: SystemTime, cx: &mut Context<Self>) {
+        let attempts = self.offline.as_ref().map_or(0, |o| o.attempts) + 1;
+        let wait = backoff(
+            attempts,
+            self.config.offline_first_wait,
+            self.config.offline_max_wait,
+            self.config.jitter,
+            jitter_sample(),
+        );
+        log::info!("{error}; trying again in {wait:?}");
+        let since = self.offline.as_ref().map_or(wall, |o| o.status.since);
+        self.offline = Some(OfflineState {
+            attempts,
+            retry_at: now + wait,
+            status: Offline {
+                since,
+                retry_at: wall + wait,
+                error,
+            },
+        });
+        // Details shown from the cache now carry their age.
+        cx.notify();
+    }
+
+    /// Whether `Accounts` says the account is signed out, or it's gone. Only then is it signed out
+    /// here.
+    fn account_signed_out(&self, cx: &App) -> bool {
+        let accounts = self.accounts.read(cx);
+        accounts.account(&self.login).is_none() || accounts.is_signed_out(&self.login)
+    }
+
+    /// There was no client for a poll. A signed-out account stops polling until it signs in again;
+    /// anything else, such as a locked Keychain, is tried again later.
+    fn lost_client(
+        &mut self,
+        target: &Target,
+        ticket: u64,
+        error: anyhow::Error,
+        cx: &mut Context<Self>,
+    ) {
+        if self.account_signed_out(cx) {
+            log::info!("not polling for {}: {error:#}", self.login);
+            self.signed_out = true;
+        } else {
+            self.schedule(target, |schedule| schedule.served(ticket));
+            let now = cx.background_executor().now();
+            let wall = self.config.wall_clock.now();
+            self.back_off(format!("{error:#}"), now, wall, cx);
+        }
         self.refresh_status(cx);
     }
 }
@@ -1163,7 +1200,9 @@ async fn poll(
                 let client = match client.await {
                     Ok(client) => client,
                     Err(error) => {
-                        this.update(cx, |this, cx| this.lost_client(error, cx))?;
+                        this.update(cx, |this, cx| {
+                            this.lost_client(&job.target(), ticket, error, cx)
+                        })?;
                         continue;
                     }
                 };

@@ -123,6 +123,8 @@ struct Polling {
     poller: Entity<Poller>,
     accounts: Entity<Accounts>,
     http: Arc<Logged>,
+    db: RozedDb,
+    store: Arc<FakeCredentialsProvider>,
     cache: PrCache,
     events: Rc<RefCell<Vec<PollEvent>>>,
     executor: BackgroundExecutor,
@@ -167,7 +169,7 @@ impl Polling {
         let db = RozedDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
         let accounts = cx
-            .update(|cx| Accounts::load(db.clone(), store, http.clone(), cx))
+            .update(|cx| Accounts::load(db.clone(), store.clone(), http.clone(), cx))
             .unwrap();
         accounts
             .update(cx, |accounts, cx| {
@@ -175,13 +177,15 @@ impl Polling {
             })
             .await
             .unwrap();
-        let cache = PrCache::new(db);
+        let cache = PrCache::new(db.clone());
         let clock = WallClock::following(executor.clone(), wall(0));
         let mut this = Self {
             poller: cx
                 .new(|cx| Poller::new(accounts.clone(), LOGIN, cache.clone(), config(&clock), cx)),
             accounts,
             http,
+            db,
+            store,
             cache,
             events: Rc::default(),
             executor,
@@ -214,6 +218,16 @@ impl Polling {
             .new(|cx| Poller::new(accounts, LOGIN, cache, config(&clock), cx));
         self.subscribe();
         self.executor.run_until_parked();
+    }
+
+    /// Replaces the accounts and the poller, as when rozed starts again: no token has been read.
+    fn restart_rozed(&mut self) {
+        let (db, store, http) = (self.db.clone(), self.store.clone(), self.http.clone());
+        self.accounts = self
+            .cx
+            .update(|cx| Accounts::load(db, store, http, cx))
+            .unwrap();
+        self.restart();
     }
 
     fn update<R>(&mut self, f: impl FnOnce(&mut Poller, &mut gpui::Context<Poller>) -> R) -> R {
@@ -1489,6 +1503,40 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
         t.http.replay.seen().last().unwrap().header("authorization"),
         Some("token gho_NEW")
     );
+}
+
+#[gpui::test]
+async fn a_token_that_cant_be_read_is_tried_again(cx: &mut TestAppContext) {
+    let mut t = Polling::new("token_unreadable", recorded(), cx).await;
+    // The Keychain is locked when rozed starts, or its prompt was dismissed.
+    t.store.state.lock().fail_reads = true;
+    t.restart_rozed();
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    let status = t.status();
+    assert!(!status.signed_out);
+    let offline = status.offline.unwrap();
+    assert_eq!(offline.retry_at, wall(20));
+    assert!(offline.error.contains("token"), "{}", offline.error);
+    // A write says so, rather than that GitHub refused the token.
+    let write = t.update(post_comment);
+    t.run();
+    let error = write.await.unwrap_err();
+    assert!(!error.is_unauthorized(), "{error:?}");
+
+    // Once it can be read, polling goes on.
+    t.store.state.lock().fail_reads = false;
+    t.run_until(20);
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (20, "GET /pulls/1"),
+            (20, "PullRequestCheck"),
+            (20, "PullRequest"),
+            (20, "GET /pulls?state=open&per_page=100"),
+            (20, "OpenPullRequests"),
+        ])
+    );
+    assert_eq!(t.status(), PollStatus::default());
 }
 
 const BAD_CREDENTIALS: &str = r#"{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}"#;
