@@ -17,14 +17,14 @@ use crate::support::{Remote, Server, git, missing_objects, packs};
 /// base ── trunk_tip      (trunk)
 ///   └── head             (refs/pull/1/head, branch feature)
 /// ```
-struct PullRequest {
-    remote: Remote,
-    base: Oid,
-    head: Oid,
-    trunk_tip: Oid,
+pub(crate) struct PullRequest {
+    pub remote: Remote,
+    pub base: Oid,
+    pub head: Oid,
+    pub trunk_tip: Oid,
 }
 
-fn pull_request(server: &Server) -> PullRequest {
+pub(crate) fn pull_request(server: &Server) -> PullRequest {
     let remote = server.repo("owner", "repo");
     remote
         .write("README.md", "# repo\n")
@@ -51,7 +51,7 @@ fn pull_request(server: &Server) -> PullRequest {
 }
 
 /// Pull request `number` into `base_branch`, as an API that knows nothing else describes it.
-fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
+pub(crate) fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
     PullRequestRefs {
         number,
         head: None,
@@ -60,7 +60,7 @@ fn refs(number: u64, base_branch: &str) -> PullRequestRefs {
     }
 }
 
-fn fetch(repo: &Repo, number: u64) -> FetchedPull {
+pub(crate) fn fetch(repo: &Repo, number: u64) -> FetchedPull {
     repo.fetch_pull(&refs(number, "trunk")).unwrap()
 }
 
@@ -234,31 +234,6 @@ fn fetches_a_pull_requests_head_and_base_and_pins_them() {
     assert!(!git_dir.join("FETCH_HEAD").exists());
     // Partial: commits and trees, but no file contents yet.
     assert!(!missing_objects(git_dir, pr.head.as_str()).is_empty());
-}
-
-#[test]
-fn what_was_fetched_reads_without_the_server() {
-    let server = Server::new();
-    let pr = pull_request(&server);
-    let (_dir, cache) = server.cache();
-    let repo = cache.open("owner", "repo", None).unwrap();
-    assert_eq!(repo.fetched_base(1).unwrap(), None);
-    assert_eq!(repo.pull_revisions(1).unwrap(), Vec::<Oid>::new());
-    fetch(&repo, 1);
-    let files = repo.changed_files(&pr.base, &pr.head).unwrap();
-
-    // Offline.
-    drop(pr.remote);
-    drop(server);
-
-    assert_eq!(repo.fetched_base(1).unwrap(), Some(pr.trunk_tip.clone()));
-    assert_eq!(repo.pull_revisions(1).unwrap(), vec![pr.head.clone()]);
-    assert_eq!(
-        repo.merge_base(&pr.head, &pr.trunk_tip).unwrap(),
-        Some(pr.base.clone())
-    );
-    assert_eq!(repo.changed_files(&pr.base, &pr.head).unwrap(), files);
-    assert_eq!(repo.fetched_base(2).unwrap(), None);
 }
 
 #[test]

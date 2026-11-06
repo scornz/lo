@@ -42,6 +42,10 @@ pub enum Error {
     /// A name or ID that can't be used, such as a branch name git refuses.
     #[error("`{value}` isn't a valid {what}")]
     Invalid { what: &'static str, value: String },
+    /// Fetching or checking out with a clone opened to read offline
+    /// ([`crate::RepoCache::open_offline`]), which never writes.
+    #[error("{name}'s local copy was opened to read offline, so it can't {what}")]
+    ReadOnly { name: String, what: &'static str },
     /// A git command failed for a reason none of the other variants covers.
     #[error("`{command}` failed: {message}")]
     Git { command: String, message: String },
