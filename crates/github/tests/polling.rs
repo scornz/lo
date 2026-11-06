@@ -1256,6 +1256,56 @@ async fn offline_it_backs_off_and_answers_from_the_cache_with_its_age(cx: &mut T
 }
 
 #[gpui::test]
+async fn any_answer_from_github_ends_offline(cx: &mut TestAppContext) {
+    let r = recorded();
+    let message = r#"{"message":"You have exceeded a secondary rate limit.","documentation_url":"https://docs.github.com/rest"}"#;
+    let mut interactions = r.clone();
+    interactions.insert(0, answer(&r[0], 403, &[("retry-after", "90")], message));
+    let mut t = Polling::new("offline_ends", interactions, cx).await;
+    t.http.offline.store(true, Ordering::SeqCst);
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    assert!(t.status().offline.is_some());
+    // Back online, GitHub answers, if only to say to wait.
+    t.http.offline.store(false, Ordering::SeqCst);
+    t.run_until(20);
+    let status = t.status();
+    assert_eq!(status.offline, None);
+    assert!(status.rate_limit.is_paused());
+}
+
+#[gpui::test]
+async fn opening_a_pr_while_offline_tries_at_once(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.extend([
+        for_pull(&r[1], 2),
+        for_pull(&details_titled(&r, "layer B"), 2),
+    ]);
+    let mut t = Polling::new("offline_open", interactions, cx).await;
+    t.http.offline.store(true, Ordering::SeqCst);
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(70);
+    assert_eq!(t.status().offline.unwrap().retry_at, wall(140));
+    t.requests();
+    // The network is back, and the user opens another PR: it's tried now, not at 140 s, and
+    // then everything else that's due.
+    t.http.offline.store(false, Ordering::SeqCst);
+    t.update(|poller, cx| poller.set_open(Some(pr(2)), cx));
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (70, "GET /pulls/2"),
+            (70, "PullRequestCheck"),
+            (70, "PullRequest"),
+            (70, "GET /pulls/1"),
+            (70, "GET /pulls?state=open&per_page=100"),
+            (70, "OpenPullRequests"),
+        ])
+    );
+    assert_eq!(t.status().offline, None);
+}
+
+#[gpui::test]
 async fn reopening_shows_the_cache_at_once_and_its_first_poll_is_free(cx: &mut TestAppContext) {
     let mut t = Polling::new("reopen", recorded(), cx).await;
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));

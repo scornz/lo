@@ -590,6 +590,9 @@ impl Poller {
             };
             let result = queue.write(|| request(client.clone())).await;
             let forget = this.update(cx, |this, cx| {
+                if answered(&result) {
+                    this.offline = None;
+                }
                 this.limits = client.rate_limits();
                 this.refresh_status(cx);
                 this.invalidate(&target, cx)
@@ -699,12 +702,12 @@ impl Poller {
         };
 
         // The open PR first, then the other PRs, then the repositories; earliest due first.
-        let mut next: Option<(Instant, Job, u64)> = None;
+        let mut next: Option<(Instant, Job, u64, bool)> = None;
         let mut consider = |schedule: &Schedule, tier: Tier, job: &dyn Fn() -> Job| {
             if let Some(at) = due(schedule, tier)
                 && next.as_ref().is_none_or(|(best, ..)| at < *best)
             {
-                next = Some((at, job(), schedule.forced));
+                next = Some((at, job(), schedule.forced, schedule.is_forced()));
             }
         };
         // In the foreground, and unless the rate limit is very low, details older than
@@ -755,10 +758,13 @@ impl Poller {
             ),
             _ => None,
         };
-        let Some((mut at, job, ticket)) = next else {
+        let Some((mut at, job, ticket, forced)) = next else {
             return Step::Wait(until_reset);
         };
-        if let Some(offline) = &self.offline {
+        // Opening a PR or coming back to the foreground tries at once, whatever the backoff.
+        if let Some(offline) = &self.offline
+            && !forced
+        {
             at = at.max(offline.retry_at);
         }
         if at <= now {
@@ -784,9 +790,11 @@ impl Poller {
         let wall = self.config.wall_clock.now();
         let target = job.target();
         let mut writes = Vec::new();
+        if answered(&result) {
+            self.offline = None;
+        }
         match result {
             Ok(outcome) => {
-                self.offline = None;
                 self.secondary_attempts = 0;
                 self.schedule(&target, |schedule| schedule.polled(now, ticket));
                 writes = self.apply(outcome, &target, wall, cx);
@@ -1156,6 +1164,16 @@ impl Poller {
         }
         self.refresh_status(cx);
     }
+}
+
+/// Whether GitHub answered, even with an error: it can be reached.
+fn answered<T>(result: &Result<T, GithubError>) -> bool {
+    !matches!(
+        result,
+        Err(GithubError::Network(_)
+            | GithubError::RefusedUrl { .. }
+            | GithubError::TokenUnavailable(_))
+    )
 }
 
 /// A number in `0..1` to jitter a backoff with. Retries only need to spread out, not to be
