@@ -3,8 +3,12 @@
 //! [`Drafts`] keeps each comment box's text by account, pull request and place until it's posted.
 //! The app saves it on this Mac whenever it changes and restores it at launch, so a crash or
 //! restart loses nothing. Logins, owners and repositories ignore case, as GitHub's do.
+//!
+//! A new thread's draft is kept on the revision it was written on. When a push makes another
+//! revision the latest, [`Drafts::on_older_revisions`] says where each such draft goes on the
+//! latest one, or that it's stranded there, so no text is lost.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::threads::Lines;
 
@@ -79,6 +83,20 @@ impl PullRequestId {
     }
 }
 
+/// A new thread's draft written on a revision other than the latest, and where it goes on the
+/// latest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OlderDraft<'a> {
+    /// Its key, whose place names the revision it was written on: the draft to take once its
+    /// comment is sent.
+    pub key: &'a DraftKey,
+    pub text: &'a str,
+    /// Where its comment box opens on the latest revision, a [`Place::Thread`] there. `None` when
+    /// it's stranded: its lines changed, or the latest revision has a draft there already. The
+    /// threads panel lists stranded drafts, so their text can still be copied or posted.
+    pub on_latest: Option<Place>,
+}
+
 /// Text typed into comment boxes and not yet posted, by [`DraftKey`], with its login, owner and
 /// repository lowercased.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -125,6 +143,41 @@ impl Drafts {
         (self.drafts.iter())
             .filter(move |(key, _)| key.is_on(account, pull_request))
             .map(|(key, text)| (&key.place, text.as_str()))
+    }
+
+    /// The new threads' drafts `account` wrote on `pull_request` on revisions other than
+    /// `latest`, the latest head, ordered by key, and where each goes on `latest`.
+    ///
+    /// `moved` gets each one's place and says where it is on `latest`, or `None` when it's gone.
+    /// The GitHub layer maps its lines through the diff between the two revisions, and keeps them
+    /// only when they're unchanged and take a comment on `latest`
+    /// ([`CommentableLines`](crate::threads::CommentableLines)). A file-level draft moves when
+    /// the file still takes a file-level comment. A place that isn't a new thread on `latest`
+    /// counts as gone. A draft whose place on `latest` already has one, from `latest` or from an
+    /// earlier draft here, is stranded.
+    pub fn on_older_revisions<'a>(
+        &'a self,
+        account: &str,
+        pull_request: &PullRequestId,
+        latest: &str,
+        mut moved: impl FnMut(&Place) -> Option<Place>,
+    ) -> Vec<OlderDraft<'a>> {
+        let on_latest =
+            |place: &Place| matches!(place, Place::Thread { commit, .. } if commit == latest);
+        let mine = || (self.drafts.iter()).filter(|(key, _)| key.is_on(account, pull_request));
+        let mut taken: BTreeSet<Place> = (mine().map(|(key, _)| &key.place))
+            .filter(|place| on_latest(place))
+            .cloned()
+            .collect();
+        mine()
+            .filter(|(key, _)| matches!(key.place, Place::Thread { .. }) && !on_latest(&key.place))
+            .map(|(key, text)| OlderDraft {
+                key,
+                text,
+                on_latest: moved(&key.place)
+                    .filter(|place| on_latest(place) && taken.insert(place.clone())),
+            })
+            .collect()
     }
 
     /// Every draft, ordered by key, for the app to save. Keys come back lowercased.
@@ -312,5 +365,92 @@ mod tests {
             restored.get(&spelled("alice", "acme", "shop")),
             Some("Saved")
         );
+    }
+
+    fn on(commit: &str, path: &str, line: Option<u32>) -> Place {
+        Place::Thread {
+            commit: commit.to_string(),
+            path: path.to_string(),
+            lines: line.map(|line| Lines::one(Line::right(line))),
+        }
+    }
+
+    #[test]
+    fn new_thread_drafts_on_older_revisions_move_to_the_latest_or_are_stranded() {
+        let mut drafts = Drafts::new();
+        let alice = |place| key("alice", 7, place);
+        drafts.set(alice(on("a1", "README.md", None)), "On the file");
+        drafts.set(alice(on("a2", "src/parse.rs", Some(10))), "Moved");
+        drafts.set(alice(on("a2", "src/parse.rs", Some(20))), "Changed");
+        drafts.set(alice(on("a2", "src/parse.rs", Some(26))), "Taken");
+        drafts.set(alice(on("a3", "src/parse.rs", Some(30))), "On the latest");
+        // Not new threads on older revisions, or not Alice's on #7.
+        let reply = Place::Reply {
+            thread: "PRRT_1".to_string(),
+        };
+        drafts.set(alice(reply), "A reply");
+        drafts.set(key("bob", 7, on("a2", "src/parse.rs", Some(10))), "Bob's");
+        drafts.set(key("alice", 8, on("a2", "src/parse.rs", Some(10))), "On #8");
+
+        // Between r2 and r3, four lines were added above line 10, and line 20 changed.
+        let moved = |place: &Place| match place {
+            Place::Thread { path, lines, .. } if path == "README.md" && lines.is_none() => {
+                Some(on("a3", "README.md", None))
+            }
+            Place::Thread { lines, .. } => match lines.map(|lines| lines.end.number) {
+                Some(10) => Some(on("a3", "src/parse.rs", Some(14))),
+                Some(26) => Some(on("a3", "src/parse.rs", Some(30))),
+                _ => None,
+            },
+            _ => unreachable!("only new threads move"),
+        };
+        let older = drafts.on_older_revisions("alice", &pull_request(7), "a3", moved);
+
+        let found: Vec<_> = (older.iter())
+            .map(|draft| (draft.text, draft.on_latest.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("On the file", Some(on("a3", "README.md", None))),
+                ("Moved", Some(on("a3", "src/parse.rs", Some(14)))),
+                // Its line changed: stranded.
+                ("Changed", None),
+                // The latest revision already has a draft there: stranded.
+                ("Taken", None),
+            ]
+        );
+        assert_eq!(older[1].key, &alice(on("a2", "src/parse.rs", Some(10))));
+    }
+
+    #[test]
+    fn two_older_drafts_moving_to_one_place_strand_the_later_one() {
+        let mut drafts = Drafts::new();
+        drafts.set(key("alice", 7, on("a1", "src/parse.rs", Some(10))), "First");
+        drafts.set(
+            key("alice", 7, on("a2", "src/parse.rs", Some(10))),
+            "Second",
+        );
+
+        let older = drafts.on_older_revisions("alice", &pull_request(7), "a3", |_| {
+            Some(on("a3", "src/parse.rs", Some(14)))
+        });
+
+        let found: Vec<_> = (older.iter())
+            .map(|draft| (draft.text, draft.on_latest.is_some()))
+            .collect();
+        assert_eq!(found, [("First", true), ("Second", false)]);
+    }
+
+    #[test]
+    fn a_draft_moved_anywhere_but_a_new_thread_on_the_latest_is_stranded() {
+        let mut drafts = Drafts::new();
+        drafts.set(key("alice", 7, on("a2", "src/parse.rs", Some(10))), "Draft");
+
+        let older = drafts.on_older_revisions("alice", &pull_request(7), "a3", |_| {
+            Some(on("a2", "src/parse.rs", Some(14)))
+        });
+
+        assert_eq!(older[0].on_latest, None);
     }
 }

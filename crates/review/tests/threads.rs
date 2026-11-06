@@ -713,3 +713,72 @@ fn erin_comments_on_r2_after_r3_was_pushed() {
     );
     assert!(review.submit(ReviewEvent::Approve, "", false, R2).is_ok());
 }
+
+#[test]
+fn alices_drafts_on_r2_cross_bobs_push_of_r3() {
+    // Alice drafted two comments on r2. Bob then pushed r3, which changed line 9 and added a line
+    // above line 11.
+    let alice = |line| DraftKey {
+        account: "alice".to_string(),
+        pull_request: pull_request(),
+        place: Place::Thread {
+            commit: R2.to_string(),
+            path: "src/parse.rs".to_string(),
+            lines: Some(Lines::one(Line::right(line))),
+        },
+    };
+    let mut drafts = Drafts::new();
+    drafts.set(alice(9), "Why public?");
+    drafts.set(alice(11), "Does build need the tokens?");
+
+    // On r3, the GitHub layer follows each draft's lines from r2, and keeps them where they still
+    // take a comment.
+    let r3 = CommentableLines::new(&Screen::full(R3), Hunk::parse(PATCH).unwrap());
+    let moved = |place: &Place| {
+        let Place::Thread { path, lines, .. } = place else {
+            return None;
+        };
+        let line = match (*lines)?.end.number {
+            11 => 12,
+            _ => return None,
+        };
+        Some(Place::Thread {
+            commit: R3.to_string(),
+            path: path.clone(),
+            lines: Some(r3.line(Line::right(line))?),
+        })
+    };
+    let older = drafts.on_older_revisions("alice", &pull_request(), R3, moved);
+    let at_12 = Lines::one(Line::right(12));
+    assert_eq!(
+        (older.iter())
+            .map(|draft| (draft.text, draft.on_latest.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("Why public?", None),
+            (
+                "Does build need the tokens?",
+                Some(Place::Thread {
+                    commit: R3.to_string(),
+                    path: "src/parse.rs".to_string(),
+                    lines: Some(at_12),
+                })
+            ),
+        ]
+    );
+
+    // Its comment box opens on line 12 of r3, and posting it takes the draft written on r2.
+    let mut review = YourReview::new(None);
+    let comment = NewComment::Thread(new_thread(Some(at_12), older[1].text));
+    let start = review.add(R3, R3, &comment).unwrap();
+    review.accepted(&start, Some("PRR_alice"));
+    assert!(start.sends_comment());
+    let posted = older[1].key.clone();
+    assert!(drafts.take(&posted).is_some());
+
+    // The stranded draft is still there, for the threads panel to list.
+    assert_eq!(
+        drafts.on("alice", &pull_request()).collect::<Vec<_>>(),
+        [(&alice(9).place, "Why public?")]
+    );
+}
