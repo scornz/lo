@@ -388,7 +388,7 @@ fn alice_reviews_r3_and_approves() {
     };
     assert!(drafts.set(key.clone(), "Does validate need the tokens?"));
     let first = NewComment::Thread(new_thread(Some(selection), drafts.get(&key).unwrap()));
-    let start = review.add(&screen.right, &first).unwrap();
+    let start = review.add(&screen.right, R3, &first).unwrap();
     assert_eq!(
         start,
         Mutation::StartReview {
@@ -409,14 +409,14 @@ fn alice_reviews_r3_and_approves() {
     let suggestion = suggestion_block(&["    Ok(validate(ast)?)"]);
     assert_eq!(suggestion, "```suggestion\n    Ok(validate(ast)?)\n```");
     let second = NewComment::Thread(new_thread(Some(added), &suggestion));
-    let add = review.add(R3, &second).unwrap();
+    let add = review.add(R3, R3, &second).unwrap();
     assert!(matches!(&add, Mutation::AddThread { review, .. } if review == "PRR_kwDOAbc"));
     review.accepted(&add, None);
 
     // Line 20 is outside the diff, so the comment goes on the file.
     assert_eq!(commentable.line(Line::right(20)), None);
     let file = NewComment::Thread(new_thread(None, "Worth a test for empty input."));
-    let add = review.add(R3, &file).unwrap();
+    let add = review.add(R3, R3, &file).unwrap();
     review.accepted(&add, None);
 
     // `C` on a reply joins the pending review: GitHub posts nothing else from her until it's
@@ -425,7 +425,7 @@ fn alice_reviews_r3_and_approves() {
         thread: "PRRT_current".to_string(),
         body: "Fixed in r3, thanks.".to_string(),
     };
-    let Ok(Posting::Pending(post)) = review.post(R3, &reply) else {
+    let Ok(Posting::Pending(post)) = review.post(R3, R3, &reply) else {
         panic!("a reply posted at once with a pending review should join it");
     };
     review.accepted(&post, None);
@@ -487,24 +487,34 @@ fn a_pending_review_started_before_a_push_keeps_its_revision() {
     let screen = Screen::between(R2, R3);
     let commentable = CommentableLines::new(&screen, Hunk::parse(PATCH).unwrap());
 
-    // Between revisions, only the right column takes comments, and they'd go on r3.
+    // Between revisions, only the right column takes comments. It shows r3, the latest head,
+    // where GitHub puts every thread added to a pending review, so they join the review on r2.
     assert_eq!(commentable.line(Line::left(11)), None);
     let lines = commentable.line(Line::right(11)).unwrap();
-    let refused = review.add(R3, &NewComment::Thread(new_thread(Some(lines), "Nit")));
-    let Err(Refusal::OtherRevision { review_on }) = refused else {
-        panic!("a thread on r3 shouldn't join a review on r2");
-    };
-    assert_eq!(revisions.label(&review_on).as_deref(), Some("r2"));
+    let nit = NewComment::Thread(new_thread(Some(lines), "Nit"));
+    assert!(matches!(
+        review.add(&screen.right, R3, &nit),
+        Ok(Mutation::AddThread { .. })
+    ));
 
-    // Replies have no lines, so they join it.
+    // On r2 itself, a new line comment would land on r3's line 11, so it's refused.
+    let refused = review.add(R2, R3, &nit);
+    let Err(Refusal::NotLatest { head }) = refused else {
+        panic!("a thread on r2 shouldn't join a pending review: GitHub puts it on r3");
+    };
+    assert_eq!(revisions.label(&head).as_deref(), Some("r3"));
+
+    // Replies have no lines, so they join it from any revision.
     let reply = NewComment::Reply {
         thread: "PRRT_current".to_string(),
         body: "Still applies.".to_string(),
     };
-    assert!(matches!(
-        review.add(R3, &reply),
-        Ok(Mutation::AddReply { .. })
-    ));
+    for on in [R1, R2, R3] {
+        assert!(matches!(
+            review.add(on, R3, &reply),
+            Ok(Mutation::AddReply { .. })
+        ));
+    }
 
     // The dialog says the review is recorded on r2.
     let dialog = review.submit_dialog("alice", false, R3);
@@ -518,7 +528,7 @@ fn without_a_pending_review_c_posts_on_the_revision_on_screen() {
     let thread = new_thread(Some(Lines::one(Line::right(11))), "Nit: rename.");
 
     assert_eq!(
-        YourReview::new(None).post(&screen.right, &NewComment::Thread(thread.clone())),
+        YourReview::new(None).post(&screen.right, R3, &NewComment::Thread(thread.clone())),
         Ok(Posting::Now(Mutation::PostThread {
             commit: R2.to_string(),
             thread,

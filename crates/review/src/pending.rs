@@ -2,18 +2,24 @@
 //! "Reviews"; §11, "Acting on what you saw").
 //!
 //! Comments collect into a pending review, which GitHub stores, so it survives quitting rozed and
-//! shows as pending on the web. GitHub keeps at most one per person per pull request, and puts
-//! every comment in it on the lines of the revision it was started on. [`YourReview`] holds yours
-//! and plans each step as a [`Mutation`]: `c` adds a comment to it, starting it on the first;
-//! `C` posts one comment at once; the submit dialog submits it, or reviews without one.
+//! shows as pending on the web. GitHub keeps at most one per person per pull request.
+//! [`YourReview`] holds yours and plans each step as a [`Mutation`]: `c` adds a comment to it,
+//! starting it on the first; `C` posts one comment at once; the submit dialog submits it, or
+//! reviews without one.
 //!
-//! GitHub's API leaves some of this undocumented, so these are rozed's reading of it:
+//! GitHub's API leaves much of this undocumented. These were checked against GitHub:
 //!
-//! - A thread added to a pending review goes on the review's revision (`addPullRequestReviewThread`
-//!   takes no commit), so a thread written on another revision doesn't join it.
+//! - A review is recorded on the commit it's started on (`addPullRequestReview`'s `commitOID`),
+//!   and so are the threads it's started with. A thread added to it later
+//!   (`addPullRequestReviewThread`, which takes no commit) goes on the pull request's current head
+//!   instead, whatever the review's commit. So a line comment on an older revision is possible
+//!   only by starting a review there. With a review pending, a new line comment is taken only
+//!   while the right column shows the latest head; elsewhere it's refused, and the UI offers to
+//!   submit the pending review or to switch to the latest revision.
+//! - Replies have no lines, so they join the pending review from any revision.
 //! - A comment posted at once is a review of its own, which GitHub refuses while you have a
-//!   pending review ("can only have one pending review per pull request"), so `C` adds to the
-//!   pending review instead, and says so.
+//!   pending review ("User can only have one pending review per pull request"), so `C` adds to
+//!   the pending review instead, and says so.
 //!
 //! ```
 //! use review::pending::{Mutation, NewComment, NewThread, ReviewEvent, YourReview};
@@ -28,7 +34,7 @@
 //!
 //! // `c`: the first comment starts your pending review on the revision on screen.
 //! let mut review = YourReview::default();
-//! let start = review.add(head, &comment).unwrap();
+//! let start = review.add(head, head, &comment).unwrap();
 //! assert!(matches!(&start, Mutation::StartReview { commit, .. } if commit == head));
 //! review.accepted(&start, Some("PRR_kwDOAbc"));
 //! assert_eq!(review.pending_comments(), 1);
@@ -60,8 +66,9 @@ github_enum! {
 pub struct PendingReview {
     /// `id`.
     pub id: String,
-    /// `commit.oid`: the revision its threads' lines are on, and the one it's recorded on when
-    /// submitted.
+    /// `commit.oid`: the revision it's recorded on, which the review shows once submitted, and the
+    /// one the threads it was started with are on. Threads added to it later are on the heads
+    /// that were current when they were added, so they may be on later revisions.
     pub commit: String,
     /// `comments.totalCount`: its threads and replies.
     pub comments: usize,
@@ -108,7 +115,8 @@ pub enum Mutation {
     /// `addPullRequestReviewThreadReply` adds the reply with the new review's id as
     /// `pullRequestReviewId`.
     StartReview { commit: String, first: NewComment },
-    /// `addPullRequestReviewThread` with `pullRequestReviewId: review`.
+    /// `addPullRequestReviewThread` with `pullRequestReviewId: review`. GitHub puts the thread on
+    /// the pull request's current head.
     AddThread { review: String, thread: NewThread },
     /// `addPullRequestReviewThreadReply` with `pullRequestReviewId: review` and
     /// `pullRequestReviewThreadId: thread`.
@@ -154,8 +162,11 @@ pub enum Posting {
 pub enum Refusal {
     /// The comment is blank, which GitHub refuses.
     Blank,
-    /// Your pending review is on another revision, `review_on`, and its threads go on that
-    /// revision's lines. Submit it first, or comment on its revision.
+    /// The right column shows a revision older than the latest head, `head`, but a new line
+    /// comment would join your pending review, and GitHub puts the threads it adds to one on the
+    /// latest head. Submit the pending review first, or switch to the latest revision.
+    NotLatest { head: String },
+    /// Your pending review is recorded on another revision, `review_on`.
     OtherRevision { review_on: String },
     /// You opened the pull request, and GitHub lets its author only comment.
     OwnPullRequest,
@@ -218,8 +229,9 @@ impl YourReview {
     }
 
     /// What `c` sends: `comment`, written while the right column shows revision `on`, added to
-    /// your pending review, or starting one on `on`.
-    pub fn add(&self, on: &str, comment: &NewComment) -> Result<Mutation, Refusal> {
+    /// your pending review, or starting one on `on`. `head` is the pull request's latest head
+    /// (`headRefOid`).
+    pub fn add(&self, on: &str, head: &str, comment: &NewComment) -> Result<Mutation, Refusal> {
         if comment.body().trim().is_empty() {
             return Err(Refusal::Blank);
         }
@@ -231,9 +243,11 @@ impl YourReview {
         };
         let review = pending.id.clone();
         match comment {
-            NewComment::Thread(_) if pending.commit != on => Err(Refusal::OtherRevision {
-                review_on: pending.commit.clone(),
-            }),
+            NewComment::Thread(thread) if thread.lines.is_some() && on != head => {
+                Err(Refusal::NotLatest {
+                    head: head.to_string(),
+                })
+            }
             NewComment::Thread(thread) => Ok(Mutation::AddThread {
                 review,
                 thread: thread.clone(),
@@ -247,10 +261,10 @@ impl YourReview {
     }
 
     /// What `C` sends: `comment`, written while the right column shows revision `on`, posted at
-    /// once, or added to your pending review if you have one.
-    pub fn post(&self, on: &str, comment: &NewComment) -> Result<Posting, Refusal> {
+    /// once, or added to your pending review if you have one, as [`add`](Self::add) adds it.
+    pub fn post(&self, on: &str, head: &str, comment: &NewComment) -> Result<Posting, Refusal> {
         if self.pending.is_some() {
-            return self.add(on, comment).map(Posting::Pending);
+            return self.add(on, head, comment).map(Posting::Pending);
         }
         if comment.body().trim().is_empty() {
             return Err(Refusal::Blank);
@@ -341,6 +355,9 @@ mod tests {
     use super::*;
     use crate::threads::Line;
 
+    /// Revisions r1 to r3 have heads `a1` to `a3`; `a3` is the latest.
+    const HEAD: &str = "a3";
+
     fn thread(body: &str) -> NewComment {
         NewComment::Thread(NewThread {
             path: "src/parse.rs".to_string(),
@@ -374,7 +391,7 @@ mod tests {
     #[test]
     fn the_first_comment_starts_a_pending_review_on_the_revision_on_screen() {
         assert_eq!(
-            YourReview::default().add("a3", &thread("Off by one?")),
+            YourReview::default().add("a3", HEAD, &thread("Off by one?")),
             Ok(Mutation::StartReview {
                 commit: "a3".to_string(),
                 first: thread("Off by one?"),
@@ -385,7 +402,7 @@ mod tests {
     #[test]
     fn later_comments_join_the_pending_review_and_count() {
         let mut review = YourReview::default();
-        let start = review.add("a3", &thread("Off by one?")).unwrap();
+        let start = review.add("a3", HEAD, &thread("Off by one?")).unwrap();
         review.accepted(&start, Some("PRR_1"));
 
         assert_eq!(
@@ -397,7 +414,7 @@ mod tests {
             })
         );
 
-        let add = review.add("a3", &thread("And here.")).unwrap();
+        let add = review.add("a3", HEAD, &thread("And here.")).unwrap();
         assert_eq!(
             add,
             Mutation::AddThread {
@@ -407,7 +424,7 @@ mod tests {
         );
         review.accepted(&add, None);
 
-        let answer = review.add("a3", &reply("Agreed.")).unwrap();
+        let answer = review.add("a3", HEAD, &reply("Agreed.")).unwrap();
         assert_eq!(
             answer,
             Mutation::AddReply {
@@ -424,7 +441,7 @@ mod tests {
     #[test]
     fn a_reply_as_the_first_comment_starts_the_review_too() {
         assert_eq!(
-            YourReview::default().add("a3", &reply("Agreed.")),
+            YourReview::default().add("a3", HEAD, &reply("Agreed.")),
             Ok(Mutation::StartReview {
                 commit: "a3".to_string(),
                 first: reply("Agreed."),
@@ -433,23 +450,58 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_on_another_revision_does_not_join_the_pending_review() {
+    fn a_new_thread_joins_a_pending_review_on_any_revision_from_the_latest_head() {
+        // GitHub puts it on the latest head, whatever revision the review was started on.
         assert_eq!(
-            pending("a2", 1).add("a3", &thread("Off by one?")),
-            Err(Refusal::OtherRevision {
-                review_on: "a2".to_string(),
+            pending("a2", 1).add("a3", HEAD, &thread("Off by one?")),
+            Ok(Mutation::AddThread {
+                review: "PRR_1".to_string(),
+                thread: new_thread(thread("Off by one?")),
             })
         );
     }
 
     #[test]
-    fn a_reply_joins_the_pending_review_from_any_revision() {
+    fn a_new_line_thread_on_an_older_revision_does_not_join_the_pending_review() {
+        // It would land on the latest head's line of that number, so the UI offers to submit the
+        // pending review or to switch to the latest revision.
+        let not_latest = Err(Refusal::NotLatest {
+            head: "a3".to_string(),
+        });
+
         assert_eq!(
-            pending("a2", 1).add("a3", &reply("Agreed.")),
-            Ok(Mutation::AddReply {
-                review: "PRR_1".to_string(),
-                thread: "PRRT_9".to_string(),
-                body: "Agreed.".to_string(),
+            pending("a3", 1).add("a2", HEAD, &thread("Off by one?")),
+            not_latest
+        );
+        // Even on the revision the review was started on.
+        assert_eq!(
+            pending("a2", 1).add("a2", HEAD, &thread("Off by one?")),
+            not_latest
+        );
+    }
+
+    #[test]
+    fn a_reply_joins_the_pending_review_from_any_revision() {
+        for on in ["a1", "a2", "a3"] {
+            assert_eq!(
+                pending("a2", 1).add(on, HEAD, &reply("Agreed.")),
+                Ok(Mutation::AddReply {
+                    review: "PRR_1".to_string(),
+                    thread: "PRRT_9".to_string(),
+                    body: "Agreed.".to_string(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_pending_review_a_line_comment_on_an_older_revision_starts_one_there() {
+        // `addPullRequestReview`'s threads are on its `commitOID`.
+        assert_eq!(
+            YourReview::default().add("a2", HEAD, &thread("Off by one?")),
+            Ok(Mutation::StartReview {
+                commit: "a2".to_string(),
+                first: thread("Off by one?"),
             })
         );
     }
@@ -457,12 +509,15 @@ mod tests {
     #[test]
     fn a_blank_comment_is_refused() {
         assert_eq!(
-            YourReview::default().add("a3", &thread(" \n\t")),
+            YourReview::default().add("a3", HEAD, &thread(" \n\t")),
             Err(Refusal::Blank)
         );
-        assert_eq!(pending("a3", 1).add("a3", &reply("")), Err(Refusal::Blank));
         assert_eq!(
-            YourReview::default().post("a3", &thread("")),
+            pending("a3", 1).add("a3", HEAD, &reply("")),
+            Err(Refusal::Blank)
+        );
+        assert_eq!(
+            YourReview::default().post("a3", HEAD, &thread("")),
             Err(Refusal::Blank)
         );
     }
@@ -472,14 +527,14 @@ mod tests {
         let review = YourReview::default();
 
         assert_eq!(
-            review.post("a3", &thread("Off by one?")),
+            review.post("a3", HEAD, &thread("Off by one?")),
             Ok(Posting::Now(Mutation::PostThread {
                 commit: "a3".to_string(),
                 thread: new_thread(thread("Off by one?")),
             }))
         );
         assert_eq!(
-            review.post("a3", &reply("Agreed.")),
+            review.post("a3", HEAD, &reply("Agreed.")),
             Ok(Posting::Now(Mutation::PostReply {
                 thread: "PRRT_9".to_string(),
                 body: "Agreed.".to_string(),
@@ -490,7 +545,7 @@ mod tests {
     #[test]
     fn a_comment_posted_at_once_leaves_no_pending_review() {
         let mut review = YourReview::default();
-        let Ok(Posting::Now(post)) = review.post("a3", &thread("Off by one?")) else {
+        let Ok(Posting::Now(post)) = review.post("a3", HEAD, &thread("Off by one?")) else {
             unreachable!()
         };
         review.accepted(&post, None);
@@ -502,17 +557,25 @@ mod tests {
     #[test]
     fn c_adds_to_the_pending_review_when_there_is_one() {
         assert_eq!(
-            pending("a3", 2).post("a3", &thread("Off by one?")),
+            pending("a3", 2).post("a3", HEAD, &thread("Off by one?")),
             Ok(Posting::Pending(Mutation::AddThread {
                 review: "PRR_1".to_string(),
                 thread: new_thread(thread("Off by one?")),
             }))
         );
         assert_eq!(
-            pending("a2", 2).post("a3", &thread("Off by one?")),
-            Err(Refusal::OtherRevision {
-                review_on: "a2".to_string(),
+            pending("a3", 2).post("a2", HEAD, &thread("Off by one?")),
+            Err(Refusal::NotLatest {
+                head: "a3".to_string(),
             })
+        );
+        assert_eq!(
+            pending("a3", 2).post("a1", HEAD, &reply("Agreed.")),
+            Ok(Posting::Pending(Mutation::AddReply {
+                review: "PRR_1".to_string(),
+                thread: "PRRT_9".to_string(),
+                body: "Agreed.".to_string(),
+            }))
         );
     }
 
