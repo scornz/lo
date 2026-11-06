@@ -1,0 +1,58 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/user"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"db83dfb5f42673a1492adf8b27f765de8ea8bd687b3d64c163cd57fa69c523ec\"",
+      "last-modified": "Fri, 06 Nov 2026 07:18:58 GMT",
+      "x-accepted-oauth-scopes": "",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-oauth-scopes": "read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4954",
+      "x-ratelimit-reset": "1793957541",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "46"
+    },
+    "body": {
+      "login": "rozed-bot",
+      "id": 353226052,
+      "node_id": "U_kgDOFQ3NRA",
+      "avatar_url": "https://avatars.githubusercontent.com/u/353226052?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rozed-bot",
+      "html_url": "https://github.com/rozed-bot",
+      "followers_url": "https://api.github.com/users/rozed-bot/followers",
+      "following_url": "https://api.github.com/users/rozed-bot/following{/other_user}",
+      "gists_url": "https://api.github.com/users/rozed-bot/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/rozed-bot/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/rozed-bot/subscriptions",
+      "organizations_url": "https://api.github.com/users/rozed-bot/orgs",
+      "repos_url": "https://api.github.com/users/rozed-bot/repos",
+      "events_url": "https://api.github.com/users/rozed-bot/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/rozed-bot/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false,
+      "name": null,
+      "company": null,
+      "blog": "",
+      "location": null,
+      "email": null,
+      "hireable": null,
+      "bio": null,
+      "twitter_username": null,
+      "notification_email": null,
+      "public_repos": 0,
+      "public_gists": 0,
+      "followers": 0,
+      "following": 0,
+      "created_at": "2026-11-06T07:10:14Z",
+      "updated_at": "2026-11-06T07:18:58Z"
+    }
+  }
+}
