@@ -376,6 +376,80 @@ impl Repo {
         )
     }
 
+    /// Makes sure every head in `heads` is in the clone and pins each at
+    /// `refs/rozed/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
+    /// the clone lacks are fetched by ID in one fetch. Returns the ones GitHub no longer has
+    /// (design §11, "Missing revisions"), which are left out; any other failure fails the whole
+    /// fetch.
+    pub fn fetch_commits(&self, number: u64, heads: &[Oid]) -> Result<Vec<Oid>, Error> {
+        let _lock = self.lock()?;
+        self.stamp_used()?;
+        let mut missing = Vec::new();
+        for oid in heads {
+            if !missing.contains(oid) && !self.has_commit(oid)? {
+                missing.push(oid.clone());
+            }
+        }
+        let what = match missing.as_slice() {
+            [oid] => format!("pull request #{number}'s revision {}", oid.short(7)),
+            _ => format!("{} of pull request #{number}'s revisions", missing.len()),
+        };
+        // GitHub stops a fetch at the first commit it doesn't have, naming it: that one is left
+        // out, and the rest asked for again.
+        let mut unavailable = Vec::new();
+        while !missing.is_empty() {
+            let refspecs: Vec<String> = (missing.iter())
+                .map(|oid| format!("+{oid}:{}", revision_ref(number, oid)))
+                .collect();
+            let refspecs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
+            match self.fetch_locked(&what, &refspecs) {
+                Ok(()) => break,
+                Err(Error::Fetch { message, .. })
+                    if let Some(lost) =
+                        (missing.iter()).position(|oid| is_lost_commit(&message, oid)) =>
+                {
+                    unavailable.push(missing.remove(lost));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut pinned: Vec<&Oid> = Vec::new();
+        for oid in heads {
+            if unavailable.contains(oid) || pinned.contains(&oid) {
+                continue;
+            }
+            // Also checks it's a commit.
+            self.resolve(oid.as_str())?;
+            self.pin(&revision_ref(number, oid), oid)?;
+            pinned.push(oid);
+        }
+        Ok(unavailable)
+    }
+
+    /// The commits on `head` that `base` doesn't have, oldest first and each after its parents
+    /// (`git rev-list --topo-order --reverse <base>..<head>`): with its base branch's tip as
+    /// `base`, a pull request's current commits, as `review::revisions::build_revisions` takes
+    /// them. Reads only commits, which the clone keeps whole, so it works offline. Both must be
+    /// in the clone already: a missing one is [`Error::NotFetched`], and is never downloaded.
+    pub fn pull_commits(&self, base: &Oid, head: &Oid) -> Result<Vec<Oid>, Error> {
+        for oid in [base, head] {
+            if !self.has_commit(oid)? {
+                return Err(Error::NotFetched { oid: oid.clone() });
+            }
+        }
+        let output = self.run(self.git().args([
+            "rev-list",
+            "--topo-order",
+            "--reverse",
+            &format!("{base}..{head}"),
+            "--",
+        ]))?;
+        String::from_utf8_lossy(&output)
+            .lines()
+            .map(str::parse)
+            .collect()
+    }
+
     /// Fetches commit `oid` by ID unless the clone has it, and pins it at `pin`. The caller holds
     /// the lock.
     fn fetch_by_id_locked(&self, what: &str, oid: &Oid, pin: &str) -> Result<(), Error> {

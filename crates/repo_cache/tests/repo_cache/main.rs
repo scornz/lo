@@ -4,4 +4,5 @@ mod compare;
 mod fetch;
 mod offline;
 mod read;
+mod revisions;
 mod support;
