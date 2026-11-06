@@ -63,6 +63,18 @@ fn a_layer_on_a_merge_committed_pr_needs_no_rebase() {
 }
 
 #[test]
+fn a_branch_that_moved_on_after_its_pr_merged_is_a_root() {
+    // `develop` was merged into main in #1 and has had more commits since.
+    assert_forest(
+        &[
+            pr(1, "main", "develop").merged(true),
+            pr(2, "develop", "b").base_at("develop.2"),
+        ],
+        &["develop", "  #2"],
+    );
+}
+
+#[test]
 fn a_merge_committed_head_is_just_history() {
     // #1's head is in main, so #2, built on main but aimed at release, isn't above it.
     assert_forest(

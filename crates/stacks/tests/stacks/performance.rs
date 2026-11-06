@@ -22,16 +22,22 @@ fn busy_repo() -> Vec<PullRequest> {
         for layer in 0..LAYERS {
             let number = stack * LAYERS + layer + 1;
             let branch = format!("s{stack}-l{layer}");
-            let base = match (layer, stack % 3) {
-                (0, _) => "main".to_string(),
-                // Rule 3: only the commits link it.
-                (_, 1) => "main".to_string(),
-                _ => format!("s{stack}-l{}", layer - 1),
+            // Rule 3 links a layer of every third stack: it targets main, and only its commits
+            // say what's below.
+            let on_layer_below = layer > 0 && stack % 3 != 1;
+            let base = if on_layer_below {
+                format!("s{stack}-l{}", layer - 1)
+            } else {
+                "main".to_string()
             };
+            let below_head = commits.last().cloned();
             commits.extend((0..COMMITS_PER_LAYER).map(|commit| oid(number, commit)));
             let listed = &commits[commits.len().saturating_sub(COMMITS_LISTED)..];
             let listed: Vec<&str> = listed.iter().map(String::as_str).collect();
             let mut pr = pr(number, &base, &branch).commits(&listed);
+            if let Some(head) = below_head.filter(|_| on_layer_below) {
+                pr = pr.base_at(&head);
+            }
             if stack % 3 == 2 {
                 pr = pr.native(100_000 + stack, layer as u32 + 1);
             }

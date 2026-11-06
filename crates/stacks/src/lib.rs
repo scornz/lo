@@ -19,6 +19,8 @@ pub struct PullRequest {
     pub state: State,
     /// `baseRefName`: the branch it merges into.
     pub base_ref: String,
+    /// `baseRefOid`: the base branch's latest commit.
+    pub base_oid: String,
     /// `headRefName`: the branch it merges from.
     pub head_ref: String,
     /// Whether the head branch is in the base repository: `!isCrossRepository`. False for a PR from
@@ -63,7 +65,8 @@ pub struct NativeStackEntry {
 pub enum Rule {
     /// GitHub says it's the layer above the PR below, in a stack made with GitHub's stacks.
     NativeStack,
-    /// Its base branch is the head branch of the PR below. Never links to a fork's branch.
+    /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor to a
+    /// merged PR's branch that has moved on since the merge.
     BaseBranch,
     /// Its commits contain the head commit of the PR below, the latest such commit if several do.
     /// A PR with the same head commit isn't below it, and neither is a merged PR whose head is in
@@ -348,10 +351,13 @@ impl<'a> Graph<'a> {
                 ..entry
             })
         };
+        // A merged PR's branch is only below while it still points where the PR merged from. Once
+        // it moves on, like a long-lived `develop`, it's a root.
         let base_branch = || {
-            by.head_ref
-                .get(pr.base_ref.as_str())
-                .filter(|&&below| below != index)
+            by.head_ref.get(pr.base_ref.as_str()).filter(|&&below| {
+                let lower = self.prs[below];
+                below != index && (lower.state == State::Open || lower.head_oid == pr.base_oid)
+            })
         };
         // The nearest: the latest of its commits that's another PR's head. A PR with the same head
         // commit isn't below it.
