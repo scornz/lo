@@ -36,12 +36,13 @@ These bind every change (design §1).
 export PATH="$HOME/.cargo/bin:$PATH" # rustup's cargo, if your shell doesn't add it
 mise install                         # Node and pnpm, pinned in mise.toml
 pnpm install                         # commitlint and lefthook; installs the git hooks
+git submodule update --init          # Zed, one commit deep; see "Zed submodule"
 ```
 
 Rust comes from rustup. `rust-toolchain.toml` pins Zed's toolchain, and cargo installs it on first
 use. If your shell doesn't activate mise, prefix Node and pnpm commands with `mise exec --`. Run
-`pnpm install` in every new clone and worktree, because the `commit-msg` hook runs commitlint from
-its `node_modules`.
+`pnpm install` and `git submodule update --init` in every new clone and worktree: the `commit-msg`
+hook runs commitlint from its `node_modules`, and nothing builds without Zed.
 
 ## Build, test and run
 
@@ -64,9 +65,39 @@ script/check-symlinks.sh
 
 ## Zed submodule
 
-_Not added yet. The spike (plan milestone 2) adds `third_party/zed` on `scornz/zed`'s patch branch
-and fills in this section: the patch list, the Cargo settings copied from Zed and the script that
-keeps them in sync, and how to update Zed._
+`third_party/zed` is Zed, pinned to branch `rozed/v1.27.0` of
+[`scornz/zed`](https://github.com/scornz/zed): Zed's release tag `v1.27.0` plus rozed's patches, one
+commit each. rozed's crates depend on Zed's by path. Don't edit files in `third_party/zed`; change a
+patch on the branch instead.
+
+`.gitmodules` sets `shallow = true`, so `git submodule update --init` fetches only the pinned commit
+(about 100 MB, under a minute) instead of Zed's whole history.
+
+### Patches
+
+On top of `v1.27.0`, in order:
+
+1. `paths: use rozed's folders`. Sets `APP_NAME` to `"rozed"` in `crates/paths/src/paths.rs`, so
+   rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
+   and `~/Library/Logs/rozed`, never Zed's folders.
+
+### Updating Zed
+
+Each Zed release gets its own branch, `rozed/v<version>`. Old branches stay, so old submodule
+pointers keep resolving.
+
+1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
+   above in order, and push the branch to `scornz/zed`.
+2. Point the submodule at it:
+
+   ```sh
+   git config -f .gitmodules submodule.third_party/zed.branch rozed/v<version>
+   git -C third_party/zed fetch --depth 1 origin rozed/v<version>
+   git -C third_party/zed checkout FETCH_HEAD
+   ```
+
+3. Set `rust-toolchain.toml`'s channel to the one in `third_party/zed/rust-toolchain.toml`.
+4. Build, fix what breaks, and update the patch list here.
 
 ## Agent rules
 
