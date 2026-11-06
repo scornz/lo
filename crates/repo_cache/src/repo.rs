@@ -137,6 +137,11 @@ impl Repo {
         &self.shared.git_dir
     }
 
+    /// `owner/repo`, for logs.
+    pub(crate) fn name(&self) -> &str {
+        &self.shared.name
+    }
+
     pub(crate) fn checkouts_dir(&self) -> &Path {
         &self.shared.checkouts_dir
     }
@@ -321,10 +326,10 @@ impl Repo {
         }
     }
 
-    /// What changed from `from` to `to`, in git's order (by path), with renames detected, binary
-    /// files marked, and each side's mode, blob and size. Downloads both sides of every changed
-    /// file in one batch, so reading them afterwards needs no network. Submodules are never
-    /// fetched.
+    /// What changed from `from` to `to`, commits or trees, in git's order (by path), with renames
+    /// detected, binary files marked, and each side's mode, blob and size. Downloads both sides of
+    /// every changed file in one batch, so reading them afterwards needs no network. Submodules
+    /// are never fetched.
     pub fn changed_files(&self, from: &Oid, to: &Oid) -> Result<Vec<ChangedFile>, Error> {
         let output = self.run(self.git().args([
             "diff",

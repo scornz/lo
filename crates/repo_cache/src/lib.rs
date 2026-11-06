@@ -4,7 +4,7 @@
 //! [`Git`] finds git and runs it in an environment of rozed's own, so the user's git config is
 //! never read or written. [`RepoCache`] keeps a bare partial clone of each repository, and
 //! [`Repo`] fetches pull requests, branches and commits into one and reads diffs and files from
-//! it.
+//! it. [`Repo::compare_revisions`] compares two revisions of a pull request across a rebase.
 //!
 //! ```no_run
 //! use repo_cache::{Git, PullRequestRefs, RepoCache};
@@ -34,6 +34,7 @@
 mod cache;
 mod cat_file;
 mod checkout;
+mod compare;
 mod diff;
 mod error;
 mod git;
@@ -46,6 +47,7 @@ mod progress;
 mod repo;
 
 pub use cache::RepoCache;
+pub use compare::{Comparison, Replay, Revision};
 pub use diff::{Change, ChangedFile, FileMode, FileVersion, LineCounts};
 pub use error::{Error, FetchFailure};
 pub use git::{Git, GitVersion, Token};
