@@ -24,7 +24,6 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::Instant;
 
 use crate::Error;
-use crate::askpass;
 
 /// A git version, from `git --version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -378,10 +377,10 @@ pub(crate) fn failure_message(finished: &Finished) -> String {
     }
 }
 
-/// Makes `askpass` available to [`Git::command`] callers in this crate's tests.
+/// Writes the askpass helper into `dir`, for this crate's tests.
 #[cfg(test)]
 pub(crate) fn test_askpass(dir: &Path) -> PathBuf {
-    askpass::install(dir).unwrap()
+    crate::askpass::install(dir).unwrap()
 }
 
 #[cfg(test)]

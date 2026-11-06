@@ -3,9 +3,10 @@
 use std::io;
 use std::path::PathBuf;
 
+use crate::Oid;
 use crate::git::GitVersion;
 
-/// The fix for a missing or old git, which every git error message ends with.
+/// The fix for a missing or old git, which both errors end with.
 const INSTALL_GIT: &str =
     "Install or update the Xcode Command Line Tools: run `xcode-select --install` in Terminal.";
 
@@ -21,6 +22,26 @@ pub enum Error {
         minimum = GitVersion::MINIMUM
     )]
     GitTooOld { program: PathBuf, found: GitVersion },
+    /// Fetching from GitHub failed. The UI shows it and tries again later (see
+    /// [`Error::is_retryable`]).
+    #[error("can't fetch {what}: {}", failure.explain(message))]
+    Fetch {
+        /// What was being fetched, e.g. "pull request #12".
+        what: String,
+        failure: FetchFailure,
+        /// git's own message.
+        message: String,
+    },
+    /// A commit rozed never fetched, which GitHub no longer has: it was force-pushed away long
+    /// ago (design §11, "Missing revisions").
+    #[error("commit {} is no longer available", oid.short(7))]
+    Unavailable { oid: Oid },
+    /// The disk is full. The UI offers to clear the cache.
+    #[error("the disk is full")]
+    DiskFull,
+    /// A name or ID that can't be used, such as a branch name git refuses.
+    #[error("`{value}` isn't a valid {what}")]
+    Invalid { what: &'static str, value: String },
     /// A git command failed for a reason none of the other variants covers.
     #[error("`{command}` failed: {message}")]
     Git { command: String, message: String },
@@ -33,11 +54,252 @@ pub enum Error {
     },
 }
 
-impl Error {
-    pub(crate) fn io(context: impl Into<String>) -> impl FnOnce(io::Error) -> Self {
-        move |source| Error::Io {
-            context: context.into(),
-            source,
+/// Why a fetch failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FetchFailure {
+    /// The network failed or timed out.
+    Network,
+    /// GitHub refused the token, or wanted one and rozed had none.
+    Auth,
+    /// The repository doesn't exist, or the account can't see it.
+    RepoNotFound,
+    /// The branch or pull request ref doesn't exist.
+    RefNotFound,
+    /// Something else, in git's words.
+    Other,
+}
+
+impl FetchFailure {
+    fn explain(self, message: &str) -> String {
+        let reason = match self {
+            FetchFailure::Network => "the network failed",
+            FetchFailure::Auth => {
+                "GitHub wants an account that can see the repository; sign in with one"
+            }
+            FetchFailure::RepoNotFound => {
+                "the repository doesn't exist, or the account can't see it"
+            }
+            FetchFailure::RefNotFound => "GitHub doesn't have it",
+            FetchFailure::Other => return message.to_string(),
+        };
+        // git's last line usually says what happened, e.g. "Could not resolve host: github.com".
+        match message.lines().rev().find(|line| !line.trim().is_empty()) {
+            Some(detail) => format!("{reason} ({})", detail.trim()),
+            None => reason.to_string(),
         }
+    }
+}
+
+impl Error {
+    /// Whether trying again later might work: a fetch that failed on the network or for a reason
+    /// rozed doesn't know.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Error::Fetch {
+                failure: FetchFailure::Network | FetchFailure::Other,
+                ..
+            }
+        )
+    }
+
+    /// Wraps an I/O error with what rozed was doing. A full disk becomes [`Error::DiskFull`].
+    pub(crate) fn io(context: impl Into<String>) -> impl FnOnce(io::Error) -> Self {
+        move |source| {
+            if source.kind() == io::ErrorKind::StorageFull {
+                return Error::DiskFull;
+            }
+            Error::Io {
+                context: context.into(),
+                source,
+            }
+        }
+    }
+
+    /// The error for a git command that failed with `message` on stderr. `what` names what a
+    /// fetch was fetching; any command can fetch, since reading a file in a partial clone
+    /// downloads it.
+    pub(crate) fn from_git(command: String, message: String, what: Option<&str>) -> Self {
+        if message.contains("No space left on device") {
+            return Error::DiskFull;
+        }
+        let fetching = what.is_some() || message.contains("promisor remote");
+        if !fetching {
+            return Error::Git { command, message };
+        }
+        let failure = classify_fetch(&message);
+        Error::Fetch {
+            what: what.unwrap_or("the files to show").to_string(),
+            failure,
+            message,
+        }
+    }
+}
+
+/// Reads why a fetch failed from git's message, which is in English (rozed runs git with
+/// `LC_ALL=C`).
+fn classify_fetch(message: &str) -> FetchFailure {
+    let has = |needles: &[&str]| needles.iter().any(|needle| message.contains(needle));
+    if has(&["couldn't find remote ref"]) {
+        FetchFailure::RefNotFound
+    } else if has(&[
+        "Authentication failed",
+        "could not read Username",
+        "could not read Password",
+        "Invalid username or password",
+        "returned error: 401",
+        "returned error: 403",
+    ]) {
+        FetchFailure::Auth
+    } else if has(&[
+        "Repository not found",
+        "not found",
+        "does not appear to be a git repository",
+        "returned error: 404",
+    ]) {
+        FetchFailure::RepoNotFound
+    } else if has(&[
+        "Could not resolve host",
+        "Failed to connect",
+        "Couldn't connect",
+        "Connection refused",
+        "Connection reset",
+        "Connection timed out",
+        "Operation timed out",
+        "Network is unreachable",
+        "transfer closed",
+        "early EOF",
+        "the remote end hung up",
+        "RPC failed",
+        "SSL",
+        "TLS",
+        "unable to access",
+    ]) {
+        FetchFailure::Network
+    } else {
+        FetchFailure::Other
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fetch_failure(message: &str) -> FetchFailure {
+        match Error::from_git("git fetch".into(), message.into(), Some("pull request #1")) {
+            Error::Fetch { failure, .. } => failure,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn classifies_fetch_failures_from_gits_messages() {
+        let cases = [
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: \
+                 github.com",
+                FetchFailure::Network,
+            ),
+            (
+                "fatal: unable to access 'https://github.com/a/b.git/': Failed to connect to \
+                 github.com port 443 after 75004 ms: Couldn't connect to server",
+                FetchFailure::Network,
+            ),
+            (
+                "error: RPC failed; curl 56 Recv failure: Connection reset by peer\nfatal: early \
+                 EOF",
+                FetchFailure::Network,
+            ),
+            (
+                "fatal: could not read Username for 'https://github.com': terminal prompts \
+                 disabled",
+                FetchFailure::Auth,
+            ),
+            (
+                "remote: Invalid username or token.\nfatal: Authentication failed for \
+                 'https://github.com/a/b.git/'",
+                FetchFailure::Auth,
+            ),
+            (
+                "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' \
+                 not found",
+                FetchFailure::RepoNotFound,
+            ),
+            (
+                "fatal: '/tmp/x/remote.git' does not appear to be a git repository\nfatal: Could \
+                 not read from remote repository.",
+                FetchFailure::RepoNotFound,
+            ),
+            (
+                "fatal: couldn't find remote ref refs/pull/9/head",
+                FetchFailure::RefNotFound,
+            ),
+            ("fatal: something new", FetchFailure::Other),
+        ];
+        for (message, expected) in cases {
+            assert_eq!(fetch_failure(message), expected, "{message}");
+        }
+    }
+
+    #[test]
+    fn a_full_disk_is_its_own_error() {
+        let error = Error::from_git(
+            "git fetch".into(),
+            "error: unable to write file: No space left on device".into(),
+            Some("pull request #1"),
+        );
+        assert!(matches!(error, Error::DiskFull), "{error:?}");
+        let io = io::Error::from(io::ErrorKind::StorageFull);
+        assert!(matches!(Error::io("writing")(io), Error::DiskFull));
+    }
+
+    #[test]
+    fn a_failed_lazy_download_is_a_fetch_error() {
+        let error = Error::from_git(
+            "git cat-file --batch".into(),
+            "fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: \
+             github.com\nfatal: could not fetch 6178079 from promisor remote"
+                .into(),
+            None,
+        );
+        assert!(error.is_retryable(), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("can't fetch the files to show: the network failed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn other_git_failures_stay_git_errors() {
+        let error = Error::from_git(
+            "git merge-base a b".into(),
+            "fatal: Not a valid object name a".into(),
+            None,
+        );
+        assert!(matches!(error, Error::Git { .. }), "{error:?}");
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn messages_say_what_failed_and_why() {
+        let error = Error::from_git(
+            "git fetch".into(),
+            "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not \
+             found"
+                .into(),
+            Some("pull request #12"),
+        );
+        assert_eq!(
+            error.to_string(),
+            "can't fetch pull request #12: the repository doesn't exist, or the account can't \
+             see it (fatal: repository 'https://github.com/a/b.git/' not found)"
+        );
+        let oid = "22c70acc6992c0c51cb68527b87adf114d01acbc".parse().unwrap();
+        assert_eq!(
+            Error::Unavailable { oid }.to_string(),
+            "commit 22c70ac is no longer available"
+        );
     }
 }
