@@ -19,12 +19,14 @@ publish = false
 # Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
 askpass = { path = "third_party/zed/crates/askpass" }
 assets = { path = "third_party/zed/crates/assets" }
+buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
 db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
 feature_flags = { path = "third_party/zed/crates/feature_flags" }
 fs = { path = "third_party/zed/crates/fs" }
+git = { path = "third_party/zed/crates/git" }
 gpui = { path = "third_party/zed/crates/gpui" }
 # Without font-kit, gpui renders no text on macOS.
 gpui_platform = { path = "third_party/zed/crates/gpui_platform", features = ["font-kit"] }
@@ -33,6 +35,7 @@ http_client = { path = "third_party/zed/crates/http_client" }
 language = { path = "third_party/zed/crates/language" }
 # load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
 languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
+multi_buffer = { path = "third_party/zed/crates/multi_buffer" }
 node_runtime = { path = "third_party/zed/crates/node_runtime" }
 paths = { path = "third_party/zed/crates/paths" }
 project = { path = "third_party/zed/crates/project" }
@@ -42,6 +45,7 @@ session = { path = "third_party/zed/crates/session" }
 settings = { path = "third_party/zed/crates/settings" }
 theme = { path = "third_party/zed/crates/theme" }
 theme_settings = { path = "third_party/zed/crates/theme_settings" }
+ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
 # under rozed's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
@@ -54,6 +58,7 @@ anyhow = "1.0.86"
 futures = "0.3.34"
 log = { version = "0.4", default-features = false, features = ["std"] }
 semver = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.144"
 tempfile = "3.20.0"
 uuid = { version = "1.1", features = ["v4"] }
