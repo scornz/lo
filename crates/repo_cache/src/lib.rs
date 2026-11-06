@@ -26,7 +26,7 @@
 //!         Some(old) => repo.read_blob(&old.oid)?.unwrap_or_default(),
 //!         None => Vec::new(),
 //!     };
-//!     println!("{}: {:?}, {} bytes before", file.path(), file.change, old.len());
+//!     println!("{}: {:?}, {} bytes before", file.display_path(), file.change, old.len());
 //! }
 //! # Ok::<(), repo_cache::Error>(())
 //! ```

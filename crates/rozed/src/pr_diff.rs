@@ -10,8 +10,8 @@
 //! The local copy is `repo_cache`'s. No changed file is left out: one rozed can't show as text
 //! (binary, more than 5,000 changed lines, or failing to load) gets a placeholder saying why, and
 //! the title counts the ones not shown. A submodule shows "Subproject commit a" against
-//! "Subproject commit b", and a badge in the header marks renames, type and mode changes, and
-//! changes to line endings alone.
+//! "Subproject commit b", and a badge in the header marks renames, type and mode changes, names
+//! that aren't UTF-8 (shown with U+FFFD), and changes to line endings alone.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -192,7 +192,7 @@ pub async fn open(
                     headers.badges.insert(shown.buffer_id, badge);
                 }
                 if let Some(warning) = shown.warning {
-                    log::warn!("{link}: {}: {}", file.path(), warning.detail);
+                    log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
                     not_shown += usize::from(warning.label == NOT_SHOWN);
                     not_loaded += usize::from(warning.label == NOT_LOADED);
                     headers.warnings.insert(shown.buffer_id, warning);
@@ -204,7 +204,7 @@ pub async fn open(
             // Only when even the placeholder that says why can't be shown.
             Err(error) => {
                 not_shown += 1;
-                log::error!("{link}: can't show {}: {error:#}", file.path());
+                log::error!("{link}: can't show {}: {error:#}", file.display_path());
             }
         }
         if index == 0 {
@@ -567,7 +567,8 @@ impl Target<'_> {
         plan: FilePlan,
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Shown> {
-        let path = RelPath::from_unix_str(file.path())?.into_arc();
+        // A name that isn't UTF-8 shows with U+FFFD, and its badge says so.
+        let path = RelPath::from_unix_str(file.display_path().as_ref())?.into_arc();
         let deleted = file.new.is_none();
         let (buffer, old_text, folded) = match plan.content {
             Content::Diff {
@@ -770,13 +771,24 @@ fn status(file: &ChangedFile) -> FileStatus {
 }
 
 /// What a changed file's header says about the change besides its status, from what git listed:
-/// a rename's old path, a submodule, a change of type or mode.
+/// a name that isn't UTF-8, a rename's old path, a submodule, a change of type or mode.
 fn badge(file: &ChangedFile) -> Option<SharedString> {
     let mut notes = Vec::new();
+    let paths = [file.old_path(), file.new_path()];
+    if paths
+        .into_iter()
+        .flatten()
+        .any(|path| std::str::from_utf8(path).is_err())
+    {
+        notes.push("name isn't UTF-8".to_string());
+    }
     if let Change::Renamed { .. } = file.change
         && let Some(old_path) = file.old_path()
     {
-        notes.push(format!("renamed from {old_path}"));
+        notes.push(format!(
+            "renamed from {}",
+            String::from_utf8_lossy(old_path)
+        ));
     }
     if file.is_submodule() {
         notes.push("submodule".to_string());
@@ -1118,13 +1130,14 @@ mod tests {
     }
 
     impl Copied {
-        fn plans(&self) -> Vec<(&str, FilePlan)> {
+        /// Each file's path, as shown, and plan.
+        fn plans(&self) -> Vec<(String, FilePlan)> {
             self.local
                 .files
                 .iter()
                 .map(|file| {
                     let plan = plan_file(&self.local.repo, file, self.checkout.as_deref());
-                    (file.path(), plan)
+                    (file.display_path().into_owned(), plan)
                 })
                 .collect()
         }
@@ -1146,7 +1159,7 @@ mod tests {
             assert_eq!(
                 copied.plans(),
                 vec![(
-                    "a.txt",
+                    "a.txt".into(),
                     FilePlan {
                         badge: Some("line endings only".into()),
                         ..FilePlan::diff(Some("one\ntwo\n".into()), new)
@@ -1199,15 +1212,15 @@ mod tests {
             copied.plans(),
             vec![
                 (
-                    "added.rs",
+                    "added.rs".into(),
                     FilePlan::diff(None, from_git("fn added() {}\n"))
                 ),
                 (
-                    "changed.rs",
+                    "changed.rs".into(),
                     FilePlan::diff(Some("fn old() {}\n".into()), from_git("fn new() {}\n"))
                 ),
                 (
-                    "gone.rs",
+                    "gone.rs".into(),
                     FilePlan::diff(Some("fn gone() {}\n".into()), NewSide::Deleted)
                 ),
             ]
@@ -1227,9 +1240,9 @@ mod tests {
         assert_eq!(
             copied.plans(),
             vec![
-                ("added.rs", FilePlan::diff(None, NewSide::Checkout)),
+                ("added.rs".into(), FilePlan::diff(None, NewSide::Checkout)),
                 (
-                    "changed.rs",
+                    "changed.rs".into(),
                     FilePlan::diff(Some("fn old() {}\n".into()), NewSide::Checkout)
                 ),
             ]
@@ -1307,9 +1320,9 @@ mod tests {
         assert_eq!(
             untrusted.plans(),
             vec![
-                ("Lib.rs", FilePlan::diff(None, from_git(evil))),
+                ("Lib.rs".into(), FilePlan::diff(None, from_git(evil))),
                 (
-                    "lib.rs",
+                    "lib.rs".into(),
                     FilePlan::diff(Some("pub fn lib() {}\n".into()), from_git(benign))
                 ),
             ]
@@ -1330,7 +1343,7 @@ mod tests {
             assert_eq!(
                 copied.plans(),
                 vec![(
-                    "vendor/lib",
+                    "vendor/lib".into(),
                     FilePlan {
                         badge: Some("submodule".into()),
                         ..FilePlan::diff(
@@ -1369,6 +1382,35 @@ mod tests {
     }
 
     #[test]
+    fn names_that_arent_utf8_show_with_a_badge() {
+        let copied = copy(
+            &[],
+            &[
+                Entry::RawFile(b"caf\xe9.txt", b"latin-1\n"),
+                Entry::File("tab\tname.txt", b"a tab\n"),
+            ],
+            false,
+        );
+
+        assert_eq!(
+            copied.plans(),
+            vec![
+                (
+                    "caf\u{fffd}.txt".into(),
+                    FilePlan {
+                        badge: Some("name isn't UTF-8".into()),
+                        ..FilePlan::diff(None, from_git("latin-1\n"))
+                    }
+                ),
+                (
+                    "tab\tname.txt".into(),
+                    FilePlan::diff(None, from_git("a tab\n"))
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn binary_files_get_a_folded_placeholder() {
         let copied = copy(
             &[
@@ -1382,11 +1424,11 @@ mod tests {
             copied.plans(),
             vec![
                 (
-                    "data.bin",
+                    "data.bin".into(),
                     FilePlan::placeholder("(binary file not shown)", false, true)
                 ),
                 (
-                    "gone.bin",
+                    "gone.bin".into(),
                     FilePlan::placeholder("(binary file not shown)", true, true)
                 ),
             ]
@@ -1395,7 +1437,9 @@ mod tests {
 
     /// Pull requests in real repositories, served over `file://` as GitHub serves them.
     mod fixtures {
+        use std::ffi::{OsStr, OsString};
         use std::io::Write as _;
+        use std::os::unix::ffi::OsStrExt as _;
         use std::path::Path;
         use std::process::{Command, Stdio};
 
@@ -1404,6 +1448,8 @@ mod tests {
         /// An entry in a fixture commit's tree.
         pub enum Entry<'a> {
             File(&'a str, &'a [u8]),
+            /// A file whose name is any bytes, such as Latin-1.
+            RawFile(&'a [u8], &'a [u8]),
             /// A submodule at the given commit, which the fixture doesn't have.
             Submodule(&'a str, &'a str),
         }
@@ -1461,22 +1507,31 @@ mod tests {
         fn commit(git_dir: &Path, index: &Path, entries: &[Entry], parent: Option<&str>) -> String {
             let _ = std::fs::remove_file(index);
             for entry in entries {
-                let (mode, id, path) = match entry {
-                    Entry::File(path, contents) => {
-                        let id = run(
-                            git_dir,
-                            &["hash-object", "-w", "--stdin"],
-                            Some(contents),
-                            None,
-                        );
-                        ("100644", id, *path)
-                    }
-                    Entry::Submodule(path, commit) => ("160000", commit.to_string(), *path),
+                let blob = |contents: &[u8]| {
+                    run(
+                        git_dir,
+                        &["hash-object", "-w", "--stdin"],
+                        Some(contents),
+                        None,
+                    )
                 };
-                let cacheinfo = format!("{mode},{id},{path}");
+                let (mode, id, path) = match entry {
+                    Entry::File(path, contents) => ("100644", blob(contents), path.as_bytes()),
+                    Entry::RawFile(path, contents) => ("100644", blob(contents), *path),
+                    Entry::Submodule(path, commit) => {
+                        ("160000", commit.to_string(), path.as_bytes())
+                    }
+                };
+                let mut cacheinfo = OsString::from(format!("{mode},{id},"));
+                cacheinfo.push(OsStr::from_bytes(path));
                 run(
                     git_dir,
-                    &["update-index", "--add", "--cacheinfo", &cacheinfo],
+                    &[
+                        OsStr::new("update-index"),
+                        OsStr::new("--add"),
+                        OsStr::new("--cacheinfo"),
+                        &cacheinfo,
+                    ],
                     None,
                     Some(index),
                 );
@@ -1496,7 +1551,12 @@ mod tests {
             probe.path().join("CASE").exists()
         }
 
-        fn run(dir: &Path, args: &[&str], stdin: Option<&[u8]>, index: Option<&Path>) -> String {
+        fn run<S: AsRef<OsStr> + std::fmt::Debug>(
+            dir: &Path,
+            args: &[S],
+            stdin: Option<&[u8]>,
+            index: Option<&Path>,
+        ) -> String {
             let mut command = Command::new("git");
             command
                 .arg("-C")

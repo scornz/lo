@@ -1,6 +1,8 @@
 //! One repository's clone: fetching into it and reading from it.
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -376,36 +378,44 @@ impl Repo {
     }
 
     /// The contents of the file at `path` in `rev`, a commit or a tree, downloading it if needed.
-    /// `None` when there's no file there. A folder or a submodule there is an error.
-    pub fn read_file(&self, rev: &Oid, path: &str) -> Result<Option<Vec<u8>>, Error> {
-        if path.is_empty() || path.contains('\0') {
+    /// `path` is bytes, as git stores it (see [`crate::FileVersion::path`]). `None` when there's
+    /// no file there. A folder or a submodule there is an error.
+    pub fn read_file(&self, rev: &Oid, path: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        let shown = String::from_utf8_lossy(path);
+        if path.is_empty() || path.contains(&0) {
             return Err(Error::Invalid {
                 what: "path",
-                value: path.to_string(),
+                value: shown.into_owned(),
             });
         }
         // ls-tree reads only trees, which a partial clone has, so it tells a submodule (a commit
         // in another repository, which must never be fetched from this one) from a file.
-        let output = self.run(self.git().args(["ls-tree", "-z", rev.as_str(), "--", path]))?;
-        let entry = String::from_utf8_lossy(&output);
-        let Some(entry) = entry.strip_suffix('\0') else {
+        let output = self.run(
+            self.git()
+                .args(["ls-tree", "-z", rev.as_str(), "--"])
+                .arg(OsStr::from_bytes(path)),
+        )?;
+        let Some(entry) = output.strip_suffix(b"\0") else {
             return Ok(None);
         };
-        let Some((info, found)) = entry.split_once('\t') else {
+        let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
             return Err(unexpected_ls_tree(entry));
         };
+        let (info, found) = (&entry[..tab], &entry[tab + 1..]);
         if found != path {
             return Ok(None);
         }
-        let mut info = info.split(' ');
+        let mut info = std::str::from_utf8(info)
+            .map_err(|_| unexpected_ls_tree(entry))?
+            .split(' ');
         let (Some(mode), Some(kind), Some(oid)) = (info.next(), info.next(), info.next()) else {
             return Err(unexpected_ls_tree(entry));
         };
         if mode == "160000" || kind != "blob" {
             let what = if mode == "160000" { "submodule" } else { kind };
             return Err(Error::Git {
-                command: format!("git ls-tree {rev} -- {path}"),
-                message: format!("{path} is a {what}, not a file"),
+                command: format!("git ls-tree {rev} -- {shown}"),
+                message: format!("{shown} is a {what}, not a file"),
             });
         }
         self.read_blob(&oid.parse()?)
@@ -523,9 +533,12 @@ fn revision_ref(number: u64, oid: &Oid) -> String {
     format!("refs/rozed/pull/{number}/revs/{oid}")
 }
 
-fn unexpected_ls_tree(entry: &str) -> Error {
+fn unexpected_ls_tree(entry: &[u8]) -> Error {
     Error::Git {
         command: "git ls-tree".into(),
-        message: format!("printed an unexpected entry {entry:?}"),
+        message: format!(
+            "printed an unexpected entry {:?}",
+            String::from_utf8_lossy(entry)
+        ),
     }
 }

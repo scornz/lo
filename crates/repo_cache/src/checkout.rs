@@ -1,6 +1,8 @@
 //! Checkouts of pull request heads, for language servers on trusted repositories.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 
 use crate::git::Location;
@@ -61,8 +63,8 @@ impl Repo {
     /// A checkout's file can differ from the head's blob: changed on disk, or two names that
     /// differ only in case sharing one file on a case-insensitive disk. Compare before letting a
     /// checkout's file stand in for git's text.
-    pub fn hash_checkout_file(&self, checkout: &Path, path: &str) -> Result<Option<Oid>, Error> {
-        let relative = Path::new(path);
+    pub fn hash_checkout_file(&self, checkout: &Path, path: &[u8]) -> Result<Option<Oid>, Error> {
+        let relative = Path::new(OsStr::from_bytes(path));
         let inside = !path.is_empty()
             && relative
                 .components()
@@ -70,7 +72,7 @@ impl Repo {
         if !inside {
             return Err(Error::Invalid {
                 what: "path in a checkout",
-                value: path.to_string(),
+                value: String::from_utf8_lossy(path).into_owned(),
             });
         }
         let Some(git_dir) = self.worktree_git_dir(checkout) else {
@@ -90,7 +92,7 @@ impl Repo {
                 work_tree: checkout,
             })
             .args(["hash-object", "--no-filters", "--"])
-            .arg(path),
+            .arg(relative),
         )?;
         crate::oid::parse_output(&output).map(Some)
     }

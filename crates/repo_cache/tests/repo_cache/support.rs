@@ -1,9 +1,12 @@
 //! Real git repositories in temporary folders, served over `file://` the way GitHub serves them:
 //! partial clones allowed, and any commit fetchable by ID.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::io::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use repo_cache::{Git, Oid, RepoCache};
 use tempfile::TempDir;
@@ -117,6 +120,44 @@ impl Remote {
     /// Commits everything in the working copy and returns the commit.
     pub fn commit(&self, message: &str) -> Oid {
         git(&self.work, &["add", "-A"]);
+        self.commit_staged(message)
+    }
+
+    /// Commits the working copy and `files`, whose names a Mac's disk may refuse (a name that
+    /// isn't UTF-8), which go straight into the index.
+    pub fn commit_with_names(&self, files: &[(&[u8], &[u8])], message: &str) -> Oid {
+        git(&self.work, &["add", "-A"]);
+        for (path, contents) in files {
+            let mut hash = Command::new("git")
+                .args(["hash-object", "-w", "--stdin"])
+                .current_dir(&self.work)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            hash.stdin.take().unwrap().write_all(contents).unwrap();
+            let output = hash.wait_with_output().unwrap();
+            assert!(output.status.success());
+            let blob = String::from_utf8(output.stdout).unwrap();
+            let mut cacheinfo = format!("100644,{},", blob.trim()).into_bytes();
+            cacheinfo.extend_from_slice(path);
+            let status = Command::new("git")
+                .args(["update-index", "--add", "--cacheinfo"])
+                .arg(OsStr::from_bytes(&cacheinfo))
+                .current_dir(&self.work)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        self.commit_staged(message)
+    }
+
+    /// Commits what's staged.
+    fn commit_staged(&self, message: &str) -> Oid {
         git(
             &self.work,
             &["commit", "-q", "--allow-empty", "-m", message],

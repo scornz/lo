@@ -241,7 +241,7 @@ fn hashes_a_checkouts_files_as_git_would() {
 
     for path in ["README.md", "src/lib.rs", "removed_later.txt"] {
         assert_eq!(
-            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            f.repo.hash_checkout_file(&dir, path.as_bytes()).unwrap(),
             Some(blob(path)),
             "{path}"
         );
@@ -249,7 +249,7 @@ fn hashes_a_checkouts_files_as_git_would() {
     // Not regular files: missing, a folder, a submodule's empty folder.
     for path in ["missing.txt", "src", "vendor/lib"] {
         assert_eq!(
-            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            f.repo.hash_checkout_file(&dir, path.as_bytes()).unwrap(),
             None,
             "{path}"
         );
@@ -257,17 +257,20 @@ fn hashes_a_checkouts_files_as_git_would() {
     // A file changed on disk no longer hashes to its blob.
     fs::write(dir.join("README.md"), "changed on disk\n").unwrap();
     assert_ne!(
-        f.repo.hash_checkout_file(&dir, "README.md").unwrap(),
+        f.repo.hash_checkout_file(&dir, b"README.md").unwrap(),
         Some(blob("README.md"))
     );
     // Nothing outside the checkout.
     for path in ["../repo.git/HEAD", "/etc/passwd", ""] {
-        assert!(f.repo.hash_checkout_file(&dir, path).is_err(), "{path}");
+        assert!(
+            f.repo.hash_checkout_file(&dir, path.as_bytes()).is_err(),
+            "{path}"
+        );
     }
     // Nor in a folder that isn't one of the clone's checkouts, such as another repository.
     let error = f
         .repo
-        .hash_checkout_file(&f.remote.work, "README.md")
+        .hash_checkout_file(&f.remote.work, b"README.md")
         .unwrap_err();
     assert!(
         error.to_string().contains("isn't a valid checkout"),
@@ -318,7 +321,7 @@ fn hostile_config_in_the_clone_has_no_effect() {
     let dir_r2 = f.repo.checkout(1, &f.r2).unwrap();
     for dir in [&dir, &dir_r2] {
         if dir.join("src/lib.rs").is_file() {
-            f.repo.hash_checkout_file(dir, "src/lib.rs").unwrap();
+            f.repo.hash_checkout_file(dir, b"src/lib.rs").unwrap();
         }
     }
 
@@ -353,7 +356,7 @@ fn a_pull_requests_own_attributes_never_apply_in_its_checkout() {
     let dir = f.repo.checkout(1, &head).unwrap();
 
     for path in ["id.txt", "x.enc", ".gitattributes"] {
-        let blob = f.repo.read_file(&head, path).unwrap().unwrap();
+        let blob = f.repo.read_file(&head, path.as_bytes()).unwrap().unwrap();
         assert_eq!(
             fs::read(dir.join(path)).unwrap(),
             blob,
@@ -361,7 +364,7 @@ fn a_pull_requests_own_attributes_never_apply_in_its_checkout() {
         );
         let id = git(&f.remote.work, &["rev-parse", &format!("{head}:{path}")]);
         assert_eq!(
-            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            f.repo.hash_checkout_file(&dir, path.as_bytes()).unwrap(),
             Some(id.parse().unwrap()),
             "{path}"
         );

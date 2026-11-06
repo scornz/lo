@@ -153,7 +153,7 @@ fn git_never_uses_a_repository_above_the_cache() {
         git(home.path(), &["for-each-ref", "--format=%(refname)"]),
         ""
     );
-    assert!(repo.read_file(&pr.head, "README.md").is_err());
+    assert!(repo.read_file(&pr.head, b"README.md").is_err());
 }
 
 #[test]
@@ -294,16 +294,16 @@ fn a_force_pushed_revision_stays_readable() {
     // A garbage collection keeps every revision.
     git(repo.git_dir(), &["gc", "-q", "--prune=now"]);
     assert_eq!(
-        repo.read_file(&r1, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r1, b"feature.txt").unwrap().unwrap(),
         b"first version\n"
     );
     assert_eq!(
-        repo.read_file(&r2, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r2, b"feature.txt").unwrap().unwrap(),
         b"second version\n"
     );
     let changes = repo.changed_files(&r1, &r2).unwrap();
     assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].path(), "feature.txt");
+    assert_eq!(changes[0].path(), b"feature.txt");
     assert!(repo.is_ancestor(&pr.base, &r1).unwrap());
 }
 
@@ -330,7 +330,7 @@ fn a_revision_the_server_lost_stays_readable_once_read() {
     git(repo.git_dir(), &["gc", "-q", "--prune=now"]);
 
     assert_eq!(
-        repo.read_file(&r1, "feature.txt").unwrap().unwrap(),
+        repo.read_file(&r1, b"feature.txt").unwrap().unwrap(),
         b"first version\n"
     );
     assert_eq!(repo.changed_files(&pr.base, &r1).unwrap().len(), 1);
@@ -547,7 +547,7 @@ fn fetches_a_commit_by_id_and_pins_it() {
         elsewhere.as_str()
     );
     assert_eq!(
-        repo.read_file(&elsewhere, "elsewhere.txt")
+        repo.read_file(&elsewhere, b"elsewhere.txt")
             .unwrap()
             .unwrap(),
         b"elsewhere\n"
