@@ -393,10 +393,14 @@ fn alice_reviews_r3_and_approves() {
         start,
         Mutation::StartReview {
             commit: R3.to_string(),
-            first: first.clone(),
+            thread: Some(new_thread(
+                Some(selection),
+                "Does validate need the tokens?"
+            )),
         }
     );
     review.accepted(&start, Some("PRR_kwDOAbc"));
+    assert!(start.sends_comment());
     assert_eq!(
         drafts.take(&key),
         Some("Does validate need the tokens?".to_string())
@@ -534,4 +538,156 @@ fn without_a_pending_review_c_posts_on_the_revision_on_screen() {
             thread,
         }))
     );
+}
+
+fn readme(body: &str) -> NewComment {
+    NewComment::Thread(NewThread {
+        path: "README.md".to_string(),
+        lines: None,
+        body: body.to_string(),
+    })
+}
+
+#[test]
+fn carol_starts_her_review_with_a_comment_on_a_file() {
+    // Carol is looking at r1 to r2, and comments on README.md's header.
+    let screen = Screen::between(R1, R2);
+    assert!(CommentableLines::new(&screen, Vec::new()).takes_file_comment());
+    let mut review = YourReview::new(None);
+    let mut drafts = Drafts::new();
+    let key = DraftKey {
+        account: "carol".to_string(),
+        pull_request: pull_request(),
+        place: Place::Thread {
+            commit: screen.right.clone(),
+            path: "README.md".to_string(),
+            lines: None,
+        },
+    };
+    drafts.set(key.clone(), "Mention the new flag.");
+    let comment = readme(drafts.get(&key).unwrap());
+
+    // GitHub can't start a review with a file-level thread, so the first call starts an empty
+    // one, on the latest head. The comment isn't sent yet, so its draft stays.
+    let start = review.add(&screen.right, R3, &comment).unwrap();
+    assert_eq!(
+        start,
+        Mutation::StartReview {
+            commit: R3.to_string(),
+            thread: None,
+        }
+    );
+    review.accepted(&start, Some("PRR_carol"));
+    assert!(!start.sends_comment());
+    assert_eq!(review.pending_comments(), 0);
+    assert!(drafts.get(&key).is_some());
+
+    // The second adds the file-level thread.
+    let add = review.add(&screen.right, R3, &comment).unwrap();
+    assert_eq!(
+        add,
+        Mutation::AddThread {
+            review: "PRR_carol".to_string(),
+            thread: NewThread {
+                path: "README.md".to_string(),
+                lines: None,
+                body: "Mention the new flag.".to_string(),
+            },
+        }
+    );
+    review.accepted(&add, None);
+    assert!(add.sends_comment());
+    drafts.take(&key);
+    assert_eq!(review.pending_comments(), 1);
+    assert!(drafts.is_empty());
+}
+
+#[test]
+fn a_comment_github_refuses_keeps_its_draft_and_is_not_counted() {
+    let mut review = YourReview::new(None);
+    let mut drafts = Drafts::new();
+    let key = DraftKey {
+        account: "dan".to_string(),
+        pull_request: pull_request(),
+        place: Place::Reply {
+            thread: "PRRT_outdated".to_string(),
+        },
+    };
+    drafts.set(key.clone(), "Still applies on r3.");
+    let reply = NewComment::Reply {
+        thread: "PRRT_outdated".to_string(),
+        body: drafts.get(&key).unwrap().to_string(),
+    };
+
+    // A reply as the first comment: the review starts, then GitHub refuses the reply.
+    let start = review.add(R3, R3, &reply).unwrap();
+    review.accepted(&start, Some("PRR_dan"));
+    let answer = review.add(R3, R3, &reply).unwrap();
+    assert!(matches!(&answer, Mutation::AddReply { review, .. } if review == "PRR_dan"));
+    // Refused, so not accepted: the review stays empty, and an empty Comment isn't sent.
+    assert_eq!(review.pending_comments(), 0);
+    assert_eq!(drafts.get(&key), Some("Still applies on r3."));
+    assert_eq!(
+        review.submit(ReviewEvent::Comment, "", false, R3),
+        Err(Refusal::NothingToSubmit)
+    );
+    // Sending it again plans the same reply.
+    assert_eq!(review.add(R3, R3, &reply), Ok(answer));
+
+    // GitHub answers a thread it won't take, such as one whose line left the diff in a push it
+    // hadn't seen, with `thread: null` and no error. That's a refusal too.
+    let lines = CommentableLines::new(&Screen::full(R3), Hunk::parse(PATCH).unwrap())
+        .line(Line::right(13))
+        .unwrap();
+    let why = NewComment::Thread(new_thread(Some(lines), "Why?"));
+    assert!(matches!(
+        review.add(R3, R3, &why),
+        Ok(Mutation::AddThread { .. })
+    ));
+    assert_eq!(review.pending_comments(), 0);
+}
+
+#[test]
+fn c_on_a_file_posts_a_file_comment_on_the_revision_on_screen() {
+    let screen = Screen::between(R1, R2);
+
+    assert_eq!(
+        YourReview::new(None).post(&screen.right, R3, &readme("Mention the new flag.")),
+        Ok(Posting::Now(Mutation::PostFileComment {
+            commit: R2.to_string(),
+            path: "README.md".to_string(),
+            body: "Mention the new flag.".to_string(),
+        }))
+    );
+}
+
+#[test]
+fn erin_comments_on_r2_after_r3_was_pushed() {
+    // With no pending review, a line comment on r2 starts a review there, with its thread on
+    // r2's lines.
+    let mut review = YourReview::new(None);
+    let nit = |line| NewComment::Thread(new_thread(Some(Lines::one(Line::right(line))), "Nit"));
+    let start = review.add(R2, R3, &nit(11)).unwrap();
+    assert_eq!(
+        start,
+        Mutation::StartReview {
+            commit: R2.to_string(),
+            thread: Some(new_thread(Some(Lines::one(Line::right(11))), "Nit")),
+        }
+    );
+    review.accepted(&start, Some("PRR_erin"));
+    assert_eq!(review.pending().unwrap().commit, R2);
+
+    // Another line comment on r2 would land on r3, so it's refused, and the UI offers to submit
+    // the review or switch to r3, where it joins.
+    assert_eq!(
+        review.add(R2, R3, &nit(12)),
+        Err(Refusal::NotLatest {
+            head: R3.to_string(),
+        })
+    );
+    assert!(matches!(
+        review.add(R3, R3, &nit(12)),
+        Ok(Mutation::AddThread { .. })
+    ));
 }

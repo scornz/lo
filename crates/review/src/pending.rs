@@ -17,9 +17,22 @@
 //!   while the right column shows the latest head; elsewhere it's refused, and the UI offers to
 //!   submit the pending review or to switch to the latest revision.
 //! - Replies have no lines, so they join the pending review from any revision.
+//! - `addPullRequestReview`'s threads can't be file-level (its draft thread input has no subject
+//!   type). So `c` on a file with no pending review is two calls: start an empty review, then
+//!   `addPullRequestReviewThread` with `subjectType: FILE`. A reply as the first comment is two
+//!   calls too: start, then reply. `C` on a file posts REST's file comment.
 //! - A comment posted at once is a review of its own, which GitHub refuses while you have a
 //!   pending review ("User can only have one pending review per pull request"), so `C` adds to
 //!   the pending review instead, and says so.
+//! - GitHub refuses a line outside the diff. `addPullRequestReview` answers "Line could not be
+//!   resolved" and REST "could not be resolved", but `addPullRequestReviewThread` returns
+//!   `thread: null` with no error. A null thread is a refusal, not an acceptance.
+//!
+//! Each call is planned and accepted on its own, so a failure loses nothing: the pending count
+//! changes only when GitHub accepts a comment, and a comment's draft is kept until a mutation
+//! that [sends it](Mutation::sends_comment) is accepted. The UI sends one call at a time and waits
+//! for its answer: two `c`s before the first is accepted would plan two reviews, and GitHub
+//! refuses the second.
 //!
 //! ```
 //! use review::pending::{Mutation, NewComment, NewThread, ReviewEvent, YourReview};
@@ -70,7 +83,9 @@ pub struct PendingReview {
     /// one the threads it was started with are on. Threads added to it later are on the heads
     /// that were current when they were added, so they may be on later revisions.
     pub commit: String,
-    /// `comments.totalCount`: its threads and replies.
+    /// `comments.totalCount`: its threads and replies. [`YourReview::accepted`] counts the ones
+    /// rozed adds. Deleting a pending comment isn't a mutation here, so the GitHub layer reads the
+    /// pending review again after one.
     pub comments: usize,
 }
 
@@ -81,7 +96,7 @@ pub struct NewThread {
     pub path: String,
     /// `line`, `side`, `startLine` and `startSide`, from
     /// [`CommentableLines`](crate::threads::CommentableLines). `None` for a file-level comment,
-    /// `subjectType: FILE`.
+    /// `subjectType: FILE`, which only `addPullRequestReviewThread` takes.
     pub lines: Option<Lines>,
     /// `body`, in Markdown.
     pub body: String,
@@ -106,17 +121,27 @@ impl NewComment {
     }
 }
 
-/// What to send GitHub. Each variant names its GraphQL mutation; all of them also take the pull
-/// request's `pullRequestId` where GitHub asks for it.
+/// What to send GitHub. Each variant names its GraphQL mutation, or REST endpoint; all of them
+/// also take the pull request's `pullRequestId` where GitHub asks for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mutation {
     /// `addPullRequestReview` with `commitOID: commit` and no `event`, which starts your pending
-    /// review. A thread goes in its `threads`. A reply needs the review first: after it,
-    /// `addPullRequestReviewThreadReply` adds the reply with the new review's id as
-    /// `pullRequestReviewId`.
-    StartReview { commit: String, first: NewComment },
-    /// `addPullRequestReviewThread` with `pullRequestReviewId: review`. GitHub puts the thread on
-    /// the pull request's current head.
+    /// review, recorded on `commit`. A line comment goes in its `threads`, on `commit`'s lines:
+    /// the only way to put a pending thread on a revision older than the latest head.
+    ///
+    /// Without one, it starts an empty review, for a file-level comment or a reply, which can't
+    /// go in `threads`. It starts on the latest head, where a file-level thread goes anyway, so
+    /// approving the latest revision isn't refused later. Once it's accepted,
+    /// [`YourReview::add`] plans the comment's own mutation.
+    StartReview {
+        commit: String,
+        /// The line comment, never a file-level one.
+        thread: Option<NewThread>,
+    },
+    /// `addPullRequestReviewThread` with `pullRequestReviewId: review`, and `subjectType: FILE`
+    /// for a file-level comment. GitHub puts the thread on the pull request's current head. It
+    /// refuses a line outside the diff by returning `thread: null` without an error, which isn't
+    /// an acceptance.
     AddThread { review: String, thread: NewThread },
     /// `addPullRequestReviewThreadReply` with `pullRequestReviewId: review` and
     /// `pullRequestReviewThreadId: thread`.
@@ -125,9 +150,17 @@ pub enum Mutation {
         thread: String,
         body: String,
     },
-    /// `addPullRequestReview` with `commitOID: commit`, `event: COMMENT` and the thread in
-    /// `threads`: one comment, posted at once.
+    /// `addPullRequestReview` with `commitOID: commit`, `event: COMMENT` and the line comment in
+    /// `threads`: one comment, posted at once on `commit`.
     PostThread { commit: String, thread: NewThread },
+    /// REST's `POST /repos/{owner}/{repo}/pulls/{number}/comments` with `commit_id: commit`,
+    /// `path`, `body` and `subject_type: "file"`: a file-level comment, posted at once.
+    /// `addPullRequestReview`'s threads can't be file-level.
+    PostFileComment {
+        commit: String,
+        path: String,
+        body: String,
+    },
     /// `addPullRequestReviewThreadReply` with `pullRequestReviewThreadId: thread` and no
     /// `pullRequestReviewId`: a reply, posted at once.
     PostReply { thread: String, body: String },
@@ -145,6 +178,23 @@ pub enum Mutation {
         event: ReviewEvent,
         body: String,
     },
+}
+
+impl Mutation {
+    /// Whether accepting it sends the comment it was planned for, so the comment's draft can go:
+    /// every comment mutation does but a [`StartReview`](Self::StartReview) without a thread,
+    /// which only starts the review the comment then joins. Submitting a review sends no comment.
+    pub fn sends_comment(&self) -> bool {
+        match self {
+            Self::StartReview { thread, .. } => thread.is_some(),
+            Self::AddThread { .. }
+            | Self::AddReply { .. }
+            | Self::PostThread { .. }
+            | Self::PostFileComment { .. }
+            | Self::PostReply { .. } => true,
+            Self::SubmitReview { .. } | Self::Review { .. } => false,
+        }
+    }
 }
 
 /// What `C` sends.
@@ -228,17 +278,27 @@ impl YourReview {
         self.pending.as_ref().map_or(0, |pending| pending.comments)
     }
 
-    /// What `c` sends: `comment`, written while the right column shows revision `on`, added to
-    /// your pending review, or starting one on `on`. `head` is the pull request's latest head
+    /// What `c` sends next: `comment`, written while the right column shows revision `on`, added
+    /// to your pending review, or starting one. `head` is the pull request's latest head
     /// (`headRefOid`).
+    ///
+    /// With no pending review, a line comment starts one on `on`, with the comment in it. A
+    /// file-level comment or a reply starts an empty one on `head` first: once that's accepted,
+    /// call it again for the comment's own mutation.
     pub fn add(&self, on: &str, head: &str, comment: &NewComment) -> Result<Mutation, Refusal> {
         if comment.body().trim().is_empty() {
             return Err(Refusal::Blank);
         }
         let Some(pending) = &self.pending else {
-            return Ok(Mutation::StartReview {
-                commit: on.to_string(),
-                first: comment.clone(),
+            return Ok(match comment {
+                NewComment::Thread(thread) if thread.lines.is_some() => Mutation::StartReview {
+                    commit: on.to_string(),
+                    thread: Some(thread.clone()),
+                },
+                _ => Mutation::StartReview {
+                    commit: head.to_string(),
+                    thread: None,
+                },
             });
         };
         let review = pending.id.clone();
@@ -270,9 +330,14 @@ impl YourReview {
             return Err(Refusal::Blank);
         }
         Ok(Posting::Now(match comment {
-            NewComment::Thread(thread) => Mutation::PostThread {
+            NewComment::Thread(thread) if thread.lines.is_some() => Mutation::PostThread {
                 commit: on.to_string(),
                 thread: thread.clone(),
+            },
+            NewComment::Thread(thread) => Mutation::PostFileComment {
+                commit: on.to_string(),
+                path: thread.path.clone(),
+                body: thread.body.clone(),
             },
             NewComment::Reply { thread, body } => Mutation::PostReply {
                 thread: thread.clone(),
@@ -284,14 +349,18 @@ impl YourReview {
     /// Records that GitHub accepted `mutation`. `review_id` is the id GitHub gave a review the
     /// mutation started (`addPullRequestReview`'s `pullRequestReview.id`); without it, starting a
     /// review records nothing.
+    ///
+    /// Call it only for an acceptance. GitHub refuses most mutations with an error, but
+    /// `addPullRequestReviewThread` refuses a line outside the diff by returning `thread: null`
+    /// with no error: that's a refusal, so don't call it, and keep the comment's draft.
     pub fn accepted(&mut self, mutation: &Mutation, review_id: Option<&str>) {
         match mutation {
-            Mutation::StartReview { commit, .. } => {
+            Mutation::StartReview { commit, thread } => {
                 if let Some(id) = review_id {
                     self.pending = Some(PendingReview {
                         id: id.to_string(),
                         commit: commit.clone(),
-                        comments: 1,
+                        comments: usize::from(thread.is_some()),
                     });
                 }
             }
@@ -300,7 +369,9 @@ impl YourReview {
                     pending.comments += 1;
                 }
             }
-            Mutation::PostThread { .. } | Mutation::PostReply { .. } => {}
+            Mutation::PostThread { .. }
+            | Mutation::PostFileComment { .. }
+            | Mutation::PostReply { .. } => {}
             Mutation::SubmitReview { .. } | Mutation::Review { .. } => self.pending = None,
         }
     }
@@ -366,6 +437,14 @@ mod tests {
         })
     }
 
+    fn file(body: &str) -> NewComment {
+        NewComment::Thread(NewThread {
+            path: "README.md".to_string(),
+            lines: None,
+            body: body.to_string(),
+        })
+    }
+
     fn reply(body: &str) -> NewComment {
         NewComment::Reply {
             thread: "PRRT_9".to_string(),
@@ -394,7 +473,7 @@ mod tests {
             YourReview::default().add("a3", HEAD, &thread("Off by one?")),
             Ok(Mutation::StartReview {
                 commit: "a3".to_string(),
-                first: thread("Off by one?"),
+                thread: Some(new_thread(thread("Off by one?"))),
             })
         );
     }
@@ -439,13 +518,83 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_as_the_first_comment_starts_the_review_too() {
+    fn a_reply_as_the_first_comment_starts_an_empty_review_then_joins_it() {
+        let mut review = YourReview::default();
+        // From any revision, the review starts on the latest head: a reply has no revision.
+        let start = review.add("a1", HEAD, &reply("Agreed.")).unwrap();
         assert_eq!(
-            YourReview::default().add("a3", HEAD, &reply("Agreed.")),
-            Ok(Mutation::StartReview {
+            start,
+            Mutation::StartReview {
                 commit: "a3".to_string(),
-                first: reply("Agreed."),
+                thread: None,
+            }
+        );
+        assert!(!start.sends_comment());
+        review.accepted(&start, Some("PRR_1"));
+        assert_eq!(review.pending_comments(), 0);
+
+        let answer = review.add("a1", HEAD, &reply("Agreed.")).unwrap();
+        assert_eq!(
+            answer,
+            Mutation::AddReply {
+                review: "PRR_1".to_string(),
+                thread: "PRRT_9".to_string(),
+                body: "Agreed.".to_string(),
+            }
+        );
+        assert!(answer.sends_comment());
+        review.accepted(&answer, None);
+        assert_eq!(review.pending_comments(), 1);
+    }
+
+    #[test]
+    fn a_file_level_first_comment_starts_an_empty_review_then_adds_its_thread() {
+        // `addPullRequestReview`'s threads can't be file-level.
+        let mut review = YourReview::default();
+        let start = review
+            .add("a2", HEAD, &file("Needs a changelog entry."))
+            .unwrap();
+        assert_eq!(
+            start,
+            Mutation::StartReview {
+                commit: "a3".to_string(),
+                thread: None,
+            }
+        );
+        review.accepted(&start, Some("PRR_1"));
+
+        assert_eq!(
+            review.add("a2", HEAD, &file("Needs a changelog entry.")),
+            Ok(Mutation::AddThread {
+                review: "PRR_1".to_string(),
+                thread: new_thread(file("Needs a changelog entry.")),
             })
+        );
+    }
+
+    #[test]
+    fn a_file_level_comment_joins_a_pending_review_from_any_revision() {
+        assert_eq!(
+            pending("a3", 1).add("a1", HEAD, &file("Needs a changelog entry.")),
+            Ok(Mutation::AddThread {
+                review: "PRR_1".to_string(),
+                thread: new_thread(file("Needs a changelog entry.")),
+            })
+        );
+    }
+
+    #[test]
+    fn an_empty_review_whose_first_comment_failed_has_nothing_to_submit() {
+        let mut review = YourReview::default();
+        let start = review.add("a3", HEAD, &reply("Agreed.")).unwrap();
+        review.accepted(&start, Some("PRR_1"));
+        // GitHub refused the reply, so it's never accepted.
+        let _reply = review.add("a3", HEAD, &reply("Agreed.")).unwrap();
+
+        assert_eq!(review.pending_comments(), 0);
+        assert_eq!(
+            review.submit(ReviewEvent::Comment, "", false, "a3"),
+            Err(Refusal::NothingToSubmit)
         );
     }
 
@@ -501,7 +650,7 @@ mod tests {
             YourReview::default().add("a2", HEAD, &thread("Off by one?")),
             Ok(Mutation::StartReview {
                 commit: "a2".to_string(),
-                first: thread("Off by one?"),
+                thread: Some(new_thread(thread("Off by one?"))),
             })
         );
     }
@@ -540,18 +689,103 @@ mod tests {
                 body: "Agreed.".to_string(),
             }))
         );
+        // On an older revision, a line comment is posted on that revision.
+        assert_eq!(
+            review.post("a2", HEAD, &thread("Off by one?")),
+            Ok(Posting::Now(Mutation::PostThread {
+                commit: "a2".to_string(),
+                thread: new_thread(thread("Off by one?")),
+            }))
+        );
+    }
+
+    #[test]
+    fn c_on_a_file_posts_a_file_comment_through_rest() {
+        assert_eq!(
+            YourReview::default().post("a2", HEAD, &file("Needs a changelog entry.")),
+            Ok(Posting::Now(Mutation::PostFileComment {
+                commit: "a2".to_string(),
+                path: "README.md".to_string(),
+                body: "Needs a changelog entry.".to_string(),
+            }))
+        );
+        assert_eq!(
+            pending("a3", 1).post("a2", HEAD, &file("Needs a changelog entry.")),
+            Ok(Posting::Pending(Mutation::AddThread {
+                review: "PRR_1".to_string(),
+                thread: new_thread(file("Needs a changelog entry.")),
+            }))
+        );
+    }
+
+    #[test]
+    fn every_mutation_but_an_empty_start_or_a_submission_sends_the_comment() {
+        let line = new_thread(thread("Off by one?"));
+        let sends = |mutation: Mutation| mutation.sends_comment();
+        let review = || "PRR_1".to_string();
+        let commit = || "a3".to_string();
+        let body = || "Agreed.".to_string();
+
+        assert!(sends(Mutation::StartReview {
+            commit: commit(),
+            thread: Some(line.clone()),
+        }));
+        assert!(!sends(Mutation::StartReview {
+            commit: commit(),
+            thread: None,
+        }));
+        assert!(sends(Mutation::AddThread {
+            review: review(),
+            thread: line.clone(),
+        }));
+        assert!(sends(Mutation::AddReply {
+            review: review(),
+            thread: "PRRT_9".to_string(),
+            body: body(),
+        }));
+        assert!(sends(Mutation::PostThread {
+            commit: commit(),
+            thread: line,
+        }));
+        assert!(sends(Mutation::PostFileComment {
+            commit: commit(),
+            path: "README.md".to_string(),
+            body: body(),
+        }));
+        assert!(sends(Mutation::PostReply {
+            thread: "PRRT_9".to_string(),
+            body: body(),
+        }));
+        assert!(!sends(Mutation::SubmitReview {
+            review: review(),
+            event: ReviewEvent::Comment,
+            body: body(),
+        }));
+        assert!(!sends(Mutation::Review {
+            commit: commit(),
+            event: ReviewEvent::Comment,
+            body: body(),
+        }));
     }
 
     #[test]
     fn a_comment_posted_at_once_leaves_no_pending_review() {
         let mut review = YourReview::default();
-        let Ok(Posting::Now(post)) = review.post("a3", HEAD, &thread("Off by one?")) else {
-            unreachable!()
-        };
-        review.accepted(&post, None);
+        for comment in [thread("Off by one?"), file("Changelog?"), reply("Agreed.")] {
+            let Ok(Posting::Now(post)) = review.post("a3", HEAD, &comment) else {
+                unreachable!()
+            };
+            // GitHub gives a review id for a comment posted at once too: it's a review of its own.
+            review.accepted(&post, Some("PRR_posted"));
+        }
 
         assert_eq!(review.pending(), None);
         assert_eq!(review.pending_comments(), 0);
+        // So `c` still starts one.
+        assert!(matches!(
+            review.add("a3", HEAD, &thread("Off by one?")),
+            Ok(Mutation::StartReview { .. })
+        ));
     }
 
     #[test]
