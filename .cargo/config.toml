@@ -1,5 +1,6 @@
 [alias]
-xtask = "run --package xtask --"
+# xtask is its own workspace (crates/xtask/Cargo.toml). Run it from the repository's root.
+xtask = "run --manifest-path crates/xtask/Cargo.toml --"
 
 # BEGIN generated from Zed's .cargo/config.toml. Run `cargo xtask sync-zed`; don't edit by hand.
 [target.'cfg(all())']

@@ -549,6 +549,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-pipe"
+version = "0.1.3"
+source = "git+https://github.com/zed-industries/async-pipe-rs?rev=82d00a04211cf4e1236029aa03e6b6ce2a74c553#82d00a04211cf4e1236029aa03e6b6ce2a74c553"
+dependencies = [
+ "futures",
+ "log",
+]
+
+[[package]]
 name = "async-process"
 version = "2.5.0"
 source = "git+https://github.com/zed-industries/async-process.git?rev=0b6d6713570af61806e1e5cb40e0f757cb93fd9d#0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
@@ -973,7 +982,9 @@ dependencies = [
  "imara-diff",
  "language",
  "log",
+ "pretty_assertions",
  "rope",
+ "settings",
  "sum_tree",
  "text",
  "tracing",
@@ -1292,6 +1303,7 @@ dependencies = [
 name = "clock"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "serde",
  "smallvec",
 ]
@@ -1995,6 +2007,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-compression",
+ "async-pipe",
  "async-tar",
  "async-trait",
  "client",
@@ -2123,6 +2136,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
 name = "diffy"
@@ -3194,6 +3213,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "parking_lot",
+ "rand 0.9.4",
  "regex",
  "rope",
  "schemars",
@@ -4707,6 +4727,7 @@ dependencies = [
  "fuzzy_nucleo",
  "globset",
  "gpui",
+ "grammars",
  "http_client",
  "imara-diff",
  "itertools 0.14.0",
@@ -4715,6 +4736,7 @@ dependencies = [
  "lsp",
  "parking_lot",
  "postage",
+ "rand 0.9.4",
  "regex",
  "rpc",
  "semver",
@@ -4731,6 +4753,11 @@ dependencies = [
  "theme",
  "tracing",
  "tree-sitter",
+ "tree-sitter-json",
+ "tree-sitter-md",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
  "unicase",
  "util",
  "watch",
@@ -5145,6 +5172,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
+ "async-pipe",
  "collections",
  "futures",
  "futures-lite",
@@ -6541,6 +6569,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "perf"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "serde",
+]
+
+[[package]]
 name = "pest"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7344,6 +7380,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8131,6 +8177,7 @@ dependencies = [
  "async-trait",
  "base64",
  "collections",
+ "fs",
  "futures",
  "gpui",
  "log",
@@ -8277,6 +8324,7 @@ name = "rozed"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "askpass",
  "assets",
  "client",
  "clock",
@@ -8301,6 +8349,8 @@ dependencies = [
  "project",
  "release_channel",
  "reqwest_client",
+ "semver",
+ "serde_json",
  "session",
  "settings",
  "tempfile",
@@ -9747,10 +9797,12 @@ dependencies = [
  "log",
  "parking_lot",
  "postage",
+ "rand 0.9.4",
  "regex",
  "rope",
  "smallvec",
  "sum_tree",
+ "util",
 ]
 
 [[package]]
@@ -10098,7 +10150,6 @@ dependencies = [
  "indexmap",
  "toml_datetime 0.7.3",
  "toml_parser",
- "toml_writer",
  "winnow 0.7.13",
 ]
 
@@ -10743,6 +10794,7 @@ dependencies = [
  "nix",
  "path",
  "percent-encoding",
+ "rand 0.9.4",
  "regex",
  "rust-embed",
  "schemars",
@@ -10754,9 +10806,19 @@ dependencies = [
  "tempfile",
  "unicase",
  "url",
+ "util_macros",
  "walkdir",
  "which",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "util_macros"
+version = "0.1.0"
+dependencies = [
+ "perf",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -12397,6 +12459,7 @@ dependencies = [
  "parking_lot",
  "paths",
  "postage",
+ "pretty_assertions",
  "rpc",
  "settings",
  "smallvec",
@@ -12472,14 +12535,6 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "toml_edit 0.23.7",
-]
 
 [[package]]
 name = "xxhash-rust"
