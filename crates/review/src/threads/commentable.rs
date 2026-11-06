@@ -2,14 +2,16 @@
 //!
 //! GitHub takes a line comment only on a line of the pull request's diff: a line of one of a
 //! file's hunks, on the side it's on. A removed or unchanged line takes one on the left, the base's
-//! side, and an added or unchanged line on the right. A range must start and end in the same hunk
-//! (GitHub refuses others with "start line must be part of the same hunk as the line"), and may
-//! start on the other side, as a range from a removed line to the added line that replaces it
-//! does. Anywhere else, the UI offers a file-level comment.
+//! side, and an added or unchanged line on the right. Each end of a range must be such a line, but
+//! the two may be in different hunks, and a range may start on the other side, as a range from a
+//! removed line to the added line that replaces it does. Anywhere else, the UI offers a
+//! file-level comment.
 //!
-//! GitHub's newer Files changed page also takes comments on unchanged lines outside the hunks of a
-//! changed file, but its API documents only lines of the diff and refuses others with "line must
-//! be part of the diff", so rozed keeps to them.
+//! Checked against GitHub: its API refuses a line outside the hunks. REST answers "could not be
+//! resolved", `addPullRequestReview` "Line could not be resolved", and `addPullRequestReviewThread`
+//! returns a null thread with no error. GitHub's newer Files changed page also takes comments on
+//! unchanged lines outside the hunks of a changed file, but its API doesn't, so rozed keeps to the
+//! hunks.
 
 use std::fmt;
 
@@ -157,11 +159,9 @@ pub struct CommentableLines {
 /// Why GitHub won't take a comment on a range of lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RangeError {
-    /// GitHub takes no comment on this line: it's outside the diff's hunks, or in a column that
-    /// doesn't take comments.
+    /// GitHub takes no comment on this end of the range: it's outside the diff's hunks, or in a
+    /// column that doesn't take comments.
     NotCommentable(Line),
-    /// The lines are in different hunks. GitHub takes a range only within one.
-    AcrossHunks,
 }
 
 impl CommentableLines {
@@ -192,21 +192,19 @@ impl CommentableLines {
     }
 
     /// The lines a comment on a selection from `from` to `to` goes on, in either order: from the
-    /// one higher in the hunk to the other.
+    /// one higher in the diff to the other. Both ends must take a comment, but they may be in
+    /// different hunks, and the lines between them needn't.
     pub fn range(&self, from: Line, to: Line) -> Result<Lines, RangeError> {
-        let (from_hunk, from_position) = self.find(from).ok_or(RangeError::NotCommentable(from))?;
-        let (to_hunk, to_position) = self.find(to).ok_or(RangeError::NotCommentable(to))?;
-        if from_hunk != to_hunk {
-            return Err(RangeError::AcrossHunks);
-        }
-        Ok(match from_position.cmp(&to_position) {
+        let from_at = self.find(from).ok_or(RangeError::NotCommentable(from))?;
+        let to_at = self.find(to).ok_or(RangeError::NotCommentable(to))?;
+        Ok(match from_at.cmp(&to_at) {
             std::cmp::Ordering::Less => Lines::range(from, to),
             std::cmp::Ordering::Equal => Lines::one(to),
             std::cmp::Ordering::Greater => Lines::range(to, from),
         })
     }
 
-    /// The hunk with `line`, and its position there, if `line` takes a comment.
+    /// Where `line` is in the diff, if it takes a comment: its hunk, and its position there.
     fn find(&self, line: Line) -> Option<(usize, usize)> {
         if line.side == DiffSide::Left && !self.left {
             return None;
@@ -493,10 +491,33 @@ index 3b18e51..a7c3d2f 100644
     }
 
     #[test]
-    fn a_range_across_hunks_takes_no_comment() {
+    fn a_range_can_span_hunks() {
         assert_eq!(
             full().range(Line::right(5), Line::right(19)),
-            Err(RangeError::AcrossHunks)
+            Ok(Lines::range(Line::right(5), Line::right(19)))
+        );
+        // Selected upwards: the later hunk's line is the range's end.
+        assert_eq!(
+            full().range(Line::right(22), Line::right(4)),
+            Ok(Lines::range(Line::right(4), Line::right(22)))
+        );
+        // From a removed line in the first hunk to an added line in the second.
+        assert_eq!(
+            full().range(Line::right(21), Line::left(3)),
+            Ok(Lines::range(Line::left(3), Line::right(21)))
+        );
+    }
+
+    #[test]
+    fn a_range_spanning_hunks_needs_both_ends_in_one() {
+        // Line 10 is between the hunks.
+        assert_eq!(
+            full().range(Line::right(5), Line::right(10)),
+            Err(RangeError::NotCommentable(Line::right(10)))
+        );
+        assert_eq!(
+            full().range(Line::right(10), Line::right(19)),
+            Err(RangeError::NotCommentable(Line::right(10)))
         );
     }
 
