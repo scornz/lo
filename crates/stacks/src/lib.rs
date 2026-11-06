@@ -3,7 +3,8 @@
 //! A stack is a tree of open pull requests. Each layer sits on the PR below it, and the bottom
 //! layer sits on a root branch: a trunk such as `main`, or a branch no open PR comes from, such as
 //! `feature-x`. [`Stacks::find`] builds the forest from the repo's PRs, and the result drives the
-//! stack sidebar and its walk. [`convert`] plans turning a chain of layers into a GitHub stack.
+//! stack sidebar and its walk. [`convert`] plans turning a chain of layers into a GitHub stack, and
+//! [`merge`] merges one that can't become one, a layer at a time.
 //!
 //! ```
 //! use std::time::SystemTime;
@@ -37,6 +38,7 @@ use std::hash::Hash;
 use std::time::SystemTime;
 
 pub mod convert;
+pub mod merge;
 
 /// A pull request, with the fields stack detection reads. The doc on each field names the GraphQL
 /// `PullRequest` field it comes from.
