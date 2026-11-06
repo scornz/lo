@@ -338,10 +338,11 @@ fn github_lets_it_merge(snapshot: &MergeSnapshot) -> bool {
 ///
 /// - Your approval replaces your latest review, and GitHub drops the request for your review.
 /// - It covers the code-owner requests for you and for your teams, when it counts.
-/// - The review decision follows from the reviews: changes requested while anyone with write
-///   access still requests them; else review required while approvals are missing, or while GitHub
-///   required a review rozed couldn't attribute, which rozed assumes your approval doesn't give;
-///   else approved.
+/// - GitHub's review decision stands unless your approval is provably what changes it. Approved
+///   stays approved, and no decision stays none. Changes requested stays, unless you were the only
+///   one rozed sees requesting them. Then, as from review required, it's review required while
+///   approvals are missing, or while GitHub required a review rozed couldn't attribute, which rozed
+///   assumes your approval doesn't give; else approved.
 /// - A `BLOCKED` merge state that the snapshot explained becomes `CLEAN`, so what still blocks the
 ///   merge comes from the other fields. One it didn't explain stays.
 fn with_your_approval(snapshot: &MergeSnapshot) -> MergeSnapshot {
@@ -364,15 +365,19 @@ fn with_your_approval(snapshot: &MergeSnapshot) -> MergeSnapshot {
         .review_requests
         .retain(|request| !matches!(&request.reviewer, Reviewer::User(login) if yours(login)));
 
+    let requesters = reviews::changes_requested_by(snapshot);
+    let only_you_requested = !requesters.is_empty() && requesters.iter().all(|login| yours(login));
     let unattributed = snapshot.review_decision == Some(ReviewDecision::ReviewRequired)
         && reviews::missing_approvals(snapshot).is_empty();
-    after.review_decision = snapshot.review_decision.map(|_| {
-        if !reviews::changes_requested_by(&after).is_empty() {
-            ReviewDecision::ChangesRequested
-        } else if unattributed || !reviews::missing_approvals(&after).is_empty() {
-            ReviewDecision::ReviewRequired
-        } else {
-            ReviewDecision::Approved
+    after.review_decision = snapshot.review_decision.map(|decision| match decision {
+        ReviewDecision::Approved => ReviewDecision::Approved,
+        ReviewDecision::ChangesRequested if !only_you_requested => decision,
+        ReviewDecision::ChangesRequested | ReviewDecision::ReviewRequired => {
+            if unattributed || !reviews::missing_approvals(&after).is_empty() {
+                ReviewDecision::ReviewRequired
+            } else {
+                ReviewDecision::Approved
+            }
         }
     });
 
@@ -834,6 +839,82 @@ mod tests {
                     approvals(1),
                 ])
             )
+        );
+    }
+
+    #[test]
+    fn changes_requested_by_someone_rozed_cannot_name_are_expected_to_stay() {
+        // Carol's request counts for GitHub, but rozed reads her as without write access: she
+        // lost it after reviewing, or her review is past the page fetched.
+        let snapshot = MergeSnapshot {
+            review_decision: Some(ReviewDecision::ChangesRequested),
+            reviews: vec![Review {
+                counts: false,
+                ..review("carol", ReviewState::ChangesRequested, HEAD)
+            }],
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&snapshot),
+            plan(
+                Approval::Approve,
+                blocked(vec![Blocker::ChangesRequested { by: vec![] }])
+            )
+        );
+    }
+
+    #[test]
+    fn changes_requested_by_you_and_someone_else_are_expected_to_stay() {
+        let snapshot = MergeSnapshot {
+            review_decision: Some(ReviewDecision::ChangesRequested),
+            reviews: vec![
+                review("alice", ReviewState::ChangesRequested, OLD_HEAD),
+                review("carol", ReviewState::ChangesRequested, OLD_HEAD),
+            ],
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&snapshot),
+            plan(
+                Approval::Approve,
+                blocked(vec![Blocker::ChangesRequested {
+                    by: vec!["carol".to_string()]
+                }])
+            )
+        );
+    }
+
+    #[test]
+    fn github_approving_is_expected_to_stand_after_your_approval() {
+        // Erin and Grace own the same files. Erin approved, which covers them, but GitHub keeps
+        // Grace's request, so rozed alone would read her approval as missing.
+        let snapshot = MergeSnapshot {
+            merge_state: MergeStateStatus::Clean,
+            review_decision: Some(ReviewDecision::Approved),
+            rules: ReviewRules {
+                required_approvals: 1,
+                code_owner_review: true,
+                ..Default::default()
+            },
+            reviews: vec![review("erin", ReviewState::Approved, HEAD)],
+            review_requests: vec![ReviewRequest {
+                reviewer: Reviewer::User("grace".to_string()),
+                as_code_owner: true,
+            }],
+            ..reviewing()
+        };
+        let mut without_auto_merge = snapshot.clone();
+        without_auto_merge.viewer.can_enable_auto_merge = false;
+
+        assert_eq!(
+            approve_and_ship(&snapshot),
+            plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&without_auto_merge),
+            plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
         );
     }
 

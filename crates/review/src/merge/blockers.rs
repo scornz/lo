@@ -21,7 +21,10 @@ pub enum Blocker {
     /// doesn't offer GitHub's "Update branch", which adds a commit: the author updates it.
     OutOfDate,
     /// Reviewers with write access whose latest review requests changes, by login. Each one's
-    /// approval, or the review's dismissal, clears theirs.
+    /// approval, or the review's dismissal, clears theirs. Empty when GitHub says changes are
+    /// requested but rozed can't see by whom: the review is past the page fetched, or its author
+    /// lost write access or was deleted. The merge panel then says the reviewer isn't visible and
+    /// links to the pull request on GitHub.
     ChangesRequested { by: Vec<String> },
     /// Approvals the base branch's rules require and it doesn't have yet.
     Approvals(MissingApprovals),
