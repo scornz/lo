@@ -435,84 +435,55 @@ impl Finder<'_> {
     /// The candidate moves among the added lines `new`, lined up with the deleted lines `delta`
     /// away. `new` has no more than [`MAX_EDITS_IN_A_ROW`] edited lines in a row.
     ///
-    /// A stretch that starts and ends with matching lines, matches on at least [`MIN_LINES`] lines
-    /// with a letter or digit, and matches on at least two thirds of its lines is a candidate. A
-    /// stretch short of two thirds gives way to its longest stretch that isn't, and what's either
-    /// side of that is tried again.
+    /// Going down the lineup, a block starts at each matching line not already in one and runs to
+    /// the furthest matching line that keeps at least two thirds of its lines matching. It's a
+    /// candidate when at least [`MIN_LINES`] of its matching lines have a letter or digit.
     fn blocks(&self, new: Range<usize>, delta: isize, out: &mut impl Extend<Candidate>) {
-        let mut stretches = vec![new];
-        while let Some(stretch) = stretches.pop() {
-            let stretch = self.trim(stretch, delta);
-            let (mut length, mut matched) = (0, 0);
-            for line in stretch.clone().filter(|&new| self.same(new, delta)) {
-                matched += 1;
-                length += usize::from(self.new.lines[line].counts);
-            }
-            if length < MIN_LINES {
-                continue;
-            }
-            let edited = stretch.len() - matched;
-            if matched >= 2 * edited {
-                out.extend([Candidate {
-                    new: stretch,
-                    delta,
-                    length,
-                    matched,
-                    edited,
-                }]);
-                continue;
-            }
-            let longest = self.longest_two_thirds(stretch.clone(), delta);
-            stretches.push(stretch.start..longest.start);
-            stretches.push(longest.end..stretch.end);
-            stretches.push(longest);
-        }
-    }
-
-    /// `new` without the edited lines at either end.
-    fn trim(&self, mut new: Range<usize>, delta: isize) -> Range<usize> {
-        while !new.is_empty() && !self.same(new.start, delta) {
-            new.start += 1;
-        }
-        while !new.is_empty() && !self.same(new.end - 1, delta) {
-            new.end -= 1;
-        }
-        new
-    }
-
-    /// The longest stretch of `new` that matches on at least two thirds of its lines. `new` starts
-    /// with a matching line, so it's never empty.
-    fn longest_two_thirds(&self, new: Range<usize>, delta: isize) -> Range<usize> {
-        // A matching line scores 1 and an edited line -2, so a stretch matches on two thirds of its
-        // lines when its score is at least 0: when the running score where it ends is at least the
-        // running score where it starts. Find the furthest-apart such pair of positions.
-        let mut score = Vec::with_capacity(new.len() + 1);
-        score.push(0_isize);
+        // Running totals before each line. A matching line scores 1 and an edited line -2, so a
+        // stretch matches on two thirds of its lines when the score where it ends is at least the
+        // score where it starts.
+        let mut score = vec![0_isize];
+        let mut matched = vec![0];
+        let mut length = vec![0];
         for line in new.clone() {
-            let step = if self.same(line, delta) { 1 } else { -2 };
-            score.push(score[score.len() - 1] + step);
+            let same = self.same(line, delta);
+            let counts = same && self.new.lines[line].counts;
+            score.push(score[score.len() - 1] + if same { 1 } else { -2 });
+            matched.push(matched[matched.len() - 1] + usize::from(same));
+            length.push(length[length.len() - 1] + usize::from(counts));
         }
-        // The lowest score at or before each position, and the highest at or after it.
-        let mut lowest = score.clone();
-        for i in 1..lowest.len() {
-            lowest[i] = lowest[i].min(lowest[i - 1]);
+        let is_match = |at: usize| matched[at + 1] > matched[at];
+        // The highest score at or after each position, which never rises along the lineup.
+        let mut highest = score.clone();
+        for at in (0..new.len()).rev() {
+            highest[at] = highest[at].max(highest[at + 1]);
         }
-        let mut highest = score;
-        for i in (0..highest.len() - 1).rev() {
-            highest[i] = highest[i].max(highest[i + 1]);
-        }
-        let (mut start, mut end, mut longest) = (0, 0, 0..0);
-        while start < lowest.len() && end < highest.len() {
-            if lowest[start] <= highest[end] {
-                if end - start > longest.len() {
-                    longest = start..end;
-                }
-                end += 1;
-            } else {
+
+        let mut start = 0;
+        while start < new.len() {
+            if !is_match(start) {
                 start += 1;
+                continue;
             }
+            let reach = highest[start + 1..].partition_point(|&high| high >= score[start]);
+            let mut end = start + reach;
+            while !is_match(end - 1) {
+                end -= 1;
+            }
+            if length[end] - length[start] < MIN_LINES {
+                start += 1;
+                continue;
+            }
+            let lines = matched[end] - matched[start];
+            out.extend([Candidate {
+                new: new.start + start..new.start + end,
+                delta,
+                length: length[end] - length[start],
+                matched: lines,
+                edited: end - start - lines,
+            }]);
+            start = end;
         }
-        new.start + longest.start..new.start + longest.end
     }
 
     /// Takes candidates longest first, giving each line to at most one move. A candidate that

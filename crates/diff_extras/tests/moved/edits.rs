@@ -76,8 +76,20 @@ fn less_than_two_thirds_matching_is_not_a_move() {
 }
 
 #[test]
-fn a_block_short_of_two_thirds_keeps_its_longest_stretch_that_is_not() {
-    // Matches: yes, no, no, yes, no, no, yes, yes, yes, yes.
+fn a_block_runs_to_the_furthest_line_that_keeps_two_thirds() {
+    // Matches: yes, yes, yes, no, no, yes, no, no, yes, no, no, yes.
+    let old = lines(12);
+
+    assert_eq!(
+        moved(&old, &edit(&old, &[4, 5, 7, 8, 10, 11])),
+        ["a.rs:1-6 -> b.rs:1-6 edited 4/4 5/5"]
+    );
+}
+
+#[test]
+fn a_block_starts_past_a_weak_start() {
+    // Matches: yes, no, no, yes, no, no, yes, yes, yes, yes. From line 1, no stretch keeps two
+    // thirds past line 1, so the block starts at line 4.
     let old = lines(10);
 
     assert_eq!(

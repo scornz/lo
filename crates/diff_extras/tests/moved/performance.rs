@@ -226,3 +226,41 @@ fn a_line_repeated_thousands_of_times_stays_fast() {
     eprintln!("found a 3,003-line move in {elapsed:?}");
     assert!(elapsed < limit, "took {elapsed:?}");
 }
+
+#[test]
+fn a_long_lineup_with_every_other_line_edited_stays_fast() {
+    // 20,000 lines that line up, with every other line edited: never two thirds matching.
+    let old: Vec<String> = (0..10_000)
+        .flat_map(|n| {
+            [
+                format!("let kept_{n} = {n};"),
+                format!("let old_{n} = {n};"),
+            ]
+        })
+        .collect();
+    let new: Vec<String> = (0..10_000)
+        .flat_map(|n| {
+            [
+                format!("let kept_{n} = {n};"),
+                format!("let new_{n} = {n};"),
+            ]
+        })
+        .collect();
+    let files = [
+        FileChanges::new("a.rs").delete(1, &old),
+        FileChanges::new("b.rs").add(1, &new),
+    ];
+
+    let start = Instant::now();
+    let moves = Moves::find(&files);
+    let elapsed = start.elapsed();
+
+    assert!(moves.all().is_empty());
+    let limit = if cfg!(debug_assertions) {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(100)
+    };
+    eprintln!("checked a 20,000-line lineup in {elapsed:?}");
+    assert!(elapsed < limit, "took {elapsed:?}");
+}
