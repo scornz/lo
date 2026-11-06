@@ -22,10 +22,16 @@ pub enum ApproveAndShip {
     /// Nothing: someone pushed since the revision on screen. rozed shows the new revision, with
     /// the changes since the one you saw.
     HeadMoved { on_screen: String, head: String },
+    /// Nothing: GitHub's head or the head on screen is missing, so nothing would make GitHub check
+    /// that the approval and the merge act on what you saw.
+    HeadUnknown,
     /// Nothing: it's merged.
     Merged,
     /// Nothing: it's closed.
     Closed,
+    /// Nothing: it's a draft. Its author hasn't said it's ready, so there's nothing to ship.
+    /// Approving a draft is left to `⌘⏎`.
+    Draft,
     /// Nothing: GitHub doesn't let you approve it, and it isn't yours.
     CannotApprove,
     /// Approve unless that's skipped, then call [`after_approving`].
@@ -77,6 +83,7 @@ impl Plan {
                 "will likely stop: {}",
                 match stop {
                     Stop::HeadMoved { .. } => "someone pushed after the approval",
+                    Stop::HeadUnknown => "GitHub didn't report the head",
                     Stop::Blocked { .. } => "something waiting won't fix blocks it",
                     Stop::NoAutoMerge(_) => "you can't turn on auto-merge",
                     Stop::NoPermission => "you can't merge into the base branch",
@@ -163,6 +170,8 @@ pub enum Stop {
     /// GitHub's head isn't the one approved: someone pushed after the approval. rozed shows the new
     /// revision.
     HeadMoved { approved: String, head: String },
+    /// GitHub reported no head, so rozed can't tell that it's still the one approved.
+    HeadUnknown,
     /// Something waiting won't fix blocks it. These are every blocker, those waiting won't fix
     /// first, as [`blockers`](super::blockers) orders them. With `auto_merge`, auto-merge is on, so
     /// GitHub merges it if they all clear while it stays on.
@@ -181,8 +190,9 @@ pub enum Stop {
 
 /// Approve and ship's first step, from a snapshot read right before it runs.
 ///
-/// - It does nothing to a merged or closed pull request, or when GitHub's head isn't the head on
-///   screen, so it never approves what you didn't see.
+/// - It does nothing to a merged or closed pull request, or to a draft. It does nothing when
+///   GitHub's head or the head on screen is missing, or GitHub's head isn't the head on screen, so
+///   it never approves what you didn't see. Heads are full commit SHAs, compared ignoring case.
 /// - It approves the head on screen. It skips that on your own pull request, and when your latest
 ///   review approves that head already. An approval of an older revision is given again, so
 ///   GitHub records that you approved what you saw. When GitHub doesn't let you approve someone
@@ -195,7 +205,13 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
         PullRequestState::Closed => return ApproveAndShip::Closed,
         PullRequestState::Open => {}
     }
-    if snapshot.head != snapshot.head_on_screen {
+    if snapshot.draft || snapshot.merge_state == MergeStateStatus::Draft {
+        return ApproveAndShip::Draft;
+    }
+    if snapshot.head.is_empty() || snapshot.head_on_screen.is_empty() {
+        return ApproveAndShip::HeadUnknown;
+    }
+    if !same_commit(&snapshot.head, &snapshot.head_on_screen) {
         return ApproveAndShip::HeadMoved {
             on_screen: snapshot.head_on_screen.clone(),
             head: snapshot.head.clone(),
@@ -209,7 +225,8 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
         Approval::OwnPullRequest
     } else if yours.is_some_and(|review| {
         review.state == ReviewState::Approved
-            && review.commit.as_deref() == Some(snapshot.head_on_screen.as_str())
+            && (review.commit.as_deref())
+                .is_some_and(|commit| same_commit(commit, &snapshot.head_on_screen))
     }) {
         Approval::AlreadyApproved
     } else if viewer.can_approve {
@@ -232,7 +249,7 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
 /// after the approval. When [`Plan::approval`] skips approving, the snapshot [`approve_and_ship`]
 /// read will do.
 ///
-/// - It stops if GitHub's head isn't the plan's.
+/// - It stops if GitHub reports no head, or a head that isn't the plan's.
 /// - It does nothing more when the pull request is in the queue already.
 /// - It stops, with the blockers, when something waiting won't fix blocks the merge.
 /// - It does nothing more when auto-merge is on.
@@ -244,13 +261,22 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
 ///   ready on a queue branch. When rozed's explanation of a `BLOCKED` is only partial, auto-merge
 ///   waits for what it can't see too.
 pub fn after_approving(snapshot: &MergeSnapshot, plan: &Plan) -> Ship {
-    if snapshot.head != plan.head {
+    if snapshot.head.is_empty() {
+        return Ship::Stop(Stop::HeadUnknown);
+    }
+    if !same_commit(&snapshot.head, &plan.head) {
         return Ship::Stop(Stop::HeadMoved {
             approved: plan.head.clone(),
             head: snapshot.head.clone(),
         });
     }
     ship(snapshot)
+}
+
+/// Whether two full commit SHAs name the same commit. Git writes them in lowercase, but nothing
+/// here depends on it.
+fn same_commit(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 /// What to do once approved, from the snapshot as GitHub reports it, or as rozed expects it to.
@@ -561,6 +587,63 @@ mod tests {
     }
 
     #[test]
+    fn it_does_nothing_without_a_head_to_approve() {
+        for (head, on_screen) in [("", HEAD), (HEAD, ""), ("", "")] {
+            let snapshot = MergeSnapshot {
+                head: head.to_string(),
+                head_on_screen: on_screen.to_string(),
+                ..reviewing()
+            };
+
+            assert_eq!(
+                approve_and_ship(&snapshot),
+                ApproveAndShip::HeadUnknown,
+                "{head:?} {on_screen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn heads_are_the_same_whatever_their_case() {
+        let snapshot = MergeSnapshot {
+            head: HEAD.to_uppercase(),
+            merge_state: MergeStateStatus::Clean,
+            review_decision: Some(ReviewDecision::Approved),
+            reviews: vec![review("alice", ReviewState::Approved, &HEAD.to_uppercase())],
+            ..reviewing()
+        };
+        let plan = the_plan(&snapshot);
+        let after = MergeSnapshot {
+            head: HEAD.to_uppercase(),
+            ..snapshot
+        };
+
+        assert_eq!(plan.approval, Approval::AlreadyApproved);
+        assert_eq!(
+            after_approving(&after, &plan),
+            Ship::Merge(MergeMethod::Squash)
+        );
+    }
+
+    #[test]
+    fn it_does_nothing_to_a_draft() {
+        let draft = MergeSnapshot {
+            draft: true,
+            ..reviewing()
+        };
+        let draft_as_rest_reports_it = MergeSnapshot {
+            merge_state: MergeStateStatus::Draft,
+            ..reviewing()
+        };
+
+        assert_eq!(approve_and_ship(&draft), ApproveAndShip::Draft);
+        assert_eq!(
+            approve_and_ship(&draft_as_rest_reports_it),
+            ApproveAndShip::Draft
+        );
+    }
+
+    #[test]
     fn it_does_nothing_to_a_merged_or_closed_pull_request() {
         let merged = MergeSnapshot {
             state: PullRequestState::Merged,
@@ -777,14 +860,10 @@ mod tests {
     }
 
     #[test]
-    fn it_expects_to_stop_on_conflicts_a_draft_or_an_out_of_date_branch() {
+    fn it_expects_to_stop_on_conflicts_or_an_out_of_date_branch() {
         let conflicting = MergeSnapshot {
             mergeable: MergeableState::Conflicting,
             merge_state: MergeStateStatus::Dirty,
-            ..reviewing()
-        };
-        let draft = MergeSnapshot {
-            draft: true,
             ..reviewing()
         };
         let behind = MergeSnapshot {
@@ -794,7 +873,6 @@ mod tests {
 
         for (snapshot, blocker) in [
             (conflicting, Blocker::Conflicts),
-            (draft, Blocker::Draft),
             (behind, Blocker::OutOfDate),
         ] {
             assert_eq!(
@@ -1037,7 +1115,7 @@ mod tests {
             (auto_merge_on, "will likely merge: auto-merge is on"),
             (
                 MergeSnapshot {
-                    draft: true,
+                    out_of_date: true,
                     ..reviewing()
                 },
                 "will likely stop: something waiting won't fix blocks it",
@@ -1179,6 +1257,20 @@ mod tests {
                 approved: HEAD.to_string(),
                 head: "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn it_stops_when_github_reports_no_head_after_approving() {
+        let plan = the_plan(&reviewing());
+        let after = MergeSnapshot {
+            head: String::new(),
+            ..approved(reviewing(), "APPROVED", "CLEAN")
+        };
+
+        assert_eq!(
+            after_approving(&after, &plan),
+            Ship::Stop(Stop::HeadUnknown)
         );
     }
 

@@ -146,9 +146,11 @@ pub struct MergeSnapshot {
     pub preferred_method: Option<MergeMethod>,
     /// The account rozed acts as.
     pub viewer: Viewer,
-    /// The head commit GitHub has now (`headRefOid`).
+    /// The head commit GitHub has now (`headRefOid`), as a full SHA. Empty when GitHub didn't
+    /// report it.
     pub head: String,
-    /// The head of the revision on screen: what you looked at, so what approving approves.
+    /// The head of the revision on screen, as a full SHA: what you looked at, so what approving
+    /// approves. Empty when there's no revision on screen yet.
     pub head_on_screen: String,
 }
 

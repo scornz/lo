@@ -1,6 +1,6 @@
 //! Merge status, merge actions and approve and ship for whole pull requests, from snapshots filled
 //! the way the GitHub layer fills them: GraphQL's and REST's enum names, check runs and commit
-//! statuses. SHAs are shortened to 7 characters.
+//! statuses, and full commit SHAs.
 
 use review::merge::{
     AllowedMethods, Approval, ApproveAndShip, AutoMerge, Blocker, CheckState, MergeAction,
@@ -9,7 +9,9 @@ use review::merge::{
     after_approving, approve_and_ship, blockers, merge_action, status,
 };
 
-const HEAD: &str = "4e1d2c9";
+const HEAD: &str = "4e1d2c9b7f3a5e60d8c1b2a3f4e5d6c7b8a9f0e1";
+/// An earlier head.
+const OLD_HEAD: &str = "77c0a1e3d5b7f9a1c3e5d7b9f1a3c5e7d9b1f3a5";
 
 /// A pull request as GraphQL reports it: `state`, `mergeable`, `mergeStateStatus` and
 /// `reviewDecision`, with the head on screen up to date.
@@ -231,7 +233,7 @@ fn a_dependency_bump_whose_tests_failed_stops_after_approving() {
 #[test]
 fn a_dependency_bump_pushed_to_while_you_read_it_stops_before_approving() {
     let snapshot = MergeSnapshot {
-        head: "a91f03b".to_string(),
+        head: "a91f03b6c8e0a2c4e6a8c0e2a4c6e8a0c2e4a6c8".to_string(),
         ..dependency_bump()
     };
 
@@ -239,7 +241,7 @@ fn a_dependency_bump_pushed_to_while_you_read_it_stops_before_approving() {
         approve_and_ship(&snapshot),
         ApproveAndShip::HeadMoved {
             on_screen: HEAD.to_string(),
-            head: "a91f03b".to_string(),
+            head: "a91f03b6c8e0a2c4e6a8c0e2a4c6e8a0c2e4a6c8".to_string(),
         }
     );
 }
@@ -249,7 +251,7 @@ fn a_dependency_bump_pushed_to_while_you_read_it_stops_before_approving() {
 
 fn checkout_change() -> MergeSnapshot {
     MergeSnapshot {
-        reviews: vec![review("sam", "COMMENTED", "77c0a1e", &[])],
+        reviews: vec![review("sam", "COMMENTED", OLD_HEAD, &[])],
         review_requests: vec![
             code_owner("acme/payments"),
             code_owner("acme/platform"),
@@ -473,7 +475,7 @@ fn a_queue_branch_with_another_approval_missing_joins_when_ready() {
 
 fn your_pull_request() -> MergeSnapshot {
     MergeSnapshot {
-        reviews: vec![review("ana", "APPROVED", "0b5e7aa", &[])],
+        reviews: vec![review("ana", "APPROVED", OLD_HEAD, &[])],
         rules: ReviewRules {
             required_approvals: 1,
             ..Default::default()
@@ -544,7 +546,7 @@ fn a_pull_request_with_everything_wrong_lists_every_reason() {
     let snapshot = MergeSnapshot {
         draft: true,
         reviews: vec![
-            review("ana", "CHANGES_REQUESTED", "77c0a1e", &[]),
+            review("ana", "CHANGES_REQUESTED", OLD_HEAD, &[]),
             review("lee", "APPROVED", HEAD, &[]),
         ],
         rules: ReviewRules {
