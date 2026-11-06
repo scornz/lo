@@ -708,10 +708,19 @@ mod tests {
 
     /// rozed's window with a tab for [`PULL`], wide enough to show its diff side by side.
     async fn tab(cx: &mut TestAppContext) -> (Entity<PrTab>, &mut VisualTestContext) {
+        tab_with_keymap(cx, |_| {}).await
+    }
+
+    /// [`tab`], with `keymap` bound after rozed's keys, as rozed binds Zed's.
+    async fn tab_with_keymap(
+        cx: &mut TestAppContext,
+        keymap: impl FnOnce(&mut App),
+    ) -> (Entity<PrTab>, &mut VisualTestContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
             editor::init(cx);
             crate::init_workspaces(cx);
+            keymap(cx);
         });
         let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
         let (multi_workspace, cx) =
@@ -1055,6 +1064,41 @@ mod tests {
 
         cx.simulate_keystrokes("alt-v");
         assert!(split(cx));
+    }
+
+    /// Zed's default macOS keymap, which binds `tab` in every editor.
+    fn zeds_keymap(cx: &mut App) {
+        let content = util::asset_str::<settings::SettingsAssets>(settings::DEFAULT_KEYMAP_PATH);
+        let bindings = match settings::KeymapFile::load(&content, cx) {
+            settings::KeymapFileLoadResult::Success { key_bindings }
+            | settings::KeymapFileLoadResult::SomeFailedToLoad { key_bindings, .. } => key_bindings,
+            settings::KeymapFileLoadResult::JsonParseFailure { error } => panic!("{error:#}"),
+        };
+        cx.bind_keys(bindings);
+    }
+
+    /// Zed binds `tab` to indent in every editor, after rozed's keys, but a read-only editor
+    /// doesn't handle indenting, so `tab` reaches rozed's binding.
+    #[gpui::test]
+    async fn tab_switches_sides_with_zeds_keymap_too(cx: &mut TestAppContext) {
+        let (tab, cx) = tab_with_keymap(cx, zeds_keymap).await;
+        let (diff, _copy) = show(
+            &tab,
+            &[Entry::File("a.txt", lines("a", 20).as_bytes())],
+            &[Entry::File("a.txt", changed("a", 20, 10).as_bytes())],
+            cx,
+        );
+        select(&diff, "a.txt", cx);
+        let lhs_focused = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                diff.read(cx)
+                    .lhs_editor()
+                    .is_some_and(|lhs| lhs.focus_handle(cx).is_focused(window))
+            })
+        };
+        assert!(!lhs_focused(cx));
+        cx.simulate_keystrokes("tab");
+        assert!(lhs_focused(cx));
     }
 
     #[gpui::test]
