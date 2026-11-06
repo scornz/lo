@@ -16,9 +16,9 @@ use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
 use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
-    Window, actions, uniform_list,
+    AnyElement, App, AsyncWindowContext, Context, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, KeyBinding, Render, SharedString, Subscription, Task, UniformListScrollHandle,
+    WeakEntity, Window, actions, uniform_list,
 };
 use language::Capability;
 use project::WorktreeId;
@@ -65,9 +65,9 @@ actions!(
 
 const KEY_CONTEXT: &str = "PrTab";
 const FILE_LIST_CONTEXT: &str = "PrFileList";
-/// The diff's editors, inside the tab, where `tab` would otherwise indent: not an editor that's
-/// typed in, such as a comment's.
-const DIFF_CONTEXT: &str = "PrTab > Editor && mode == full";
+/// The diff's editors, inside the tab, where `tab` would otherwise indent: full editors of many
+/// files, not an editor that's typed in, such as a comment's, which edits one buffer.
+const DIFF_CONTEXT: &str = "PrTab > Editor && mode == full && multibuffer";
 
 /// The tab's keys. Panels toggle with Zed's keys for its docks.
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -232,8 +232,8 @@ pub struct PrTab {
     hide_whitespace: bool,
     /// Brings the diff's files in line with `hide_whitespace`.
     _whitespace: Option<Task<()>>,
-    /// Loads large files on a key, one task a path, each until it's done.
-    loading: HashMap<String, Task<()>>,
+    /// Loads large files on a key, one task a file of a diff, each until it's done.
+    loading: HashMap<(EntityId, String), Task<()>>,
     /// Keeps the diff's images right as it goes side by side and back, and stops decoding a
     /// file's images when it folds.
     _diff_watch: Vec<Subscription>,
@@ -1019,6 +1019,9 @@ impl PrTab {
         if let Some(old) = self.diff.as_ref().filter(|old| **old != editor) {
             shown_files::release_images(old, Some(window), cx);
         }
+        // Loads into a diff no longer shown stop, and let it go.
+        let shown = editor.entity_id();
+        self.loading.retain(|(diff, _), _| *diff == shown);
         self._diff_watch = vec![
             cx.observe_in(&editor, window, |_, diff, window, cx| {
                 shown_files::sync_side_by_side(&diff, window, cx)
@@ -1322,7 +1325,8 @@ impl PrTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading.contains_key(&path) {
+        let key = (diff.entity_id(), path.clone());
+        if self.loading.contains_key(&key) {
             return;
         }
         let Some(project) = self
@@ -1334,11 +1338,11 @@ impl PrTab {
         };
         let hide = self.hide_whitespace;
         let task = cx.spawn_in(window, {
-            let path = path.clone();
+            let key = key.clone();
             async move |this, cx| {
                 let loaded = pr_diff::load_large_file(diff, project, path.clone(), hide, cx).await;
                 this.update_in(cx, |this, window, cx| {
-                    this.loading.remove(&path);
+                    this.loading.remove(&key);
                     if let Err(error) = loaded {
                         log::error!("can't load {path}: {error:#}");
                         this.banners.update(cx, |banners, cx| {
@@ -1356,7 +1360,7 @@ impl PrTab {
                 .ok();
             }
         });
-        self.loading.insert(path, task);
+        self.loading.insert(key, task);
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
@@ -3576,15 +3580,18 @@ mod tests {
                 let (bindings, _) = keymap.bindings_for_input(&[keystroke], &stack);
                 bindings.first().map(|binding| binding.action().name())
             };
-            let diff = ["Workspace", "Pane", "PrTab", "Editor mode=full"];
+            let diff = ["Workspace", "Pane", "PrTab", "Editor mode=full multibuffer"];
             let file_list = ["Workspace", "Pane", "PrTab", "PrFileList"];
             let comment = ["Workspace", "Pane", "PrTab", "Editor mode=auto_height"];
-            let elsewhere = ["Workspace", "Pane", "Editor mode=full"];
+            // A comment box can be a full editor too, of one buffer.
+            let full_comment = ["Workspace", "Pane", "PrTab", "Editor mode=full"];
+            let elsewhere = ["Workspace", "Pane", "Editor mode=full multibuffer"];
 
             // Zed's keys are bound, and rozed's, bound after, win where both apply.
             assert_eq!(first("tab", &elsewhere), Some("editor::Tab"));
             assert_eq!(first("tab", &diff), Some("review_ui::SwitchSide"));
             assert_eq!(first("tab", &comment), Some("editor::Tab"));
+            assert_eq!(first("tab", &full_comment), Some("editor::Tab"));
             for (key, action) in [
                 ("alt-v", "review_ui::ToggleDiffLayout"),
                 ("alt-w", "review_ui::ToggleWhitespace"),
@@ -3594,6 +3601,7 @@ mod tests {
                 assert_eq!(first(key, &file_list), Some(action), "{key}");
                 // Where text is typed, option and a letter types a character.
                 assert_eq!(first(key, &comment), None, "{key}");
+                assert_eq!(first(key, &full_comment), None, "{key}");
             }
         });
     }
