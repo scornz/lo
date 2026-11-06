@@ -8,7 +8,7 @@ mod state;
 
 pub use generated::{Generated, generated, is_lockfile};
 pub use kind::{FileKind, kind};
-pub use order::path_order;
+pub use order::{path_order, review_order};
 pub use state::{InitialState, LARGE_FILE_LINES, initial_state};
 
 /// One file a pull request changes, as GitHub's changed-file list describes it, plus the
