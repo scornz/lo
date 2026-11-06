@@ -9,7 +9,7 @@ use repo_cache::{
 };
 use tempfile::TempDir;
 
-use crate::support::{Remote, Server, git, missing_objects};
+use crate::support::{Remote, Server, git, missing_objects, packs};
 
 /// A repository with `trunk` and pull request #1 on it:
 ///
@@ -382,11 +382,21 @@ fn uses_the_head_githubs_api_reported() {
     // Both are pinned.
     let mut revisions = repo.pull_revisions(1).unwrap();
     revisions.sort();
-    let mut expected = vec![pr.head.clone(), pushed];
+    let mut expected = vec![pr.head.clone(), pushed.clone()];
     expected.sort();
     assert_eq!(revisions, expected);
 
-    // The same head needs no second fetch.
+    // The API's head, already fetched, isn't fetched again.
+    let before = packs(repo.git_dir());
+    let fetched = repo
+        .fetch_pull(&PullRequestRefs {
+            head: Some(pushed.clone()),
+            ..refs(1, "trunk")
+        })
+        .unwrap();
+    assert_eq!(fetched.head, pushed);
+    assert_eq!(packs(repo.git_dir()), before);
+    // Nor is anything when the API's head is refs/pull/1/head's.
     let fetched = repo
         .fetch_pull(&PullRequestRefs {
             head: Some(pr.head.clone()),
@@ -394,6 +404,7 @@ fn uses_the_head_githubs_api_reported() {
         })
         .unwrap();
     assert_eq!(fetched.head_source, HeadSource::PullRef);
+    assert_eq!(packs(repo.git_dir()), before);
 }
 
 #[test]
@@ -675,6 +686,43 @@ fn many_fetches_at_once_all_succeed() {
 
     for thread in threads {
         assert_eq!(thread.join().unwrap().head, pr.head);
+    }
+}
+
+#[test]
+fn fetches_of_one_pull_request_at_once_each_get_what_they_asked_for() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    // Two windows disagree about pull request #1's base: one still has `trunk`, the other knows
+    // it was retargeted to `rel`, whose tip is another commit.
+    pr.remote.switch("rel").write("rel.txt", "release\n");
+    let rel_tip = pr.remote.commit("release");
+    pr.remote.publish("refs/heads/rel");
+    let (_dir, cache) = server.cache();
+    let cache = Arc::new(cache);
+
+    for _ in 0..5 {
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (cache, barrier) = (cache.clone(), barrier.clone());
+                let (branch, tip) = if i % 2 == 0 {
+                    ("trunk", pr.trunk_tip.clone())
+                } else {
+                    ("rel", rel_tip.clone())
+                };
+                std::thread::spawn(move || {
+                    let repo = cache.open("owner", "repo", None).unwrap();
+                    barrier.wait();
+                    let fetched = repo.fetch_pull(&refs(1, branch)).unwrap();
+                    (fetched.base_tip, tip)
+                })
+            })
+            .collect();
+        for thread in threads {
+            let (base_tip, expected) = thread.join().unwrap();
+            assert_eq!(base_tip, expected);
+        }
     }
 }
 

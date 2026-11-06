@@ -9,7 +9,7 @@ use repo_cache::{
 };
 use tempfile::TempDir;
 
-use crate::support::{Remote, Server, blob_id, git, missing_objects, rust_source};
+use crate::support::{Remote, Server, blob_id, git, missing_objects, packs, rust_source};
 
 /// The commits the submodule points at. Neither is on the server, so fetching either fails.
 const SUBMODULE_BEFORE: &str = "1111111111111111111111111111111111111111";
@@ -226,8 +226,12 @@ fn listing_changes_downloads_both_sides_at_once() {
     let changed_blob = blob_id(&f.remote.work, &f.base, "keep.txt");
     assert!(missing_objects(git_dir, f.base.as_str()).contains(&changed_blob));
 
+    let before = packs(git_dir);
+
     f.repo.changed_files(&f.base, &f.head).unwrap();
 
+    // In one download.
+    assert_eq!(packs(git_dir), before + 1);
     let missing = missing_objects(git_dir, f.head.as_str());
     assert!(!missing.contains(&changed_blob));
     for path in ["keep.txt", "added.txt", "data.bin", "src/new_name.rs"] {
@@ -261,9 +265,12 @@ fn reads_files_by_blob_id() {
     // A symlink's contents are its target.
     assert_eq!(read(&files[5].old), b"keep.txt");
 
-    let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
     assert!(f.repo.read_blob(&f.head).is_err(), "a commit isn't a file");
-    let _ = unknown;
+    // An object neither the clone nor the server has.
+    let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
+    assert_eq!(f.repo.read_blob(&unknown).unwrap(), None);
+    // And the reader still works afterwards.
+    assert_eq!(read(&files[2].new), b"\x00\x01\x02head");
 }
 
 #[test]

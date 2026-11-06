@@ -254,6 +254,22 @@ impl Remote {
     }
 }
 
+/// How many packs the clone at `git_dir` has. Every fetch and every download that brings
+/// something adds one.
+pub fn packs(git_dir: &Path) -> usize {
+    fs::read_dir(git_dir.join("objects/pack"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "promisor")
+        })
+        .count()
+}
+
 /// The objects reachable from `rev` that the clone at `git_dir` hasn't downloaded.
 pub fn missing_objects(git_dir: &Path, rev: &str) -> Vec<String> {
     git(
