@@ -501,12 +501,14 @@ impl PrTab {
         self.changed(cx);
     }
 
-    /// The local copy listed the pull request's files: lists them, builds its revisions, and
-    /// returns where each file goes in the diff, by its index in `files`.
+    /// The local copy listed the pull request's files at `head`, which GitHub gave at
+    /// `polled_at`: lists them, builds its revisions, and returns where each file goes in the
+    /// diff, by its index in `files`.
     pub(crate) fn copied(
         &mut self,
         files: &[ChangedFile],
         head: &Oid,
+        polled_at: SystemTime,
         cx: &mut Context<Self>,
     ) -> Vec<usize> {
         let mut list = FileList::new(files.iter().map(FileEntry::from_local).collect());
@@ -515,16 +517,15 @@ impl PrTab {
         self.files = list;
         // Until rozed reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
-        let now = SystemTime::now();
         let records = [PushRecord::Polled {
             head: head.as_str().to_string(),
-            at: now,
+            at: polled_at,
         }];
         self.revisions = Some(build_revisions(
             &records,
             &[],
             head.as_str(),
-            self.created_at.unwrap_or(now),
+            self.created_at.unwrap_or(polled_at),
         ));
         self.status = Status::Loading("Loading the diff…".into());
         cx.notify();
@@ -1257,15 +1258,8 @@ async fn show_offline(
         return Err(offline);
     };
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
-    let shown = pr_diff::open_offline(
-        this.clone(),
-        workspace,
-        link.clone(),
-        &saved.details,
-        opened,
-        cx,
-    )
-    .await;
+    let shown =
+        pr_diff::open_offline(this.clone(), workspace, link.clone(), &saved, opened, cx).await;
     match shown {
         Ok(true) => {
             this.update(cx, |this, cx| this.showing_offline(&offline, cx))?;
@@ -2441,13 +2435,13 @@ mod tests {
     }
 
     /// `rozed-dev/playground#2`, opened once online, which copied it, and closed; with what
-    /// rozed saved about it for `rozed-bot` two hours ago, at `saved_head`, or at the head it
-    /// copied. Then offline, GitHub's git server included.
+    /// rozed saved about it for `rozed-bot` two hours ago, `saved` from the pull request on the
+    /// fake GitHub. Then offline, GitHub's git server included.
     async fn playground_copied_then_offline(
         workspace: &Entity<Workspace>,
         github: &FakeGithub,
         git: &GitServer,
-        saved_head: Option<&str>,
+        saved: impl FnOnce(&FakePull) -> PullRequestData,
         cx: &mut VisualTestContext,
     ) -> FakePull {
         let mut pull = git.pull_request(
@@ -2465,12 +2459,11 @@ mod tests {
         close(workspace, tab, cx);
 
         let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3_600 + 30);
-        let head = saved_head.unwrap_or(&pull.head);
         cache
             .put(
                 "rozed-bot",
                 &Target::Pull(PullRef::new("rozed-dev", "playground", 2)),
-                &details_at("Add b", "VIEWED", head),
+                &saved(&pull),
                 None,
                 two_hours_ago,
             )
@@ -2481,6 +2474,29 @@ mod tests {
         pull
     }
 
+    /// What rozed saved about `pull`: its head and base as GitHub gave them.
+    fn saved_as_given(pull: &FakePull) -> PullRequestData {
+        details_with("Add b", "VIEWED", &pull.head, &pull.base_branch, &pull.base)
+    }
+
+    /// The text of each file's old side in `tab`'s diff, sorted.
+    fn old_texts(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Vec<String> {
+        tab.read_with(cx, |tab, cx| {
+            let editor = tab.diff().unwrap().read(cx).rhs_editor().clone();
+            let multi_buffer = editor.read(cx).buffer().read(cx);
+            let mut texts: Vec<String> = multi_buffer
+                .all_buffers()
+                .iter()
+                .filter_map(|buffer| {
+                    let diff = multi_buffer.diff_for(buffer.read(cx).remote_id())?;
+                    diff.read(cx).base_text_string(cx)
+                })
+                .collect();
+            texts.sort();
+            texts
+        })
+    }
+
     #[gpui::test]
     async fn offline_a_pull_request_the_local_copy_has_shows_its_diff_from_the_copy(
         cx: &mut TestAppContext,
@@ -2488,7 +2504,8 @@ mod tests {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
-        let pull = playground_copied_then_offline(&workspace, &github, &git, None, cx).await;
+        let pull =
+            playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
 
         let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
 
@@ -2532,6 +2549,8 @@ mod tests {
         });
         assert!(diff_text.contains("a2"), "{diff_text}");
         assert!(diff_text.contains("b2"), "{diff_text}");
+        // Against the saved base, which the copy has.
+        assert_eq!(old_texts(&tab, cx), ["a\n", "b\n"]);
 
         // Back online, opening it again asks GitHub again.
         github.set_offline(false);
@@ -2554,7 +2573,14 @@ mod tests {
         let git = GitServer::start(cx);
         // GitHub had a newer head when rozed last saved the details.
         let newer = "e".repeat(40);
-        playground_copied_then_offline(&workspace, &github, &git, Some(&newer), cx).await;
+        playground_copied_then_offline(
+            &workspace,
+            &github,
+            &git,
+            |pull| details_with("Add b", "VIEWED", &newer, &pull.base_branch, &pull.base),
+            cx,
+        )
+        .await;
 
         let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
 
@@ -2566,6 +2592,68 @@ mod tests {
             banners(&tab, cx),
             ["Showing what rozed saved for rozed-bot 2 hours ago."]
         );
+        tab.read_with(cx, |tab, cx| {
+            assert!(tab.diff().is_none());
+            assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
+        });
+    }
+
+    #[gpui::test]
+    async fn offline_a_newer_tip_of_the_same_base_branch_uses_the_one_fetched(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        // main moved on after the copy fetched it.
+        let moved_on = "e".repeat(40);
+        playground_copied_then_offline(
+            &workspace,
+            &github,
+            &git,
+            |pull| details_with("Add b", "VIEWED", &pull.head, &pull.base_branch, &moved_on),
+            cx,
+        )
+        .await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        assert!(matches!(status(&tab, cx), Status::Offline(_)));
+        assert_eq!(old_texts(&tab, cx), ["a\n", "b\n"]);
+    }
+
+    #[gpui::test]
+    async fn offline_a_base_branch_the_copy_never_fetched_shows_only_the_saved_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        // GitHub retargeted the pull request onto another branch after the copy fetched it, so
+        // the base the copy has would show other changes.
+        playground_copied_then_offline(
+            &workspace,
+            &github,
+            &git,
+            |pull| {
+                details_with(
+                    "Add b",
+                    "VIEWED",
+                    &pull.head,
+                    "stack-a",
+                    "b046244d9569964088e952243e5e557312322488",
+                )
+            },
+            cx,
+        )
+        .await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        let Status::Failed(message) = status(&tab, cx) else {
+            panic!("expected only the saved details: {:?}", status(&tab, cx));
+        };
+        assert!(message.contains("couldn't reach GitHub"), "{message}");
         tab.read_with(cx, |tab, cx| {
             assert!(tab.diff().is_none());
             assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
@@ -2735,6 +2823,23 @@ mod tests {
 
     /// [`details`], with `head` as the pull request's head.
     fn details_at(title: &str, viewed: &str, head: &str) -> PullRequestData {
+        details_with(
+            title,
+            viewed,
+            head,
+            "stack-a",
+            "b046244d9569964088e952243e5e557312322488",
+        )
+    }
+
+    /// [`details`], with `head` as the pull request's head and `base` as its base branch's tip.
+    fn details_with(
+        title: &str,
+        viewed: &str,
+        head: &str,
+        base_branch: &str,
+        base: &str,
+    ) -> PullRequestData {
         serde_json::from_value(serde_json::json!({
             "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
             "number": 2,
@@ -2748,8 +2853,8 @@ mod tests {
                 "login": "rozed-bot",
                 "avatarUrl": "https://avatars.githubusercontent.com/u/353226052?v=4"
             },
-            "baseRefName": "stack-a",
-            "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+            "baseRefName": base_branch,
+            "baseRefOid": base,
             "headRefName": "stack-b",
             "headRefOid": head,
             "isCrossRepository": false,
@@ -3181,7 +3286,9 @@ mod tests {
             changed("a.json", Change::Modified),
         ];
         let head: Oid = "2".repeat(40).parse().unwrap();
-        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        tab.update(cx, |tab, cx| {
+            tab.copied(&files, &head, SystemTime::now(), cx)
+        });
         let shown = |cx: &mut VisualTestContext| {
             tab.read_with(cx, |tab, _| {
                 (tab.is_file_list_shown(), tab.is_threads_panel_shown())
