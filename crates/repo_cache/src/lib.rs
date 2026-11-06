@@ -46,7 +46,7 @@ mod oid;
 mod progress;
 mod repo;
 
-pub use attributes::Attribute;
+pub use attributes::{Attribute, MAX_ATTRIBUTE_FILES};
 pub use cache::RepoCache;
 pub use diff::{Change, ChangedFile, FileMode, FileVersion, LineCounts};
 pub use error::{Error, FetchFailure};

@@ -538,6 +538,11 @@ impl Repo {
         RepoLock::acquire(&self.shared.lock_path)
     }
 
+    /// The version of the git that runs the clone's commands.
+    pub(crate) fn git_version(&self) -> crate::GitVersion {
+        self.shared.env.git.version()
+    }
+
     /// A git command on the clone, signed in when the repository has a token.
     pub(crate) fn git(&self) -> GitCommand {
         self.git_at(Location::Clone(&self.shared.git_dir))

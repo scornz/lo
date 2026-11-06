@@ -144,7 +144,7 @@ impl fmt::Debug for Git {
 }
 
 /// The empty tree's ID, which git knows without having it.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Where rozed looks for git first: Apple's, from the Xcode Command Line Tools.
 const SYSTEM_GIT: &str = "/usr/bin/git";
@@ -458,6 +458,12 @@ impl GitCommand {
         for arg in args {
             self = self.arg(arg);
         }
+        self
+    }
+
+    /// Sets environment variable `name` for the command. Logs and errors never show it.
+    pub fn env(mut self, name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+        self.command.env(name, value);
         self
     }
 

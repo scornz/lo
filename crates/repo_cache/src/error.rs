@@ -42,6 +42,13 @@ pub enum Error {
     /// A name or ID that can't be used, such as a branch name git refuses.
     #[error("`{value}` isn't a valid {what}")]
     Invalid { what: &'static str, value: String },
+    /// More `.gitattributes` files apply to the paths asked about than rozed reads, so it reads
+    /// none.
+    #[error(
+        "{found} .gitattributes files apply, more than the {} rozed reads",
+        crate::attributes::MAX_ATTRIBUTE_FILES
+    )]
+    TooManyAttributeFiles { found: usize },
     /// A git command failed for a reason none of the other variants covers.
     #[error("`{command}` failed: {message}")]
     Git { command: String, message: String },

@@ -3,7 +3,7 @@
 use repo_cache::{Attribute, Error, Oid, PullRequestRefs, Repo};
 use tempfile::TempDir;
 
-use crate::support::{Server, blob_id, missing_objects};
+use crate::support::{Server, blob_id, missing_objects, packs};
 
 /// A pull request whose head changes what `.gitattributes` says, fetched into a clone. The head
 /// has a top-level `.gitattributes`, with a macro, and another in `sub/`.
@@ -69,6 +69,53 @@ fn fixture() -> Fixture {
         repo,
         head_attributes,
     }
+}
+
+/// A pull request whose head adds `files` to a base with a README, fetched into a clone.
+struct Pull {
+    head: Oid,
+    work: std::path::PathBuf,
+    _server: Server,
+    _cache_dir: TempDir,
+    repo: Repo,
+}
+
+fn pull(files: &[(String, &str)]) -> Pull {
+    let server = Server::new();
+    let remote = server.repo("owner", "repo");
+    remote.write("README", "readme\n");
+    remote.commit("base");
+    remote.switch("feature");
+    for (path, contents) in files {
+        remote.write(path, contents);
+    }
+    let head = remote.commit("head");
+    remote.publish("refs/pull/1/head");
+    remote.switch("trunk");
+    remote.publish("refs/heads/trunk");
+    let (cache_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    repo.fetch_pull(&PullRequestRefs {
+        number: 1,
+        head: Some(head.clone()),
+        base_branch: "trunk".into(),
+        base: None,
+    })
+    .unwrap();
+    Pull {
+        head,
+        work: remote.work.clone(),
+        _server: server,
+        _cache_dir: cache_dir,
+        repo,
+    }
+}
+
+fn files<const N: usize>(files: [(&str, &'static str); N]) -> Vec<(String, &'static str)> {
+    files
+        .into_iter()
+        .map(|(path, contents)| (path.to_string(), contents))
+        .collect()
 }
 
 fn linguist_generated(repo: &Repo, rev: &Oid, paths: &[&str]) -> Vec<Attribute> {
@@ -186,5 +233,106 @@ fn a_commit_the_clone_lacks_is_an_error() {
         f.repo
             .attribute(&unknown, "linguist-generated", &[b"a"])
             .is_err()
+    );
+}
+
+#[test]
+fn patterns_match_case_sensitively_whatever_the_disk() {
+    let p = pull(&files([
+        (
+            ".gitattributes",
+            "Dist/** linguist-generated\n*.JS linguist-generated\n",
+        ),
+        ("dist/app.js", "app()\n"),
+    ]));
+    // On a Mac's disk, the clone's config says case doesn't matter, which mustn't change the
+    // answer.
+    assert_eq!(
+        linguist_generated(&p.repo, &p.head, &["dist/app.js", "Dist/App.JS"]),
+        [Attribute::Unspecified, Attribute::Set]
+    );
+}
+
+#[test]
+fn a_nested_gitattributes_overrides_its_parents() {
+    let p = pull(&files([
+        (".gitattributes", "*.js linguist-generated\n"),
+        ("vendor/.gitattributes", "*.js -linguist-generated\n"),
+        ("app.js", "app()\n"),
+        ("vendor/lib.js", "lib()\n"),
+        ("vendor/deep/x.js", "x()\n"),
+    ]));
+    assert_eq!(
+        linguist_generated(
+            &p.repo,
+            &p.head,
+            &["app.js", "vendor/lib.js", "vendor/deep/x.js"]
+        ),
+        [Attribute::Set, Attribute::Unset, Attribute::Unset]
+    );
+}
+
+#[test]
+fn the_gitattributes_that_apply_download_together_and_no_others() {
+    let p = pull(&files([
+        (".gitattributes", "*.txt linguist-generated\n"),
+        ("a/.gitattributes", "*.txt -linguist-generated\n"),
+        ("a/b/.gitattributes", "*.txt linguist-generated=true\n"),
+        ("c/.gitattributes", "*.txt linguist-generated=false\n"),
+        ("a/b/f.txt", "f\n"),
+        ("c/g.txt", "g\n"),
+    ]));
+    let blob = |path| blob_id(&p.work, &p.head, path);
+    let applying = [
+        blob(".gitattributes"),
+        blob("a/.gitattributes"),
+        blob("a/b/.gitattributes"),
+    ];
+    let missing = missing_objects(p.repo.git_dir(), p.head.as_str());
+    assert!(applying.iter().all(|blob| missing.contains(blob)));
+    let before = packs(p.repo.git_dir());
+
+    assert_eq!(
+        linguist_generated(&p.repo, &p.head, &["a/b/f.txt"]),
+        [Attribute::Value("true".into())]
+    );
+
+    assert_eq!(packs(p.repo.git_dir()), before + 1, "one download");
+    let missing = missing_objects(p.repo.git_dir(), p.head.as_str());
+    assert!(applying.iter().all(|blob| !missing.contains(blob)));
+    assert!(missing.contains(&blob("c/.gitattributes")));
+}
+
+#[test]
+fn past_the_limit_no_gitattributes_are_read() {
+    let mut head = vec![(".gitattributes".to_string(), "*.txt linguist-generated\n")];
+    let mut paths = Vec::new();
+    for dir in 0..repo_cache::MAX_ATTRIBUTE_FILES {
+        head.push((
+            format!("d{dir}/.gitattributes"),
+            "*.txt -linguist-generated\n",
+        ));
+        head.push((format!("d{dir}/f.txt"), "f\n"));
+        paths.push(format!("d{dir}/f.txt"));
+    }
+    let p = pull(&head);
+    let paths: Vec<&[u8]> = paths.iter().map(|path| path.as_bytes()).collect();
+    let before = packs(p.repo.git_dir());
+
+    let error = p
+        .repo
+        .attribute(&p.head, "linguist-generated", &paths)
+        .unwrap_err();
+
+    assert!(
+        matches!(error, Error::TooManyAttributeFiles { found } if found == paths.len() + 1),
+        "{error:?}"
+    );
+    assert_eq!(packs(p.repo.git_dir()), before, "nothing downloaded");
+    // One fewer is read.
+    assert!(
+        p.repo
+            .attribute(&p.head, "linguist-generated", &paths[1..])
+            .is_ok()
     );
 }
