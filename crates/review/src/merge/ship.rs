@@ -1785,6 +1785,37 @@ mod tests {
     }
 
     #[test]
+    fn it_stops_when_rozed_sees_a_blocker_github_does_not_report() {
+        // GitHub says CLEAN, but the checks read beside it show a required one failed.
+        let plan = the_plan(&reviewing());
+        let after = MergeSnapshot {
+            required_checks: vec![check("build", CheckState::Failed)],
+            ..approved(reviewing(), "APPROVED", "CLEAN")
+        };
+
+        assert_eq!(
+            after_approving(&after, &plan),
+            blocked(vec![Blocker::Check(check("build", CheckState::Failed))])
+        );
+    }
+
+    #[test]
+    fn it_stops_when_the_pull_request_was_merged_or_closed_meanwhile() {
+        let plan = the_plan(&reviewing());
+        for (state, blocker) in [
+            (PullRequestState::Merged, Blocker::Merged),
+            (PullRequestState::Closed, Blocker::Closed),
+        ] {
+            let after = MergeSnapshot {
+                state,
+                ..approved(reviewing(), "APPROVED", "CLEAN")
+            };
+
+            assert_eq!(after_approving(&after, &plan), blocked(vec![blocker]));
+        }
+    }
+
+    #[test]
     fn it_does_nothing_more_once_approved_when_auto_merge_is_on_or_it_is_queued() {
         let plan = the_plan(&needing_another_approval());
         let mut auto_merge_on = approved(needing_another_approval(), "REVIEW_REQUIRED", "BLOCKED");
