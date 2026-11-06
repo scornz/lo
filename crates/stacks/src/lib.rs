@@ -31,12 +31,17 @@
 //! ```
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::time::SystemTime;
 
 /// A pull request, with the fields stack detection reads. The doc on each field names the GraphQL
 /// `PullRequest` field it comes from.
+///
+/// Pass the repo's open PRs, its recently merged ones, and the merged PRs from the branches open
+/// PRs target: [`branches_to_look_up`] lists the branches still to fetch
+/// (`pullRequests(headRefName:, states: MERGED)`). Merged PRs link the layers above them, so
+/// without them a layer whose lower layer merged sits on that layer's branch as a root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequest {
     /// `number`.
@@ -56,7 +61,7 @@ pub struct PullRequest {
     pub head_in_base_repo: bool,
     /// `headRefOid`: the head branch's latest commit.
     pub head_oid: String,
-    /// The PR's recent commit OIDs, oldest first: `commits(last: n)`. The last is usually the head.
+    /// The PR's recent commit OIDs, oldest first: `commits(last: n)`. The last is the head.
     pub commits: Vec<String>,
     /// `createdAt`.
     pub created_at: SystemTime,
@@ -71,8 +76,13 @@ pub enum State {
     /// Closed without merging. Closed PRs are ignored, as if they weren't passed.
     Closed,
     Merged {
-        /// Whether the PR's head commit is in its base branch, which the caller works out with git.
-        /// True after a merge commit or a fast-forward; false after a squash or rebase merge.
+        /// Whether the PR's head commit is in its base branch: true after a merge commit or a
+        /// fast-forward, false after a squash or rebase merge. From GraphQL, it's true when
+        /// `headRefOid` is one of `mergeCommit { parents }` or is `mergeCommit { oid }`.
+        ///
+        /// Known limit: this is about the branch the PR merged into. A PR merge-committed into
+        /// `feature-x`, which was then squash-merged into `main`, still counts as in its base,
+        /// so the layers above it aren't marked as needing a rebase.
         head_in_base: bool,
     },
 }
@@ -85,6 +95,42 @@ pub struct NativeStackEntry {
     pub stack: u64,
     /// `position`: 1 is the bottom layer.
     pub position: u32,
+}
+
+/// Lists the branches whose merged PRs [`Stacks::find`] still needs. These are the branches that
+/// open PRs target, or that merged PRs leading down from them target, which no open or merged PR
+/// in `prs` comes from and which aren't trunks. Sorted by name.
+pub fn branches_to_look_up(prs: &[PullRequest], trunks: &[&str]) -> Vec<String> {
+    let from_base_repo = prs.iter().filter(|pr| pr.head_in_base_repo);
+    let mut open_heads = HashSet::new();
+    let mut merged_by_head: HashMap<&str, Vec<&str>> = HashMap::new();
+    for pr in from_base_repo {
+        match pr.state {
+            State::Open => _ = open_heads.insert(pr.head_ref.as_str()),
+            State::Merged { .. } => merged_by_head
+                .entry(pr.head_ref.as_str())
+                .or_default()
+                .push(pr.base_ref.as_str()),
+            State::Closed => {}
+        }
+    }
+    let mut pending: Vec<&str> = prs
+        .iter()
+        .filter(|pr| pr.state == State::Open)
+        .map(|pr| pr.base_ref.as_str())
+        .collect();
+    let mut seen = HashSet::new();
+    let mut missing = BTreeSet::new();
+    while let Some(branch) = pending.pop() {
+        if !seen.insert(branch) || trunks.contains(&branch) || open_heads.contains(branch) {
+            continue;
+        }
+        match merged_by_head.get(branch) {
+            Some(bases) => pending.extend(bases),
+            None => _ = missing.insert(branch),
+        }
+    }
+    missing.into_iter().map(String::from).collect()
 }
 
 /// The rule that linked a layer to the PR below it. When several rules apply, the first in this
@@ -127,6 +173,9 @@ pub struct Layer {
     /// Set when a merged PR below it was squash- or rebase-merged, so this layer still carries
     /// commits that never landed as they are. Never set on a layer linked by
     /// [`Rule::NativeStack`], because GitHub rebases those itself.
+    ///
+    /// Known limit: a layer rebased onto the root branch but still targeting the merged PR's
+    /// branch is still marked, because its base branch links it to the merged PR.
     pub needs_rebase: Option<NeedsRebase>,
     /// The base branch "Make this a GitHub stack" must give it: the head branch of the PR below,
     /// or the root branch. `None` when its base branch is already that, or when the PR below is
