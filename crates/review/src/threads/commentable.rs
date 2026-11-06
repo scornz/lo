@@ -63,13 +63,35 @@ impl Hunk {
     }
 
     /// The hunks of one file's unified diff: GitHub's `patch` for a changed file, or `git diff`'s
-    /// output for one file. Anything before a hunk's `@@` header, such as git's `diff --git`, `---`
-    /// and `+++` lines, is skipped, and so is `\ No newline at end of file`.
+    /// output for one file. Anything outside a hunk's counted lines, such as git's `diff --git`,
+    /// `---` and `+++` lines, is skipped, and so is `\ No newline at end of file`. A second file's
+    /// header, a second `diff` line or a second `---` and `+++` pair, is an error, since its hunks'
+    /// lines are another file's.
     pub fn parse(patch: &str) -> Result<Vec<Self>, PatchError> {
         let error = |line, reason| PatchError { line, reason };
+        let second_file = "a second file's diff starts here, and a patch is one file's";
         let mut hunks = Vec::new();
-        let mut lines = patch.lines().zip(1..);
+        let (mut diff_header, mut file_header) = (false, false);
+        let mut lines = patch.lines().zip(1..).peekable();
         while let Some((text, header_line)) = lines.next() {
+            if text.starts_with("diff ") {
+                if diff_header || file_header || !hunks.is_empty() {
+                    return Err(error(header_line, second_file));
+                }
+                diff_header = true;
+                continue;
+            }
+            if text.starts_with("--- ")
+                && lines
+                    .peek()
+                    .is_some_and(|(next, _)| next.starts_with("+++ "))
+            {
+                if file_header || !hunks.is_empty() {
+                    return Err(error(header_line, second_file));
+                }
+                file_header = true;
+                continue;
+            }
             if !text.starts_with("@@") {
                 continue;
             }
@@ -357,16 +379,58 @@ index 3b18e51..a7c3d2f 100644
     }
 
     #[test]
-    fn lines_after_a_hunks_counted_lines_are_skipped() {
-        // In `git diff` output for several files, the next file's `---` and `+++` follow a hunk.
-        let patch = "@@ -1 +1 @@\n-a\n+b\n--- a/c\n+++ b/c\n@@ -4,0 +5 @@\n+d\n";
+    fn a_second_files_diff_is_an_error() {
+        let second_file = |line| {
+            Err(PatchError {
+                line,
+                reason: "a second file's diff starts here, and a patch is one file's",
+            })
+        };
+        // `git diff` output for two files.
+        let git = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-a
++b
+diff --git a/c.rs b/c.rs
+--- a/c.rs
++++ b/c.rs
+@@ -40,3 +40,4 @@
+ x
++y
+ z
+ w
+";
+        assert_eq!(Hunk::parse(git), second_file(7));
+        // A plain unified diff for two files: the next file's `---` and `+++` follow a hunk.
+        let plain = "@@ -1 +1 @@\n-a\n+b\n--- a/c\n+++ b/c\n@@ -4,0 +5 @@\n+d\n";
+        assert_eq!(Hunk::parse(plain), second_file(4));
+        // A pure rename has no hunks, so the next file follows its header.
+        let rename = "\
+diff --git a/x.rs b/y.rs
+similarity index 100%
+rename from x.rs
+rename to y.rs
+diff --git a/c.rs b/c.rs
+--- a/c.rs
++++ b/c.rs
+@@ -1 +1 @@
+-a
++b
+";
+        assert_eq!(Hunk::parse(rename), second_file(5));
+    }
+
+    #[test]
+    fn a_removed_line_that_looks_like_a_header_is_a_removed_line() {
+        // `-- a` removed, and `++ b` added: inside a hunk's counted lines, they're lines.
+        let patch = "@@ -1,2 +1,2 @@\n--- a\n+++ b\n x\n";
 
         assert_eq!(
             Hunk::parse(patch),
-            Ok(vec![
-                Hunk::new(1, 1, [Removed, Added]),
-                Hunk::new(4, 5, [Added])
-            ])
+            Ok(vec![Hunk::new(1, 1, [Removed, Added, Context])])
         );
     }
 
