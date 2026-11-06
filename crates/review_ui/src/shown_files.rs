@@ -17,10 +17,9 @@ use editor::display_map::{
 };
 use editor::scroll::Autoscroll;
 use editor::{Addon, Editor, SplittableEditor, ToggleSplitDiff, multibuffer_context_lines};
-use gpui::StyledImage as _;
 use gpui::{
-    AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EntityId, Focusable as _,
-    ObjectFit, RenderImage, Task, WeakEntity, Window, checkerboard, img, size,
+    AnyElement, App, AppContext as _, AsyncWindowContext, DevicePixels, Entity, EntityId,
+    Focusable as _, RenderImage, Size, Task, WeakEntity, Window, checkerboard, img, size,
 };
 use language::{Buffer, BufferId, OffsetRangeExt as _, Point};
 use multi_buffer::PathKey;
@@ -847,6 +846,18 @@ fn render_decoding(cx: &mut BlockContext) -> AnyElement {
         .into_any_element()
 }
 
+/// The widest a panel with a note in place of its image grows.
+const NOTE_WIDTH: Pixels = px(360.);
+
+/// The size an image of `natural` pixels shows at, on a display of `scale_factor`, in a box of
+/// `room`: its own size, or smaller to fit, keeping its shape.
+fn fitted(natural: Size<DevicePixels>, scale_factor: f32, room: Size<Pixels>) -> Size<Pixels> {
+    let width = px((natural.width.0 as f32 / scale_factor).max(1.));
+    let height = px((natural.height.0 as f32 / scale_factor).max(1.));
+    let scale = (room.width / width).min(room.height / height).min(1.);
+    size(width * scale, height * scale)
+}
+
 /// A line of text in the middle of an image's panel, in place of the image.
 fn note(text: String) -> AnyElement {
     div()
@@ -870,19 +881,40 @@ fn render_images(drawn: &Drawn, side: Side, cx: &mut BlockContext) -> AnyElement
     // Every size is explicit: the block is laid out on its own, and an image left to size itself
     // would grow to its own height and spill over the lines below.
     let (height, label) = (cx.line_height * cx.height as f32, cx.line_height);
+    // `max_width` is the widest line's when that's wider than the view, so each panel hugs its
+    // image, or its note, rather than fill the block, and stays in view.
     let width = (cx.max_width - cx.em_width * 4.).max(px(120.));
     let (gap, inset) = (px(8.), px(12.));
     let panels = if side == Side::Both { 2. } else { 1. };
     let panel_width = ((width - gap * (panels - 1.)) / panels).max(px(60.));
-    let image_size = size(
+    let room = size(
         (panel_width - inset).max(px(16.)),
         (height - label - inset - px(8.)).max(px(16.)),
     );
+    let scale_factor = cx.window.scale_factor();
     let colors = cx.theme().colors();
     let (border, background, square) = (colors.border_variant, colors.panel_background, 8.);
     let panel = |name: &'static str, image: &DrawnSide| {
+        let (shown, content) = match image {
+            Some(Ok(image)) => {
+                let shown = fitted(image.size(0), scale_factor, room);
+                let content = img(image.clone())
+                    .w(shown.width)
+                    .h(shown.height)
+                    .into_any_element();
+                (shown, content)
+            }
+            other => {
+                let text = match other {
+                    Some(Err(error)) if error.starts_with("too large") => format!("({error})"),
+                    Some(Err(error)) => format!("(rozed can't draw this image: {error})"),
+                    _ => "(no image)".to_string(),
+                };
+                (size(room.width.min(NOTE_WIDTH), room.height), note(text))
+            }
+        };
         v_flex()
-            .w(panel_width)
+            .min_w(px(60.))
             .flex_shrink_0()
             .child(
                 div()
@@ -891,28 +923,15 @@ fn render_images(drawn: &Drawn, side: Side, cx: &mut BlockContext) -> AnyElement
             )
             .child(
                 div()
-                    .w(image_size.width + inset)
-                    .h(image_size.height + inset)
+                    .w(shown.width + inset)
+                    .h(shown.height + inset)
                     .p_1()
                     .overflow_hidden()
                     .rounded_sm()
                     .border_1()
                     .border_color(border)
                     .bg(checkerboard(background, square))
-                    .child(match image {
-                        // The box's own ratio, or the image's would decide one of its sides.
-                        Some(Ok(image)) => img(image.clone())
-                            .w(image_size.width)
-                            .h(image_size.height)
-                            .aspect_ratio(image_size.width / image_size.height)
-                            .object_fit(ObjectFit::ScaleDown)
-                            .into_any_element(),
-                        Some(Err(error)) if error.starts_with("too large") => {
-                            note(format!("({error})"))
-                        }
-                        Some(Err(error)) => note(format!("(rozed can't draw this image: {error})")),
-                        None => note("(no image)".to_string()),
-                    }),
+                    .child(content),
             )
     };
     let before = || panel("Before", &drawn.old);
@@ -1208,6 +1227,25 @@ mod tests {
         assert!(
             text.contains("big 1\n") && text.contains("big 5001"),
             "loaded"
+        );
+    }
+
+    #[test]
+    fn an_image_shows_at_its_own_size_or_smaller_to_fit() {
+        let device = |width, height| size(DevicePixels(width), DevicePixels(height));
+        // On a 2x display, 1,024 pixels are 512 points; the room is a very long line's width.
+        assert_eq!(
+            fitted(device(1024, 381), 2., size(px(5000.), px(244.))),
+            size(px(512.), px(190.5))
+        );
+        // Too large for the room, it shrinks to fit, keeping its shape.
+        assert_eq!(
+            fitted(device(1024, 512), 1., size(px(400.), px(300.))),
+            size(px(400.), px(200.))
+        );
+        assert_eq!(
+            fitted(device(512, 1024), 1., size(px(400.), px(300.))),
+            size(px(150.), px(300.))
         );
     }
 
