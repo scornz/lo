@@ -7,7 +7,7 @@
 //!   contents download only when something reads them. Fetched revisions go under rozed's own refs:
 //!   `refs/rozed/pull/<n>/head` and `refs/rozed/base/<branch>`.
 //! - `checkouts/github.com/<owner>/<repo>/pull-<n>`: a detached `git worktree` of the clone at the
-//!   pull request's head, for language servers.
+//!   pull request's head, for language servers. Only made for a pull request the user trusts.
 //!
 //! git runs without the user's or the system's git config, so nothing there (URL rewrites,
 //! credential helpers, filters, hooks) changes what rozed fetches or runs, and it never prompts.
@@ -38,8 +38,6 @@ pub struct PullRequestSource<'a> {
 #[derive(Debug)]
 pub struct LocalPullRequest {
     pub repo: Repo,
-    /// A checkout of `head`.
-    pub checkout: PathBuf,
     /// The commit the diff starts from: where the head branched from the base branch.
     pub base: String,
     /// The pull request's head commit.
@@ -55,8 +53,29 @@ pub struct ChangedFile {
     pub old_path: Option<String>,
     /// The path at the head. `None` when the pull request deletes the file.
     pub new_path: Option<String>,
+    /// The file's entry at the base, when it has one.
+    pub old_object: Option<GitObject>,
+    /// The file's entry at the head, when it has one.
+    pub new_object: Option<GitObject>,
     /// Whether git considers either side binary.
     pub binary: bool,
+}
+
+/// A file's entry in a commit's tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitObject {
+    /// The blob's ID, or for a submodule the ID of the commit it points at.
+    pub id: String,
+    /// git's mode for the entry: `0o100644` or `0o100755` for a file, `0o120000` for a symlink,
+    /// `0o160000` for a submodule.
+    pub mode: u32,
+}
+
+impl GitObject {
+    /// Whether the entry is a submodule (a gitlink): a commit in another repository, not a file.
+    pub fn is_submodule(&self) -> bool {
+        self.mode == 0o160000
+    }
 }
 
 impl ChangedFile {
@@ -104,7 +123,7 @@ impl RepoCache {
     }
 
     /// Clones the repository if it isn't cloned yet, fetches the pull request's head and base
-    /// branch, checks the head out, and lists what changed. Blocks while git runs.
+    /// branch, and lists what changed. Makes no checkout. Blocks while git runs.
     pub fn prepare(&self, source: &PullRequestSource) -> anyhow::Result<LocalPullRequest> {
         let branch = source.base_branch;
         check_branch_name(branch)?;
@@ -124,23 +143,38 @@ impl RepoCache {
         let head = repo.commit(&head_ref)?;
         let base = repo.merge_base(&head, &repo.commit(&base_ref)?)?;
         let files = repo.changed_files(&base, &head)?;
-
-        let checkout = self.checkout_dir(source.owner, source.repo, number);
-        repo.check_out(&checkout, &head)?;
         Ok(LocalPullRequest {
             repo,
-            checkout,
             base,
             head,
             files,
         })
     }
+
+    /// Checks the pull request's head out, detached, into its checkout folder, and returns the
+    /// folder. Only for a pull request the user trusts: language servers run there. Blocks while
+    /// git runs.
+    pub fn check_out(
+        &self,
+        source: &PullRequestSource,
+        pull_request: &LocalPullRequest,
+    ) -> anyhow::Result<PathBuf> {
+        let checkout = self.checkout_dir(source.owner, source.repo, source.number);
+        pull_request.repo.check_out(&checkout, &pull_request.head)?;
+        Ok(checkout)
+    }
 }
 
 impl Repo {
     /// The contents of `path` at revision `rev`.
+    #[cfg(test)]
     pub fn read_file(&self, rev: &str, path: &str) -> anyhow::Result<Vec<u8>> {
         self.git(&["cat-file", "blob", &format!("{rev}:{path}")])
+    }
+
+    /// The contents of the blob `id`.
+    pub fn read_blob(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        self.git(&["cat-file", "blob", id])
     }
 
     /// Creates the bare repository if it doesn't exist, and points `origin` at `url`. The first
@@ -193,30 +227,39 @@ impl Repo {
 
     /// What changed from `base` to `head`, with renames detected.
     fn changed_files(&self, base: &str, head: &str) -> anyhow::Result<Vec<ChangedFile>> {
-        let diff =
-            |format: &str| self.git(&["diff", "--no-ext-diff", "-z", "-M", format, base, head]);
+        let diff = |format: &[&str]| {
+            let mut args = vec!["diff", "--no-ext-diff", "-z", "-M"];
+            args.extend(format);
+            args.extend([base, head]);
+            self.git(&args)
+        };
         // --numstat reads both sides of every changed file, so git downloads them all in one
-        // batch here instead of one at a time later.
-        let stats = parse_numstat(&diff("--numstat")?)?;
-        let paths = parse_name_status(&diff("--name-status")?)?;
+        // batch here instead of one at a time later. It reads nothing for a submodule, whose
+        // commit is in another repository.
+        let stats = parse_numstat(&diff(&["--numstat"])?)?;
+        let entries = parse_raw(&diff(&["--raw", "--no-abbrev"])?)?;
         anyhow::ensure!(
-            stats.len() == paths.len(),
-            "git listed {} files with --numstat and {} with --name-status",
+            stats.len() == entries.len(),
+            "git listed {} files with --numstat and {} with --raw",
             stats.len(),
-            paths.len()
+            entries.len()
         );
-        paths
+        entries
             .into_iter()
             .zip(stats)
-            .map(|((old_path, new_path), (path, binary))| {
+            .map(|((old, new), (path, binary))| {
+                let (old_path, old_object) = old.unzip();
+                let (new_path, new_object) = new.unzip();
                 let file = ChangedFile {
                     old_path,
                     new_path,
+                    old_object,
+                    new_object,
                     binary,
                 };
                 anyhow::ensure!(
                     file.path() == path,
-                    "git listed {path} with --numstat but {} with --name-status",
+                    "git listed {path} with --numstat but {} with --raw",
                     file.path()
                 );
                 Ok(file)
@@ -286,6 +329,19 @@ impl Repo {
     fn git(&self, args: &[&str]) -> anyhow::Result<Vec<u8>> {
         git_in(&self.git_dir, args)
     }
+}
+
+/// The ID git would give `path` in `checkout` as a blob, hashing its bytes as they are on disk,
+/// without the conversions `.gitattributes` asks for. `None` when `path` isn't a regular file
+/// there: missing, a folder or a symlink.
+pub fn hash_checkout_file(checkout: &Path, path: &str) -> anyhow::Result<Option<String>> {
+    let is_file = std::fs::symlink_metadata(checkout.join(path))
+        .is_ok_and(|metadata| metadata.file_type().is_file());
+    if !is_file {
+        return Ok(None);
+    }
+    let output = git_in(checkout, &["hash-object", "--no-filters", "--", path])?;
+    Ok(Some(String::from_utf8(output)?.trim().to_string()))
 }
 
 /// Fails unless `name` is a valid branch name, which also keeps it from changing the meaning of
@@ -359,18 +415,31 @@ fn nul_fields(output: &[u8]) -> anyhow::Result<Vec<String>> {
         .collect()
 }
 
-/// Parses `git diff -z --name-status` into `(old path, new path)` pairs.
-fn parse_name_status(output: &[u8]) -> anyhow::Result<Vec<(Option<String>, Option<String>)>> {
+/// One file in `git diff --raw`: its path and entry at the base and at the head, `None` on a side
+/// where it doesn't exist.
+type RawEntry = (Option<(String, GitObject)>, Option<(String, GitObject)>);
+
+/// Parses `git diff -z --raw --no-abbrev`.
+fn parse_raw(output: &[u8]) -> anyhow::Result<Vec<RawEntry>> {
     let mut fields = nul_fields(output)?.into_iter();
     let mut files = Vec::new();
-    while let Some(status) = fields.next() {
+    while let Some(header) = fields.next() {
+        // `:<old mode> <new mode> <old id> <new id> <status>`
+        let parts: Vec<&str> = header
+            .strip_prefix(':')
+            .unwrap_or_default()
+            .split(' ')
+            .collect();
+        let [old_mode, new_mode, old_id, new_id, status] = parts[..] else {
+            bail!("git printed an unexpected --raw line {header:?}");
+        };
         let mut path = || {
             fields
                 .next()
                 .filter(|path| !path.is_empty())
                 .with_context(|| format!("git's {status} entry is missing a path"))
         };
-        let file = match status.chars().next() {
+        let (old_path, new_path) = match status.chars().next() {
             Some('A') => (None, Some(path()?)),
             Some('D') => (Some(path()?), None),
             Some('M' | 'T') => {
@@ -380,9 +449,29 @@ fn parse_name_status(output: &[u8]) -> anyhow::Result<Vec<(Option<String>, Optio
             Some('R' | 'C') => (Some(path()?), Some(path()?)),
             _ => bail!("git printed an unknown file status {status:?}"),
         };
-        files.push(file);
+        let old = old_path
+            .map(|path| anyhow::Ok((path, git_object(old_id, old_mode)?)))
+            .transpose()?;
+        let new = new_path
+            .map(|path| anyhow::Ok((path, git_object(new_id, new_mode)?)))
+            .transpose()?;
+        files.push((old, new));
     }
     Ok(files)
+}
+
+/// A tree entry from the ID and octal mode `git diff --raw` prints.
+fn git_object(id: &str, mode: &str) -> anyhow::Result<GitObject> {
+    let is_id = matches!(id.len(), 40 | 64) && id.bytes().all(|byte| byte.is_ascii_hexdigit());
+    anyhow::ensure!(is_id, "git printed an unexpected object ID {id:?}");
+    let mode = u32::from_str_radix(mode, 8)
+        .ok()
+        .filter(|&mode| mode != 0)
+        .with_context(|| format!("git printed an unexpected mode {mode:?}"))?;
+    Ok(GitObject {
+        id: id.to_string(),
+        mode,
+    })
 }
 
 /// Parses `git diff -z --numstat` into `(path, binary)` pairs, where `path` is the new path.
@@ -581,12 +670,18 @@ mod tests {
         }
     }
 
-    fn changed(old: Option<&str>, new: Option<&str>, binary: bool) -> ChangedFile {
-        ChangedFile {
-            old_path: old.map(Into::into),
-            new_path: new.map(Into::into),
-            binary,
-        }
+    /// A changed file's paths and whether it's binary.
+    type Paths = (Option<String>, Option<String>, bool);
+
+    fn changed(old: Option<&str>, new: Option<&str>, binary: bool) -> Paths {
+        (old.map(Into::into), new.map(Into::into), binary)
+    }
+
+    fn paths(files: &[ChangedFile]) -> Vec<Paths> {
+        files
+            .iter()
+            .map(|file| (file.old_path.clone(), file.new_path.clone(), file.binary))
+            .collect()
     }
 
     #[test]
@@ -614,7 +709,7 @@ mod tests {
         // The merge base, not the tip of main, which has moved on.
         assert_eq!(pr.base, remote.base);
         assert_eq!(
-            pr.files,
+            paths(&pr.files),
             vec![
                 changed(None, Some("added.txt"), false),
                 changed(Some("data.bin"), Some("data.bin"), true),
@@ -625,6 +720,29 @@ mod tests {
         );
         assert_eq!(pr.files[2].path(), "gone.txt");
         assert_eq!(pr.files[4].path(), "src/new_name.rs");
+
+        // Each side's entry: the blob and mode git has for it at the base and the head.
+        let object = |rev: &str, path: &str| GitObject {
+            id: git(&remote.git_dir(), &["rev-parse", &format!("{rev}:{path}")]),
+            mode: 0o100644,
+        };
+        let renamed = &pr.files[4];
+        assert_eq!(
+            renamed.old_object,
+            Some(object(&remote.base, "old_name.rs"))
+        );
+        assert_eq!(
+            renamed.new_object,
+            Some(object(&remote.head, "src/new_name.rs"))
+        );
+        assert_eq!(pr.files[0].old_object, None);
+        assert_eq!(pr.files[2].new_object, None);
+        assert!(pr.files.iter().all(|file| {
+            [&file.old_object, &file.new_object]
+                .into_iter()
+                .flatten()
+                .all(|object| !object.is_submodule())
+        }));
 
         // A bare clone in the cache, with the fetched revisions under rozed's own refs.
         let git_dir = cache.repo_dir("Owner", "Repo.rs");
@@ -643,25 +761,59 @@ mod tests {
         );
         assert_eq!(git(&git_dir, &["for-each-ref", "refs/heads"]), "");
 
-        // A detached checkout of the head.
-        assert_eq!(pr.checkout, cache.checkout_dir("Owner", "Repo.rs", 1));
-        assert_eq!(git(&pr.checkout, &["rev-parse", "HEAD"]), remote.head);
-        assert_eq!(git(&pr.checkout, &["status", "--porcelain"]), "");
-        assert_eq!(
-            git(&pr.checkout, &["rev-parse", "--abbrev-ref", "HEAD"]),
-            "HEAD"
-        );
-        assert!(pr.checkout.join("src/new_name.rs").is_file());
-        assert!(pr.checkout.join("added.txt").is_file());
-        assert!(!pr.checkout.join("gone.txt").exists());
+        // No checkout until one is asked for.
+        assert!(!cache.checkout_dir("Owner", "Repo.rs", 1).exists());
+        assert!(!cache_dir.path().join("checkouts").exists());
 
-        // The old side reads from git.
+        // Both sides read from git.
         assert_eq!(
             pr.repo.read_file(&pr.base, "old_name.rs").unwrap(),
             rust_source("").into_bytes()
         );
         assert_eq!(pr.repo.read_file(&pr.base, "gone.txt").unwrap(), b"gone\n");
         assert!(pr.repo.read_file(&pr.base, "added.txt").is_err());
+        assert_eq!(
+            pr.repo
+                .read_blob(&renamed.new_object.as_ref().unwrap().id)
+                .unwrap(),
+            rust_source("pub fn added() {}\n").into_bytes()
+        );
+    }
+
+    #[test]
+    fn checks_out_the_head() {
+        let remote = Remote::new();
+        let cache_dir = TempDir::new().unwrap();
+        let cache = RepoCache::new(cache_dir.path());
+        let pr = cache.prepare(&remote.source()).unwrap();
+
+        let checkout = cache.check_out(&remote.source(), &pr).unwrap();
+
+        // A detached checkout of the head.
+        assert_eq!(checkout, cache.checkout_dir("Owner", "Repo.rs", 1));
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), remote.head);
+        assert_eq!(git(&checkout, &["status", "--porcelain"]), "");
+        assert_eq!(
+            git(&checkout, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "HEAD"
+        );
+        assert!(checkout.join("src/new_name.rs").is_file());
+        assert!(checkout.join("added.txt").is_file());
+        assert!(!checkout.join("gone.txt").exists());
+
+        // Every file at the head hashes to its blob.
+        for file in &pr.files {
+            let (Some(path), Some(object)) = (&file.new_path, &file.new_object) else {
+                continue;
+            };
+            assert_eq!(
+                hash_checkout_file(&checkout, path).unwrap().as_ref(),
+                Some(&object.id),
+                "{path}"
+            );
+        }
+        assert_eq!(hash_checkout_file(&checkout, "gone.txt").unwrap(), None);
+        assert_eq!(hash_checkout_file(&checkout, "src").unwrap(), None);
     }
 
     #[test]
@@ -704,16 +856,18 @@ mod tests {
         let remote = Remote::new();
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path());
-        cache.prepare(&remote.source()).unwrap();
+        let first = cache.prepare(&remote.source()).unwrap();
+        cache.check_out(&remote.source(), &first).unwrap();
 
         let new_head = remote.force_push_new_head();
         let pr = cache.prepare(&remote.source()).unwrap();
+        let checkout = cache.check_out(&remote.source(), &pr).unwrap();
 
         assert_eq!(pr.head, new_head);
         assert_eq!(pr.base, remote.base);
-        assert_eq!(git(&pr.checkout, &["rev-parse", "HEAD"]), new_head);
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), new_head);
         assert_eq!(
-            fs::read_to_string(pr.checkout.join("added.txt")).unwrap(),
+            fs::read_to_string(checkout.join("added.txt")).unwrap(),
             "added, then amended\n"
         );
     }
@@ -724,12 +878,14 @@ mod tests {
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path());
         let first = cache.prepare(&remote.source()).unwrap();
+        cache.check_out(&remote.source(), &first).unwrap();
         fs::remove_dir_all(&first.repo.git_dir).unwrap();
 
         let pr = cache.prepare(&remote.source()).unwrap();
+        let checkout = cache.check_out(&remote.source(), &pr).unwrap();
 
-        assert_eq!(git(&pr.checkout, &["rev-parse", "HEAD"]), remote.head);
-        assert!(pr.checkout.join("src/new_name.rs").is_file());
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), remote.head);
+        assert!(checkout.join("src/new_name.rs").is_file());
     }
 
     #[test]
@@ -767,21 +923,133 @@ mod tests {
     }
 
     #[test]
-    fn parses_name_status() {
-        let output = b"M\0keep.txt\0A\0added.txt\0D\0gone.txt\0R087\0old.rs\0src/new.rs\0T\0link\0";
+    fn parses_raw() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let zero = "0".repeat(40);
+        let output = format!(
+            ":100644 100644 {a} {b} M\0keep.txt\0\
+             :000000 100755 {zero} {b} A\0added.sh\0\
+             :100644 000000 {a} {zero} D\0gone.txt\0\
+             :100644 100644 {a} {b} R087\0old.rs\0src/new.rs\0\
+             :100644 120000 {a} {b} T\0link\0\
+             :160000 160000 {a} {b} M\0sub\0"
+        );
+        let object = |id: &str, mode| GitObject {
+            id: id.to_string(),
+            mode,
+        };
+        let side = |path: &str, id: &str, mode| Some((path.to_string(), object(id, mode)));
         assert_eq!(
-            parse_name_status(output).unwrap(),
+            parse_raw(output.as_bytes()).unwrap(),
             vec![
-                (Some("keep.txt".into()), Some("keep.txt".into())),
-                (None, Some("added.txt".into())),
-                (Some("gone.txt".into()), None),
-                (Some("old.rs".into()), Some("src/new.rs".into())),
-                (Some("link".into()), Some("link".into())),
+                (
+                    side("keep.txt", &a, 0o100644),
+                    side("keep.txt", &b, 0o100644)
+                ),
+                (None, side("added.sh", &b, 0o100755)),
+                (side("gone.txt", &a, 0o100644), None),
+                (
+                    side("old.rs", &a, 0o100644),
+                    side("src/new.rs", &b, 0o100644)
+                ),
+                (side("link", &a, 0o100644), side("link", &b, 0o120000)),
+                (side("sub", &a, 0o160000), side("sub", &b, 0o160000)),
             ]
         );
-        assert_eq!(parse_name_status(b"").unwrap(), vec![]);
-        assert!(parse_name_status(b"R100\0only-one-path\0").is_err());
-        assert!(parse_name_status(b"X\0what\0").is_err());
+        assert!(object(&a, 0o160000).is_submodule());
+        assert!(!object(&a, 0o100644).is_submodule());
+        assert_eq!(parse_raw(b"").unwrap(), vec![]);
+        for bad in [
+            format!(":100644 100644 {a} {b} R100\0only-one-path\0"),
+            format!(":100644 100644 {a} {b} X\0what\0"),
+            format!(":100644 100644 {a} {b}\0no-status\0"),
+            format!(":100644 100644 {a} nothex M\0bad-id\0"),
+            format!(":100644 1x0644 {a} {b} M\0bad-mode\0"),
+            "M\0no-header\0".to_string(),
+        ] {
+            assert!(parse_raw(bad.as_bytes()).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_submodule_is_listed_without_reading_its_commit() {
+        // The submodule's commits live in another repository, so the cache never has them and
+        // reading one would ask the remote for it, which fails.
+        let old_commit = "1".repeat(40);
+        let new_commit = "2".repeat(40);
+        let remote = fixtures::pull_request(
+            &[fixtures::Entry::Submodule("vendor/lib", &old_commit)],
+            &[
+                fixtures::Entry::Submodule("vendor/lib", &new_commit),
+                fixtures::Entry::File("README", b"bumped vendor/lib\n"),
+            ],
+        );
+        let cache_dir = TempDir::new().unwrap();
+        let cache = RepoCache::new(cache_dir.path());
+
+        let pr = cache.prepare(&remote.source()).unwrap();
+
+        assert_eq!(pr.files.len(), 2);
+        let submodule = &pr.files[1];
+        assert_eq!(submodule.path(), "vendor/lib");
+        assert_eq!(
+            submodule.old_object,
+            Some(GitObject {
+                id: old_commit,
+                mode: 0o160000
+            })
+        );
+        assert_eq!(
+            submodule.new_object,
+            Some(GitObject {
+                id: new_commit,
+                mode: 0o160000
+            })
+        );
+        let checkout = cache.check_out(&remote.source(), &pr).unwrap();
+        assert_eq!(hash_checkout_file(&checkout, "vendor/lib").unwrap(), None);
+    }
+
+    #[test]
+    fn a_case_collision_leaves_a_file_that_doesnt_hash_to_its_blob() {
+        // Lib.rs and lib.rs are two files to git, but one on a case-insensitive disk, as macOS's
+        // usually is: the checkout keeps one name, holding whichever was written last.
+        let remote = fixtures::pull_request(
+            &[fixtures::Entry::File("lib.rs", b"pub fn lib() {}\n")],
+            &[
+                fixtures::Entry::File("Lib.rs", b"pub fn evil() {}\n"),
+                fixtures::Entry::File("lib.rs", b"pub fn lib() { /* benign */ }\n"),
+            ],
+        );
+        let cache_dir = TempDir::new().unwrap();
+        let cache = RepoCache::new(cache_dir.path());
+        let pr = cache.prepare(&remote.source()).unwrap();
+        let checkout = cache.check_out(&remote.source(), &pr).unwrap();
+
+        let mismatched: Vec<&str> = pr
+            .files
+            .iter()
+            .filter(|file| {
+                let blob = &file.new_object.as_ref().unwrap().id;
+                hash_checkout_file(&checkout, file.path()).unwrap().as_ref() != Some(blob)
+            })
+            .map(ChangedFile::path)
+            .collect();
+        if fixtures::is_case_insensitive(cache_dir.path()) {
+            assert_eq!(mismatched.len(), 1, "{mismatched:?}");
+        } else {
+            assert_eq!(mismatched, Vec::<&str>::new());
+        }
+        // git still has both.
+        for (file, text) in pr
+            .files
+            .iter()
+            .zip(["pub fn evil() {}\n", "pub fn lib() { /* benign */ }\n"])
+        {
+            let blob = &file.new_object.as_ref().unwrap().id;
+            assert_eq!(pr.repo.read_blob(blob).unwrap(), text.as_bytes());
+        }
     }
 
     #[test]
@@ -797,5 +1065,147 @@ mod tests {
         );
         assert_eq!(parse_numstat(b"").unwrap(), vec![]);
         assert!(parse_numstat(b"1\t1\t\0only-old\0").is_err());
+    }
+}
+
+/// Repositories for tests, built from git's plumbing so a commit can hold what a disk can't: names
+/// that differ only in case, or a submodule without its repository.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+
+    use std::io::Write as _;
+
+    use tempfile::TempDir;
+
+    /// An entry in a fixture commit's tree.
+    pub enum Entry<'a> {
+        File(&'a str, &'a [u8]),
+        /// A submodule at the given commit, which the fixture doesn't have.
+        Submodule(&'a str, &'a str),
+    }
+
+    /// A bare repository with `main` at a base commit and pull request #1 at a head commit on top.
+    pub struct Fixture {
+        dir: TempDir,
+        url: &'static str,
+    }
+
+    impl Fixture {
+        pub fn source(&self) -> PullRequestSource<'_> {
+            PullRequestSource {
+                owner: "owner",
+                repo: "repo",
+                number: 1,
+                remote_url: self.url,
+                base_branch: "main",
+            }
+        }
+
+        fn git_dir(&self) -> PathBuf {
+            self.dir.path().join("remote.git")
+        }
+    }
+
+    /// A pull request from a base commit holding `base` to a head commit holding `head`.
+    pub fn pull_request(base: &[Entry], head: &[Entry]) -> Fixture {
+        let dir = TempDir::new().unwrap();
+        let git_dir = dir.path().join("remote.git");
+        run(dir.path(), &["init", "-q", "--bare", "remote.git"], None);
+        run(
+            &git_dir,
+            &["config", "uploadpack.allowFilter", "true"],
+            None,
+        );
+        run(
+            &git_dir,
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+            None,
+        );
+        let url: &'static str = Box::leak(format!("file://{}", git_dir.display()).into_boxed_str());
+        let fixture = Fixture { dir, url };
+        let base = commit(&fixture, base, None);
+        let head = commit(&fixture, head, Some(&base));
+        run(&git_dir, &["update-ref", "refs/heads/main", &base], None);
+        run(&git_dir, &["update-ref", "refs/pull/1/head", &head], None);
+        fixture
+    }
+
+    /// Writes a commit whose tree holds exactly `entries`, and returns its ID.
+    fn commit(fixture: &Fixture, entries: &[Entry], parent: Option<&str>) -> String {
+        let git_dir = fixture.git_dir();
+        let index = fixture.dir.path().join("index");
+        let _ = std::fs::remove_file(&index);
+        let index = index.to_str().unwrap();
+        for entry in entries {
+            let (mode, id, path) = match entry {
+                Entry::File(path, contents) => {
+                    let id = run(&git_dir, &["hash-object", "-w", "--stdin"], Some(contents));
+                    ("100644", id, *path)
+                }
+                Entry::Submodule(path, commit) => ("160000", commit.to_string(), *path),
+            };
+            let cacheinfo = format!("{mode},{id},{path}");
+            run_with_index(
+                &git_dir,
+                index,
+                &["update-index", "--add", "--cacheinfo", &cacheinfo],
+            );
+        }
+        let tree = run_with_index(&git_dir, index, &["write-tree"]);
+        let mut args = vec!["commit-tree", tree.as_str(), "-m", "fixture"];
+        if let Some(parent) = parent {
+            args.extend(["-p", parent]);
+        }
+        run(&git_dir, &args, None)
+    }
+
+    /// Whether the disk under `dir` treats names that differ only in case as one.
+    pub fn is_case_insensitive(dir: &Path) -> bool {
+        let probe = TempDir::new_in(dir).unwrap();
+        std::fs::write(probe.path().join("case"), "").unwrap();
+        probe.path().join("CASE").exists()
+    }
+
+    fn run_with_index(dir: &Path, index: &str, args: &[&str]) -> String {
+        run_command(dir, args, None, Some(index))
+    }
+
+    fn run(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> String {
+        run_command(dir, args, stdin, None)
+    }
+
+    fn run_command(dir: &Path, args: &[&str], stdin: Option<&[u8]>, index: Option<&str>) -> String {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "rozed test")
+            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_NAME", "rozed test")
+            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(index) = index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or_default())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 }

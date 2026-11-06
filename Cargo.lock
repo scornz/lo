@@ -8075,6 +8075,7 @@ dependencies = [
  "tempfile",
  "theme",
  "theme_settings",
+ "ui",
  "util",
  "uuid",
  "workspace",

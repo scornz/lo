@@ -45,6 +45,7 @@ session = { path = "third_party/zed/crates/session" }
 settings = { path = "third_party/zed/crates/settings" }
 theme = { path = "third_party/zed/crates/theme" }
 theme_settings = { path = "third_party/zed/crates/theme_settings" }
+ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
 # under rozed's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }

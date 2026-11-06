@@ -8,8 +8,10 @@ mod github_api;
 mod http;
 mod keymap;
 mod local_copy;
+mod local_project;
 mod pr_diff;
 mod pr_link;
+mod rust_toolchain;
 mod trust;
 
 use std::io::IsTerminal as _;
@@ -23,8 +25,8 @@ use db::kvp::KeyValueStore;
 use editor::{Editor, MultiBuffer};
 use fs::RealFs;
 use gpui::{
-    App, AppContext as _, Bounds, Context, Menu, MenuItem, TaskExt as _, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Bounds, Context, Menu, MenuItem, Task, TaskExt as _, TitlebarOptions,
+    Window, WindowBounds, WindowOptions, px, size,
 };
 use http_client::{HttpClient, HttpClientWithUrl};
 use language::{Capability, LanguageRegistry};
@@ -45,8 +47,13 @@ use crate::pr_link::PrLink;
 /// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "ROZED_PARENT_PID";
 
-const USAGE: &str = "usage: rozed [<pull request link>]
-example: rozed https://github.com/sharkdp/fd/pull/2212";
+const USAGE: &str = "usage: rozed [--trust] [<pull request link>]
+example: rozed https://github.com/sharkdp/fd/pull/2212
+
+  --trust  Check the pull request out and run rust-analyzer on it. rust-analyzer runs cargo
+           and rustc there, which the repository can point at its own programs, so only trust
+           a pull request whose code you'd run. Without it, rozed shows the diff from git, with
+           no checkout and no language server.";
 
 fn main() {
     let launched = Instant::now();
@@ -78,14 +85,10 @@ fn main() {
             askpass::main(socket);
             return;
         }
-        Some(flag) if flag.starts_with("--") => {
-            eprintln!("rozed: unknown option `{flag}`");
-            std::process::exit(2);
-        }
         _ => {}
     }
-    let pull_request = match parse_args(&args) {
-        Ok(pull_request) => pull_request,
+    let options = match parse_args(&args) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("rozed: {error}\n\n{USAGE}");
             std::process::exit(2);
@@ -126,13 +129,14 @@ fn main() {
         KeyValueStore::from_app_db(&app_db),
     ));
     let fs = RealFs::new(None, app.background_executor());
-    if !std::io::stdout().is_terminal() {
-        // Started from Finder rather than a shell: load the login shell's environment, so git
-        // and language servers are on PATH.
-        app.background_executor()
-            .spawn(async { util::load_login_shell_environment().await.log_err() })
-            .detach();
-    }
+    // Started from Finder rather than a shell: load the login shell's environment, run in the home
+    // folder, so git and language servers are on PATH. The project copies rozed's environment
+    // when it's made, so the window waits for this.
+    let login_shell_environment: Option<Task<()>> = (!std::io::stdout().is_terminal()).then(|| {
+        app.background_executor().spawn(async {
+            util::load_login_shell_environment().await.log_err();
+        })
+    });
 
     app.run(move |cx| {
         cx.set_global(app_db);
@@ -141,7 +145,8 @@ fn main() {
         release_channel::init(AppVersion::load(version(), None, None), cx);
         gpui_tokio::init(cx);
         settings::init(cx);
-        forced_settings::apply(cx);
+        // Before anything reads settings. Again below, once every language is known.
+        forced_settings::apply(&[], None, cx);
 
         let http = http_client(cx);
         cx.set_http_client(http.clone());
@@ -164,6 +169,17 @@ fn main() {
         let languages = Arc::new(languages);
         let node_runtime = NodeRuntime::unavailable();
         languages::init(languages.clone(), fs.clone(), node_runtime.clone(), cx);
+        // rust-analyzer runs only on a trusted pull request, with the toolchain rozed finds.
+        let rust_toolchain = options.trust.then(rust_toolchain::find).flatten();
+        if options.trust {
+            match &rust_toolchain {
+                Some(toolchain) => log::info!("rust-analyzer uses the Rust toolchain {toolchain}"),
+                None => log::info!(
+                    "found no Rust toolchain for rust-analyzer; it can't install the repository's"
+                ),
+            }
+        }
+        forced_settings::apply(&languages.language_names(), rust_toolchain.as_deref(), cx);
 
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
@@ -210,13 +226,19 @@ fn main() {
         })
         .detach();
 
-        match open_window(app_state, pull_request, launched, cx) {
-            Ok(()) => cx.activate(true),
-            Err(error) => {
-                log::error!("{error:#}");
-                cx.quit();
+        cx.spawn(async move |cx| {
+            if let Some(loaded) = login_shell_environment {
+                loaded.await;
             }
-        }
+            cx.update(|cx| match open_window(app_state, options, launched, cx) {
+                Ok(()) => cx.activate(true),
+                Err(error) => {
+                    log::error!("{error:#}");
+                    cx.quit();
+                }
+            })
+        })
+        .detach();
     });
 }
 
@@ -225,19 +247,45 @@ fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// Reads the command line after the program name: nothing, or one pull request link.
-fn parse_args(args: &[String]) -> anyhow::Result<Option<PrLink>> {
-    match args {
-        [] => Ok(None),
-        [link] => link
-            .parse()
-            .map(Some)
-            .with_context(|| format!("can't open `{link}`")),
+/// What the command line asks for.
+#[derive(Debug, PartialEq)]
+struct Options {
+    pull_request: Option<PrLink>,
+    /// Whether to check the pull request out and run language servers on it.
+    trust: bool,
+}
+
+/// Reads the command line after the program name: nothing, or one pull request link, with or
+/// without `--trust`.
+fn parse_args(args: &[String]) -> anyhow::Result<Options> {
+    let mut trust = false;
+    let mut links = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--trust" => trust = true,
+            flag if flag.starts_with("--") => anyhow::bail!("unknown option `{flag}`"),
+            link => links.push(link),
+        }
+    }
+    let pull_request = match links[..] {
+        [] => None,
+        [link] => Some(
+            link.parse()
+                .with_context(|| format!("can't open `{link}`"))?,
+        ),
         _ => anyhow::bail!(
             "expected one pull request link, got {} arguments",
-            args.len()
+            links.len()
         ),
-    }
+    };
+    anyhow::ensure!(
+        pull_request.is_some() || !trust,
+        "--trust needs a pull request link"
+    );
+    Ok(Options {
+        pull_request,
+        trust,
+    })
 }
 
 /// Creates rozed's folders. Zed's `paths` crate, patched to use the name rozed, puts them in
@@ -316,36 +364,31 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
 /// read-only.
 fn open_window(
     app_state: Arc<AppState>,
-    pull_request: Option<PrLink>,
+    options: Options,
     launched: Instant,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    let mut options = (app_state.build_window_options)(None, cx);
+    let Options {
+        pull_request,
+        trust,
+    } = options;
+    let trust = if trust {
+        pr_diff::Trust::Checkout
+    } else {
+        pr_diff::Trust::Untrusted
+    };
+    let mut window_options = (app_state.build_window_options)(None, cx);
     if let Some(pull_request) = &pull_request {
         log::info!("opening {pull_request}");
-        options.titlebar = Some(TitlebarOptions {
+        window_options.titlebar = Some(TitlebarOptions {
             title: Some(format!("{pull_request} - rozed").into()),
             ..Default::default()
         });
     }
     let window = cx
-        .open_window(options, |window, cx| {
+        .open_window(window_options, |window, cx| {
             theme_settings::setup_ui_font(window, cx);
-            let project = Project::local(
-                app_state.client.clone(),
-                app_state.node_runtime.clone(),
-                app_state.user_store.clone(),
-                app_state.languages.clone(),
-                app_state.fs.clone(),
-                None,
-                project::LocalProjectFlags {
-                    // Zed's worktree trust: no language server or `.zed/settings.json` until
-                    // rozed trusts the worktree (see `trust`).
-                    init_worktree_trust: true,
-                    watch_global_configs: true,
-                },
-                cx,
-            );
+            let project = local_project::new(&app_state, cx);
             let workspace =
                 cx.new(|cx| Workspace::new(None, project, app_state.clone(), window, cx));
             // Zed roots every window at a MultiWorkspace, and parts of its workspace code look
@@ -360,7 +403,7 @@ fn open_window(
                 let weak_workspace = workspace.downgrade();
                 window
                     .spawn(cx, async move |cx| {
-                        pr_diff::open(weak_workspace, pull_request, launched, cx).await
+                        pr_diff::open(weak_workspace, pull_request, trust, launched, cx).await
                     })
                     .detach_and_notify_err(workspace.downgrade(), window, cx);
             }
@@ -430,15 +473,42 @@ mod tests {
 
     #[test]
     fn no_arguments_open_no_pull_request() {
-        assert_eq!(parse_args(&[]).unwrap(), None);
+        assert_eq!(
+            parse_args(&[]).unwrap(),
+            Options {
+                pull_request: None,
+                trust: false
+            }
+        );
     }
 
     #[test]
-    fn one_link_opens_that_pull_request() {
-        let pull_request = parse_args(&args(&["https://github.com/sharkdp/fd/pull/2212"]))
-            .unwrap()
-            .unwrap();
-        assert_eq!(pull_request.to_string(), "sharkdp/fd#2212");
+    fn one_link_opens_that_pull_request_untrusted() {
+        let options = parse_args(&args(&["https://github.com/sharkdp/fd/pull/2212"])).unwrap();
+        assert_eq!(options.pull_request.unwrap().to_string(), "sharkdp/fd#2212");
+        assert!(!options.trust);
+    }
+
+    #[test]
+    fn trust_is_asked_for_with_a_flag_before_or_after_the_link() {
+        let link = "https://github.com/sharkdp/fd/pull/2212";
+        for args in [args(&["--trust", link]), args(&[link, "--trust"])] {
+            let options = parse_args(&args).unwrap();
+            assert_eq!(options.pull_request.unwrap().to_string(), "sharkdp/fd#2212");
+            assert!(options.trust);
+        }
+    }
+
+    #[test]
+    fn trust_needs_a_pull_request() {
+        let error = parse_args(&args(&["--trust"])).unwrap_err();
+        assert_eq!(error.to_string(), "--trust needs a pull request link");
+    }
+
+    #[test]
+    fn an_unknown_option_is_an_error() {
+        let error = parse_args(&args(&["--trusted", "https://github.com/a/b/pull/1"])).unwrap_err();
+        assert_eq!(error.to_string(), "unknown option `--trusted`");
     }
 
     #[test]

@@ -1,13 +1,14 @@
 //! A pull request in Zed's side-by-side diff (`SplittableEditor`), every changed file in one
 //! scrolling view.
 //!
-//! The right side shows project buffers opened from a checkout of the head, so language servers
-//! work there. The left side shows the base's text, read from git. Modelled on Zed's
-//! `git_ui_core/src/file_diff_view.rs` (project buffer on the right) and
+//! Both sides' text comes from git: the left side is the merge base's, the right side the head's,
+//! each in an in-memory buffer. With a trusted checkout, a file whose bytes there hash to the head's
+//! blob shows the checkout's project buffer on the right instead, so language servers attach to
+//! it. Modelled on Zed's `git_ui_core/src/file_diff_view.rs` (project buffer on the right) and
 //! `git_ui/src/commit_view.rs` (many files in one view), without depending on either crate.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,28 +19,41 @@ use editor::{
     multibuffer_context_lines,
 };
 use git::status::{FileStatus, StatusCode, TrackedStatus};
-use gpui::{App, AppContext as _, AsyncWindowContext, Entity, WeakEntity};
+use gpui::{AnyElement, App, AppContext as _, AsyncWindowContext, Entity, WeakEntity, Window};
 use language::{
     Buffer, BufferId, Capability, DiskState, File, LanguageRegistry, LineEnding,
     OffsetRangeExt as _, Point, ReplicaId, Rope, TextBuffer,
 };
-use multi_buffer::PathKey;
+use multi_buffer::{ExcerptBoundaryInfo, PathKey};
 use project::{Project, ProjectPath, WorktreeId};
 use settings::{DiffViewStyle, Settings as _};
+use ui::{Icon, IconName, IconSize, Label, LabelSize, Tooltip, prelude::*};
 use util::paths::PathStyle;
 use util::rel_path::RelPath;
 use workspace::Workspace;
+use workspace::notifications::NotificationId;
 
-use crate::github_api;
-use crate::local_copy::{ChangedFile, LocalPullRequest, PullRequestSource, RepoCache};
+use crate::github_api::{self, PullRequest};
+use crate::local_copy::{self, ChangedFile, GitObject, PullRequestSource, Repo, RepoCache};
 use crate::pr_link::PrLink;
 use crate::trust;
+
+/// Whether the pull request gets a checkout and language servers. The caller decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// No checkout and no language servers: both sides come from git.
+    Untrusted,
+    /// Check the head out, trust that checkout and nothing else, and open it as the project's
+    /// folder, so language servers start there. Language servers run the repository's code.
+    Checkout,
+}
 
 /// Fetches the pull request, copies it locally and shows it in a new tab of `workspace`.
 /// `launched` is when rozed started, for timing.
 pub async fn open(
     workspace: WeakEntity<Workspace>,
     link: PrLink,
+    trust: Trust,
     launched: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
@@ -53,22 +67,15 @@ pub async fn open(
     );
 
     let started = Instant::now();
-    let local = cx
-        .background_spawn({
-            let link = link.clone();
-            let pull_request = pull_request.clone();
-            async move {
-                RepoCache::new(paths::temp_dir()).prepare(&PullRequestSource {
-                    owner: &link.owner,
-                    repo: &link.repo,
-                    number: link.number,
-                    remote_url: &pull_request.base.repo.clone_url,
-                    base_branch: &pull_request.base.branch,
-                })
-            }
+    let cache = Arc::new(RepoCache::new(paths::temp_dir()));
+    let local = Arc::new(
+        cx.background_spawn({
+            let (cache, link, pull_request) = (cache.clone(), link.clone(), pull_request.clone());
+            async move { cache.prepare(&source(&link, &pull_request)) }
         })
         .await
-        .with_context(|| format!("copying {link} locally"))?;
+        .with_context(|| format!("copying {link} locally"))?,
+    );
     log::info!(
         "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
         started.elapsed(),
@@ -87,16 +94,36 @@ pub async fn open(
     }
 
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
-    // Trust the checkout rozed just made, and nothing else, so rust-analyzer starts there. There's
-    // no trust prompt yet (design §7), so this trusts whatever pull request rozed was given.
-    cx.update(|_, cx| trust::trust_path(&project, &local.checkout, cx))?;
-    let (worktree, _) = project
-        .update(cx, |project, cx| {
-            project.find_or_create_worktree(&local.checkout, true, cx)
-        })
-        .await
-        .with_context(|| format!("opening {}", local.checkout.display()))?;
-    let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+    let checkout = match trust {
+        Trust::Untrusted => {
+            log::info!("{link}: not trusted, so no checkout and no language servers");
+            None
+        }
+        Trust::Checkout => {
+            let dir = cx
+                .background_spawn({
+                    let (cache, link, pull_request) =
+                        (cache.clone(), link.clone(), pull_request.clone());
+                    let local = local.clone();
+                    async move { cache.check_out(&source(&link, &pull_request), &local) }
+                })
+                .await
+                .with_context(|| format!("checking {link} out"))?;
+            cx.update(|_, cx| trust::trust_checkout(&project, &dir, cx))??;
+            let (worktree, _) = project
+                .update(cx, |project, cx| {
+                    project.find_or_create_worktree(&dir, true, cx)
+                })
+                .await
+                .with_context(|| format!("opening {}", dir.display()))?;
+            let worktree_id = worktree.read_with(cx, |worktree, _| worktree.id());
+            log::info!(
+                "{link}: trusted, so language servers start in {}",
+                dir.display()
+            );
+            Some(Checkout { dir, worktree_id })
+        }
+    };
     let languages = project.read_with(cx, |project, _| project.languages().clone());
 
     let title = format!("{link}: {}", pull_request.title);
@@ -129,23 +156,49 @@ pub async fn open(
     })?;
 
     let target = Target {
-        local: &local,
+        repo_name: &link.repo,
         project: &project,
-        worktree_id,
+        checkout: checkout.as_ref(),
         languages: &languages,
         editor: &editor,
     };
-    let mut statuses = HashMap::new();
-    let mut binary_buffers = HashSet::new();
+    let mut headers = FileHeaders::default();
+    let mut folded = HashSet::new();
+    let mut not_shown = 0;
     for (index, file) in local.files.iter().enumerate() {
-        match target.add_file(index, file, cx).await {
-            Ok(buffer_id) => {
-                statuses.insert(buffer_id, status(file));
-                if file.binary {
-                    binary_buffers.insert(buffer_id);
+        let plan = cx
+            .background_spawn({
+                let repo = local.repo.clone();
+                let file = file.clone();
+                let checkout = checkout.as_ref().map(|checkout| checkout.dir.clone());
+                async move { plan_file(&repo, &file, checkout.as_deref()) }
+            })
+            .await;
+        let shown = match target.add_file(index, file, plan.clone(), cx).await {
+            Ok(shown) => Ok(shown),
+            Err(error) => {
+                target
+                    .add_file(index, file, FilePlan::failed(&error), cx)
+                    .await
+            }
+        };
+        match shown {
+            Ok(shown) => {
+                headers.statuses.insert(shown.buffer_id, status(file));
+                if let Some(warning) = shown.warning {
+                    log::warn!("{link}: {}: {}", file.path(), warning.detail);
+                    not_shown += usize::from(warning.label == NOT_SHOWN);
+                    headers.warnings.insert(shown.buffer_id, warning);
+                }
+                if shown.folded {
+                    folded.insert(shown.buffer_id);
                 }
             }
-            Err(error) => log::warn!("{link}: can't show {}: {error:#}", file.path()),
+            // Only when even the placeholder that says why can't be shown.
+            Err(error) => {
+                not_shown += 1;
+                log::error!("{link}: can't show {}: {error:#}", file.path());
+            }
         }
         if index == 0 {
             log::info!(
@@ -162,22 +215,232 @@ pub async fn open(
 
     editor.update(cx, |editor, cx| {
         editor.rhs_editor().update(cx, |editor, cx| {
-            editor.register_addon(StatusAddon { statuses });
-            if !binary_buffers.is_empty() {
-                editor.fold_buffers(binary_buffers, cx);
+            editor.register_addon(headers);
+            if !folded.is_empty() {
+                editor.fold_buffers(folded, cx);
             }
         });
     });
+    if not_shown > 0 {
+        let message = match not_shown {
+            1 => format!("{link}: 1 file couldn't be shown. Its header says why."),
+            n => format!("{link}: {n} files couldn't be shown. Their headers say why."),
+        };
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_toast(
+                workspace::Toast::new(NotificationId::unique::<FileHeaders>(), message),
+                cx,
+            )
+        })?;
+    }
     Ok(())
+}
+
+/// Which pull request the local copy fetches, and from where.
+fn source<'a>(link: &'a PrLink, pull_request: &'a PullRequest) -> PullRequestSource<'a> {
+    PullRequestSource {
+        owner: &link.owner,
+        repo: &link.repo,
+        number: link.number,
+        remote_url: &pull_request.base.repo.clone_url,
+        base_branch: &pull_request.base.branch,
+    }
+}
+
+/// The trusted checkout a pull request's project buffers come from.
+struct Checkout {
+    dir: PathBuf,
+    worktree_id: WorktreeId,
+}
+
+/// What one changed file shows, worked out from git before anything goes on screen.
+#[derive(Clone, Debug, PartialEq)]
+struct FilePlan {
+    content: Content,
+    /// Shown in the file's header.
+    warning: Option<Warning>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Content {
+    /// The two sides, compared.
+    Diff {
+        /// The base's text. `None` when the pull request adds the file.
+        old_text: Option<String>,
+        new: NewSide,
+    },
+    /// Text that stands in for a file rozed doesn't compare: a binary file, a submodule, or one
+    /// it couldn't read.
+    Placeholder {
+        text: String,
+        /// Whether the pull request deletes the file.
+        deleted: bool,
+        /// Whether the file starts folded, showing only its header.
+        folded: bool,
+    },
+}
+
+/// Where the right side's text comes from.
+#[derive(Clone, Debug, PartialEq)]
+enum NewSide {
+    /// The head's text, read from git.
+    Git(String),
+    /// The checkout's project buffer, whose bytes hash to the head's blob.
+    Checkout,
+    /// Nothing: the pull request deletes the file.
+    Deleted,
+}
+
+/// A note in a file's header: a short label, and the reason in its tooltip.
+#[derive(Clone, Debug, PartialEq)]
+struct Warning {
+    label: SharedString,
+    detail: SharedString,
+}
+
+/// The header label of a file rozed couldn't show.
+const NOT_SHOWN: &str = "Not shown";
+
+impl FilePlan {
+    fn diff(old_text: Option<String>, new: NewSide) -> Self {
+        Self {
+            content: Content::Diff { old_text, new },
+            warning: None,
+        }
+    }
+
+    fn placeholder(text: impl Into<String>, deleted: bool, folded: bool) -> Self {
+        Self {
+            content: Content::Placeholder {
+                text: text.into(),
+                deleted,
+                folded,
+            },
+            warning: None,
+        }
+    }
+
+    /// A placeholder that says why the file can't be shown, in its text and its header.
+    fn failed(error: &anyhow::Error) -> Self {
+        Self {
+            warning: Some(Warning {
+                label: NOT_SHOWN.into(),
+                detail: format!("rozed couldn't show this file: {error:#}").into(),
+            }),
+            ..Self::placeholder(
+                format!("(rozed couldn't show this file: {error:#})"),
+                false,
+                false,
+            )
+        }
+    }
+}
+
+/// Works out what `file` shows. Reads git, and with a `checkout`, hashes the file there. Never
+/// fails: a file it can't read gets a placeholder that says why. Blocks while git runs.
+fn plan_file(repo: &Repo, file: &ChangedFile, checkout: Option<&Path>) -> FilePlan {
+    try_plan_file(repo, file, checkout).unwrap_or_else(|error| FilePlan::failed(&error))
+}
+
+fn try_plan_file(
+    repo: &Repo,
+    file: &ChangedFile,
+    checkout: Option<&Path>,
+) -> anyhow::Result<FilePlan> {
+    let deleted = file.new_path.is_none();
+    // Checked before reading anything: a submodule's commit is in another repository, and
+    // reading it as a blob would ask the remote for it.
+    let sides = [&file.old_object, &file.new_object];
+    if sides
+        .iter()
+        .any(|side| side.as_ref().is_some_and(GitObject::is_submodule))
+    {
+        let [old, new] = sides.map(|side| match side {
+            Some(object) if object.is_submodule() => object.id.as_str(),
+            Some(_) => "a file",
+            None => "nothing",
+        });
+        return Ok(FilePlan::placeholder(
+            format!("Submodule: {old} → {new}\n\n(rozed doesn't show submodule changes yet.)"),
+            deleted,
+            false,
+        ));
+    }
+    if file.binary {
+        return Ok(FilePlan::placeholder(
+            "(binary file not shown)",
+            deleted,
+            true,
+        ));
+    }
+
+    let old_text = file
+        .old_object
+        .as_ref()
+        .map(|object| read_text(repo, object))
+        .transpose()
+        .context("reading the base's version")?;
+    let (Some(path), Some(new_object)) = (&file.new_path, &file.new_object) else {
+        return Ok(FilePlan::diff(old_text, NewSide::Deleted));
+    };
+    let from_git = |warning: Option<Warning>| -> anyhow::Result<FilePlan> {
+        let text = read_text(repo, new_object).context("reading the head's version")?;
+        Ok(FilePlan {
+            warning,
+            ..FilePlan::diff(old_text.clone(), NewSide::Git(text))
+        })
+    };
+    let Some(checkout) = checkout else {
+        return from_git(None);
+    };
+    match local_copy::hash_checkout_file(checkout, path) {
+        Ok(Some(id)) if id == new_object.id => Ok(FilePlan::diff(old_text, NewSide::Checkout)),
+        Ok(found) => from_git(Some(Warning {
+            label: "Checkout differs: shown from git".into(),
+            detail: format!(
+                "The checkout's copy of this file {}, so this shows the head's text from git, \
+                 without language servers.",
+                match found {
+                    Some(id) => format!("hashes to {id}, not the head's blob {}", new_object.id),
+                    None => "is missing or isn't a regular file".to_string(),
+                }
+            )
+            .into(),
+        })),
+        Err(error) => from_git(Some(Warning {
+            label: "Checkout unchecked: shown from git".into(),
+            detail: format!(
+                "rozed couldn't hash the checkout's copy of this file ({error:#}), so this shows \
+                 the head's text from git, without language servers."
+            )
+            .into(),
+        })),
+    }
+}
+
+/// A blob's text, with line endings normalized as Zed's buffers have them.
+fn read_text(repo: &Repo, object: &GitObject) -> anyhow::Result<String> {
+    let bytes = repo.read_blob(&object.id)?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    LineEnding::normalize(&mut text);
+    Ok(text)
 }
 
 /// Where the changed files go.
 struct Target<'a> {
-    local: &'a LocalPullRequest,
+    /// The repository's name, which starts each file's full path.
+    repo_name: &'a str,
     project: &'a Entity<Project>,
-    worktree_id: WorktreeId,
+    checkout: Option<&'a Checkout>,
     languages: &'a Arc<LanguageRegistry>,
     editor: &'a Entity<SplittableEditor>,
+}
+
+/// A file added to the diff.
+struct Shown {
+    buffer_id: BufferId,
+    warning: Option<Warning>,
+    folded: bool,
 }
 
 impl Target<'_> {
@@ -186,72 +449,87 @@ impl Target<'_> {
         &self,
         index: usize,
         file: &ChangedFile,
+        plan: FilePlan,
         cx: &mut AsyncWindowContext,
-    ) -> anyhow::Result<BufferId> {
+    ) -> anyhow::Result<Shown> {
         let path = RelPath::from_unix_str(file.path())?.into_arc();
-        let old_text = match (&file.old_path, file.binary) {
-            (Some(old_path), false) => {
-                let repo = self.local.repo.clone();
-                let base = self.local.base.clone();
-                let old_path = old_path.clone();
-                let bytes = cx
-                    .background_spawn(async move { repo.read_file(&base, &old_path) })
+        let deleted = file.new_path.is_none();
+        let (buffer, old_text, folded) = match plan.content {
+            Content::Diff {
+                old_text,
+                new: NewSide::Checkout,
+            } => {
+                let checkout = self
+                    .checkout
+                    .context("a file from the checkout, without one")?;
+                // A project buffer, so language servers attach to it.
+                let buffer = self
+                    .project
+                    .update(cx, |project, cx| {
+                        project.open_buffer(
+                            ProjectPath {
+                                worktree_id: checkout.worktree_id,
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
                     .await?;
-                let mut text = String::from_utf8_lossy(&bytes).into_owned();
-                LineEnding::normalize(&mut text);
-                Some(text)
+                (buffer, Some(old_text), false)
             }
-            _ => None,
-        };
-
-        let buffer = if file.binary {
-            self.placeholder("(binary file not shown)", &path, false, cx)
-                .await?
-        } else if file.new_path.is_some() {
-            // A real project buffer, so language servers attach to it.
-            self.project
-                .update(cx, |project, cx| {
-                    project.open_buffer(
-                        ProjectPath {
-                            worktree_id: self.worktree_id,
-                            path: path.clone(),
-                        },
-                        cx,
-                    )
-                })
-                .await?
-        } else {
-            self.placeholder("", &path, true, cx).await?
+            Content::Diff {
+                old_text,
+                new: NewSide::Git(text),
+            } => (
+                self.memory_buffer(&text, &path, false, cx).await?,
+                Some(old_text),
+                false,
+            ),
+            Content::Diff {
+                old_text,
+                new: NewSide::Deleted,
+            } => (
+                self.memory_buffer("", &path, true, cx).await?,
+                Some(old_text),
+                false,
+            ),
+            Content::Placeholder { text, folded, .. } => (
+                self.memory_buffer(&text, &path, deleted, cx).await?,
+                None,
+                folded,
+            ),
         };
 
         let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
-        let diff = if file.binary {
-            cx.new(|cx| {
+        let diff = match old_text {
+            // A placeholder: nothing to compare, so no hunks.
+            None => cx.new(|cx| {
                 BufferDiff::new_unchanged(
                     &snapshot,
                     snapshot.language().cloned(),
                     Some(self.languages.clone()),
                     cx,
                 )
-            })
-        } else {
-            let diff = cx.new(|cx| {
-                BufferDiff::new(
-                    &snapshot.text,
-                    snapshot.language().cloned(),
-                    Some(self.languages.clone()),
-                    cx,
-                )
-            });
-            diff.update(cx, |diff, cx| {
-                diff.set_base_text(
-                    old_text.map(|text| Arc::from(text.as_str())),
-                    snapshot.text.clone(),
-                    cx,
-                )
-            })
-            .await;
-            diff
+            }),
+            Some(old_text) => {
+                let diff = cx.new(|cx| {
+                    BufferDiff::new(
+                        &snapshot.text,
+                        snapshot.language().cloned(),
+                        Some(self.languages.clone()),
+                        cx,
+                    )
+                });
+                diff.update(cx, |diff, cx| {
+                    diff.set_base_text(
+                        old_text.map(|text| Arc::from(text.as_str())),
+                        snapshot.text.clone(),
+                        cx,
+                    )
+                })
+                .await;
+                diff
+            }
         };
         cx.update(|_, cx| follow_language(&buffer, &diff, cx))?;
 
@@ -283,21 +561,28 @@ impl Target<'_> {
                 editor.split(window, cx);
             }
         })?;
-        Ok(buffer_id)
+        Ok(Shown {
+            buffer_id,
+            warning: plan.warning,
+            folded,
+        })
     }
 
-    /// An in-memory buffer for a file that has no text at the head: deleted or binary.
-    async fn placeholder(
+    /// An in-memory buffer holding `text`: the head's text from git, or a placeholder. Language
+    /// servers never see it.
+    async fn memory_buffer(
         &self,
         text: &str,
         path: &Arc<RelPath>,
         deleted: bool,
         cx: &mut AsyncWindowContext,
     ) -> anyhow::Result<Entity<Buffer>> {
-        let file: Arc<dyn File> = Arc::new(HistoricFile {
+        let file: Arc<dyn File> = Arc::new(GitFile {
             path: path.clone(),
-            full_path: self.local.checkout.join(path.as_std_path()),
-            worktree_id: self.worktree_id,
+            full_path: Path::new(self.repo_name).join(path.as_std_path()),
+            worktree_id: self
+                .checkout
+                .map_or_else(GitFile::no_worktree, |checkout| checkout.worktree_id),
             deleted,
         });
         let text = Rope::from(text);
@@ -329,9 +614,9 @@ impl Target<'_> {
     }
 }
 
-/// Copies the buffer's language onto the diff's base text, which the left side shows. A project
-/// buffer's language can load after the diff is built; without this the left side would stay
-/// plain text (Zed's `file_diff_view.rs` does the same).
+/// Copies the buffer's language onto the diff's base text, which the left side shows. A buffer's
+/// language can load after the diff is built; without this the left side would stay plain text
+/// (Zed's `file_diff_view.rs` does the same).
 fn follow_language(buffer: &Entity<Buffer>, diff: &Entity<BufferDiff>, cx: &mut App) {
     let base_text = diff.read(cx).base_text_buffer().downgrade();
     let copy = move |buffer: &Entity<Buffer>, cx: &mut App| {
@@ -367,13 +652,16 @@ fn status(file: &ChangedFile) -> FileStatus {
     })
 }
 
-/// Shows each file's change in the pull request (added, deleted, renamed or modified) in its
-/// header, rather than its status in the checkout, which is always clean.
-struct StatusAddon {
+/// What each file's header shows beyond its path: the pull request's change (added, deleted,
+/// renamed or modified) rather than its status in the checkout, which is always clean, and any
+/// warning.
+#[derive(Default)]
+struct FileHeaders {
     statuses: HashMap<BufferId, FileStatus>,
+    warnings: HashMap<BufferId, Warning>,
 }
 
-impl Addon for StatusAddon {
+impl Addon for FileHeaders {
     fn to_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -381,17 +669,52 @@ impl Addon for StatusAddon {
     fn override_status_for_buffer_id(&self, buffer_id: BufferId, _: &App) -> Option<FileStatus> {
         self.statuses.get(&buffer_id).copied()
     }
+
+    fn render_buffer_header_controls(
+        &self,
+        _: &ExcerptBoundaryInfo,
+        buffer: &language::BufferSnapshot,
+        _: &Window,
+        _: &App,
+    ) -> Option<AnyElement> {
+        let warning = self.warnings.get(&buffer.remote_id())?;
+        Some(
+            h_flex()
+                .id(("file-warning", buffer.remote_id().to_proto()))
+                .flex_shrink_0()
+                .gap_1()
+                .child(
+                    Icon::new(IconName::Warning)
+                        .size(IconSize::Small)
+                        .color(Color::Warning),
+                )
+                .child(
+                    Label::new(warning.label.clone())
+                        .size(LabelSize::Small)
+                        .color(Color::Warning),
+                )
+                .tooltip(Tooltip::text(warning.detail.clone()))
+                .into_any_element(),
+        )
+    }
 }
 
-/// The file behind a placeholder buffer: a path in the pull request with no text at the head.
-struct HistoricFile {
+/// The file behind an in-memory buffer: a path in the pull request whose text came from git.
+struct GitFile {
     path: Arc<RelPath>,
     full_path: PathBuf,
     worktree_id: WorktreeId,
     deleted: bool,
 }
 
-impl File for HistoricFile {
+impl GitFile {
+    /// The worktree an in-memory buffer claims when there's no checkout. No worktree has it.
+    fn no_worktree() -> WorktreeId {
+        WorktreeId::from_proto(u64::MAX)
+    }
+}
+
+impl File for GitFile {
     fn as_local(&self) -> Option<&dyn language::LocalFile> {
         None
     }
@@ -446,10 +769,15 @@ impl File for HistoricFile {
 mod tests {
     use super::*;
 
+    use crate::local_copy::LocalPullRequest;
+    use crate::local_copy::fixtures::{self, Entry};
+
     fn file(old: Option<&str>, new: Option<&str>) -> ChangedFile {
         ChangedFile {
             old_path: old.map(Into::into),
             new_path: new.map(Into::into),
+            old_object: None,
+            new_object: None,
             binary: false,
         }
     }
@@ -472,6 +800,256 @@ mod tests {
         assert_eq!(
             code(status(&file(Some("a"), Some("a")))),
             StatusCode::Modified
+        );
+    }
+
+    /// A pull request copied locally from a fixture, with a checkout when asked for.
+    struct Copied {
+        _fixture: fixtures::Fixture,
+        _cache: tempfile::TempDir,
+        local: LocalPullRequest,
+        checkout: Option<PathBuf>,
+    }
+
+    fn copy(base: &[Entry], head: &[Entry], checkout: bool) -> Copied {
+        let fixture = fixtures::pull_request(base, head);
+        let cache_dir = tempfile::TempDir::new().unwrap();
+        let cache = RepoCache::new(cache_dir.path());
+        let local = cache.prepare(&fixture.source()).unwrap();
+        let checkout = checkout.then(|| cache.check_out(&fixture.source(), &local).unwrap());
+        Copied {
+            _fixture: fixture,
+            _cache: cache_dir,
+            local,
+            checkout,
+        }
+    }
+
+    impl Copied {
+        fn plans(&self) -> Vec<(&str, FilePlan)> {
+            self.local
+                .files
+                .iter()
+                .map(|file| {
+                    let plan = plan_file(&self.local.repo, file, self.checkout.as_deref());
+                    (file.path(), plan)
+                })
+                .collect()
+        }
+    }
+
+    fn from_git(text: &str) -> NewSide {
+        NewSide::Git(text.to_string())
+    }
+
+    #[test]
+    fn without_a_checkout_both_sides_come_from_git() {
+        let copied = copy(
+            &[
+                Entry::File("changed.rs", b"fn old() {}\n"),
+                Entry::File("gone.rs", b"fn gone() {}\n"),
+            ],
+            &[
+                Entry::File("added.rs", b"fn added() {}\n"),
+                Entry::File("changed.rs", b"fn new() {}\r\n"),
+            ],
+            false,
+        );
+        assert_eq!(
+            copied.plans(),
+            vec![
+                (
+                    "added.rs",
+                    FilePlan::diff(None, from_git("fn added() {}\n"))
+                ),
+                (
+                    "changed.rs",
+                    FilePlan::diff(Some("fn old() {}\n".into()), from_git("fn new() {}\n"))
+                ),
+                (
+                    "gone.rs",
+                    FilePlan::diff(Some("fn gone() {}\n".into()), NewSide::Deleted)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_a_checkout_files_that_hash_to_their_blob_use_it() {
+        let copied = copy(
+            &[Entry::File("changed.rs", b"fn old() {}\n")],
+            &[
+                Entry::File("added.rs", b"fn added() {}\n"),
+                Entry::File("changed.rs", b"fn new() {}\n"),
+            ],
+            true,
+        );
+        assert_eq!(
+            copied.plans(),
+            vec![
+                ("added.rs", FilePlan::diff(None, NewSide::Checkout)),
+                (
+                    "changed.rs",
+                    FilePlan::diff(Some("fn old() {}\n".into()), NewSide::Checkout)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_checkout_file_that_differs_from_its_blob_shows_gits_text_with_a_warning() {
+        let copied = copy(&[], &[Entry::File("a.rs", b"fn committed() {}\n")], true);
+        std::fs::write(
+            copied.checkout.as_ref().unwrap().join("a.rs"),
+            "fn changed_on_disk() {}\n",
+        )
+        .unwrap();
+        let [(_, plan)] = &copied.plans()[..] else {
+            panic!("expected one file");
+        };
+        assert_eq!(
+            plan.content,
+            Content::Diff {
+                old_text: None,
+                new: from_git("fn committed() {}\n")
+            }
+        );
+        let warning = plan.warning.as_ref().unwrap();
+        assert_eq!(warning.label, "Checkout differs: shown from git");
+        assert!(
+            warning.detail.contains("not the head's blob"),
+            "{warning:?}"
+        );
+    }
+
+    #[test]
+    fn a_case_collision_shows_each_files_own_text() {
+        // On a case-insensitive disk, Lib.rs and lib.rs share one file in the checkout. Whichever
+        // doesn't hash to its blob there shows git's text with a warning, so evil() still shows.
+        let evil = "pub fn evil() {}\n";
+        let benign = "pub fn lib() { /* benign */ }\n";
+        let base = [Entry::File("lib.rs", b"pub fn lib() {}\n")];
+        let head = [
+            Entry::File("Lib.rs", evil.as_bytes()),
+            Entry::File("lib.rs", benign.as_bytes()),
+        ];
+
+        let trusted = copy(&base, &head, true);
+        let shown_from_git: Vec<_> = trusted
+            .plans()
+            .into_iter()
+            .map(|(path, plan)| match plan.content {
+                Content::Diff {
+                    new: NewSide::Git(text),
+                    ..
+                } => {
+                    assert!(plan.warning.is_some(), "{path}");
+                    Some(text)
+                }
+                Content::Diff {
+                    new: NewSide::Checkout,
+                    ..
+                } => {
+                    assert_eq!(plan.warning, None, "{path}");
+                    None
+                }
+                other => panic!("{path}: unexpected {other:?}"),
+            })
+            .collect();
+        if fixtures::is_case_insensitive(trusted.checkout.as_deref().unwrap()) {
+            // The checkout holds lib.rs's text under one name, so Lib.rs comes from git.
+            assert_eq!(shown_from_git, vec![Some(evil.to_string()), None]);
+        } else {
+            assert_eq!(shown_from_git, vec![None, None]);
+        }
+
+        let untrusted = copy(&base, &head, false);
+        assert_eq!(
+            untrusted.plans(),
+            vec![
+                ("Lib.rs", FilePlan::diff(None, from_git(evil))),
+                (
+                    "lib.rs",
+                    FilePlan::diff(Some("pub fn lib() {}\n".into()), from_git(benign))
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_submodule_gets_a_placeholder_without_reading_its_commits() {
+        let old = "1".repeat(40);
+        let new = "2".repeat(40);
+        for checkout in [false, true] {
+            let copied = copy(
+                &[Entry::Submodule("vendor/lib", &old)],
+                &[Entry::Submodule("vendor/lib", &new)],
+                checkout,
+            );
+            assert_eq!(
+                copied.plans(),
+                vec![(
+                    "vendor/lib",
+                    FilePlan::placeholder(
+                        format!(
+                            "Submodule: {old} → {new}\n\n\
+                             (rozed doesn't show submodule changes yet.)"
+                        ),
+                        false,
+                        false
+                    )
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_git_cant_read_gets_a_placeholder_that_says_why() {
+        let copied = copy(
+            &[Entry::File("a.rs", b"fn a() {}\n")],
+            &[Entry::File("a.rs", b"fn b() {}\n")],
+            false,
+        );
+        let mut file = copied.local.files[0].clone();
+        let missing = "f".repeat(40);
+        file.new_object.as_mut().unwrap().id = missing.clone();
+
+        let plan = plan_file(&copied.local.repo, &file, None);
+
+        let Content::Placeholder { text, .. } = &plan.content else {
+            panic!("{plan:?}");
+        };
+        assert!(
+            text.starts_with("(rozed couldn't show this file: reading the head's version"),
+            "{text}"
+        );
+        let warning = plan.warning.unwrap();
+        assert_eq!(warning.label, NOT_SHOWN);
+        assert!(warning.detail.contains(&missing), "{warning:?}");
+    }
+
+    #[test]
+    fn binary_files_get_a_folded_placeholder() {
+        let copied = copy(
+            &[
+                Entry::File("data.bin", b"\0\x01base"),
+                Entry::File("gone.bin", b"\0\x01gone"),
+            ],
+            &[Entry::File("data.bin", b"\0\x01head")],
+            false,
+        );
+        assert_eq!(
+            copied.plans(),
+            vec![
+                (
+                    "data.bin",
+                    FilePlan::placeholder("(binary file not shown)", false, true)
+                ),
+                (
+                    "gone.bin",
+                    FilePlan::placeholder("(binary file not shown)", true, true)
+                ),
+            ]
         );
     }
 }
