@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/user"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-oauth-scopes": "read:org, repo, workflow"
+    },
+    "body": {
+      "login": "rozed-bot",
+      "id": 353226052,
+      "name": null,
+      "avatar_url": "https://avatars.githubusercontent.com/u/353226052?v=4"
+    }
+  }
+}

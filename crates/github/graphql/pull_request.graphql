@@ -1,0 +1,45 @@
+# A pull request and its files with the viewer's viewed marks, a page of files at a time.
+query PullRequest(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $filesFirst: Int!
+  $filesAfter: String
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      number
+      title
+      url
+      state
+      isDraft
+      updatedAt
+      author {
+        __typename
+        login
+        avatarUrl
+      }
+      baseRefName
+      baseRefOid
+      headRefName
+      headRefOid
+      isCrossRepository
+      headRepository {
+        nameWithOwner
+        isFork
+      }
+      files(first: $filesFirst, after: $filesAfter) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          path
+          viewerViewedState
+        }
+      }
+    }
+  }
+}

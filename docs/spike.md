@@ -5,9 +5,9 @@ showed (design §2, "First milestone").
 
 ## Building
 
-rozed depends by path on 30 Zed crates (listed in the root `Cargo.toml`'s `[workspace.dependencies]`).
-With what they pull in, `Cargo.lock` holds 1,120 packages, 111 of them Zed crates (all targets,
-so including Linux and Windows platform crates that macOS builds skip). The binary compiles in 104 of
+rozed depends by path on 36 Zed crates (listed in the root `Cargo.toml`'s `[workspace.dependencies]`).
+With what they pull in, `Cargo.lock` holds 1,155 packages, 114 of them Zed crates (all targets,
+so including Linux and Windows platform crates that macOS builds skip). The binary compiles in 107 of
 them; see "Zed crates compiled in".
 
 What the build needs beyond Rust:
@@ -48,7 +48,7 @@ Things that surprised:
 
 ## Zed crates compiled in
 
-rozed compiles in 104 Zed crates: everything reachable from the `rozed` package through normal
+rozed compiles in 107 Zed crates: everything reachable from the `rozed` package through normal
 dependencies on macOS, which is what gets linked into the binary. `script/zed-crates.txt` lists
 them, and `script/check-zed-crates.sh`, which CI runs, fails when the set changes, so a new Zed
 crate shows up in review. It lists them with `cargo tree -p rozed -e normal` for the host platform.
@@ -57,10 +57,11 @@ crate shows up in review. It lists them with `cargo tree -p rozed -e normal` for
 
 What rozed uses:
 
-- **UI (25):** `gpui`, `gpui_apple`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
+- **UI (28):** `gpui`, `gpui_apple`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
   `gpui_shared_string`, `gpui_tokio`, `gpui_util`, `ui`, `ui_input`, `ui_macros`, `component`,
   `icons`, `file_icons`, `assets`, `theme`, `theme_settings`, `syntax_theme`, `refineable`,
-  `derive_refineable`, `menu`, `zed_actions`, `breadcrumbs`, `markdown`, `mermaid_render`.
+  `derive_refineable`, `menu`, `zed_actions`, `breadcrumbs`, `markdown`, `mermaid_render`,
+  `command_palette`, `command_palette_hooks`, `picker`.
 - **Editor and languages (17):** `editor`, `multi_buffer`, `buffer_diff`, `text`, `rope`,
   `sum_tree`, `language`, `language_core`, `language_detection`, `languages`, `grammars`, `lsp`,
   `snippet`, `snippet_provider`, `fuzzy`, `fuzzy_nucleo`, `vim_mode_setting`.

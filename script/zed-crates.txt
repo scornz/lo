@@ -9,6 +9,8 @@ cloud_api_client
 cloud_api_types
 cloud_llm_client
 collections
+command_palette
+command_palette_hooks
 component
 context_server
 credentials_provider
@@ -58,6 +60,7 @@ node_runtime
 oauth_callback_server
 path
 paths
+picker
 prettier
 project
 proto
