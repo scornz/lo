@@ -863,6 +863,45 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn accounts_added_in_the_same_second_keep_their_order_after_a_restart(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, store, db) = setup("same_second", no_http(), cx).await;
+        // Two accounts added in the same second, whose logins differ in case.
+        for login in ["B", "a"] {
+            db.save_account(Account {
+                host: HOST.to_string(),
+                login: login.into(),
+                user_id: 1,
+                name: None,
+                avatar_url: None,
+                scopes: vec!["repo".into()],
+                source: AccountSource::DeviceFlow,
+                added_at: 1,
+            })
+            .await
+            .unwrap();
+        }
+        let load = |cx: &mut TestAppContext| {
+            cx.update(|cx| Accounts::load(db.clone(), store.clone(), no_http(), cx))
+                .unwrap()
+        };
+        let logins = |accounts: &Entity<Accounts>, cx: &mut TestAppContext| {
+            accounts.read_with(cx, |accounts, _| {
+                let logins = accounts.accounts().iter().map(|a| a.login.clone());
+                logins.collect::<Vec<_>>()
+            })
+        };
+
+        // Signing in to one again sorts the accounts in memory; a restart reads the database's
+        // order. Both ignore case.
+        let accounts = load(cx);
+        add(&accounts, "B", cx).await;
+        assert_eq!(logins(&accounts, cx), ["a", "B"]);
+        assert_eq!(logins(&load(cx), cx), ["a", "B"]);
+    }
+
+    #[gpui::test]
     async fn an_account_whose_token_is_gone_can_still_be_removed(cx: &mut TestAppContext) {
         let (accounts, store, db) = setup("removing_without_token", no_http(), cx).await;
         add(&accounts, "a", cx).await;
@@ -1119,11 +1158,13 @@ esac
             ..Default::default()
         });
         let (accounts, _, _) = setup("account_for_repo", http, cx).await;
+        // In login order, so the accounts' order (when added, then login) doesn't depend on
+        // which second each one is added in.
         for (login, token) in [
-            ("work", "gho_WORK"),
             ("home", "gho_HOME"),
             ("old", "gho_REVOKED"),
             ("other", "gho_OTHER"),
+            ("work", "gho_WORK"),
         ] {
             accounts
                 .update(cx, |accounts, cx| {
@@ -1216,12 +1257,14 @@ esac
             ..Default::default()
         });
         let (accounts, _, _) = setup("account_for_repo_problems", http, cx).await;
+        // In login order, so the accounts' order (when added, then login) doesn't depend on
+        // which second each one is added in.
         for (login, token) in [
-            ("work", "gho_WORK"),
-            ("home", "gho_HOME"),
-            ("sso", "gho_SSO"),
             ("down", "gho_DOWN"),
             ("elsewhere", "gho_ELSEWHERE"),
+            ("home", "gho_HOME"),
+            ("sso", "gho_SSO"),
+            ("work", "gho_WORK"),
         ] {
             add_with(&accounts, login, token, AccountSource::DeviceFlow, cx).await;
         }

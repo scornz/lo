@@ -19,6 +19,7 @@ publish = false
 # Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
 askpass = { path = "third_party/zed/crates/askpass" }
 assets = { path = "third_party/zed/crates/assets" }
+buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
 command_palette = { path = "third_party/zed/crates/command_palette" }
@@ -27,6 +28,7 @@ db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
 feature_flags = { path = "third_party/zed/crates/feature_flags" }
 fs = { path = "third_party/zed/crates/fs" }
+git = { path = "third_party/zed/crates/git" }
 gpui = { path = "third_party/zed/crates/gpui" }
 # Without font-kit, gpui renders no text on macOS.
 gpui_platform = { path = "third_party/zed/crates/gpui_platform", features = ["font-kit"] }
@@ -36,6 +38,7 @@ language = { path = "third_party/zed/crates/language" }
 # load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
 languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
 menu = { path = "third_party/zed/crates/menu" }
+multi_buffer = { path = "third_party/zed/crates/multi_buffer" }
 node_runtime = { path = "third_party/zed/crates/node_runtime" }
 paths = { path = "third_party/zed/crates/paths" }
 project = { path = "third_party/zed/crates/project" }
@@ -57,6 +60,7 @@ zlog = { path = "third_party/zed/crates/zlog" }
 
 # rozed's crates.
 github = { path = "crates/github" }
+repo_cache = { path = "crates/repo_cache" }
 
 # Other crates. Versions match Zed's where Zed has them.
 anyhow = "1.0.86"

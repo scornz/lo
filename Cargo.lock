@@ -8207,6 +8207,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "repo_cache"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "reqwest_client"
 version = "0.1.0"
 dependencies = [
@@ -8328,6 +8337,7 @@ dependencies = [
  "anyhow",
  "askpass",
  "assets",
+ "buffer_diff",
  "client",
  "clock",
  "command_palette",
@@ -8337,6 +8347,7 @@ dependencies = [
  "feature_flags",
  "fs",
  "futures",
+ "git",
  "github",
  "gpui",
  "gpui_platform",
@@ -8346,12 +8357,15 @@ dependencies = [
  "languages",
  "log",
  "menu",
+ "multi_buffer",
  "node_runtime",
  "paths",
  "project",
  "release_channel",
+ "repo_cache",
  "reqwest_client",
  "semver",
+ "serde",
  "serde_json",
  "session",
  "settings",
