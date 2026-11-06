@@ -1,11 +1,12 @@
 //! Which lines GitHub takes a comment on (design §8, "Comments").
 //!
 //! GitHub takes a line comment only on a line of the pull request's diff: a line of one of a
-//! file's hunks, on the side it's on. A removed or unchanged line takes one on the left, the base's
-//! side, and an added or unchanged line on the right. Each end of a range must be such a line, but
-//! the two may be in different hunks, and a range may start on the other side, as a range from a
-//! removed line to the added line that replaces it does. Anywhere else, the UI offers a
-//! file-level comment.
+//! file's hunks, on the side it's on. A removed line takes one on the left, the base's side, and
+//! an added line on the right. An unchanged line is on both sides; rozed puts its comments on the
+//! right, as GitHub's docs advise, so they show between revisions and can suggest a change. Each
+//! end of a range must be a line of the diff, but the two may be in different hunks, and a range
+//! may start on the other side, as a range from a removed line to the added line that replaces it
+//! does. Anywhere else, the UI offers a file-level comment.
 //!
 //! Checked against GitHub: its API refuses a line outside the hunks. REST answers "could not be
 //! resolved", `addPullRequestReview` "Line could not be resolved", and `addPullRequestReviewThread`
@@ -121,6 +122,13 @@ impl Hunk {
         let index = line.number.checked_sub(start)?;
         positions.get(usize::try_from(index).ok()?).copied()
     }
+
+    /// The right side's number of the line at `position`, if it's on the right: an added or
+    /// unchanged line.
+    fn right_number(&self, position: usize) -> Option<u32> {
+        let index = self.new.binary_search(&position).ok()?;
+        self.new_start.checked_add(u32::try_from(index).ok()?)
+    }
 }
 
 /// A unified diff [`Hunk::parse`] can't read.
@@ -186,17 +194,20 @@ impl CommentableLines {
 
     /// The lines a comment on `line` goes on, or `None` when GitHub won't take one there, so the UI
     /// offers a file-level comment. `line`'s side is its column on screen, which is GitHub's side
-    /// wherever a comment can go.
+    /// wherever a comment can go, except for an unchanged line picked in the left column: that
+    /// goes on the right, the side GitHub's docs give unchanged lines, so it still shows between
+    /// revisions and can suggest a change.
     pub fn line(&self, line: Line) -> Option<Lines> {
-        self.find(line).map(|_| Lines::one(line))
+        self.find(line).map(|(_, line)| Lines::one(line))
     }
 
     /// The lines a comment on a selection from `from` to `to` goes on, in either order: from the
     /// one higher in the diff to the other. Both ends must take a comment, but they may be in
-    /// different hunks, and the lines between them needn't.
+    /// different hunks, and the lines between them needn't. An unchanged end goes on the right, as
+    /// in [`line`](Self::line).
     pub fn range(&self, from: Line, to: Line) -> Result<Lines, RangeError> {
-        let from_at = self.find(from).ok_or(RangeError::NotCommentable(from))?;
-        let to_at = self.find(to).ok_or(RangeError::NotCommentable(to))?;
+        let (from_at, from) = self.find(from).ok_or(RangeError::NotCommentable(from))?;
+        let (to_at, to) = self.find(to).ok_or(RangeError::NotCommentable(to))?;
         Ok(match from_at.cmp(&to_at) {
             std::cmp::Ordering::Less => Lines::range(from, to),
             std::cmp::Ordering::Equal => Lines::one(to),
@@ -204,13 +215,20 @@ impl CommentableLines {
         })
     }
 
-    /// Where `line` is in the diff, if it takes a comment: its hunk, and its position there.
-    fn find(&self, line: Line) -> Option<(usize, usize)> {
+    /// Where `line` is in the diff, if it takes a comment (its hunk, and its position there), and
+    /// the line a comment on it goes on.
+    fn find(&self, line: Line) -> Option<((usize, usize), Line)> {
         if line.side == DiffSide::Left && !self.left {
             return None;
         }
-        (self.hunks.iter().enumerate())
-            .find_map(|(index, hunk)| Some((index, hunk.position(line)?)))
+        (self.hunks.iter().enumerate()).find_map(|(index, hunk)| {
+            let position = hunk.position(line)?;
+            let line = match line.side {
+                DiffSide::Left => hunk.right_number(position).map_or(line, Line::right),
+                DiffSide::Right => line,
+            };
+            Some(((index, position), line))
+        })
     }
 }
 
@@ -393,20 +411,70 @@ index 3b18e51..a7c3d2f 100644
     }
 
     #[test]
-    fn an_unchanged_line_in_a_hunk_takes_a_comment_on_either_side() {
-        assert_eq!(full().line(Line::left(1)), Some(Lines::one(Line::left(1))));
+    fn an_unchanged_line_in_a_hunk_takes_a_comment_in_either_column_on_the_right() {
+        // On the right, GitHub's side for unchanged lines: the thread then shows between
+        // revisions, and takes a suggestion.
+        assert_eq!(full().line(Line::left(1)), Some(Lines::one(Line::right(1))));
         assert_eq!(
             full().line(Line::right(1)),
             Some(Lines::one(Line::right(1)))
         );
-        // Line 20 on the left is line 20 on the right: the hunk adds lines after it.
+        // Line 20 on the left is line 20 on the right, and line 21 is 23: the hunk adds two
+        // lines between them.
         assert_eq!(
             full().line(Line::left(20)),
-            Some(Lines::one(Line::left(20)))
+            Some(Lines::one(Line::right(20)))
+        );
+        assert_eq!(
+            full().line(Line::left(21)),
+            Some(Lines::one(Line::right(23)))
         );
         assert_eq!(
             full().line(Line::right(24)),
             Some(Lines::one(Line::right(24)))
+        );
+        assert!(full().line(Line::left(22)).unwrap().takes_suggestion());
+    }
+
+    #[test]
+    fn a_range_picked_in_the_left_column_puts_its_unchanged_ends_on_the_right() {
+        // Unchanged lines 4 to 6, picked on the left.
+        assert_eq!(
+            full().range(Line::left(4), Line::left(6)),
+            Ok(Lines::range(Line::right(4), Line::right(6)))
+        );
+        // The same unchanged line picked in both columns is one line.
+        assert_eq!(
+            full().range(Line::left(1), Line::right(1)),
+            Ok(Lines::one(Line::right(1)))
+        );
+        // A removed line keeps the left side.
+        assert_eq!(
+            full().range(Line::left(1), Line::left(3)),
+            Ok(Lines::range(Line::right(1), Line::left(3)))
+        );
+    }
+
+    #[test]
+    fn ranges_over_a_replaced_line_between_unchanged_ones() {
+        let hunks = Hunk::parse("@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n").unwrap();
+        let lines = CommentableLines::new(&Screen::full("a2"), hunks);
+
+        assert_eq!(
+            lines.range(Line::left(1), Line::right(1)),
+            Ok(Lines::one(Line::right(1)))
+        );
+        assert_eq!(
+            lines.range(Line::right(1), Line::left(2)),
+            Ok(Lines::range(Line::right(1), Line::left(2)))
+        );
+        assert_eq!(
+            lines.range(Line::right(3), Line::left(1)),
+            Ok(Lines::range(Line::right(1), Line::right(3)))
+        );
+        assert_eq!(
+            lines.range(Line::left(3), Line::left(2)),
+            Ok(Lines::range(Line::left(2), Line::right(3)))
         );
     }
 
@@ -475,10 +543,10 @@ index 3b18e51..a7c3d2f 100644
             full().range(Line::right(4), Line::left(3)),
             Ok(Lines::range(Line::left(3), Line::right(4)))
         );
-        // The unchanged line before them is above both.
+        // The unchanged line before them is above both, and on the right.
         assert_eq!(
             full().range(Line::right(3), Line::left(2)),
-            Ok(Lines::range(Line::left(2), Line::right(3)))
+            Ok(Lines::range(Line::right(2), Line::right(3)))
         );
     }
 
