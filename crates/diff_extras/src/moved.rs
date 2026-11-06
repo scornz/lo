@@ -11,6 +11,12 @@ const MIN_LINES: usize = 3;
 /// The most edited lines a move has in a row.
 const MAX_EDITS_IN_A_ROW: usize = 2;
 
+/// The most lineups one text starts. A text deleted D times and added A times would start D × A of
+/// them, so a line repeated all over a PR, such as `return Ok(());`, starts none. It still matches
+/// inside a lineup that another line started. Without a limit, a line repeated thousands of times
+/// would take time and memory that grow with the square of its count.
+const MAX_LINEUPS_PER_TEXT: usize = 64;
+
 /// One file's changed lines, as a line diff produces them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileChanges {
@@ -376,6 +382,10 @@ struct Finder<'a> {
 impl Finder<'_> {
     fn candidates(&self, texts: usize) -> Vec<Candidate> {
         let index = self.old.index(texts);
+        let mut added = vec![0; texts];
+        for line in &self.new.lines {
+            added[line.id as usize] += 1;
+        }
         let mut seeds = Vec::new();
         // Every move has a matching line that counts, so only those start a lineup.
         for (new, line) in self
@@ -385,8 +395,12 @@ impl Finder<'_> {
             .enumerate()
             .filter(|(_, line)| line.counts)
         {
+            let olds = index.get(line.id);
+            if olds.len() * added[line.id as usize] > MAX_LINEUPS_PER_TEXT {
+                continue;
+            }
             let new_run = &self.new.runs[line.run];
-            for &old in index.get(line.id) {
+            for &old in olds {
                 let old_run = &self.old.runs[self.old.lines[old].run];
                 if (old_run.file, old_run.place) == (new_run.file, new_run.place) {
                     continue;

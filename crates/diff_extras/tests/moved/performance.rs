@@ -196,3 +196,33 @@ fn finds_moves_in_a_20000_line_diff_within_100_ms() {
         "took {elapsed:?} to find moves among {lines} changed lines"
     );
 }
+
+#[test]
+fn a_line_repeated_thousands_of_times_stays_fast() {
+    // A table of the same line, with a few distinct lines in the middle, moved to another file.
+    let mut table = vec!["value = 0,"; 1500];
+    table.extend(["first = 1,", "second = 2,", "third = 3,"]);
+    table.extend(vec!["value = 0,"; 1500]);
+    let files = [
+        FileChanges::new("a.rs").delete(1, &table),
+        FileChanges::new("b.rs").add(1, &table),
+    ];
+
+    let start = Instant::now();
+    let moves = Moves::find(&files);
+    let elapsed = start.elapsed();
+
+    let found: Vec<_> = moves
+        .all()
+        .iter()
+        .map(|moved| (moved.from.lines.clone(), moved.to.lines.clone()))
+        .collect();
+    assert_eq!(found, [(1..=3003, 1..=3003)]);
+    let limit = if cfg!(debug_assertions) {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(100)
+    };
+    eprintln!("found a 3,003-line move in {elapsed:?}");
+    assert!(elapsed < limit, "took {elapsed:?}");
+}
