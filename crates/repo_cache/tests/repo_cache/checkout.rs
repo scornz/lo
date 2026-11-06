@@ -228,3 +228,40 @@ fn checkouts_at_once_all_succeed() {
     assert_eq!(worktrees.lines().count(), 2, "{worktrees}");
     let _ = &f.server;
 }
+
+#[test]
+fn hashes_a_checkouts_files_as_git_would() {
+    let f = fixture();
+    let dir = f.repo.checkout(1, &f.r1).unwrap();
+    let blob = |path: &str| -> Oid {
+        git(&f.remote.work, &["rev-parse", &format!("{}:{path}", f.r1)])
+            .parse()
+            .unwrap()
+    };
+
+    for path in ["README.md", "src/lib.rs", "removed_later.txt"] {
+        assert_eq!(
+            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            Some(blob(path)),
+            "{path}"
+        );
+    }
+    // Not regular files: missing, a folder, a submodule's empty folder.
+    for path in ["missing.txt", "src", "vendor/lib"] {
+        assert_eq!(
+            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            None,
+            "{path}"
+        );
+    }
+    // A file changed on disk no longer hashes to its blob.
+    fs::write(dir.join("README.md"), "changed on disk\n").unwrap();
+    assert_ne!(
+        f.repo.hash_checkout_file(&dir, "README.md").unwrap(),
+        Some(blob("README.md"))
+    );
+    // Nothing outside the checkout.
+    for path in ["../repo.git/HEAD", "/etc/passwd", ""] {
+        assert!(f.repo.hash_checkout_file(&dir, path).is_err(), "{path}");
+    }
+}

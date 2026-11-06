@@ -50,6 +50,38 @@ impl Repo {
         Ok(dir)
     }
 
+    /// The blob ID git would give the file at `path` in `checkout`, one of this clone's
+    /// checkouts, hashing its bytes as they are on disk, without the conversions `.gitattributes`
+    /// asks for. `None` when `path` isn't a regular file there: missing, a folder or a symlink.
+    ///
+    /// A checkout's file can differ from the head's blob: changed on disk, or two names that
+    /// differ only in case sharing one file on a case-insensitive disk. Compare before letting a
+    /// checkout's file stand in for git's text.
+    pub fn hash_checkout_file(&self, checkout: &Path, path: &str) -> Result<Option<Oid>, Error> {
+        let relative = Path::new(path);
+        let inside = !path.is_empty()
+            && relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)));
+        if !inside {
+            return Err(Error::Invalid {
+                what: "path in a checkout",
+                value: path.to_string(),
+            });
+        }
+        let is_file = fs::symlink_metadata(checkout.join(relative))
+            .is_ok_and(|metadata| metadata.file_type().is_file());
+        if !is_file {
+            return Ok(None);
+        }
+        let output = self.run(
+            self.git_in(checkout)
+                .args(["hash-object", "--no-filters", "--"])
+                .arg(path),
+        )?;
+        crate::oid::parse_output(&output).map(Some)
+    }
+
     /// Whether `dir` is a worktree of this clone, judged from its `.git` file rather than by
     /// running git there, which could find some other repository further up.
     fn is_worktree(&self, dir: &Path) -> bool {

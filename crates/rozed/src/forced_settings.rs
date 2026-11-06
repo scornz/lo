@@ -1,14 +1,22 @@
 //! Zed settings rozed forces, whatever the user's settings say.
 //!
 //! They sit in Zed's top settings layer (the "server" layer, merged after the user's), so a
-//! user's `settings.json` can't override them. They keep Zed's account, telemetry, update and AI
+//! user's `settings.json` can't override them, and a repository's `.zed/settings.json` never
+//! applies at all ([`crate::local_project`]). They keep Zed's account, telemetry, update and AI
 //! code from starting, point every Zed service URL at a placeholder that rozed's HTTP client
-//! refuses ([`crate::http`]), and keep rust-analyzer from running a repository's code.
+//! refuses ([`crate::http`]), let only rust-analyzer start, and narrow what rust-analyzer does.
+//!
+//! They don't keep a repository's code from running: rust-analyzer still runs cargo and rustc in
+//! the checkout, and a repository's `.cargo/config.toml` can point those at its own programs. So
+//! only a pull request the user trusts gets a checkout ([`crate::trust`]). `docs/spike.md`,
+//! "Trust risks", lists what the settings stop and what they don't.
 
 use gpui::{App, UpdateGlobal as _};
+use language::LanguageName;
 use settings::SettingsStore;
 
-/// The forced settings, in the format of Zed's `settings.json`.
+/// The forced settings, in the format of Zed's `settings.json`. [`forced_settings`] adds what
+/// depends on the machine.
 pub const FORCED_SETTINGS: &str = r#"{
   // No telemetry: no usage events and no crash or diagnostics reports.
   "telemetry": { "diagnostics": false, "metrics": false },
@@ -23,14 +31,30 @@ pub const FORCED_SETTINGS: &str = r#"{
   "auto_install_extensions": { "html": false },
   // Only rozed decides which worktrees are trusted to run language servers (`crate::trust`).
   "session": { "trust_all_worktrees": false },
+  // Only rust-analyzer can start, and only for Rust; no other language gets a language server.
+  // A language's own entry wins over this default, so rozed adds an empty list for every
+  // language it knows. Later milestones add servers one at a time.
+  "language_servers": [],
+  "languages": { "Rust": { "language_servers": ["rust-analyzer"] } },
   "lsp": {
     "rust-analyzer": {
-      // Use the rust-analyzer rozed downloads from its GitHub releases, never one found on PATH.
-      // With rustup, that one is a proxy that runs, and may first install, whatever toolchain the
-      // repository's rust-toolchain.toml names.
-      "binary": { "ignore_system_version": true },
-      // Never run the repository's code or download its dependencies (design §1): no build
-      // scripts, no proc macros, no `cargo check`, and no `cargo metadata` for dependencies.
+      "binary": {
+        // Use the rust-analyzer rozed downloads from its GitHub releases, never one found on
+        // PATH. With rustup, that one is a proxy that runs, and may first install, whatever
+        // toolchain the repository's rust-toolchain.toml names.
+        "ignore_system_version": true,
+        // The environment of rust-analyzer and the cargo and rustc it runs. No rustc wrapper,
+        // whether the repository's .cargo/config.toml or rozed's environment names one, and
+        // rustup never installs a toolchain. rozed adds RUSTUP_TOOLCHAIN when it finds a
+        // toolchain (`crate::rust_toolchain`); rustup prefers it to a rust-toolchain.toml.
+        "env": {
+          "RUSTC_WRAPPER": "",
+          "RUSTC_WORKSPACE_WRAPPER": "",
+          "RUSTUP_AUTO_INSTALL": "0"
+        }
+      },
+      // No build scripts, no proc macros, no `cargo check`, and no `cargo metadata` for
+      // dependencies, which would download them.
       "initialization_options": {
         "cargo": { "buildScripts": { "enable": false }, "noDeps": true },
         "procMacro": { "enable": false },
@@ -40,10 +64,32 @@ pub const FORCED_SETTINGS: &str = r#"{
   }
 }"#;
 
-pub fn apply(cx: &mut App) {
+/// The forced settings, with no language server for any of `languages` but Rust, and rustup
+/// pinned to `rust_toolchain` for rust-analyzer when there's one.
+pub fn forced_settings(languages: &[LanguageName], rust_toolchain: Option<&str>) -> String {
+    let mut settings: serde_json::Value = settings::parse_json_with_comments(FORCED_SETTINGS)
+        .expect("rozed's forced settings are valid");
+    let forced_languages = settings["languages"]
+        .as_object_mut()
+        .expect("the forced settings have a languages object");
+    for language in languages {
+        forced_languages
+            .entry(language.as_ref())
+            .or_insert_with(|| serde_json::json!({ "language_servers": [] }));
+    }
+    if let Some(toolchain) = rust_toolchain {
+        settings["lsp"]["rust-analyzer"]["binary"]["env"]["RUSTUP_TOOLCHAIN"] = toolchain.into();
+    }
+    settings.to_string()
+}
+
+/// Sets the forced settings. Call it at startup, before anything reads settings, and again once
+/// every language is registered.
+pub fn apply(languages: &[LanguageName], rust_toolchain: Option<&str>, cx: &mut App) {
+    let settings = forced_settings(languages, rust_toolchain);
     SettingsStore::update_global(cx, |store, cx| {
         store
-            .set_server_settings(FORCED_SETTINGS, cx)
+            .set_server_settings(&settings, cx)
             .expect("rozed's forced settings are valid");
     });
 }
@@ -52,16 +98,28 @@ pub fn apply(cx: &mut App) {
 mod tests {
     use super::*;
 
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
     use client::{ClientSettings, TelemetrySettings};
+    use language::language_settings::AllLanguageSettings;
+    use language::{LanguageRegistry, LanguageServerName};
+    use node_runtime::NodeRuntime;
     use project::DisableAiSettings;
+    use project::FakeFs;
     use project::project_settings::ProjectSettings;
     use settings::{
         ParseStatus, RootUserSettings as _, SaturatingBool, Settings as _, SettingsContent,
     };
 
+    fn content(languages: &[LanguageName], rust_toolchain: Option<&str>) -> SettingsContent {
+        SettingsContent::parse_json_with_comments(&forced_settings(languages, rust_toolchain))
+            .unwrap()
+    }
+
     #[test]
     fn forced_settings_set_the_fields_they_mean_to() {
-        let content = SettingsContent::parse_json_with_comments(FORCED_SETTINGS).unwrap();
+        let content = content(&[], None);
         let telemetry = content.telemetry.unwrap();
         assert_eq!(telemetry.diagnostics, Some(false));
         assert_eq!(telemetry.metrics, Some(false));
@@ -80,7 +138,18 @@ mod tests {
       "telemetry": { "diagnostics": true, "metrics": true },
       "server_url": "https://zed.dev",
       "disable_ai": false,
-      "session": { "trust_all_worktrees": true }
+      "session": { "trust_all_worktrees": true },
+      "language_servers": ["..."],
+      "languages": {
+        "Python": { "language_servers": ["pyright", "ruff", "..."], "enable_language_server": true },
+        "Rust": { "language_servers": ["rust-analyzer", "..."] },
+        "TypeScript": { "language_servers": ["vtsls", "eslint", "..."] }
+      },
+      "lsp": {
+        "rust-analyzer": {
+          "binary": { "ignore_system_version": false, "env": { "RUSTC_WRAPPER": "sccache" } }
+        }
+      }
     }"#;
 
     fn set_user_settings(json: &str, cx: &mut App) {
@@ -103,6 +172,16 @@ mod tests {
             !ProjectSettings::get_global(cx).session.trust_all_worktrees,
             "every worktree is trusted"
         );
+        let binary = rust_analyzer_binary(cx);
+        assert_eq!(binary.ignore_system_version, Some(true));
+        assert_eq!(binary.env.unwrap()["RUSTC_WRAPPER"], "");
+    }
+
+    fn rust_analyzer_binary(cx: &App) -> settings::BinarySettings {
+        ProjectSettings::get_global(cx).lsp[&LanguageServerName::new_static("rust-analyzer")]
+            .binary
+            .clone()
+            .unwrap()
     }
 
     #[gpui::test]
@@ -112,7 +191,7 @@ mod tests {
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
             // The user's settings did change the defaults, so the next check means something.
             assert!(TelemetrySettings::get_global(cx).metrics);
-            apply(cx);
+            apply(&[], None, cx);
             assert_forced(cx);
         });
     }
@@ -122,15 +201,80 @@ mod tests {
         // rozed applies them at startup, before reading the user's settings file.
         cx.update(|cx| {
             settings::init(cx);
-            apply(cx);
+            apply(&[], None, cx);
             set_user_settings(CONTRARY_USER_SETTINGS, cx);
             assert_forced(cx);
         });
     }
 
+    #[gpui::test]
+    fn only_rust_analyzer_can_start(cx: &mut gpui::TestAppContext) {
+        let fs = FakeFs::new(cx.executor());
+        cx.update(|cx| {
+            settings::init(cx);
+            let languages = Arc::new(LanguageRegistry::test(cx.background_executor().clone()));
+            languages::init(languages.clone(), fs, NodeRuntime::unavailable(), cx);
+            let names = languages.language_names();
+            let python = LanguageName::new_static("Python");
+            assert!(
+                !languages.lsp_adapters(&python).is_empty(),
+                "Python has language servers to turn off"
+            );
+
+            set_user_settings(CONTRARY_USER_SETTINGS, cx);
+            apply(&names, None, cx);
+
+            let available: Vec<LanguageServerName> = languages.available_lsp_adapter_names();
+            for name in &names {
+                let mut adapters: Vec<LanguageServerName> = languages
+                    .lsp_adapters(name)
+                    .iter()
+                    .map(|adapter| adapter.name.clone())
+                    .collect();
+                adapters.extend(available.iter().cloned());
+                let started = AllLanguageSettings::get_global(cx)
+                    .language(None, Some(name), cx)
+                    .customized_language_servers(&adapters);
+                let expected = if name.as_ref() == "Rust" {
+                    vec![LanguageServerName::new_static("rust-analyzer")]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(started, expected, "{name:?}");
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn rust_analyzer_gets_no_wrappers_and_the_toolchain_rozed_found(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            settings::init(cx);
+            set_user_settings(CONTRARY_USER_SETTINGS, cx);
+
+            apply(&[], None, cx);
+            let env = rust_analyzer_binary(cx).env.unwrap();
+            assert_eq!(
+                env,
+                BTreeMap::from(
+                    [
+                        ("RUSTC_WRAPPER", ""),
+                        ("RUSTC_WORKSPACE_WRAPPER", ""),
+                        ("RUSTUP_AUTO_INSTALL", "0"),
+                    ]
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                )
+            );
+
+            apply(&[], Some("1.98.1-aarch64-apple-darwin"), cx);
+            let env = rust_analyzer_binary(cx).env.unwrap();
+            assert_eq!(env["RUSTUP_TOOLCHAIN"], "1.98.1-aarch64-apple-darwin");
+            assert_eq!(env["RUSTUP_AUTO_INSTALL"], "0");
+        });
+    }
+
     #[test]
-    fn rust_analyzer_is_downloaded_and_runs_nothing_from_the_repository() {
-        let content = SettingsContent::parse_json_with_comments(FORCED_SETTINGS).unwrap();
+    fn rust_analyzer_is_downloaded_with_build_scripts_proc_macros_and_checks_off() {
+        let content = content(&[], None);
         let rust_analyzer = &content.project.lsp.0["rust-analyzer"];
         assert_eq!(
             rust_analyzer.binary.as_ref().unwrap().ignore_system_version,
@@ -145,7 +289,7 @@ mod tests {
 
     #[test]
     fn the_server_url_is_refused_by_the_http_client() {
-        let content = SettingsContent::parse_json_with_comments(FORCED_SETTINGS).unwrap();
+        let content = content(&[], None);
         let url: http_client::Url = content.server_url.unwrap().parse().unwrap();
         assert!(crate::http::is_refused_host(url.host_str().unwrap()));
     }
