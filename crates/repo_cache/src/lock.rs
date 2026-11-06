@@ -91,7 +91,20 @@ mod tests {
         drop(held);
         receiver.recv_timeout(Duration::from_secs(5)).unwrap();
         waiter.join().unwrap();
-        assert!(RepoLock::try_acquire(&path).unwrap().is_some());
+        assert!(free_soon(&path));
+    }
+
+    /// Whether the lock at `path` comes free within a couple of seconds. A child process another
+    /// test thread starts as a holder lets go can keep a copy of its file descriptor until it runs
+    /// its program, so a lock just let go can take a moment.
+    fn free_soon(path: &Path) -> bool {
+        (0..100).any(|_| {
+            let free = RepoLock::try_acquire(path).unwrap().is_some();
+            if !free {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            free
+        })
     }
 
     #[test]
@@ -105,15 +118,6 @@ mod tests {
         drop(first);
         assert!(RepoLock::try_acquire(&path).unwrap().is_none());
         drop(second);
-        // A child process another test thread starts at that moment can hold a copy of the
-        // lock's file descriptor until it runs its program, so allow a moment.
-        let free = (0..100).any(|_| {
-            let free = RepoLock::try_acquire(&path).unwrap().is_some();
-            if !free {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            free
-        });
-        assert!(free);
+        assert!(free_soon(&path));
     }
 }
