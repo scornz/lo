@@ -1,0 +1,4 @@
+{
+  "description": "Sign-in: the code is never entered and runs out after 20 s",
+  "synthetic": true
+}
