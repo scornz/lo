@@ -1584,6 +1584,43 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn the_reviewer_is_told_when_gitattributes_couldnt_be_read(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        // A file under more folders with a .gitattributes than rozed reads, which don't change.
+        let folders: Vec<String> = (1..=repo_cache::MAX_ATTRIBUTE_FILES + 1)
+            .map(|depth| "d/".repeat(depth))
+            .collect();
+        let attributes: Vec<String> = folders
+            .iter()
+            .map(|folder| format!("{folder}.gitattributes"))
+            .collect();
+        let base: Vec<_> = attributes
+            .iter()
+            .map(|path| Entry::File(path, b"*.js linguist-generated\n"))
+            .collect();
+        let generated = format!("{}gen.js", folders.last().unwrap());
+        let mut head: Vec<_> = attributes
+            .iter()
+            .map(|path| Entry::File(path, b"*.js linguist-generated\n"))
+            .collect();
+        head.push(Entry::File(&generated, b"gen()\n"));
+        let (diff, _copy) = show(&tab, &base, &head, cx);
+        assert!(!is_folded(&diff, &generated, cx));
+        let messages = tab.read_with(cx, |tab, cx| tab.banners().read(cx).messages().to_vec());
+        let banner = messages
+            .iter()
+            .find(|message| message.kind == crate::pr_banner::BannerKind::AttributesUnread)
+            .expect("a banner about .gitattributes");
+        assert!(
+            banner
+                .text
+                .contains("files it marks generated start expanded: 201 .gitattributes"),
+            "{}",
+            banner.text
+        );
+    }
+
+    #[gpui::test]
     async fn alt_a_shows_the_whole_file_and_then_its_changes_again(cx: &mut TestAppContext) {
         let (tab, cx) = tab(cx).await;
         let (diff, _copy) = show(
