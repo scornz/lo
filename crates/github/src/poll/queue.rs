@@ -29,15 +29,25 @@ impl RequestQueue {
         }))
     }
 
-    /// Runs a read once the account has nothing else in flight.
-    pub async fn read<F: Future>(&self, request: F) -> F::Output {
+    /// Makes and runs a read once the account has nothing else in flight. `request` is called
+    /// only then, so a request that starts work when it's made, such as a spawned task, still
+    /// waits its turn.
+    pub async fn read<F, Fut>(&self, request: F) -> Fut::Output
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future,
+    {
         let _turn = self.0.last_write.lock().await;
-        request.await
+        request().await
     }
 
-    /// Runs a write (a mutation) once the account has nothing else in flight, and at least the
-    /// spacing after the previous write finished.
-    pub async fn write<F: Future>(&self, request: F) -> F::Output {
+    /// Makes and runs a write (a mutation) once the account has nothing else in flight, and at
+    /// least the spacing after the previous write finished.
+    pub async fn write<F, Fut>(&self, request: F) -> Fut::Output
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future,
+    {
         let mut last_write = self.0.last_write.lock().await;
         if let Some(last) = *last_write {
             let ready = last + self.0.spacing;
@@ -46,7 +56,7 @@ impl RequestQueue {
                 self.0.executor.timer(ready - now).await;
             }
         }
-        let output = request.await;
+        let output = request().await;
         *last_write = Some(self.0.executor.now());
         output
     }
@@ -88,7 +98,7 @@ mod tests {
             let queue = queue.clone();
             let request = request(name, Duration::from_millis(300), &log, &executor, start);
             executor
-                .spawn(async move { queue.read(request).await })
+                .spawn(async move { queue.read(|| request).await })
                 .detach();
             executor.run_until_parked();
         }
@@ -114,9 +124,9 @@ mod tests {
             executor
                 .spawn(async move {
                     if write {
-                        queue.write(request).await
+                        queue.write(|| request).await
                     } else {
-                        queue.read(request).await
+                        queue.read(|| request).await
                     }
                 })
                 .detach();
@@ -141,5 +151,41 @@ mod tests {
                 ("write c", 2600, 2700),
             ]
         );
+    }
+
+    #[gpui::test]
+    async fn a_request_is_made_only_once_it_holds_the_queue(cx: &mut TestAppContext) {
+        let executor = cx.executor();
+        let queue = RequestQueue::new(executor.clone(), Duration::from_secs(1));
+        let log = Log::default();
+        let start = executor.now();
+        let made = Arc::new(SyncMutex::new(Vec::new()));
+        for (name, write) in [("write", true), ("read", false)] {
+            let (queue, made) = (queue.clone(), made.clone());
+            let request = request(name, Duration::from_millis(500), &log, &executor, start);
+            let make = move || {
+                made.lock().push(name);
+                request
+            };
+            executor
+                .spawn(async move {
+                    if write {
+                        queue.write(make).await
+                    } else {
+                        queue.read(make).await
+                    }
+                })
+                .detach();
+            executor.run_until_parked();
+        }
+        // The read waits for the write without having been made: a spawned task would already
+        // be running.
+        assert_eq!(*made.lock(), ["write"]);
+        for _ in 0..10 {
+            executor.advance_clock(Duration::from_millis(100));
+            executor.run_until_parked();
+        }
+        assert_eq!(*made.lock(), ["write", "read"]);
+        assert_eq!(*log.lock(), [("write", 0, 500), ("read", 500, 1000)]);
     }
 }

@@ -853,10 +853,9 @@ async fn reopening_shows_the_cache_at_once_and_its_first_poll_is_free(cx: &mut T
     assert_eq!(recent[0].opened_at, wall(5));
 }
 
-#[gpui::test]
-async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut TestAppContext) {
-    let r = recorded();
-    let comment = Interaction {
+/// `POST /issues/1/comments`, answered `201`.
+fn comment(r: &[Interaction]) -> Interaction {
+    Interaction {
         request: cassette::RecordedRequest {
             method: "POST".into(),
             url: "https://api.github.com/repos/rozed-dev/playground/issues/1/comments".into(),
@@ -864,9 +863,38 @@ async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut Te
             ..Default::default()
         },
         response: answer(&r[0], 201, &[], r#"{"id":1}"#).response,
-    };
+    }
+}
+
+fn post_comment(
+    poller: &mut Poller,
+    cx: &mut gpui::Context<Poller>,
+) -> gpui::Task<Result<serde_json::Value, github::GithubError>> {
+    poller.write(
+        |client| async move {
+            client
+                .post::<serde_json::Value, _>(
+                    "/repos/rozed-dev/playground/issues/1/comments",
+                    &serde_json::json!({"body": "hi"}),
+                )
+                .await
+        },
+        cx,
+    )
+}
+
+/// Asserts no request was sent before the one before it finished, when each takes a second.
+fn assert_one_at_a_time(requests: &[(u64, String)]) {
+    for pair in requests.windows(2) {
+        assert!(pair[1].0 > pair[0].0, "{requests:?}");
+    }
+}
+
+#[gpui::test]
+async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut TestAppContext) {
+    let r = recorded();
     let mut interactions = r.clone();
-    interactions.push(comment);
+    interactions.push(comment(&r));
     let mut t = Polling::with(
         "write",
         interactions,
@@ -877,30 +905,15 @@ async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut Te
     .await;
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
     t.run_until(1);
-    let post = |poller: &mut Poller, cx: &mut gpui::Context<Poller>| {
-        poller.write(
-            |client| async move {
-                client
-                    .post::<serde_json::Value, _>(
-                        "/repos/rozed-dev/playground/issues/1/comments",
-                        &serde_json::json!({"body": "hi"}),
-                    )
-                    .await
-            },
-            cx,
-        )
-    };
-    let first = t.update(post);
-    let second = t.update(post);
+    let first = t.update(post_comment);
+    let second = t.update(post_comment);
     t.run_until(20);
     assert_eq!(first.await.unwrap()["id"], 1);
     assert_eq!(second.await.unwrap()["id"], 1);
 
     let requests = t.requests();
     // Each request takes a second, and none overlaps another.
-    for pair in requests.windows(2) {
-        assert!(pair[1].0 > pair[0].0, "{requests:?}");
-    }
+    assert_one_at_a_time(&requests);
     let posts: Vec<u64> = requests
         .iter()
         .filter(|(_, what)| what.starts_with("POST /issues"))
@@ -911,6 +924,40 @@ async fn a_write_waits_for_the_poll_in_flight_and_the_previous_write(cx: &mut Te
     assert_eq!(posts.len(), 2);
     assert!(posts[0] >= 3, "{requests:?}");
     assert!(posts[1] >= posts[0] + 2, "{requests:?}");
+}
+
+#[gpui::test]
+async fn a_poll_that_comes_due_while_a_write_holds_the_queue_waits(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::with(
+        "poll_waits_for_write",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(21);
+    t.requests();
+    // The second write holds the queue through its second of spacing, while the open PR's next
+    // poll comes due.
+    let first = t.update(post_comment);
+    let second = t.update(post_comment);
+    t.run_until(30);
+    first.await.unwrap();
+    second.await.unwrap();
+    let requests = t.requests();
+    assert_one_at_a_time(&requests);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, what)| what.starts_with("POST"))
+            .count(),
+        2
+    );
 }
 
 #[gpui::test]

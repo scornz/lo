@@ -465,7 +465,7 @@ impl Poller {
             let client = client.await.map_err(|error| GithubError::Unauthorized {
                 message: format!("{error:#}"),
             })?;
-            let result = queue.write(request(client.clone())).await;
+            let result = queue.write(|| request(client.clone())).await;
             this.update(cx, |this, cx| {
                 this.limits = client.rate_limits();
                 this.refresh_status(cx);
@@ -957,8 +957,10 @@ async fn poll(
                         continue;
                     }
                 };
-                let run = cx.background_spawn((*job).clone().run(client.clone()));
-                let result = queue.read(run).await;
+                // The poll's requests start only once it holds the queue.
+                let result = queue
+                    .read(|| executor.spawn((*job).clone().run(client.clone())))
+                    .await;
                 let writes = this.update(cx, |this, cx| this.finish(*job, result, &client, cx))?;
                 for write in writes {
                     if let Err(error) = write.await {
