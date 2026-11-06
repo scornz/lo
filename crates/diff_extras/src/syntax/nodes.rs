@@ -202,6 +202,11 @@ impl<'s> Syntax<'s> {
         matches!(&self[id].shape, Shape::Atom { token, .. } if token.text.is_empty())
     }
 
+    /// How many nodes there are, on both sides.
+    pub(crate) fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// The node's children; none for an atom.
     pub(crate) fn children(&self, id: NodeId) -> &[NodeId] {
         match &self[id].shape {
