@@ -362,7 +362,8 @@ rust-analyzer's type hover. Screenshots of both.
 
 Carried forward from PR #3: Zed's keymap no longer binds any open, new, save or repo-changing
 action, but the pane tab bar's "+" menu and Zed's welcome page still offer New File and Open by
-mouse. The PR tab (milestone 5) replaces both; vim's `:w`/`ZZ` and the command palette get the
+mouse, and with `--trust` a file header's "Open File" opens an ordinary editor tab that must stay
+read-only. The PR tab (milestone 5) replaces all three; vim's `:w`/`ZZ` and the command palette get the
 same filtering when vim lands (milestone 12).
 
 ---
@@ -699,3 +700,88 @@ stacked on `feat/stacks-logic`. Design §4 "Turning chains into GitHub stacks", 
   bottom PR, then point the next at the root branch and mark it "needs rebase" (design §9 "Stacks").
 - Tests for every branch above, including trees, partial native stacks and rollback after each
   failing step.
+
+### Task 11.2: The syntax-aware diff's core (`crates/diff_extras`)
+
+PR: `feat(diff_extras): compare files by syntax` — branch `feat/syntax-diff`, stacked on
+`feat/moved-code`. Design §5 "Syntax-aware view".
+
+- Port difftastic's structural diff (github.com/Wilfred/difftastic, MIT): turn two tree-sitter trees
+  into difftastic's syntax nodes (lists with delimiters, atoms), find the cheapest route through its
+  graph of matched and novel nodes (Dijkstra), and mark each side's novel nodes. Keep difftastic's
+  MIT copyright notice in the ported files and add it to a `THIRD_PARTY_NOTICES.md`.
+- Input: old and new source with their tree-sitter `Tree`s (the caller parses with Zed's grammars);
+  depend only on the `tree-sitter` crate at Zed's version, plus a few grammar crates as
+  dev-dependencies for tests (Rust, JSON, TypeScript), at the versions in Zed's workspace.
+- Output for display: aligned rows of (old line number, new line number), either side possibly
+  absent, with the novel byte ranges on each line. Every row uses real line numbers, so a comment
+  can be placed on a real line (design §5).
+- Limits like difftastic's (graph size, byte size); past them, or with no grammar, return "too
+  large" or "no grammar" so the caller keeps the normal diff.
+- `nearest_commentable_line(row, side, commentable_lines)`: maps a row to a line GitHub will take
+  a comment on, or `None`, so the UI can offer a file-level comment instead.
+- Tests ported from difftastic's own where they fit, plus: a renamed variable, a reordered argument
+  list, a re-indented block (no change), a moved function, and the size fallbacks.
+
+---
+
+## Milestone 5: The PR tab
+
+Design §5, §6 "Viewed marks", §10 "Window", §11 "The local copy". A new `crates/review_ui` holds the
+PR tab; `crates/rozed` keeps startup, windows and menus. This is the first milestone that needs the
+GitHub layer, the local copy and the review model together.
+
+**Base:** an integration branch, `integration/pr-tab`, made only of merges of `feat/repo-cache`
+(the spike and the local copy), `feat/github-polling` (the GitHub layer) and `feat/merge-logic`
+(the review model: review order, revisions, merge logic). It gets no commits of its own besides
+conflict resolutions, and is updated by merging those branches again when they move. Milestone 5's
+PRs target it, so each PR's diff shows only its own change.
+
+Five PRs, in order (5c and 5d can run in parallel once 5b is open):
+
+### 5a `feat(review_ui): open pull requests in tabs` — branch `feat/pr-tab`
+
+- **Wiring:** `rozed <pr-url>` picks the account (`Accounts::account_for_repo`; unauthenticated for
+  public repos when none can see it), starts that account's `Poller`, opens the PR from the cache
+  at once and refreshes it, prepares the local copy with `repo_cache` using the account's token,
+  and builds revisions (`review::revisions`, with the PR's head and `createdAt`). `--trust` stays
+  the only way to get a checkout and language servers until milestone 10.
+- **The tab** (a `workspace::Item` in `review_ui`): header with title, number, author, the account
+  acting, and placeholders for the merge status line and revision picker; left panel with the file
+  list in review order (`review::files`) showing viewed marks, a key for path order; middle the
+  side-by-side diff (the spike's `pr_diff`, moved into `review_ui`); right an empty threads panel.
+  Each panel opens and closes with a key.
+- **One window, a tab per PR;** opening a PR that's already open switches to its tab.
+- **Read-only gaps from the spike closed:** no welcome page, no tab-bar "+" menu, no "Open File" on
+  file headers (or it opens a read-only view).
+- **Verify on screen:** `sharkdp/fd#2212` (public, unauthenticated) and `rozed-dev/playground#2`
+  (private, signed in as `rozed-bot`) open in two tabs; reopening one switches to it.
+
+### 5b `feat(review_ui): show GitHub's diff while the local copy loads` — branch `feat/api-diff`
+
+- The diff appears straight away from GitHub's per-file patches (`GET /pulls/{n}/files`), read-only
+  and without whole-file context, then switches to the local copy's diff when it's ready, keeping
+  the scroll position. Progress shows while the copy loads; a failed fetch shows a banner and
+  retries (design §11).
+
+### 5c `feat(review_ui): mark files viewed` — branch `feat/viewed-marks`
+
+- `e` marks the file viewed through GraphQL `markFileAsViewed` (via `Poller::write`) and moves to
+  the next unviewed file; on a viewed file it clears the mark. The revision at which each file was
+  marked is stored locally (SQLite) for `viewed_file_comparison`. `]f`/`[f` move between files,
+  `]c`/`[c` between changes. Viewed marks show in the file list.
+
+### 5d `feat(review_ui): collapse, expand and switch how files show` — branch `feat/diff-display`
+
+- Generated files and lockfiles start collapsed; files over 5,000 changed lines start collapsed and
+  load on a key (`review::files::initial_state`). Binary files say "binary file changed"; images
+  show before and after side by side. Renames show as renames. Keys: `Tab` switches side, one key
+  toggles inline/side-by-side, one hides whitespace changes, one expands the whole file.
+
+### 5e `feat(review_ui): list recent pull requests` — branch `feat/recent-prs`
+
+- With no PR open, the window lists PRs opened recently across all accounts (`recent_prs`), opened
+  with `enter`.
+
+**Milestone done when:** all five PRs are green, every key above works on screen, and both test PRs
+open from a clean state.

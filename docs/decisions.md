@@ -65,6 +65,30 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Shared desktop:** agents take `mkdir ~/src/rozed-worktrees/.desktop.lock` before using the
   desktop and remove it after, so two agents never drive it at once.
 
+- **Cached PR data carries a version** (a hash of the query text, or the REST API version), so an
+  app update that changes a query reads old rows as missing instead of serving the wrong shape.
+- **"Clear cache" clears cached PR data only;** accounts, owner choices and recent PRs stay (design §3).
+- **One request in flight per account,** writes spaced at least 1 s apart, through the poller's queue.
+- **A watched PR that changed in the background gets a fresh summary; its full details are fetched
+  when it's opened,** so background tabs don't spend GraphQL points.
+
+- **A 200 to a conditional poll isn't a change by itself.** GitHub's ETag for a PR covers its
+  embedded repo objects, so any push or star in the repo changes it. The poller compares the decoded
+  summary (and, for the open-PR list, a projection of each PR's number, head, base, draft, title,
+  update time and stack) before spending GraphQL points.
+- **Requests start only once they hold the account's queue,** which serves waiters first in, first
+  out, so a poll never overlaps a write.
+- **rozed's own writes invalidate what they change,** and the open PR's details are refetched in full
+  at least every 5 minutes, so viewed marks set elsewhere show up without a push.
+- **Only `Accounts` decides an account is signed out;** any other error getting a client (a locked
+  Keychain) backs off and retries. "Offline" clears on any HTTP response.
+- **Waits are capped (60 s) and recomputed from the wall clock,** so pauses end on time after the Mac
+  sleeps, and slowed or open-only tiers wake at the limit's reset.
+- **The cheap check covers what the UI will need:** checks rollup, review decision, merge state,
+  unresolved threads and queue entry, not only counts.
+- **Cache versions come from each stored type's shape** (a hash checked by a snapshot test), not a
+  hand-bumped string.
+
 ## Local copy
 
 - **rozed runs the `git` CLI with an isolated environment** (`GIT_CONFIG_GLOBAL=/dev/null`,
@@ -74,6 +98,13 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   survive `gc` (design §3).
 - **git 2.40 or newer is required,** for `git merge-tree --write-tree --merge-base` (rebase-aware
   comparison, design §6). macOS's `/usr/bin/git` is 2.54.
+
+- **Base branches are fetched per PR** (`refs/rozed/pull/<n>/base`, tips pinned under `bases/<sha>`),
+  never under a branch-name ref; arbitrary commits pin at `refs/rozed/commits/<sha>`.
+- **`repo_cache`'s API blocks;** it's split into fetch, changed files and checkout, `Repo` is `Send +
+  Sync`, and the app calls each step from a background task.
+- **A merged PR's diff needs its merge commit's first parent as the base** (the base tip already
+  contains it); milestone 6 handles merged PRs.
 
 ## Building on Zed (PR #3 and its review)
 
@@ -122,6 +153,18 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Rebase-aware comparison is skipped when both revisions share a base;** a `merge-tree` exit of 1
   (conflict) falls back to the plain diff with a note, and any other failure is an error.
 
+- **The latest revision is always the PR's current head** (`headRefOid`), passed in, never inferred
+  from inexact times. Heads outside the current commits sort before the latest force-push's result.
+  Without this a late review or a skewed clock made a stale head "latest" and said "Nothing new".
+- **Revisions start where the PR opened:** heads older than the newest head pushed at or before
+  `createdAt` are dropped, so pushes made before the PR existed aren't r1.
+- **A review's commit is a revision** (it was the head when the reviewer looked). Only submitted
+  reviews count; pending ones have no time and are ignored.
+- **A branch re-created at another SHA counts as forced unless ancestry says otherwise,** and a check
+  suite whose previous SHA isn't a known head or current commit (a backport on another branch) never
+  names a revision's previous head.
+- **Revision building is O(n log n),** with a head → position index, so 20,000 pushes stay fast.
+
 ## Review order (PR #6)
 
 - **`linguist-generated` has three states;** an explicit `-linguist-generated` keeps a lockfile
@@ -147,6 +190,18 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   how to find one that doesn't follow the repo's `rust-toolchain.toml` (rustup would install it).
 - **Live GitHub fixtures are only read, never force-pushed.** The classifier treats force-pushes as
   destructive, and local test repos prove force-push survival just as well.
+
+- **Zed patches 2 and 3:** `SettingsObserver::ignore_worktree_settings_files()` (skips a worktree's
+  `.zed/` and `.vscode/` settings, tasks and debug files; `.editorconfig` still applies) and
+  `WorktreeStore::keep_out_of_recent_documents()`. Neither setting nor API existed.
+- **Prettier and inline git blame are forced off.** Prettier tried to install itself with `--trust`,
+  and blame in a partial clone fetched each file's history one request at a time (899 requests in
+  2.5 minutes).
+- **Zed's `trusted_worktrees` table is emptied at startup,** so trust never carries over between
+  runs; rozed keeps its own trust list (milestone 10).
+- **rust-analyzer gets `RUSTUP_AUTO_INSTALL=0`** and a pinned `RUSTUP_TOOLCHAIN`, so a repo's
+  `rust-toolchain.toml` can't make rustup download a toolchain. A trusted repo's `.cargo/config.toml`
+  still steers cargo; that's within design §7's accepted cost for trusted repos.
 
 ## Stacks (PR #7 and its review)
 
@@ -204,6 +259,19 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   `owner/repo` (repository ID once the GitHub layer is wired in). Writes to a repo copy hold a
   per-repo lock.
 
+## Stack conversion (PR #11)
+
+- **Conversion is refused with every reason at once,** bottom to top, so the user sees all of them;
+  "already a GitHub stack" is a refusal, not an empty plan.
+- **Layers already in the GitHub stack keep their base branches;** only joining PRs are retargeted.
+- **A GitHub stack with other open layers above the path can't be extended** (the API only appends
+  at the top), and a PR in a merge queue anywhere on the path blocks conversion.
+- **Rollback restores base branches, last changed first, and reports a created stack as kept**
+  (it can be unstacked by number); layers added to an existing stack can't be removed alone.
+- **Merging one layer at a time moves every layer on the merged bottom to the root** and marks it
+  "needs rebase", so none is left targeting a dead branch, the way GitHub does when a branch is
+  deleted.
+
 ## GitHub client (PR #5 and its review)
 
 - **The token only goes to GitHub's API hosts.** The client refuses absolute URLs to any host but
@@ -234,14 +302,9 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   edited lines come in a row; an inserted or removed line splits it into two moves.
 - **Lines repeated all over a PR don't start a lineup** (deleted × added count above 64), which keeps
   detection linear on generated or repetitive diffs.
-- **The latest revision is always the PR's current head** (`headRefOid`), passed in, never inferred
-  from inexact times. Heads outside the current commits sort before the latest force-push's result.
-  Without this a late review or a skewed clock made a stale head "latest" and said "Nothing new".
-- **Revisions start where the PR opened:** heads older than the newest head pushed at or before
-  `createdAt` are dropped, so pushes made before the PR existed aren't r1.
-- **A review's commit is a revision** (it was the head when the reviewer looked). Only submitted
-  reviews count; pending ones have no time and are ignored.
-- **A branch re-created at another SHA counts as forced unless ancestry says otherwise,** and a check
-  suite whose previous SHA isn't a known head or current commit (a backport on another branch) never
-  names a revision's previous head.
-- **Revision building is O(n log n),** with a head → position index, so 20,000 pushes stay fast.
+
+## The PR tab
+
+- **Milestone 5 builds on an integration branch** (`integration/pr-tab`) made only of merges of the
+  open PR branches it needs, so its PRs' diffs show only their own change while the lower PRs wait
+  to merge. When the lower PRs land on `main`, the milestone's PRs are retargeted to `main`.
