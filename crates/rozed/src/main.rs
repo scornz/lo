@@ -4,7 +4,9 @@
 //! leaves out: no Zed account, telemetry, auto-update, extensions, AI or collaboration.
 
 mod forced_settings;
+mod github_api;
 mod http;
+mod local_copy;
 mod pr_link;
 
 use std::io::IsTerminal as _;

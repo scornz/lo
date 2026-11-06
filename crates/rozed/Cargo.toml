@@ -27,6 +27,8 @@ paths.workspace = true
 project.workspace = true
 release_channel.workspace = true
 reqwest_client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 session.workspace = true
 settings.workspace = true
 theme.workspace = true
@@ -36,3 +38,6 @@ uuid.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 zlog.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
