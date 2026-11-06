@@ -15,7 +15,8 @@ pub enum MergeStatus {
     /// Nothing blocks it: it can merge, or join the merge queue.
     Ready,
     /// Only things waiting will fix block it. With `auto_merge`, auto-merge is on, so it merges,
-    /// or joins the queue, once they clear. With `partial`, rozed may not see every rule behind
+    /// or joins the queue, once they clear, while it stays on: GitHub turns it off when someone
+    /// without write access pushes. With `partial`, rozed may not see every rule behind
     /// GitHub's block ([`may_not_see_every_rule`]), so these may be only part of why.
     Waiting {
         blockers: Vec<Blocker>,
@@ -24,7 +25,7 @@ pub enum MergeStatus {
     },
     /// Something waiting won't fix blocks it. The first blocker is the one to name, as
     /// [`blockers`](super::blockers) orders them. With `auto_merge`, auto-merge is on, and it merges
-    /// once everything clears. With `partial`, as for [`MergeStatus::Waiting`].
+    /// if everything clears while it stays on. With `partial`, as for [`MergeStatus::Waiting`].
     Blocked {
         blockers: Vec<Blocker>,
         auto_merge: bool,

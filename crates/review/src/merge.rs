@@ -121,8 +121,10 @@ pub struct MergeSnapshot {
     /// `reviewDecision`: `None` when the base branch's rules don't require reviews.
     pub review_decision: Option<ReviewDecision>,
     /// Each reviewer's latest approval or request for changes, or its dismissal
-    /// (`latestOpinionatedReviews`), one per reviewer. A later entry for the same reviewer replaces
-    /// an earlier one.
+    /// (`latestOpinionatedReviews`, without `writersOnly`), one per reviewer. A later entry for the
+    /// same reviewer replaces an earlier one. It keeps reviews from people without write access,
+    /// marked by [`Review::counts`], because approve and ship needs your own latest review even
+    /// when it doesn't count.
     pub reviews: Vec<Review>,
     /// Reviews requested and not yet given (`reviewRequests`). GitHub drops a user's request when
     /// they review.
@@ -411,7 +413,10 @@ pub struct Viewer {
     pub teams: Vec<String>,
     /// Whether it opened the pull request (`viewerDidAuthor`). GitHub doesn't let authors approve.
     pub did_author: bool,
-    /// Whether GitHub lets it submit an approving review here.
+    /// Whether GitHub lets it submit an approving review here. GraphQL has no `viewerCanApprove`,
+    /// so the GitHub layer works it out: it didn't open the pull request, the pull request is open,
+    /// the repository isn't archived, the conversation isn't locked unless it has write access,
+    /// and it can read the repository.
     pub can_approve: bool,
     /// Whether its approval counts toward the base branch's rules: it has write access
     /// (`Repository.viewerPermission` is `WRITE`, `MAINTAIN` or `ADMIN`).

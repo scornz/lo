@@ -129,8 +129,9 @@ github_enum! {
 }
 
 github_enum! {
-    /// How a pull request merges: GraphQL's `PullRequestMergeMethod` and `MergeQueueMergeMethod`,
-    /// REST's `merge_method`. Ordered as GitHub's merge button lists them.
+    /// How a pull request merges: GraphQL's `PullRequestMergeMethod`, which the merge queue's
+    /// `configuration.mergeMethod` uses too, and REST's `merge_method`. Ordered as GitHub's merge
+    /// button lists them.
     pub enum MergeMethod {
         Merge = "MERGE",
         Squash = "SQUASH",
