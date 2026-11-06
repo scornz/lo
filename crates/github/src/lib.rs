@@ -4,9 +4,12 @@
 //! Everything goes through an [`http_client::HttpClient`]: in the app, the shared client that
 //! refuses Zed's hosts; in tests, a [`replay::ReplayHttpClient`] serving recorded responses.
 
+pub mod accounts;
 #[cfg(any(test, feature = "test-support"))]
 pub mod cassette;
 mod client;
+pub mod credentials;
+pub mod db;
 mod error;
 mod graphql;
 pub mod queries;
