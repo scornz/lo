@@ -38,6 +38,44 @@ fn a_layer_retargeted_after_a_squash_merge_still_needs_a_rebase() {
 }
 
 #[test]
+fn a_layer_cut_before_a_squashed_layers_last_commit_still_links() {
+    // #2 was cut from a.1, then #1 got a.2 and was squash-merged, and GitHub pointed #2 at main.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1", "a.2"]).merged(false),
+            pr(2, "main", "b").commits(&["a.1", "b.1"]),
+        ],
+        &["main", "  #2 shared-commits needs-rebase(#1 a.1)"],
+    );
+}
+
+#[test]
+fn a_layer_is_compared_against_the_newest_commit_it_has() {
+    // As above, but #2 still targets `a`, which ends at a.2.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1", "a.2"]).merged(false),
+            pr(2, "a", "b").commits(&["a.1", "b.1"]).base_at("a.2"),
+        ],
+        &["main", "  #2 base-branch needs-rebase(#1 a.1)"],
+    );
+}
+
+#[test]
+fn a_rebase_merged_pr_matches_on_its_commits_too() {
+    // Rebase-merging copies #1's commits, so its own aren't in main either.
+    assert_forest(
+        &[
+            pr(1, "main", "a")
+                .commits(&["a.1", "a.2", "a.3"])
+                .merged(false),
+            pr(2, "main", "b").commits(&["a.1", "a.2", "b.1"]),
+        ],
+        &["main", "  #2 shared-commits needs-rebase(#1 a.2)"],
+    );
+}
+
+#[test]
 fn layers_above_the_rebased_layer_stay_on_it() {
     assert_forest(
         &[

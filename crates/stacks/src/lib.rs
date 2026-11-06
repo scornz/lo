@@ -98,9 +98,10 @@ pub enum Rule {
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor an
     /// open PR to a merged PR's branch that has moved on since the merge.
     BaseBranch,
-    /// Its commits contain the head commit of the PR below, the latest such commit if several do.
-    /// A PR with the same head commit isn't below it, and neither is a merged PR whose head is in
-    /// its base branch.
+    /// Its commits contain the head commit of the open PR below, or any commit of a squash- or
+    /// rebase-merged PR below. If several PRs match, the nearest wins: the one matching its latest
+    /// commit. A PR with the same head commit isn't below it, and neither is a merged PR whose
+    /// head is in its base branch.
     SharedCommits,
 }
 
@@ -138,8 +139,9 @@ pub struct Layer {
 pub struct NeedsRebase {
     /// The merged PR the layer's rule matched: the nearest merged PR below it.
     pub merged: u64,
-    /// The commit to compare the layer against: the merged PR's head, so changes that already
-    /// landed stay hidden.
+    /// The commit to compare the layer against, so changes that already landed stay hidden: the
+    /// newest of the merged PR's commits that the layer lists, or the merged PR's head if it lists
+    /// none.
     pub compare_against: String,
 }
 
@@ -349,7 +351,7 @@ struct Graph<'a> {
 struct Lookups<'a> {
     position: HashMap<NativeStackEntry, usize>,
     head_ref: HashMap<&'a str, usize>,
-    head_oid: HashMap<&'a str, usize>,
+    commit: HashMap<&'a str, usize>,
 }
 
 /// A link from a PR to the PR below it, as an index into [`Graph::prs`].
@@ -375,11 +377,19 @@ impl<'a> Graph<'a> {
         let by = Lookups {
             position: self.index(|pr| pr.native_stack),
             head_ref: self.index(|pr| pr.head_in_base_repo.then_some(pr.head_ref.as_str())),
-            // A merge-committed PR's head is in its base branch, so it's history like any other
-            // commit there, not a layer below.
-            head_oid: self.index(|pr| {
-                let in_base = pr.state == State::Merged { head_in_base: true };
-                (!in_base).then_some(pr.head_oid.as_str())
+            commit: self.index(|pr| match pr.state {
+                State::Open => vec![pr.head_oid.as_str()],
+                // Squashing or rebasing left all of its commits out of its base branch, so a layer
+                // cut before its last commit still has some of them.
+                State::Merged {
+                    head_in_base: false,
+                } => {
+                    let head = std::iter::once(pr.head_oid.as_str());
+                    pr.commits.iter().map(String::as_str).chain(head).collect()
+                }
+                // A merge-committed PR's head is in its base branch, so it's history like any
+                // other commit there, not a layer below.
+                State::Merged { head_in_base: true } | State::Closed => Vec::new(),
             }),
         };
         (0..self.prs.len())
@@ -408,14 +418,15 @@ impl<'a> Graph<'a> {
                     && (lower.state == State::Open || pr.state != State::Open || unmoved())
             })
         };
-        // The nearest: the latest of its commits that's another PR's head. A PR with the same head
+        // The nearest: the latest of its commits that another PR matches. A PR with the same head
         // commit isn't below it.
         let shared_commits = || {
             pr.commits
                 .iter()
                 .rev()
                 .filter(|&oid| *oid != pr.head_oid)
-                .find_map(|oid| by.head_oid.get(oid.as_str()))
+                .find_map(|oid| by.commit.get(oid.as_str()))
+                .filter(|&&below| below != index)
         };
         let edge = |rule| move |&below: &usize| Edge { below, rule };
         native_stack()
@@ -452,9 +463,18 @@ impl<'a> Graph<'a> {
         };
         // GitHub rebases a stack's layers itself when a lower one merges.
         let merged = self.prs[edge.below];
-        let needs_rebase = (squashed && edge.rule != Rule::NativeStack).then(|| NeedsRebase {
-            merged: merged.number,
-            compare_against: merged.head_oid.clone(),
+        let needs_rebase = (squashed && edge.rule != Rule::NativeStack).then(|| {
+            let listed: HashSet<&str> = pr.commits.iter().map(String::as_str).collect();
+            let compare_against = merged
+                .commits
+                .iter()
+                .rev()
+                .find(|oid| listed.contains(oid.as_str()))
+                .unwrap_or(&merged.head_oid);
+            NeedsRebase {
+                merged: merged.number,
+                compare_against: compare_against.clone(),
+            }
         });
         Placed {
             pr,
@@ -514,14 +534,17 @@ impl<'a> Graph<'a> {
 
     /// Indexes the PRs that can be below another by `key`. Where several PRs share a key, keeps
     /// the one a rule links to: an open PR before a merged one, then the newest.
-    fn index<K: Eq + Hash>(&self, key: impl Fn(&'a PullRequest) -> Option<K>) -> HashMap<K, usize> {
+    fn index<K: Eq + Hash, Keys: IntoIterator<Item = K>>(
+        &self,
+        keys: impl Fn(&'a PullRequest) -> Keys,
+    ) -> HashMap<K, usize> {
         let mut index = HashMap::with_capacity(self.prs.len());
         for (i, &pr) in self.prs.iter().enumerate() {
             let from_trunk = pr.head_in_base_repo && self.trunks.contains(pr.head_ref.as_str());
             if from_trunk {
                 continue;
             }
-            if let Some(key) = key(pr) {
+            for key in keys(pr) {
                 index
                     .entry(key)
                     .and_modify(|best: &mut usize| {

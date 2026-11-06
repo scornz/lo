@@ -37,6 +37,18 @@ fn the_nearest_pr_below_is_the_parent() {
 }
 
 #[test]
+fn an_open_lower_layer_links_only_by_its_head() {
+    // #2 was cut from a.1 before #1 got a.2, so #2 doesn't contain #1's latest commit.
+    assert_forest(
+        &[
+            pr(1, "main", "a").commits(&["a.1", "a.2"]),
+            pr(2, "main", "b").commits(&["a.1", "b.1"]),
+        ],
+        &["main", "  #1", "  #2"],
+    );
+}
+
+#[test]
 fn a_head_before_the_commits_listed_links_nothing() {
     // Only #2's recent commits are known, and #1's head is older than all of them.
     assert_forest(
