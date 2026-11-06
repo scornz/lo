@@ -5,10 +5,12 @@
 //! decision (`mergeable`, `mergeStateStatus`, `reviewDecision`), the decision wins, and the rest
 //! of the snapshot says why.
 
+mod action;
 mod blockers;
 mod github;
 mod reviews;
 
+pub use action::{MergeAction, NotPossible, merge_action};
 pub use blockers::{Blocker, blockers};
 pub use github::{
     CheckConclusion, CheckStatus, MergeMethod, MergeStateStatus, MergeableState, PullRequestState,
