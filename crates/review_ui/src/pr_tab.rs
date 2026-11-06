@@ -19,6 +19,7 @@ use gpui::{
     Window, actions, uniform_list,
 };
 use language::Capability;
+use project::WorktreeId;
 use repo_cache::{ChangedFile, Oid};
 use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
@@ -178,8 +179,10 @@ pub struct PrTab {
     diff: Option<Entity<SplittableEditor>>,
     show_file_list: bool,
     show_threads: bool,
-    /// The account's poller and the pull request it watches for this tab.
+    /// The account's poller and the pull request it watches for this tab, until the tab closes.
     watched: Option<(Entity<Poller>, PullRef)>,
+    /// The trusted checkout's worktree, which goes with the last tab that uses it.
+    checkout: Option<WorktreeId>,
     opened: Instant,
     _load: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -203,6 +206,9 @@ impl PrTab {
                 window.focus(&diff.focus_handle(cx), cx);
             }
         });
+        // Moving the tab to another pane removes it from one pane and adds it to another, so
+        // only closing it, which releases it, lets go of what it holds.
+        cx.on_release(Self::released).detach();
         let banners = cx.new(|_| Banners::default());
         let on_banners = cx.observe(&banners, |_, _, cx| cx.notify());
         Self {
@@ -226,6 +232,7 @@ impl PrTab {
             show_file_list: true,
             show_threads: true,
             watched: None,
+            checkout: None,
             opened: Instant::now(),
             _load: None,
             _subscriptions: vec![on_focus, on_banners],
@@ -250,6 +257,41 @@ impl PrTab {
                 .ok();
             }
         }));
+    }
+
+    /// The tab shows its pull request with language servers from the trusted checkout in
+    /// `worktree`.
+    pub(crate) fn uses_checkout(&mut self, worktree: WorktreeId) {
+        self.checkout = Some(worktree);
+    }
+
+    /// The tab closed: its poller stops watching its pull request, and a trusted checkout no other
+    /// tab uses leaves the project, which stops its language servers (design §11).
+    fn released(&mut self, cx: &mut App) {
+        if let Some((poller, pull)) = self.watched.take() {
+            poller.update(cx, |poller, cx| poller.unwatch(&pull, cx));
+        }
+        let (Some(checkout), Some(workspace)) = (self.checkout.take(), self.workspace.upgrade())
+        else {
+            return;
+        };
+        let still_used = workspace
+            .read(cx)
+            .items_of_type::<PrTab>(cx)
+            .any(|tab| tab.read(cx).checkout == Some(checkout));
+        if still_used {
+            return;
+        }
+        let project = workspace.read(cx).project().clone();
+        project.update(cx, |project, cx| {
+            if let Some(worktree) = project.worktree_for_id(checkout, cx) {
+                log::info!(
+                    "closing the checkout {} and its language servers",
+                    worktree.read(cx).abs_path().display()
+                );
+            }
+            project.remove_worktree(checkout, cx);
+        });
     }
 
     /// Forgets why the tab failed, before it loads again.
@@ -1236,18 +1278,13 @@ impl Item for PrTab {
     ) -> bool {
         dropped.is::<gpui::ExternalPaths>()
     }
-
-    fn on_removed(&self, cx: &mut Context<Self>) {
-        if let Some((poller, pull)) = self.watched.clone() {
-            poller.update(cx, |poller, cx| poller.unwatch(&pull, cx));
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::path::Path;
     use std::time::Duration;
 
     use github::cache::PrCache;
@@ -1996,6 +2033,131 @@ mod tests {
         ] {
             assert_eq!(open_unloaded(&workspace, link, cx), left[0]);
         }
+    }
+
+    /// Closes `tab`, as its close button does, and lets go of it.
+    fn close(workspace: &Entity<Workspace>, tab: Entity<PrTab>, cx: &mut VisualTestContext) {
+        let pane = workspace
+            .read_with(cx, |workspace, _| workspace.pane_for(&tab))
+            .unwrap();
+        let id = tab.entity_id();
+        drop(tab);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.close_item_by_id(id, workspace::SaveIntent::Skip, window, cx)
+        })
+        .detach();
+        cx.run_until_parked();
+    }
+
+    /// Whether the account's poller polls pull request `number` of `rozed-dev/playground`, as
+    /// it does every pull request it watches, within three minutes in the foreground.
+    fn polled(number: u64, github: &FakeGithub, cx: &mut VisualTestContext) -> bool {
+        github.requests();
+        cx.executor().advance_clock(Duration::from_secs(3 * 60));
+        cx.run_until_parked();
+        let path = format!("/repos/rozed-dev/playground/pulls/{number} ");
+        github
+            .requests()
+            .iter()
+            .any(|request| request.contains(&path))
+    }
+
+    #[gpui::test]
+    async fn a_tab_stays_watched_when_it_moves_and_isnt_once_it_closes(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_seen_two_hours_ago(&github, &git, cx).await;
+        let other = git.pull_request("rozed-dev/playground", 3, &[], &[("c.rs", "c\n")]);
+        github.add_pull(other);
+        let left = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+        let three = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/3", cx);
+        let two = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let poller = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.update(cx, |layer, cx| layer.poller("rozed-bot", cx))
+        });
+        assert!(poller.read_with(cx, |poller, _| poller.is_foreground()));
+        assert!(polled(2, &github, cx));
+
+        // #2 moves into a split, and #3, left behind, is the active tab.
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.split_and_move(left.clone(), workspace::SplitDirection::Right, window, cx);
+            workspace.activate_item(&three, true, true, window, cx);
+        });
+        cx.run_until_parked();
+        assert_ne!(
+            workspace.read_with(cx, |workspace, _| workspace.pane_for(&two)),
+            Some(left)
+        );
+        assert!(polled(2, &github, cx));
+        assert!(polled(3, &github, cx));
+
+        close(&workspace, two, cx);
+        assert!(!polled(2, &github, cx));
+        assert!(polled(3, &github, cx));
+    }
+
+    #[gpui::test]
+    async fn a_trusted_checkout_goes_with_the_last_tab_that_uses_it(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
+        let languages = project.read_with(cx, |project, _| project.languages().clone());
+        languages.add(language::rust_lang());
+        let mut servers = languages.register_fake_lsp(
+            "Rust",
+            language::FakeLspAdapter {
+                name: "rust-analyzer",
+                ..Default::default()
+            },
+        );
+        // A checkout, which rozed trusts and opens as a folder of the project, with
+        // rust-analyzer running.
+        cx.update(|_, cx| crate::trust::trust_checkout(&project, Path::new("/elsewhere"), cx))
+            .unwrap();
+        let (worktree, _) = project
+            .update(cx, |project, cx| {
+                project.find_or_create_worktree("/elsewhere", true, cx)
+            })
+            .await
+            .unwrap();
+        let checkout = worktree.read_with(cx, |worktree, _| worktree.id());
+        drop(worktree);
+        cx.run_until_parked();
+        let (_buffer, _lsp) = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer_with_lsp("/elsewhere/src/main.rs", cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        servers.try_recv().expect("rust-analyzer started");
+        let running = |cx: &mut VisualTestContext| {
+            project.read_with(cx, |project, cx| {
+                project
+                    .lsp_store()
+                    .read(cx)
+                    .language_server_statuses()
+                    .count()
+            })
+        };
+        assert_eq!(running(cx), 1);
+
+        // Two tabs use it, as when a second link to the same head opened before the first
+        // loaded.
+        let first = open_unloaded(&workspace, "github.com/acme/app/pull/1", cx);
+        let second = open_unloaded(&workspace, "github.com/acme/app/pull/2", cx);
+        for tab in [&first, &second] {
+            tab.update(cx, |tab, _| tab.uses_checkout(checkout));
+        }
+
+        close(&workspace, first, cx);
+        assert_eq!(worktrees(&workspace, cx), 1);
+        assert_eq!(running(cx), 1);
+
+        close(&workspace, second, cx);
+        assert_eq!(worktrees(&workspace, cx), 0);
+        assert_eq!(running(cx), 0);
     }
 
     #[gpui::test]
