@@ -228,6 +228,9 @@ pub struct PrTab {
     opened: Instant,
     /// Where the tab put the diff's cursor while files arrive, until it's moved.
     parked_cursor: Option<Anchor>,
+    /// Whether the diff's cursor was moved, by a key, a click or the file list. From then on the
+    /// tab leaves it where it is.
+    cursor_moved: bool,
     /// Keeps the file list's selection on the file the diff's cursor is in, and the cursor at the
     /// start until it's moved.
     _diff_cursor: Option<Subscription>,
@@ -289,6 +292,7 @@ impl PrTab {
             checkout: None,
             opened: Instant::now(),
             parked_cursor: None,
+            cursor_moved: false,
             _diff_cursor: None,
             _load: None,
             _subscriptions: vec![on_focus, on_banners],
@@ -759,10 +763,14 @@ impl PrTab {
     /// first file in review order whichever file arrived first. An empty editor's cursor sits at
     /// its end, which would otherwise leave it in the last file.
     fn park_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cursor_moved {
+            return;
+        }
         let (Some(diff), Some(head)) = (&self.diff, self.diff_cursor(cx)) else {
             return;
         };
-        if head != Anchor::Max && Some(head) != self.parked_cursor {
+        // Moved since it was parked, though the move's event hasn't arrived yet.
+        if self.parked_cursor.is_some_and(|parked| parked != head) {
             return;
         }
         let rhs = diff.read(cx).rhs_editor().clone();
@@ -775,10 +783,14 @@ impl PrTab {
     }
 
     /// The diff's cursor moved: the list selects the file it's in. Where the tab parked it isn't
-    /// a move.
+    /// a move, but the first real move ends the parking, even one back to the same place.
     fn diff_cursor_moved(&mut self, cx: &mut Context<Self>) {
-        if self.diff_cursor(cx) == self.parked_cursor {
-            return;
+        if !self.cursor_moved {
+            if self.diff_cursor(cx) == self.parked_cursor {
+                return;
+            }
+            self.cursor_moved = true;
+            self.parked_cursor = None;
         }
         let Some((_, path)) = self
             .diff
@@ -2397,9 +2409,15 @@ mod tests {
         );
     }
 
-    /// [`details`] with these files and marks.
+    /// [`details`] with these files and marks, at the head on screen in these tests.
     fn details_with(files: &[(&str, &str)]) -> PullRequestData {
+        details_at(HEAD, files)
+    }
+
+    /// [`details`] with these files and marks, with GitHub's head at `head`.
+    fn details_at(head: &str, files: &[(&str, &str)]) -> PullRequestData {
         let mut details = serde_json::to_value(details("Add b", "UNVIEWED")).unwrap();
+        details["headRefOid"] = head.into();
         details["files"]["totalCount"] = files.len().into();
         details["files"]["nodes"] = files
             .iter()
@@ -2616,7 +2634,8 @@ mod tests {
 
     const HEAD: &str = "2222222222222222222222222222222222222222";
 
-    /// A tab on the playground's PR #2 with three files, signed in as the bot, with GitHub's marks.
+    /// A tab on the playground's PR #2 with three files in its diff, a.rs, b.rs and c.rs, each
+    /// with one change, signed in as the bot, with GitHub's marks.
     async fn three_files<'a>(
         name: &str,
         recorded: &[(&str, &str)],
@@ -2628,21 +2647,40 @@ mod tests {
         SignedIn,
         &'a mut VisualTestContext,
     ) {
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+            ("c.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let (workspace, tab, signed_in, _, cx) =
+            signed_in_diff(name, recorded, &files, github_marks, cx).await;
+        (workspace, tab, signed_in, cx)
+    }
+
+    /// A tab on the playground's PR #2 showing a diff of `files`, signed in as the bot, with
+    /// GitHub's marks.
+    async fn signed_in_diff<'a>(
+        name: &str,
+        recorded: &[(&str, &str)],
+        files: &[(&str, String, String)],
+        github_marks: &[(&str, &str)],
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<PrTab>,
+        SignedIn,
+        Entity<SplittableEditor>,
+        &'a mut VisualTestContext,
+    ) {
         let (workspace, cx) = workspace(cx).await;
         let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
         let signed_in = sign_in_bot(&tab, name, recorded, cx).await;
-        let files = [
-            changed("a.rs", Change::Modified),
-            changed("b.rs", Change::Modified),
-            changed("c.rs", Change::Modified),
-        ];
-        let head: Oid = HEAD.parse().unwrap();
+        let editor = show_test_diff(&tab, &workspace, files, cx).await;
         tab.update(cx, |tab, cx| {
-            tab.copied(&files, &head, cx);
-            tab.set_details(&details_with(github_marks), cx);
+            tab.set_details(&details_with(github_marks), cx)
         });
         cx.run_until_parked();
-        (workspace, tab, signed_in, cx)
+        (workspace, tab, signed_in, editor, cx)
     }
 
     fn has_viewed_toast(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
@@ -2956,19 +2994,42 @@ mod tests {
         files: &[(&str, String, String)],
         cx: &mut VisualTestContext,
     ) -> Entity<SplittableEditor> {
+        let positions = list_test_files(tab, files, cx);
+        let editor = test_diff_editor(workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), window, cx)
+        });
+        add_test_files(&editor, files, &positions, cx).await;
+        cx.run_until_parked();
+        editor
+    }
+
+    /// Lists `files` in `tab` as the local copy does, and returns where each goes in the diff.
+    fn list_test_files(
+        tab: &Entity<PrTab>,
+        files: &[(&str, String, String)],
+        cx: &mut VisualTestContext,
+    ) -> Vec<usize> {
         let changed: Vec<_> = files
             .iter()
             .map(|(path, _, _)| changed(path, Change::Modified))
             .collect();
         let head: Oid = HEAD.parse().unwrap();
-        let positions = tab.update(cx, |tab, cx| tab.copied(&changed, &head, cx));
+        tab.update(cx, |tab, cx| tab.copied(&changed, &head, cx))
+    }
+
+    /// An empty side-by-side diff, not shown anywhere yet.
+    fn test_diff_editor(
+        workspace: &Entity<Workspace>,
+        cx: &mut VisualTestContext,
+    ) -> Entity<SplittableEditor> {
         let project = workspace.read_with(cx, |workspace, _| workspace.project().clone());
         let multi_buffer = cx.new(|cx| {
             let mut multi_buffer = multi_buffer::MultiBuffer::new(Capability::ReadOnly);
             multi_buffer.set_all_diff_hunks_expanded(cx);
             multi_buffer
         });
-        let editor = workspace.update_in(cx, |_, window, cx| {
+        workspace.update_in(cx, |_, window, cx| {
             let workspace = cx.entity();
             cx.new(|cx| {
                 SplittableEditor::new(
@@ -2980,10 +3041,17 @@ mod tests {
                     cx,
                 )
             })
-        });
-        tab.update_in(cx, |tab, window, cx| {
-            tab.show_diff(editor.clone(), window, cx)
-        });
+        })
+    }
+
+    /// Adds `files`, (path, old text, new text), to `editor`, each at its position in `positions`,
+    /// one by one.
+    async fn add_test_files(
+        editor: &Entity<SplittableEditor>,
+        files: &[(&str, String, String)],
+        positions: &[usize],
+        cx: &mut VisualTestContext,
+    ) {
         for ((path, old, new), position) in files.iter().zip(positions) {
             let buffer = cx.new(|cx| language::Buffer::local(new.as_str(), cx));
             let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
@@ -2999,14 +3067,13 @@ mod tests {
                     .map(|hunk| hunk.buffer_range.to_point(&snapshot))
                     .collect()
             });
-            let key = pr_diff::path_key(position, RelPath::from_unix_str(path).unwrap().into_arc());
+            let key =
+                pr_diff::path_key(*position, RelPath::from_unix_str(path).unwrap().into_arc());
             editor.update_in(cx, |editor, window, cx| {
                 editor.update_excerpts_for_path(key, buffer, ranges, 3, diff, cx);
                 editor.split(window, cx);
             });
         }
-        cx.run_until_parked();
-        editor
     }
 
     /// The file the diff's cursor is in, the cursor's row, and the file the list selects.
@@ -3070,6 +3137,39 @@ mod tests {
         let (in_file, row, listed) = cursor(&tab, &editor, cx);
         assert_eq!((in_file.as_deref(), row), (Some("src/a.rs"), second));
         assert_eq!(listed.as_deref(), Some("src/a.rs"));
+    }
+
+    #[gpui::test]
+    async fn a_change_key_back_to_where_the_cursor_started_moves_the_list_with_it(
+        cx: &mut TestAppContext,
+    ) {
+        // An added first file: its one change starts at its first row, where the cursor starts.
+        let files = [
+            ("a.rs", String::new(), lines(3, &[])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let (_, tab, github, editor, cx) = signed_in_diff(
+            "back_to_the_start",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        assert_eq!(cursor(&tab, &editor, cx), (Some("a.rs".into()), 0, None));
+
+        cx.simulate_keystrokes("] c");
+        assert_eq!(cursor(&tab, &editor, cx).2.as_deref(), Some("b.rs"));
+        cx.simulate_keystrokes("[ c");
+        assert_eq!(
+            cursor(&tab, &editor, cx),
+            (Some("a.rs".into()), 0, Some("a.rs".into()))
+        );
+
+        // `e` marks the file read, not the one the list showed before.
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
     }
 
     #[gpui::test]
