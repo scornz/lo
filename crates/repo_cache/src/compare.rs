@@ -92,13 +92,13 @@ pub struct ComparedFile {
     /// file the replay conflicted on that's the same in both, as when the author resolved the
     /// conflict by keeping their version over the base's.
     pub change: Option<ChangedFile>,
-    /// How the author resolved the conflict on this file, for one [`Replay::Conflicted`]
-    /// conflicted on, which the UI marks "resolved a conflict": the files that changed from the
-    /// conflicted replay to the new head, at this path and at any copy of it git set aside under
-    /// a name of its own (`<path>~<commit>`), as when a file became a symlink on one side and
-    /// changed on the other. Empty when the new head kept the conflicted replay's version, as for
-    /// a file the old revision deleted, the base changed, and the author kept. `None` for a file
-    /// the replay didn't conflict on.
+    /// For a file the replay conflicted on ([`Replay::Conflicted`]), which the UI marks "resolved
+    /// a conflict", how the author resolved it: the files that changed from the conflicted replay
+    /// to the new head, at this path and at any copy of it git set aside under a name of its own
+    /// (`<path>~<commit>`), as when a file became a symlink on one side and changed on the other.
+    /// Empty when the new head kept the conflicted replay's version, as when the base changed a
+    /// file the old revision deleted, and the author kept the base's. `None` for a file the
+    /// replay didn't conflict on.
     pub resolution: Option<Vec<ChangedFile>>,
 }
 
