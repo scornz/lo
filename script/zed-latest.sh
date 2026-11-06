@@ -18,7 +18,7 @@
 # step passes, 1 when a patch or step fails, and 2 when the script can't run (bad arguments, a
 # failed fetch).
 #
-# Run it under `mise exec --`, so cargo finds mise's cmake. A build needs about 30 GB in <folder>;
+# Run it under `mise exec --`, so cargo finds mise's cmake. A build needs about 6 GB in <folder>;
 # remove it with `git worktree remove --force <folder>/rozed`.
 set -Eeuo pipefail
 # Anything that fails outside the steps below is the script's own failure, not Zed's.
