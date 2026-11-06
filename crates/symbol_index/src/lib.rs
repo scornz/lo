@@ -3,6 +3,7 @@
 mod file;
 mod generated;
 mod grammar;
+mod imports;
 mod index;
 pub mod queries;
 mod store;

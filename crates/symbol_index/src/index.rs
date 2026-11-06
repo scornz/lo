@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::{Definition, FileSymbols, Reference, Skip};
+use crate::{
+    Definition, FileSymbols, Reference, Skip,
+    imports::{self, directory},
+};
 
 /// The symbols of a commit's files, built by [`Store::index`](crate::Store::index).
 #[derive(Debug, Default)]
@@ -55,13 +58,22 @@ impl Index {
     }
 
     /// The definitions of `name`, nearest to the file at `from_path` first (design §7, "Name
-    /// collisions"): that file's own, then those in its directory, then the rest. Within a rank,
-    /// they're in path order, and in the order they appear in each file.
+    /// collisions"): that file's own, then those in its directory, then those in files its
+    /// imports of `name` name, then the rest. Within a rank, they're in path order, and in the
+    /// order they appear in each file.
     ///
-    /// The file at `from_path` needn't be in the index. Definitions in other languages aren't
-    /// left out; they rank like any other file.
-    pub fn definitions(&self, name: &str, from_path: &str) -> Vec<(Rank, Found<'_, Definition>)> {
+    /// `from_text` is the asking file's text, whose imports are read by a small heuristic per
+    /// language (Rust, JavaScript and TypeScript, Python, Go), picked by `from_path`'s extension.
+    /// The file needn't be in the index, so the text can be one the index hasn't seen.
+    /// Definitions in other languages aren't left out; they rank like any other file.
+    pub fn definitions(
+        &self,
+        name: &str,
+        from_path: &str,
+        from_text: &str,
+    ) -> Vec<(Rank, Found<'_, Definition>)> {
         let from_directory = directory(from_path);
+        let mut imported = None;
         let mut found = Vec::new();
         for (path, file) in &self.files {
             if !file.defines(name) {
@@ -71,6 +83,12 @@ impl Index {
                 Rank::SameFile
             } else if directory(path) == from_directory {
                 Rank::SameDirectory
+            } else if imported
+                .get_or_insert_with(|| imports::targets(from_path, from_text, name))
+                .iter()
+                .any(|target| target.matches(path))
+            {
+                Rank::Imported
             } else {
                 Rank::Other
             };
@@ -118,9 +136,4 @@ impl Index {
             .ok()?;
         Some(self.skipped[index].1)
     }
-}
-
-/// The directory part of a path, `""` at the root.
-fn directory(path: &str) -> &str {
-    path.rsplit_once('/').map_or("", |(directory, _)| directory)
 }
