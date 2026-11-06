@@ -813,6 +813,64 @@ async fn every_page_of_open_prs_is_watched(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn opening_a_pr_while_its_watched_poll_is_in_flight_polls_it_at_once(
+    cx: &mut TestAppContext,
+) {
+    let r = recorded();
+    let mut interactions = vec![
+        r[0].clone(),
+        r[1].clone(),
+        r[2].clone(),
+        r[6].clone(),
+        r[3].clone(),
+        r[8].clone(),
+        for_pull(&r[1], 2),
+        for_pull(&details_titled(&r, "layer B"), 2),
+    ];
+    interactions.extend(repo_answers(&r));
+    let mut t = Polling::with(
+        "open_in_flight",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| {
+        poller.watch(pr(2), cx);
+        poller.set_open(Some(pr(1)), cx)
+    });
+    // Step until PR #2's second watched GET is in flight, then open it.
+    while !t
+        .http
+        .log
+        .lock()
+        .iter()
+        .any(|(_, what)| what == "GET /pulls/2 (since)")
+    {
+        t.run_until(t.now() + 1);
+    }
+    let opened_at = t.now();
+    t.requests();
+    t.events();
+    t.update(|poller, cx| poller.set_open(Some(pr(2)), cx));
+    t.run_until(opened_at + 5);
+    // As soon as the watched GET is back: the open PR's poll, with its details.
+    assert_eq!(
+        t.requests()
+            .into_iter()
+            .filter(|(_, what)| !what.contains("/pulls?"))
+            .collect::<Vec<_>>(),
+        log(&[
+            (opened_at + 1, "GET /pulls/2 (since)"),
+            (opened_at + 2, "PullRequestCheck"),
+            (opened_at + 3, "PullRequest"),
+        ])
+    );
+    assert_eq!(t.events(), ["check #2", "details #2: layer B"]);
+}
+
+#[gpui::test]
 async fn in_the_background_everything_polls_every_five_minutes(cx: &mut TestAppContext) {
     let mut t = Polling::new("background", recorded(), cx).await;
     t.update(|poller, cx| poller.watch(pr(2), cx));

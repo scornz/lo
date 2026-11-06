@@ -94,11 +94,42 @@ pub struct PullRequestAnswer {
     pub offline_age: Option<Duration>,
 }
 
+/// When a pull request or a repository was polled, and whether it's owed a poll at once.
+#[derive(Default)]
+struct Schedule {
+    last_polled: Option<Instant>,
+    /// How many times it was asked to be polled at once: opened, or rozed came to the foreground.
+    forced: u64,
+    /// `forced` as it was when the last poll to finish was chosen. A poll asked for while another
+    /// was in flight is still owed when that one finishes.
+    served: u64,
+}
+
+impl Schedule {
+    fn force(&mut self) {
+        self.forced += 1;
+    }
+
+    fn is_forced(&self) -> bool {
+        self.forced > self.served
+    }
+
+    /// A poll chosen when `forced` was `ticket` finished.
+    fn polled(&mut self, at: Instant, ticket: u64) {
+        self.last_polled = Some(at);
+        self.served(ticket);
+    }
+
+    /// A poll chosen when `forced` was `ticket` finished without an answer, so it isn't owed
+    /// again at once.
+    fn served(&mut self, ticket: u64) {
+        self.served = self.served.max(ticket);
+    }
+}
+
 #[derive(Default)]
 struct PullState {
-    last_polled: Option<Instant>,
-    /// Poll as soon as possible: just opened, or rozed just came to the foreground.
-    force: bool,
+    schedule: Schedule,
     summary: Option<Cached<Arc<PullSummary>>>,
     /// The check the details were last fetched at. A different check means they're stale, and
     /// none means they must be fetched again whatever the check says.
@@ -110,7 +141,7 @@ struct PullState {
 
 #[derive(Default)]
 struct RepoState {
-    last_polled: Option<Instant>,
+    schedule: Schedule,
     /// GitHub's REST list of the open PRs, page by page with their ETags: what tells whether
     /// `list` changed.
     listed: Option<Cached<Arc<ListedPulls>>>,
@@ -279,7 +310,8 @@ impl Job {
 }
 
 enum Step {
-    Run(Box<Job>),
+    /// Run a poll, chosen when its target's `Schedule::forced` was the number given.
+    Run(Box<Job>, u64),
     /// Nothing is due: wait this long, or until woken.
     Wait(Option<Duration>),
 }
@@ -394,7 +426,7 @@ impl Poller {
         }
         self.foreground = foreground;
         if foreground && let Some(state) = self.open.as_ref().and_then(|o| self.pulls.get_mut(o)) {
-            state.force = true;
+            state.schedule.force();
         }
         self.wake();
         cx.notify();
@@ -419,7 +451,7 @@ impl Poller {
         if !self.repos.contains_key(&pull.repo) {
             let repo = Target::Repo(pull.repo.clone());
             let state = RepoState {
-                last_polled: None,
+                schedule: Schedule::default(),
                 listed: self.cached::<ListedPulls>(&repo).map(|c| c.map(Arc::new)),
                 list: self
                     .cached::<OpenPullRequestList>(&repo)
@@ -477,7 +509,7 @@ impl Poller {
                 .map(|c| c.map(Arc::new)),
         };
         let state = self.pulls.entry(pull.clone()).or_default();
-        state.force = true;
+        state.schedule.force();
         state.details = details;
         let opened_at = self.config.wall_clock.now();
         self.opened_at = Some(opened_at);
@@ -610,63 +642,57 @@ impl Poller {
                 .unwrap_or_default();
             return Step::Wait(Some(wait.max(Duration::from_millis(1))));
         }
-        let due = |last_polled: Option<Instant>, force: bool, tier: Tier| -> Option<Instant> {
+        let due = |schedule: &Schedule, tier: Tier| -> Option<Instant> {
             let interval = interval(tier, self.foreground, &self.status.rate_limit, &self.config)?;
-            Some(match last_polled {
-                Some(last) if !force => last + interval,
+            Some(match schedule.last_polled {
+                Some(last) if !schedule.is_forced() => last + interval,
                 _ => now,
             })
         };
 
         // The open PR first, then the other PRs, then the repositories; earliest due first.
-        let mut next: Option<(Instant, Job)> = None;
-        let mut consider = |at: Option<Instant>, job: &dyn Fn() -> Job| {
-            if let Some(at) = at
-                && next.as_ref().is_none_or(|(best, _)| at < *best)
+        let mut next: Option<(Instant, Job, u64)> = None;
+        let mut consider = |schedule: &Schedule, tier: Tier, job: &dyn Fn() -> Job| {
+            if let Some(at) = due(schedule, tier)
+                && next.as_ref().is_none_or(|(best, ..)| at < *best)
             {
-                next = Some((at, job()));
+                next = Some((at, job(), schedule.forced));
             }
         };
         if let Some(open) = &self.open
             && let Some(state) = self.pulls.get(open)
         {
-            consider(due(state.last_polled, state.force, Tier::Open), &|| {
-                Job::Open {
-                    pull: open.clone(),
-                    summary: state.summary.as_ref().map(|s| s.value.clone()),
-                    check: state.check.clone(),
-                    have_details: state.details.is_some(),
-                }
+            consider(&state.schedule, Tier::Open, &|| Job::Open {
+                pull: open.clone(),
+                summary: state.summary.as_ref().map(|s| s.value.clone()),
+                check: state.check.clone(),
+                have_details: state.details.is_some(),
             });
         }
         for (pull, state) in &self.pulls {
             if Some(pull) == self.open.as_ref() {
                 continue;
             }
-            consider(due(state.last_polled, false, Tier::Watched), &|| {
-                Job::Watched {
-                    pull: pull.clone(),
-                    summary: state.summary.as_ref().map(|s| s.value.clone()),
-                }
+            consider(&state.schedule, Tier::Watched, &|| Job::Watched {
+                pull: pull.clone(),
+                summary: state.summary.as_ref().map(|s| s.value.clone()),
             });
         }
         for (repo, state) in &self.repos {
-            consider(due(state.last_polled, false, Tier::Watched), &|| {
-                Job::Repo {
-                    repo: repo.clone(),
-                    listed: state.listed.as_ref().map(|l| l.value.clone()),
-                    have_list: state.list.is_some(),
-                }
+            consider(&state.schedule, Tier::Watched, &|| Job::Repo {
+                repo: repo.clone(),
+                listed: state.listed.as_ref().map(|l| l.value.clone()),
+                have_list: state.list.is_some(),
             });
         }
-        let Some((mut at, job)) = next else {
+        let Some((mut at, job, ticket)) = next else {
             return Step::Wait(None);
         };
         if let Some(offline) = &self.offline {
             at = at.max(offline.retry_at);
         }
         if at <= now {
-            Step::Run(Box::new(job))
+            Step::Run(Box::new(job), ticket)
         } else {
             Step::Wait(Some(at - now))
         }
@@ -677,6 +703,7 @@ impl Poller {
     fn finish(
         &mut self,
         job: Job,
+        ticket: u64,
         result: Result<Outcome, GithubError>,
         client: &GithubClient,
         cx: &mut Context<Self>,
@@ -690,10 +717,11 @@ impl Poller {
             Ok(outcome) => {
                 self.offline = None;
                 self.secondary_attempts = 0;
-                self.mark_polled(&target, now);
+                self.schedule(&target, |schedule| schedule.polled(now, ticket));
                 writes = self.apply(outcome, &target, wall, cx);
             }
             Err(GithubError::Network(error)) => {
+                self.schedule(&target, |schedule| schedule.served(ticket));
                 let attempts = self.offline.as_ref().map_or(0, |o| o.attempts) + 1;
                 let wait = backoff(
                     attempts,
@@ -735,7 +763,7 @@ impl Poller {
             }
             Err(error) => {
                 log::info!("polling {target:?}: {error:#}");
-                self.mark_polled(&target, now);
+                self.schedule(&target, |schedule| schedule.polled(now, ticket));
                 cx.emit(PollEvent::Failed {
                     target,
                     error: Arc::new(error),
@@ -800,19 +828,14 @@ impl Poller {
         });
     }
 
-    fn mark_polled(&mut self, target: &Target, now: Instant) {
-        match target {
-            Target::Pull(pull) => {
-                if let Some(state) = self.pulls.get_mut(pull) {
-                    state.last_polled = Some(now);
-                    state.force = false;
-                }
-            }
-            Target::Repo(repo) => {
-                if let Some(state) = self.repos.get_mut(repo) {
-                    state.last_polled = Some(now);
-                }
-            }
+    /// Updates a pull request's or a repository's schedule, if it's still watched.
+    fn schedule(&mut self, target: &Target, update: impl FnOnce(&mut Schedule)) {
+        let schedule = match target {
+            Target::Pull(pull) => self.pulls.get_mut(pull).map(|state| &mut state.schedule),
+            Target::Repo(repo) => self.repos.get_mut(repo).map(|state| &mut state.schedule),
+        };
+        if let Some(schedule) = schedule {
+            update(schedule);
         }
     }
 
@@ -1076,7 +1099,7 @@ async fn poll(
                 futures::future::select(pin!(timer), woken.next()).await;
                 while woken.try_recv().is_ok() {}
             }
-            Step::Run(job) => {
+            Step::Run(job, ticket) => {
                 let (client, queue) = this.update(cx, |this, cx| {
                     let login = this.login.clone();
                     let client = this
@@ -1095,7 +1118,9 @@ async fn poll(
                 let result = queue
                     .read(|| executor.spawn((*job).clone().run(client.clone())))
                     .await;
-                let writes = this.update(cx, |this, cx| this.finish(*job, result, &client, cx))?;
+                let writes = this.update(cx, |this, cx| {
+                    this.finish(*job, ticket, result, &client, cx)
+                })?;
                 for write in writes {
                     if let Err(error) = write.await {
                         log::warn!("writing the cache: {error:#}");
