@@ -190,11 +190,18 @@ impl FileList {
     /// that isn't viewed, going round to the start. Changed since viewed, or with no mark known,
     /// counts as unviewed. `None` when every other file is viewed.
     pub fn next_unviewed(&self, path: &str) -> Option<&FileEntry> {
-        let from = self.review_position(path)?;
+        self.unviewed_after(path).next()
+    }
+
+    /// The files after `path` in review order that aren't viewed, going round to the start, as
+    /// [`Self::next_unviewed`] counts them.
+    pub fn unviewed_after(&self, path: &str) -> impl Iterator<Item = &FileEntry> {
+        let from = self.review_position(path);
         let count = self.review_order.len();
-        (1..count)
-            .filter_map(|step| self.at_review_position((from + step) % count))
-            .find(|entry| entry.viewed != Some(ViewedState::Viewed))
+        from.into_iter()
+            .flat_map(move |from| (1..count).map(move |step| (from + step) % count))
+            .filter_map(|position| self.at_review_position(position))
+            .filter(|entry| entry.viewed != Some(ViewedState::Viewed))
     }
 
     /// Takes GitHub's viewed marks, by path. Files GitHub doesn't list keep no mark.

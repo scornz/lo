@@ -571,6 +571,7 @@ impl PrTab {
             window,
             |this, _, event: &EditorEvent, window, cx| match event {
                 EditorEvent::SelectionsChanged { .. } => this.diff_cursor_moved(cx),
+                EditorEvent::ScrollPositionChanged { .. } => this.select_shown_file(cx),
                 EditorEvent::BufferRangesUpdated { .. } => this.park_cursor(window, cx),
                 _ => {}
             },
@@ -731,39 +732,33 @@ impl PrTab {
         cx.notify();
     }
 
-    /// The file `e` and the movement keys act on, by its position in review order: the one
-    /// selected in the list, which follows the diff's cursor, or the one the cursor is in, or the
-    /// first.
-    fn current_position(&self, cx: &App) -> Option<usize> {
-        if self.files.is_empty() {
-            return None;
-        }
-        let selected = self
-            .files
-            .selected()
-            .and_then(|entry| self.files.review_position(entry.path()));
-        let at_cursor = || {
-            let (_, path) = diff_cursor::file_at_cursor(self.diff.as_ref()?, cx)?;
-            self.files.review_position(&path)
-        };
-        Some(selected.or_else(at_cursor).unwrap_or(0))
+    /// The file `e` and the movement keys act on: the one the diff shows
+    /// ([`diff_cursor::shown_file`]), by its position in review order and its path. `None` until
+    /// the diff shows a file.
+    fn shown_file(&self, cx: &mut App) -> Option<(usize, String)> {
+        diff_cursor::shown_file(self.diff.as_ref()?, cx)
     }
 
-    fn current_path(&self, cx: &App) -> Option<String> {
-        let position = self.current_position(cx)?;
-        Some(self.files.at_review_position(position)?.path().to_string())
+    /// Where `path`'s file starts in the diff, once it's there.
+    fn location_in_diff(&self, path: &str, cx: &App) -> Option<Anchor> {
+        let diff = self.diff.as_ref()?;
+        let position = self.files.review_position(path)?;
+        let key = pr_diff::path_key(position, RelPath::from_unix_str(path).ok()?.into_arc());
+        let multi_buffer = diff.read(cx).rhs_editor().read(cx).buffer().clone();
+        multi_buffer.read(cx).location_for_path(&key, cx)
     }
 
-    /// What the diff says about the current file when GitHub says it changed since it was viewed:
-    /// since when, from the revision this Mac recorded when it was marked viewed.
-    pub fn changed_since_viewed(&self, cx: &App) -> Option<String> {
-        let path = self.current_path(cx)?;
+    /// What the diff says about the file it shows when GitHub says it changed since it was viewed:
+    /// the file, and since when, from the revision this Mac recorded when it was marked viewed.
+    pub fn changed_since_viewed(&self, cx: &mut App) -> Option<(String, String)> {
+        let (_, path) = self.shown_file(cx)?;
         let none = Revisions::default();
-        changed_since_viewed(
+        let note = changed_since_viewed(
             self.revisions.as_ref().unwrap_or(&none),
             self.marks.state(&path),
             self.viewed_at.get(&path).map(String::as_str),
-        )
+        )?;
+        Some((path, note))
     }
 
     /// The diff's cursor head, on its right side.
@@ -795,8 +790,8 @@ impl PrTab {
         }));
     }
 
-    /// The diff's cursor moved: the list selects the file it's in. Where the tab parked it isn't
-    /// a move, but the first real move ends the parking, even one back to the same place.
+    /// The diff's cursor moved: the list selects the file the diff shows. Where the tab parked it
+    /// isn't a move, but the first real move ends the parking, even one back to the same place.
     fn diff_cursor_moved(&mut self, cx: &mut Context<Self>) {
         if !self.cursor_moved {
             if self.diff_cursor(cx) == self.parked_cursor {
@@ -805,11 +800,12 @@ impl PrTab {
             self.cursor_moved = true;
             self.parked_cursor = None;
         }
-        let Some((_, path)) = self
-            .diff
-            .as_ref()
-            .and_then(|diff| diff_cursor::file_at_cursor(diff, cx))
-        else {
+        self.select_shown_file(cx);
+    }
+
+    /// The list selects the file the diff shows, the one `e` acts on.
+    fn select_shown_file(&mut self, cx: &mut Context<Self>) {
+        let Some((_, path)) = self.shown_file(cx) else {
             return;
         };
         if self.files.selected().map(FileEntry::path) != Some(path.as_str()) {
@@ -819,18 +815,22 @@ impl PrTab {
         }
     }
 
-    /// `]f` and `[f`: the next or previous file in review order, which is the diff's order. They
-    /// stop at the ends.
+    /// `]f` and `[f`: the next or previous file in review order, which is the diff's order,
+    /// among the files in the diff. They stop at the ends.
     fn move_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(current) = self.current_position(cx) else {
+        let Some((current, _)) = self.shown_file(cx) else {
             return;
         };
-        let position = match forward {
-            true => (current + 1).min(self.files.len() - 1),
-            false => current.saturating_sub(1),
+        let positions: Vec<usize> = match forward {
+            true => (current + 1..self.files.len()).collect(),
+            false => (0..current).rev().collect(),
         };
-        if let Some(entry) = self.files.at_review_position(position) {
-            let path = entry.path().to_string();
+        let target = positions
+            .into_iter()
+            .filter_map(|position| self.files.at_review_position(position))
+            .map(|entry| entry.path().to_string())
+            .find(|path| self.location_in_diff(path, cx).is_some());
+        if let Some(path) = target {
             self.files.select_path(&path);
             self.selection_moved(window, cx);
         }
@@ -860,7 +860,11 @@ impl PrTab {
     /// `e`: marks the current file viewed and moves to the next unviewed file, or clears a viewed
     /// file's mark. The new mark shows at once, and goes back to GitHub's if the write fails.
     fn toggle_viewed(&mut self, _: &ToggleViewed, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.current_path(cx) else {
+        let Some((_, path)) = self.shown_file(cx) else {
+            self.toast(
+                "The diff is still loading, so there's no file to mark viewed yet.".into(),
+                cx,
+            );
             return;
         };
         let Some((poller, pull)) = self.watched.clone() else {
@@ -882,12 +886,33 @@ impl PrTab {
         };
         let toggle = self.marks.toggle(&path);
         self.files.set_viewed(&self.marks.shown());
-        if toggle.mark
-            && let Some(next) = self.files.next_unviewed(&path)
-        {
-            let next = next.path().to_string();
-            self.files.select_path(&next);
-            self.selection_moved(window, cx);
+        if toggle.mark {
+            // Only to a file the diff shows; the others are still loading.
+            let unviewed: Vec<String> = self
+                .files
+                .unviewed_after(&path)
+                .map(|entry| entry.path().to_string())
+                .collect();
+            match unviewed
+                .iter()
+                .find(|next| self.location_in_diff(next, cx).is_some())
+            {
+                Some(next) => {
+                    self.files.select_path(next);
+                    self.selection_moved(window, cx);
+                }
+                None => {
+                    if let Some(next) = unviewed.first() {
+                        self.toast(
+                            format!(
+                                "{next}, the next unviewed file, is still loading, so the diff \
+                                 stays on {path}."
+                            ),
+                            cx,
+                        );
+                    }
+                }
+            }
         }
         let mark = toggle.mark;
         let write = poller.update(cx, |poller, cx| {
@@ -958,14 +983,12 @@ impl PrTab {
     }
 
     fn toast(&self, message: String, cx: &mut Context<Self>) {
-        self.workspace
-            .update(cx, |workspace, cx| {
-                workspace.show_toast(
-                    Toast::new(NotificationId::unique::<ViewedMarkToast>(), message),
-                    cx,
-                )
-            })
-            .ok();
+        show_toast(
+            &self.workspace,
+            NotificationId::unique::<ViewedMarkToast>(),
+            message,
+            cx,
+        );
     }
 
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
@@ -1017,18 +1040,10 @@ impl PrTab {
         let (Some(diff), Some(entry)) = (&self.diff, self.files.selected()) else {
             return;
         };
-        let Some(position) = self.files.review_position(entry.path()) else {
+        let Some(location) = self.location_in_diff(entry.path(), cx) else {
             return;
         };
-        let Ok(path) = RelPath::from_unix_str(entry.path()) else {
-            return;
-        };
-        let key = pr_diff::path_key(position, path.into_arc());
         let rhs_editor = diff.read(cx).rhs_editor().clone();
-        let multi_buffer = rhs_editor.read(cx).buffer().clone();
-        let Some(location) = multi_buffer.read(cx).location_for_path(&key, cx) else {
-            return;
-        };
         rhs_editor.update(cx, |editor, cx| {
             editor.change_selections(
                 // A jump to another file, which back goes back from.
@@ -1142,8 +1157,7 @@ impl PrTab {
 
     /// The note above the diff while the current file changed since it was viewed.
     fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let note = self.changed_since_viewed(cx)?;
-        let path = self.current_path(cx)?;
+        let (path, note) = self.changed_since_viewed(cx)?;
         let colors = cx.theme().colors();
         Some(
             h_flex()
@@ -1312,6 +1326,32 @@ impl PrTab {
 
 /// The toast that says why a viewed mark couldn't be set or cleared.
 struct ViewedMarkToast;
+
+/// Shows a toast in `workspace` about a viewed mark.
+fn show_toast(
+    workspace: &WeakEntity<Workspace>,
+    id: NotificationId,
+    message: String,
+    cx: &mut App,
+) {
+    #[cfg(test)]
+    cx.default_global::<ToastLog>()
+        .0
+        .push((id.clone(), message.clone()));
+    workspace
+        .update(cx, |workspace, cx| {
+            workspace.show_toast(Toast::new(id, message), cx)
+        })
+        .ok();
+}
+
+/// The toasts the tabs showed, for tests.
+#[cfg(test)]
+#[derive(Default)]
+struct ToastLog(Vec<(NotificationId, String)>);
+
+#[cfg(test)]
+impl gpui::Global for ToastLog {}
 
 /// GitHub's viewed mark as rozed's review model has it.
 fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
@@ -2702,6 +2742,136 @@ mod tests {
         })
     }
 
+    /// Selects `path` in the list, which moves the diff there.
+    fn go_to(tab: &Entity<PrTab>, path: &str, cx: &mut VisualTestContext) {
+        tab.update_in(cx, |tab, window, cx| {
+            tab.files.select_path(path);
+            tab.selection_moved(window, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// The toasts the tab showed, oldest first.
+    fn toasts(cx: &mut VisualTestContext) -> Vec<String> {
+        cx.update(|_, cx| {
+            cx.try_global::<ToastLog>()
+                .map(|log| log.0.iter().map(|(_, text)| text.clone()).collect())
+                .unwrap_or_default()
+        })
+    }
+
+    #[gpui::test]
+    async fn e_before_the_diff_shows_a_file_marks_nothing_and_says_why(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in_bot(&tab, "e_before_the_diff", &[], cx).await;
+        let head: Oid = HEAD.parse().unwrap();
+        tab.update(cx, |tab, cx| {
+            tab.copied(&[changed("a.rs", Change::Modified)], &head, cx);
+            tab.set_details(&details_with(&[("a.rs", "UNVIEWED")]), cx);
+        });
+
+        // The list has the file, but the diff doesn't exist yet.
+        cx.simulate_keystrokes("e");
+        assert_eq!(
+            toasts(cx),
+            ["The diff is still loading, so there's no file to mark viewed yet."]
+        );
+        assert_eq!(marks(&tab, cx), [mark("a.rs", Some(ViewedState::Unviewed))]);
+        assert_eq!(github.github.mutations(), []);
+
+        // Nor once it exists, until a file is in it.
+        let editor = test_diff_editor(&workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), window, cx)
+        });
+        cx.simulate_keystrokes("e");
+        assert_eq!(toasts(cx).len(), 2);
+        assert_eq!(github.github.mutations(), []);
+    }
+
+    #[gpui::test]
+    async fn e_acts_on_the_file_at_the_top_of_the_view_when_the_cursor_is_out_of_it(
+        cx: &mut TestAppContext,
+    ) {
+        let files = [
+            ("a.rs", String::new(), lines(200, &[])),
+            ("b.rs", String::new(), lines(200, &[])),
+        ];
+        let (_, tab, github, editor, cx) = signed_in_diff(
+            "e_at_the_top",
+            &[],
+            &files,
+            &[("a.rs", "UNVIEWED"), ("b.rs", "UNVIEWED")],
+            cx,
+        )
+        .await;
+        // Scrolling doesn't move the cursor, which stays at a.rs's start.
+        let rhs = editor.read_with(cx, |editor, _| editor.rhs_editor().clone());
+        rhs.update_in(cx, |editor, window, cx| {
+            editor.set_scroll_position(gpui::point(0., 260.), window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+        // The list follows the view.
+        assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
+
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "b.rs");
+    }
+
+    #[gpui::test]
+    async fn e_and_the_file_keys_move_only_to_files_in_the_diff(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let github = sign_in_bot(&tab, "e_while_loading", &[], cx).await;
+        let files = [
+            ("a.rs", lines(5, &[]), lines(5, &[3])),
+            ("b.rs", lines(5, &[]), lines(5, &[3])),
+            ("c.rs", lines(5, &[]), lines(5, &[3])),
+        ];
+        let positions = list_test_files(&tab, &files, cx);
+        tab.update(cx, |tab, cx| {
+            tab.set_details(
+                &details_with(&[
+                    ("a.rs", "UNVIEWED"),
+                    ("b.rs", "UNVIEWED"),
+                    ("c.rs", "UNVIEWED"),
+                ]),
+                cx,
+            )
+        });
+        let editor = test_diff_editor(&workspace, cx);
+        tab.update_in(cx, |tab, window, cx| {
+            tab.show_diff(editor.clone(), window, cx)
+        });
+        // Only a.rs has arrived.
+        add_test_files(&editor, &files[..1], &positions[..1], cx).await;
+        cx.run_until_parked();
+
+        // There's no file in the diff to move to.
+        cx.simulate_keystrokes("] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+
+        // e marks a.rs, and says why it stays: b.rs, the next unviewed file, isn't in yet.
+        github.github.answer(WriteAnswer::Done);
+        cx.simulate_keystrokes("e");
+        assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
+        assert_ne!(selected(&tab, cx).as_deref(), Some("b.rs"));
+        assert_eq!(
+            toasts(cx),
+            ["b.rs, the next unviewed file, is still loading, so the diff stays on a.rs."]
+        );
+
+        // c.rs arrives before b.rs, and the keys skip b.rs while it isn't in.
+        add_test_files(&editor, &files[2..], &positions[2..], cx).await;
+        cx.run_until_parked();
+        cx.simulate_keystrokes("] f");
+        assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("c.rs"));
+    }
+
     #[gpui::test]
     async fn e_marks_the_file_viewed_and_moves_to_the_next_unviewed_one(cx: &mut TestAppContext) {
         let (workspace, tab, github, cx) = three_files(
@@ -2759,7 +2929,7 @@ mod tests {
             cx,
         )
         .await;
-        tab.update(cx, |tab, _| tab.files.select_path("b.rs"));
+        go_to(&tab, "b.rs", cx);
         github.github.answer(WriteAnswer::Done);
 
         cx.simulate_keystrokes("e");
@@ -2813,7 +2983,7 @@ mod tests {
             WriteAnswer::RateLimited,
         ] {
             workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
-            tab.update(cx, |tab, _| tab.files.select_path("a.rs"));
+            go_to(&tab, "a.rs", cx);
             github.github.answer(answer);
 
             cx.simulate_keystrokes("e");
@@ -2910,8 +3080,10 @@ mod tests {
             cx,
         )
         .await;
-        let note =
-            |cx: &mut VisualTestContext| tab.read_with(cx, |tab, cx| tab.changed_since_viewed(cx));
+        let note = |cx: &mut VisualTestContext| {
+            tab.update(cx, |tab, cx| tab.changed_since_viewed(cx))
+                .map(|(_, note)| note)
+        };
         assert_eq!(note(cx), None, "a.rs is current, and unviewed");
 
         // The list shows b.rs changed since viewed; opening it says since when.
@@ -2965,13 +3137,17 @@ mod tests {
     async fn the_file_keys_move_between_files_in_review_order(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let tab = open_unloaded(&workspace, "https://github.com/sharkdp/fd/pull/2212", cx);
-        let files = [
-            changed("Cargo.lock", Change::Modified),
-            changed("src/main.rs", Change::Modified),
-            changed("tests/main.rs", Change::Modified),
-        ];
-        let head: Oid = HEAD.parse().unwrap();
-        tab.update(cx, |tab, cx| tab.copied(&files, &head, cx));
+        show_test_diff(
+            &tab,
+            &workspace,
+            &[
+                ("Cargo.lock", lines(5, &[]), lines(5, &[2])),
+                ("src/main.rs", lines(5, &[]), lines(5, &[3])),
+                ("tests/main.rs", lines(5, &[]), lines(5, &[4])),
+            ],
+            cx,
+        )
+        .await;
         // The list shows path order; the keys still follow the diff's order, review order.
         cx.simulate_keystrokes("alt-o");
 

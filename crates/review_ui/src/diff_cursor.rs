@@ -5,17 +5,47 @@
 //! cursor beside it. Each file's excerpts sit under [`crate::pr_diff::path_key`], whose sort
 //! prefix is the file's position in review order.
 
-use editor::ToPoint as _;
-use editor::{Direction, SelectionEffects, SplittableEditor};
+use editor::display_map::{DisplayRow, ToDisplayPoint as _};
+use editor::{Bias, Direction, DisplayPoint, SelectionEffects, SplittableEditor, ToPoint as _};
 use gpui::{App, Entity, Window};
 use language::Point;
+use multi_buffer::MultiBufferSnapshot;
 
 /// The file the diff's cursor is in: its position in review order and its path.
 pub fn file_at_cursor(diff: &Entity<SplittableEditor>, cx: &App) -> Option<(usize, String)> {
     let editor = diff.read(cx).rhs_editor().read(cx);
     let snapshot = editor.buffer().read(cx).snapshot(cx);
-    let head = editor.selections.newest_anchor().head();
-    let (buffer, _) = snapshot.excerpt_containing(head..head)?;
+    let head = editor.selections.newest_anchor().head().to_point(&snapshot);
+    file_at(&snapshot, head)
+}
+
+/// The file the diff shows, which `e` and the movement keys act on: the one the cursor is in
+/// while it's in view, or about to be scrolled into view, else the one at the top of the view.
+/// Scrolling doesn't move the cursor. Its position in review order and its path.
+pub fn shown_file(diff: &Entity<SplittableEditor>, cx: &mut App) -> Option<(usize, String)> {
+    let editor = diff.read(cx).rhs_editor().clone();
+    editor.update(cx, |editor, cx| {
+        let display = editor.display_snapshot(cx);
+        let head = editor.selections.newest_anchor().head();
+        let top = editor.scroll_position(cx).y.max(0.);
+        let cursor_row = f64::from(head.to_display_point(&display).row().0);
+        let in_view = editor.has_autoscroll_request()
+            || editor
+                .visible_line_count()
+                .is_none_or(|lines| cursor_row >= top.floor() && cursor_row < top + lines);
+        let point = if in_view {
+            head.to_point(display.buffer_snapshot())
+        } else {
+            let top_row = DisplayPoint::new(DisplayRow(top.floor() as u32), 0);
+            display.display_point_to_point(top_row, Bias::Right)
+        };
+        file_at(display.buffer_snapshot(), point)
+    })
+}
+
+/// The file at `point` in the diff: its position in review order and its path.
+fn file_at(snapshot: &MultiBufferSnapshot, point: Point) -> Option<(usize, String)> {
+    let (buffer, _) = snapshot.point_to_buffer_point(point)?;
     let key = snapshot.path_for_buffer(buffer.remote_id())?;
     let position = usize::try_from(key.sort_prefix?).ok()?;
     Some((position, key.path.as_unix_str().to_string()))
