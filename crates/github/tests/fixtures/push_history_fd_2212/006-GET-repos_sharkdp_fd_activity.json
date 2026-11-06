@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/sharkdp/fd/activity?ref=refs%2Fheads%2Fmaster&direction=desc&per_page=100",
+    "if_none_match": "\"a8a00f296d1897fac2fc33c4fca2fd6f13a2399b0f41e6dba64e188104de10aa\""
+  },
+  "response": {
+    "status": 304,
+    "headers": {
+      "etag": "\"a8a00f296d1897fac2fc33c4fca2fd6f13a2399b0f41e6dba64e188104de10aa\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4979",
+      "x-ratelimit-reset": "1794005019",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "21"
+    }
+  }
+}

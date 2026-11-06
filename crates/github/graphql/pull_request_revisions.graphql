@@ -1,0 +1,152 @@
+# What a pull request's revisions and their bases come from, besides its branches' push history
+# (design §6): when it opened and closed, how it merged, force-pushes of its head and base branches
+# and changes of its base branch, its submitted reviews and the commits they were on, the
+# signed-in user's last review, and the pushes that started check suites on its latest 100 commits.
+# The timeline's events and the reviews are read $first a page.
+query PullRequestRevisions(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $login: String!
+  $first: Int!
+  $timelineAfter: String
+  $reviewsAfter: String
+) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      createdAt
+      closed
+      closedAt
+      merged
+      headRefName
+      headRefOid
+      baseRefName
+      # Null once a fork is deleted.
+      headRepository {
+        name
+        owner {
+          __typename
+          login
+        }
+      }
+      mergeCommit {
+        oid
+        parents(first: 2) {
+          nodes {
+            oid
+          }
+        }
+      }
+      timelineItems(
+        first: $first
+        after: $timelineAfter
+        itemTypes: [
+          HEAD_REF_FORCE_PUSHED_EVENT
+          BASE_REF_FORCE_PUSHED_EVENT
+          BASE_REF_CHANGED_EVENT
+          AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT
+        ]
+      ) {
+        filteredCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          __typename
+          ... on HeadRefForcePushedEvent {
+            createdAt
+            beforeCommit {
+              oid
+            }
+            afterCommit {
+              oid
+            }
+          }
+          ... on BaseRefForcePushedEvent {
+            createdAt
+            beforeCommit {
+              oid
+            }
+            afterCommit {
+              oid
+            }
+          }
+          ... on BaseRefChangedEvent {
+            createdAt
+            previousRefName
+            currentRefName
+          }
+          ... on AutomaticBaseChangeSucceededEvent {
+            createdAt
+            oldBase
+            newBase
+          }
+        }
+      }
+      # Pending reviews have no commit a reviewer submitted on, and no time.
+      reviews(
+        first: $first
+        after: $reviewsAfter
+        states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]
+      ) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          submittedAt
+          commit {
+            oid
+          }
+          author {
+            __typename
+            login
+          }
+        }
+      }
+      viewerLastReview: reviews(
+        last: 1
+        author: $login
+        states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]
+      ) {
+        nodes {
+          submittedAt
+          commit {
+            oid
+          }
+        }
+      }
+      commits(last: 100) {
+        nodes {
+          commit {
+            oid
+            checkSuites(first: 10) {
+              nodes {
+                createdAt
+                # Null once the branch is deleted.
+                branch {
+                  name
+                }
+                # Null for a suite a push didn't start, such as a fork's pull request's in the
+                # base repository.
+                push {
+                  previousSha
+                  nextSha
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

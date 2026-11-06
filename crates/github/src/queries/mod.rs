@@ -14,6 +14,7 @@ pub mod mark_file_as_viewed;
 pub mod open_pull_requests;
 pub mod pull_request;
 pub mod pull_request_check;
+pub mod pull_request_revisions;
 pub mod unmark_file_as_viewed;
 pub mod viewer;
 
@@ -26,6 +27,7 @@ pub use pull_request_check::{
     MergeQueueEntryState, MergeStateStatus, PullRequestCheck, PullRequestCheckData,
     PullRequestReviewDecision, StatusState,
 };
+pub use pull_request_revisions::{PullRequestRevisions, PullRequestRevisionsData};
 pub use unmark_file_as_viewed::UnmarkFileAsViewed;
 pub use viewer::{Viewer, ViewerData};
 

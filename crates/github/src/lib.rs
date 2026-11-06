@@ -5,6 +5,7 @@
 //! refuses Zed's hosts; in tests, a [`replay::ReplayHttpClient`] serving recorded responses.
 
 pub mod accounts;
+pub mod activity;
 pub mod cache;
 #[cfg(any(test, feature = "test-support"))]
 pub mod cassette;
@@ -19,6 +20,7 @@ mod graphql;
 pub mod patch;
 pub mod poll;
 mod pulls;
+pub mod push_history;
 pub mod queries;
 mod rate_limit;
 #[cfg(any(test, feature = "test-support"))]

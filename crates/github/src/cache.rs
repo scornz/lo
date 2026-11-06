@@ -487,7 +487,9 @@ mod tests {
     use serde::Deserialize;
 
     use crate::db::{Account, AccountSource};
+    use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
+    use crate::push_history::PushHistory;
 
     fn account(login: &str) -> Account {
         Account {
@@ -707,7 +709,8 @@ mod tests {
 
     /// Every version, as of the last change to what the cache stores. When this fails, a stored
     /// shape changed: rows written in the old one will read as missing and be fetched again.
-    /// Check that's what the change means, then update the versions here.
+    /// Check that's what the change means, then update the versions here. A read the poller keeps
+    /// ([`crate::poll::CachedRead`]) is stored stamped.
     #[test]
     fn versions_follow_the_stored_shapes() {
         assert_eq!(
@@ -717,6 +720,10 @@ mod tests {
                 (PullRequestData::NAME, PullRequestData::version()),
                 (PullRequestCheckData::NAME, PullRequestCheckData::version()),
                 (OpenPullRequestList::NAME, OpenPullRequestList::version()),
+                (
+                    Stamped::<PushHistory>::NAME,
+                    Stamped::<PushHistory>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
@@ -724,6 +731,7 @@ mod tests {
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
                 ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+                ("PushHistory", "72388c5a64f800c5".to_string()),
             ]
         );
     }

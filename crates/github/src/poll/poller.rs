@@ -24,6 +24,7 @@ use crate::cache::{CacheEntry, Cached, PrCache, RecentPr};
 use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
 use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
+use crate::push_history::{PushHistory, read_push_history};
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
 };
@@ -676,6 +677,20 @@ impl Poller {
             etag: None,
             fetched_at: read.fetched_at?,
         })
+    }
+
+    /// `pull`'s push history, as [`Self::read_cached`] keeps it, read as this account.
+    pub fn push_history(
+        &mut self,
+        pull: PullRef,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<PushHistory>>> {
+        let (login, target) = (self.login.clone(), pull.clone());
+        self.read_cached(
+            pull,
+            move |client, known| read_push_history(client, target.clone(), login.clone(), known),
+            cx,
+        )
     }
 
     /// Runs a write (a comment, a review, viewed marks, a merge) that changes `target`, with the

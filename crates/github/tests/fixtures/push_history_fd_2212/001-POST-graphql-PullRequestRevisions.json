@@ -1,0 +1,122 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequestRevisions",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2212,
+      "login": "rozed-bot",
+      "first": 100,
+      "timelineAfter": null,
+      "reviewsAfter": null
+    },
+    "query_sha256": "9ae5a1cf4defb264981f45ca1f51a86cd7feceb2546b9c750ac6e26ccabaf1b1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-accepted-oauth-scopes": "repo",
+      "x-oauth-scopes": "delete_repo, read:org, repo, workflow",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4978",
+      "x-ratelimit-reset": "1794005019",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "22"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4978,
+          "used": 22,
+          "resetAt": "2026-11-06T22:43:39Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "createdAt": "2026-11-03T07:06:59Z",
+            "closed": false,
+            "closedAt": null,
+            "merged": false,
+            "headRefName": "fix/1822-explicit-jemalloc",
+            "headRefOid": "22c70acc6992c0c51cb68527b87adf114d01acbc",
+            "baseRefName": "master",
+            "headRepository": {
+              "name": "fd",
+              "owner": {
+                "__typename": "User",
+                "login": "voidsipp"
+              }
+            },
+            "mergeCommit": null,
+            "timelineItems": {
+              "filteredCount": 0,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "reviews": {
+              "totalCount": 1,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0xMS0wM1QwOTowMTozMlq0MjAyNi0xMS0wM1QwODoyNjoxMFrPAAAAAVarsds="
+              },
+              "nodes": [
+                {
+                  "submittedAt": "2026-11-03T09:01:32Z",
+                  "commit": {
+                    "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "tmccombs"
+                  }
+                }
+              ]
+            },
+            "viewerLastReview": {
+              "nodes": []
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5",
+                    "checkSuites": {
+                      "nodes": [
+                        {
+                          "createdAt": "2026-11-03T07:07:03Z",
+                          "branch": null,
+                          "push": null
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "22c70acc6992c0c51cb68527b87adf114d01acbc",
+                    "checkSuites": {
+                      "nodes": [
+                        {
+                          "createdAt": "2026-11-03T10:06:17Z",
+                          "branch": null,
+                          "push": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
