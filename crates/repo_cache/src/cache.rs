@@ -29,10 +29,13 @@ pub struct RepoCache {
 }
 
 /// Everything a git command needs besides its arguments.
+#[derive(Clone)]
 pub(crate) struct GitEnv {
     pub git: Git,
     pub home: PathBuf,
     pub askpass: PathBuf,
+    /// Extra `name=value` config for every git, from [`RepoCache::with_remote_base`].
+    pub config: Vec<String>,
 }
 
 impl GitEnv {
@@ -42,7 +45,7 @@ impl GitEnv {
             askpass: &self.askpass,
             token,
         });
-        self.git.command(dir, &self.home, auth)
+        self.git.command(dir, &self.home, auth, &self.config)
     }
 }
 
@@ -63,15 +66,27 @@ impl RepoCache {
         let askpass = askpass::install(&env_dir)?;
         Ok(Self {
             root,
-            env: Arc::new(GitEnv { git, home, askpass }),
+            env: Arc::new(GitEnv {
+                git,
+                home,
+                askpass,
+                config: Vec::new(),
+            }),
             remote_base: format!("https://{HOST}"),
         })
     }
 
-    /// Fetches from `<url>/<owner>/<repo>.git` instead of GitHub, e.g. `file:///tmp/remotes` in
-    /// tests.
+    /// Fetches from `<url>/<owner>/<repo>.git` instead of GitHub, and allows git that URL's
+    /// protocol: for tests, which serve repositories from `file://` folders.
     pub fn with_remote_base(mut self, url: impl Into<String>) -> Self {
         self.remote_base = url.into().trim_end_matches('/').to_string();
+        if let Some((scheme, _)) = self.remote_base.split_once("://")
+            && scheme != "https"
+        {
+            Arc::make_mut(&mut self.env)
+                .config
+                .push(format!("protocol.{scheme}.allow=always"));
+        }
         self
     }
 
@@ -125,8 +140,9 @@ impl RepoCache {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let result = (|| {
+            // No template: nothing but what git needs, so no sample hooks.
             self.git(&temporary_root)
-                .args(["init", "--quiet", "--bare"])
+                .args(["init", "--quiet", "--bare", "--template="])
                 .arg(&temporary)
                 .run()?;
             for (key, value) in [

@@ -1,20 +1,26 @@
 //! Running git: finding it, checking its version, and running it in an environment of rozed's own.
 //!
-//! rozed runs the git CLI as a child process. Every git it runs gets the same clean environment:
+//! rozed runs the git CLI as a child process. Every git it runs gets the same environment, built
+//! from nothing rather than inherited and patched:
 //!
-//! - Only `PATH`, `TMPDIR` and the network variables (proxies and CA bundles) come from rozed's
-//!   own environment. Everything else is dropped, including every `GIT_*` variable, so nothing
-//!   points git at another repository, adds config (`GIT_CONFIG_PARAMETERS`) or turns off TLS
-//!   checks.
+//! - Only `PATH`, `TMPDIR`, `DEVELOPER_DIR` and the network variables (proxies and CA bundles) come
+//!   from rozed's own environment. Everything else is dropped, including every `GIT_*` variable, so
+//!   nothing adds config (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`), points git at another
+//!   repository, template, program or attribute source (`GIT_DIR`, `GIT_TEMPLATE_DIR`,
+//!   `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ATTR_SOURCE`) or prompts (`SSH_ASKPASS`).
 //! - `HOME` is a folder of rozed's, so git and its HTTP library read none of the user's files there
 //!   (`~/.gitconfig`, `~/.config/git/attributes`, `~/.netrc`).
 //! - No system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`), no
 //!   credential helper, and no prompts (`GIT_TERMINAL_PROMPT=0`). The only credential git gets is
 //!   the token rozed hands it through `GIT_ASKPASS` (see [`crate::askpass`]).
+//! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
+//!   a repository's own `.gitattributes`), no replace refs, and literal pathspecs.
+//! - HTTPS only. [`crate::RepoCache::with_remote_base`] allows another protocol for tests.
 //! - `LC_ALL=C`, so the messages rozed reads are in English.
 //!
-//! The user's git config is never read or written, and nothing in it (URL rewrites, credential
-//! helpers, filters, hooks) changes what rozed fetches or runs.
+//! The user's git config is never read or written, and nothing in it or in rozed's environment
+//! (URL rewrites, credential helpers, filters, hooks) changes what this crate's git fetches or
+//! runs.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -212,7 +218,15 @@ impl Git {
     /// A git command with rozed's environment (see the module docs), running in `dir`. `home` is
     /// the empty folder git gets as its `HOME`. With `auth`, git signs in with its token when a
     /// server asks.
-    pub(crate) fn command(&self, dir: &Path, home: &Path, auth: Option<Auth<'_>>) -> GitCommand {
+    ///
+    /// `config` is extra `name=value` config, which wins over rozed's own: tests allow `file://`.
+    pub(crate) fn command(
+        &self,
+        dir: &Path,
+        home: &Path,
+        auth: Option<Auth<'_>>,
+        config: &[String],
+    ) -> GitCommand {
         let mut command = Command::new(&self.program);
         command
             .env_clear()
@@ -221,6 +235,8 @@ impl Git {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .env("LC_ALL", "C")
             .current_dir(dir)
             .stdin(Stdio::null());
@@ -248,7 +264,28 @@ impl Git {
             "http.lowSpeedLimit=1",
             "-c",
             "http.lowSpeedTime=60",
+            // Nothing in a repository or rozed's environment makes git run a program: no hooks
+            // (a checkout runs post-checkout) and no file-system monitor.
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            // No attributes: not the user's file, and not a repository's own `.gitattributes`,
+            // which git reads from `attr.tree` in a bare repository. rozed's clones never have a
+            // HEAD to read them from either; the empty tree makes that explicit.
+            "-c",
+            "core.attributesFile=/dev/null",
+            "-c",
+            "attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            // HTTPS only: no ssh, git or ext transports, and no local paths.
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.https.allow=always",
         ]);
+        for config in config {
+            command.args(["-c", config]);
+        }
         GitCommand {
             command,
             args: Vec::new(),
@@ -515,73 +552,180 @@ mod tests {
         assert_eq!(inherited_env(all), kept);
     }
 
-    /// A bare repository with one commit on `trunk`, served over `file://`.
-    fn remote(dir: &Path) -> String {
-        let work = dir.join("work");
-        fs::create_dir(&work).unwrap();
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(&work)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_AUTHOR_NAME", "rozed test")
-                .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
-                .env("GIT_COMMITTER_NAME", "rozed test")
-                .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?}");
-        };
-        git(&["init", "-q", "-b", "trunk"]);
-        fs::write(work.join("a.txt"), "a\n").unwrap();
-        git(&["add", "a.txt"]);
-        git(&["commit", "-q", "-m", "first"]);
-        git(&["clone", "-q", "--bare", ".", "../remote.git"]);
-        format!("file://{}", dir.join("remote.git").display())
+    /// The test's own git in `dir`, without the user's config.
+    fn plain_git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "rozed test")
+            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
+            .env("GIT_COMMITTER_NAME", "rozed test")
+            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
     /// The URL rewrite a hostile config applies: every `file://` URL goes nowhere.
     const REWRITE: &str = "[url \"file:///nowhere/\"]\n\tinsteadOf = file://\n";
 
+    /// A repository served over `file://`, and an environment in which every variable that could
+    /// change what git reads, runs or fetches is set to something that would show.
+    struct Hostile {
+        dir: TempDir,
+        /// The remote's URL.
+        url: String,
+        /// A working copy, with `first` and `second` commits on `trunk`. Both have a
+        /// `.gitattributes` saying `*.txt -diff`, and `second` changes `a.txt`.
+        work: PathBuf,
+        first: String,
+        second: String,
+        /// rozed's own `HOME` for git.
+        home: PathBuf,
+        env: Vec<(OsString, OsString)>,
+    }
+
+    impl Hostile {
+        fn new() -> Self {
+            let dir = TempDir::new().unwrap();
+            let root = dir.path();
+            let work = root.join("work");
+            fs::create_dir(&work).unwrap();
+            plain_git(&work, &["init", "-q", "-b", "trunk"]);
+            fs::write(work.join("a.txt"), "a\n").unwrap();
+            fs::write(work.join(".gitattributes"), "*.txt -diff\n").unwrap();
+            plain_git(&work, &["add", "-A"]);
+            plain_git(&work, &["commit", "-q", "-m", "first"]);
+            let first = plain_git(&work, &["rev-parse", "HEAD"]);
+            fs::write(work.join("a.txt"), "b\n").unwrap();
+            plain_git(&work, &["commit", "-q", "-am", "second"]);
+            let second = plain_git(&work, &["rev-parse", "HEAD"]);
+            plain_git(root, &["clone", "-q", "--bare", "work", "remote.git"]);
+            // Replace refs that would make `first` read as `second`.
+            plain_git(&work, &["replace", &first, &second]);
+            plain_git(
+                &work,
+                &["update-ref", &format!("refs/evil/{first}"), &second],
+            );
+
+            // A program that leaves a marker named after itself, so a test can see it ran.
+            let markers = root.join("markers");
+            let bin = root.join("bin");
+            fs::create_dir_all(&markers).unwrap();
+            fs::create_dir_all(&bin).unwrap();
+            let program = |name: &str| {
+                let path = bin.join(name);
+                let script = format!("#!/bin/sh\ntouch '{}/{name}'\nexit 1\n", markers.display());
+                fs::write(&path, script).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+                path.to_str().unwrap().to_string()
+            };
+            let exec_path = root.join("exec-path");
+            fs::create_dir_all(&exec_path).unwrap();
+            fs::copy(
+                program("git-upload-pack"),
+                exec_path.join("git-upload-pack"),
+            )
+            .unwrap();
+            let hooks = root.join("hooks");
+            fs::create_dir_all(&hooks).unwrap();
+            fs::copy(program("post-checkout"), hooks.join("post-checkout")).unwrap();
+            let template = root.join("template");
+            fs::create_dir_all(template.join("info")).unwrap();
+            fs::write(template.join("info/hostile-template"), "").unwrap();
+
+            // The user's config and attributes, everywhere git might look for them.
+            let user_home = root.join("user-home");
+            fs::create_dir_all(user_home.join(".config/git")).unwrap();
+            fs::write(user_home.join(".gitconfig"), REWRITE).unwrap();
+            fs::write(user_home.join(".config/git/config"), REWRITE).unwrap();
+            fs::write(user_home.join(".config/git/attributes"), "* binary\n").unwrap();
+            fs::write(
+                user_home.join(".netrc"),
+                "machine github.com login a password b\n",
+            )
+            .unwrap();
+            let global = root.join("global-config");
+            fs::write(&global, REWRITE).unwrap();
+            let parameters = format!(
+                "'url.file:///nowhere/.insteadof'='file://' 'core.hookspath'='{}' \
+                 'core.fsmonitor'='{}' 'protocol.allow'='always'",
+                hooks.display(),
+                program("fsmonitor"),
+            );
+            let env = vars(&[
+                ("PATH", "/usr/bin:/bin"),
+                ("HOME", user_home.to_str().unwrap()),
+                (
+                    "XDG_CONFIG_HOME",
+                    user_home.join(".config").to_str().unwrap(),
+                ),
+                ("GIT_CONFIG_GLOBAL", global.to_str().unwrap()),
+                ("GIT_CONFIG_PARAMETERS", &parameters),
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "url.file:///nowhere/.insteadOf"),
+                ("GIT_CONFIG_VALUE_0", "file://"),
+                ("GIT_DIR", "/nowhere/.git"),
+                ("GIT_TEMPLATE_DIR", template.to_str().unwrap()),
+                ("GIT_EXEC_PATH", exec_path.to_str().unwrap()),
+                ("GIT_SSH_COMMAND", &program("ssh-command")),
+                ("GIT_SSH", &program("ssh")),
+                ("GIT_ASKPASS", &program("git-askpass")),
+                ("SSH_ASKPASS", &program("ssh-askpass")),
+                ("GIT_REPLACE_REF_BASE", "refs/evil/"),
+                ("GIT_ATTR_SOURCE", &second),
+                ("GIT_PROTOCOL_FROM_USER", "1"),
+            ]);
+            let home = root.join("rozed-home");
+            fs::create_dir(&home).unwrap();
+            let url = format!("file://{}", root.join("remote.git").display());
+            Self {
+                dir,
+                url,
+                work,
+                first,
+                second,
+                home,
+                env,
+            }
+        }
+
+        /// git run by rozed from inside the hostile environment.
+        fn git(&self, dir: &Path, config: &[&str]) -> GitCommand {
+            let config: Vec<String> = config.iter().map(|c| c.to_string()).collect();
+            Git::with_env(Git::find().unwrap().program, self.env.clone())
+                .unwrap()
+                .command(dir, &self.home, None, &config)
+        }
+
+        /// The hostile programs that ran.
+        fn programs_run(&self) -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(self.dir.path().join("markers"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    const ALLOW_FILE: &str = "protocol.file.allow=always";
+
     #[test]
-    fn hostile_config_and_variables_have_no_effect() {
-        let dir = TempDir::new().unwrap();
-        let url = remote(dir.path());
+    fn hostile_config_has_no_effect() {
+        let hostile = Hostile::new();
 
-        // The user's config, everywhere git might look for it.
-        let user_home = dir.path().join("user-home");
-        fs::create_dir_all(user_home.join(".config/git")).unwrap();
-        fs::write(user_home.join(".gitconfig"), REWRITE).unwrap();
-        fs::write(user_home.join(".config/git/config"), REWRITE).unwrap();
-        fs::write(user_home.join(".config/git/attributes"), "* binary\n").unwrap();
-        let global = dir.path().join("global-config");
-        fs::write(&global, REWRITE).unwrap();
-        let hostile = vars(&[
-            ("PATH", "/usr/bin:/bin"),
-            ("HOME", user_home.to_str().unwrap()),
-            (
-                "XDG_CONFIG_HOME",
-                user_home.join(".config").to_str().unwrap(),
-            ),
-            ("GIT_CONFIG_GLOBAL", global.to_str().unwrap()),
-            (
-                "GIT_CONFIG_PARAMETERS",
-                "'url.file:///nowhere/.insteadof'='file://'",
-            ),
-            ("GIT_CONFIG_COUNT", "1"),
-            ("GIT_CONFIG_KEY_0", "url.file:///nowhere/.insteadOf"),
-            ("GIT_CONFIG_VALUE_0", "file://"),
-            ("GIT_DIR", "/nowhere/.git"),
-        ]);
-        let git = Git::with_env(Git::find().unwrap().program, hostile).unwrap();
-        let home = dir.path().join("rozed-home");
-        fs::create_dir(&home).unwrap();
-
-        // Without the rewrite, the remote is reachable.
-        let refs = git
-            .command(dir.path(), &home, None)
-            .args(["ls-remote", &url])
+        // No URL rewrite, and git's own upload-pack, not GIT_EXEC_PATH's.
+        let refs = hostile
+            .git(hostile.dir.path(), &[ALLOW_FILE])
+            .args(["ls-remote", &hostile.url])
             .run()
             .unwrap();
         assert!(
@@ -591,8 +735,8 @@ mod tests {
         );
 
         // git sees no config but rozed's own.
-        let config = git
-            .command(dir.path(), &home, None)
+        let config = hostile
+            .git(hostile.dir.path(), &[])
             .args(["config", "--list", "--show-origin"])
             .run()
             .unwrap();
@@ -601,19 +745,101 @@ mod tests {
             config.lines().all(|line| line.starts_with("command line:")),
             "{config}"
         );
-        assert!(!config.contains("insteadof"), "{config}");
+        for absent in ["insteadof", "hostile", "markers", "protocol.allow=always"] {
+            assert!(!config.contains(absent), "{absent} in {config}");
+        }
         assert!(config.contains("credential.helper="), "{config}");
+        assert!(config.contains("core.hookspath=/dev/null"), "{config}");
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
 
-        // Nor the user's attributes.
-        let attributes = git
-            .command(&dir.path().join("work"), &home, None)
-            .args(["check-attr", "binary", "--", "a.txt"])
+    #[test]
+    fn hostile_hooks_and_templates_never_run() {
+        let hostile = Hostile::new();
+        let clone = hostile.dir.path().join("clone");
+
+        // A new repository gets no hostile template, and a checkout runs no hook.
+        hostile
+            .git(hostile.dir.path(), &[])
+            .args(["init", "-q"])
+            .arg(&clone)
+            .run()
+            .unwrap();
+        assert!(!clone.join(".git/info/hostile-template").exists());
+        let work = hostile.work.to_str().unwrap();
+        hostile
+            .git(&clone, &[ALLOW_FILE])
+            .args(["fetch", "-q", work, "trunk"])
+            .run()
+            .unwrap();
+        hostile
+            .git(&clone, &[])
+            .args(["checkout", "-q", "FETCH_HEAD"])
+            .run()
+            .unwrap();
+        hostile
+            .git(&clone, &[])
+            .args(["status", "--porcelain"])
+            .run()
+            .unwrap();
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn only_https_is_allowed() {
+        let hostile = Hostile::new();
+        let dir = hostile.dir.path();
+        for (url, transport) in [
+            (hostile.url.as_str(), "file"),
+            ("ssh://git@example.invalid/a/b.git", "ssh"),
+            ("git@example.invalid:a/b.git", "ssh"),
+            ("git://example.invalid/a/b.git", "git"),
+            ("ext::sh -c touch% /tmp/rozed-ext", "ext"),
+        ] {
+            let error = hostile
+                .git(dir, &[])
+                .args(["ls-remote", url])
+                .run()
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("transport '{transport}' not allowed")),
+                "{url}: {error}"
+            );
+        }
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn hostile_attributes_and_replace_refs_have_no_effect() {
+        let hostile = Hostile::new();
+
+        // Neither the user's attributes nor GIT_ATTR_SOURCE's.
+        let attributes = hostile
+            .git(&hostile.dir.path().join("remote.git"), &[])
+            .args(["check-attr", "binary", "diff", "--", "a.txt"])
             .run()
             .unwrap();
         assert_eq!(
             String::from_utf8(attributes).unwrap(),
-            "a.txt: binary: unspecified\n"
+            "a.txt: binary: unspecified\na.txt: diff: unspecified\n"
         );
+        // Nor the repository's own `.gitattributes`, though the bare remote's HEAD has one.
+        let numstat = hostile
+            .git(&hostile.dir.path().join("remote.git"), &[])
+            .args(["diff", "--numstat", &hostile.first, &hostile.second])
+            .run()
+            .unwrap();
+        assert_eq!(String::from_utf8(numstat).unwrap(), "1\t1\ta.txt\n");
+
+        // `first` is itself, despite refs/replace/ and GIT_REPLACE_REF_BASE.
+        let subject = hostile
+            .git(&hostile.work, &[])
+            .args(["log", "-1", "--format=%s", &hostile.first])
+            .run()
+            .unwrap();
+        assert_eq!(String::from_utf8(subject).unwrap(), "first\n");
     }
 
     #[test]
@@ -649,10 +875,8 @@ mod tests {
     }
 
     /// Asks git for github.com's credentials, as it does when a server answers 401.
-    fn credential_fill(auth: Option<Auth<'_>>, home: &Path) -> Result<Vec<u8>, Error> {
-        Git::find()
-            .unwrap()
-            .command(home, home, auth)
+    fn credential_fill(git: &Git, auth: Option<Auth<'_>>, home: &Path) -> Result<Vec<u8>, Error> {
+        git.command(home, home, auth, &[])
             .args(["credential", "fill"])
             .run_with_input(Some(b"protocol=https\nhost=github.com\n\n"))
     }
@@ -667,9 +891,9 @@ mod tests {
             token: &token,
         };
 
-        let command = Git::find()
-            .unwrap()
-            .command(dir.path(), dir.path(), Some(auth))
+        let git = Git::find().unwrap();
+        let command = git
+            .command(dir.path(), dir.path(), Some(auth), &[])
             .args(["credential", "fill"]);
         assert!(!command.display().contains("gho_secret"));
         let (command, _) = command.into_command();
@@ -680,7 +904,7 @@ mod tests {
         );
 
         let credentials =
-            String::from_utf8(credential_fill(Some(auth), dir.path()).unwrap()).unwrap();
+            String::from_utf8(credential_fill(&git, Some(auth), dir.path()).unwrap()).unwrap();
         assert!(
             credentials.contains("username=x-access-token\n"),
             "{credentials}"
@@ -690,12 +914,17 @@ mod tests {
 
     #[test]
     fn without_a_token_git_never_prompts() {
-        let dir = TempDir::new().unwrap();
-        let error = credential_fill(None, dir.path()).unwrap_err();
+        let hostile = Hostile::new();
+        let git = Git::with_env(Git::find().unwrap().program, hostile.env.clone()).unwrap();
+
+        let error = credential_fill(&git, None, &hostile.home).unwrap_err();
+
         assert!(
             error.to_string().contains("terminal prompts disabled"),
             "{error}"
         );
+        // Not GIT_ASKPASS's or SSH_ASKPASS's helper either.
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
     }
 
     #[test]
