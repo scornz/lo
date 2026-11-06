@@ -104,6 +104,12 @@ impl Hunk {
             let mut last_line = header_line;
             while old_left > 0 || new_left > 0 {
                 let Some((text, line)) = lines.next() else {
+                    // One unchanged line short: a last blank line whose space was trimmed, in a
+                    // patch without a last newline.
+                    if (old_left, new_left) == (1, 1) {
+                        kinds.push(HunkLine::Context);
+                        break;
+                    }
                     return Err(error(last_line, "the patch ends inside a hunk"));
                 };
                 last_line = line;
@@ -455,6 +461,24 @@ diff --git a/c.rs b/c.rs
     }
 
     #[test]
+    fn a_last_blank_line_whose_space_was_trimmed_is_still_context() {
+        let hunk = Hunk::new(1, 1, [Removed, Added, Context]);
+
+        // Trimmed, with the patch's last newline: as with any other trimmed blank line.
+        assert_eq!(
+            Hunk::parse("@@ -1,2 +1,2 @@\n-a\n+b\n\n"),
+            Ok(vec![hunk.clone()])
+        );
+        // Trimmed, without it: the patch ends one unchanged line short.
+        assert_eq!(
+            Hunk::parse("@@ -1,2 +1,2 @@\n-a\n+b\n"),
+            Ok(vec![hunk.clone()])
+        );
+        // GitHub's, untrimmed and without the last newline.
+        assert_eq!(Hunk::parse("@@ -1,2 +1,2 @@\n-a\n+b\n "), Ok(vec![hunk]));
+    }
+
+    #[test]
     fn a_patch_that_is_not_a_unified_diff_is_an_error() {
         assert_eq!(
             Hunk::parse("@@ -1,2 +1,2\n a\n"),
@@ -464,7 +488,7 @@ diff --git a/c.rs b/c.rs
             })
         );
         assert_eq!(
-            Hunk::parse("@@ -1,2 +1,2 @@\n a\n"),
+            Hunk::parse("@@ -1,3 +1,3 @@\n a\n"),
             Err(PatchError {
                 line: 2,
                 reason: "the patch ends inside a hunk",
