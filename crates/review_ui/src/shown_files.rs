@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use buffer_diff::BufferDiff;
 use editor::display_map::{
@@ -20,7 +20,7 @@ use editor::{Addon, Editor, SplittableEditor, ToggleSplitDiff, multibuffer_conte
 use gpui::StyledImage as _;
 use gpui::{
     AnyElement, App, AppContext as _, AsyncWindowContext, Entity, EntityId, Focusable as _,
-    ObjectFit, RenderImage, WeakEntity, Window, checkerboard, img, size,
+    ObjectFit, RenderImage, Task, WeakEntity, Window, checkerboard, img, size,
 };
 use language::{Buffer, BufferId, OffsetRangeExt as _, Point};
 use multi_buffer::PathKey;
@@ -28,6 +28,7 @@ use settings::DiffViewStyle;
 use ui::{Label, LabelSize, prelude::*};
 
 use crate::file_display::{Collapsed, ImageSide, Images, without_whitespace_changes};
+use crate::image_preview;
 use crate::pr_diff::{FileHeaders, LocalPullRequest};
 
 /// One file in the diff.
@@ -45,8 +46,10 @@ pub(crate) struct ShownFile {
     pub(crate) rows: Option<Vec<Range<u32>>>,
     /// The before and after of a changed image, which show under the file's last line.
     pub(crate) images: Option<Images>,
-    /// `images`, decoded to draw.
-    pub(crate) drawn: Option<Drawn>,
+    /// `images`, decoded to draw once the file first shows, which the image blocks read.
+    pub(crate) drawn: Arc<OnceLock<Drawn>>,
+    /// Decodes `images`, while it does.
+    decoding: Option<Task<()>>,
     /// Why the file shows collapsed, if it does or did.
     pub(crate) collapsed: Option<Collapsed>,
     /// Whether the whole file shows, rather than its changes with the lines around them.
@@ -73,7 +76,8 @@ impl ShownFile {
             base,
             rows: None,
             images: None,
-            drawn: None,
+            drawn: Arc::default(),
+            decoding: None,
             collapsed: None,
             whole: false,
             whitespace_hidden: false,
@@ -82,7 +86,7 @@ impl ShownFile {
     }
 }
 
-/// One side of a changed image, decoded to draw, or why it can't be.
+/// One side of a changed image, decoded to a preview to draw, or why it can't be.
 pub(crate) type DrawnSide = Option<Result<Arc<RenderImage>, SharedString>>;
 
 /// The two sides of a changed image, decoded to draw. A side is `None` when the pull request adds
@@ -93,30 +97,96 @@ pub(crate) struct Drawn {
     pub(crate) new: DrawnSide,
 }
 
-/// Decodes `images` in the background, so drawing them needs no more work.
-pub(crate) async fn decode(images: &Images, cx: &mut AsyncWindowContext) -> Drawn {
-    let Ok(renderer) = cx.update(|_, cx| cx.svg_renderer()) else {
-        let gone = || Some(Err(SharedString::from("the window closed")));
-        return Drawn {
-            old: gone(),
-            new: gone(),
-        };
+impl Drawn {
+    fn images(&self) -> impl Iterator<Item = &Arc<RenderImage>> {
+        [&self.old, &self.new]
+            .into_iter()
+            .filter_map(|side| side.as_ref()?.as_ref().ok())
+    }
+}
+
+/// Decodes one side to a preview, in the background.
+fn decode_side(side: Option<ImageSide>) -> DrawnSide {
+    let side = side?;
+    Some(
+        image_preview::preview(side.format, &side.bytes, side.dimensions)
+            .map(|preview| Arc::new(RenderImage::new(vec![image::Frame::new(preview)])))
+            .map_err(SharedString::from),
+    )
+}
+
+/// Starts decoding `path`'s images, both sides at once in the background, unless they're decoded
+/// or on their way. Their blocks draw them when they're ready.
+fn start_decode(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window, cx: &mut App) {
+    let Some((images, drawn)) = read(diff, cx, |files| {
+        let file = files.get(path)?;
+        let pending = file.drawn.get().is_none() && file.decoding.is_none();
+        pending.then(|| Some((file.images.clone()?, file.drawn.clone())))?
+    })
+    .flatten() else {
+        return;
     };
-    let decode = |side: &Option<ImageSide>| {
-        let image = side.as_ref().map(|side| side.image.clone());
-        let renderer = renderer.clone();
-        cx.background_spawn(async move {
-            image.map(|image| {
-                image
-                    .to_image_data(renderer)
-                    .map_err(|error| SharedString::from(format!("{error:#}")))
+    let weak_diff = diff.downgrade();
+    let task = window.spawn(cx, async move |cx| {
+        let Images { old, new } = images;
+        let old = cx.background_spawn(async move { decode_side(old) });
+        let new = cx.background_spawn(async move { decode_side(new) });
+        drawn
+            .set(Drawn {
+                old: old.await,
+                new: new.await,
             })
-        })
-    };
-    let (old, new) = (decode(&images.old), decode(&images.new));
-    Drawn {
-        old: old.await,
-        new: new.await,
+            .ok();
+        weak_diff
+            .update(cx, |diff, cx| diff.update_editors(cx, |_, cx| cx.notify()))
+            .ok();
+    });
+    update(diff, cx, |files, _| {
+        if let Some(file) = files.files.get_mut(path) {
+            file.decoding = Some(task);
+        }
+    });
+}
+
+/// Starts decoding the images of the files among `buffers` that now show.
+pub(crate) fn decode_shown(
+    diff: &Entity<SplittableEditor>,
+    buffers: &[BufferId],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let paths = read(diff, cx, |files| {
+        files
+            .files
+            .iter()
+            .filter(|(_, file)| file.images.is_some() && buffers.contains(&file.buffer_id))
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for path in paths {
+        start_decode(diff, &path, window, cx);
+    }
+}
+
+/// Lets go of the textures `diff`'s images were drawn with, in every window, once the diff no
+/// longer shows. Their pixels go with the diff.
+pub(crate) fn release_images(
+    diff: &Entity<SplittableEditor>,
+    mut window: Option<&mut Window>,
+    cx: &mut App,
+) {
+    let images: Vec<Arc<RenderImage>> = read(diff, cx, |files| {
+        files
+            .files
+            .values()
+            .filter_map(|file| file.drawn.get())
+            .flat_map(|drawn| drawn.images().cloned().collect::<Vec<_>>())
+            .collect()
+    })
+    .unwrap_or_default();
+    for image in images {
+        cx.drop_image(image, window.as_deref_mut());
     }
 }
 
@@ -208,10 +278,18 @@ pub(crate) fn add(
     .flatten();
     if let Some(replaced) = replaced {
         remove_image_blocks(replaced.image_blocks, cx);
+        if let Some(drawn) = replaced.drawn.get() {
+            for image in drawn.images() {
+                cx.drop_image(image.clone(), Some(window));
+            }
+        }
     }
     if fold {
         let rhs = diff.read(cx).rhs_editor().clone();
         rhs.update(cx, |rhs, cx| rhs.fold_buffers([buffer_id], cx));
+    } else {
+        // A folded file's images decode once it opens.
+        start_decode(diff, &path, window, cx);
     }
     show_images(diff, &path, window, cx);
 }
@@ -538,7 +616,8 @@ pub(crate) fn sync_side_by_side(
     }
 }
 
-/// How tall an image block is, in lines: room for its images up to 240 pixels high, and a label.
+/// How tall an image block is, in lines of `line_height`, the editor's: room for its images up to
+/// 240 pixels high, and a label.
 fn image_rows(images: &Images, line_height: Pixels) -> u32 {
     const MAX_HEIGHT: f32 = 240.;
     let tallest = [&images.old, &images.new]
@@ -561,7 +640,9 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
         let file = files.get(path)?;
         let base = file.diff.read(cx).base_text_buffer().clone();
         Some((
-            file.images.clone().zip(file.drawn.clone()),
+            file.images
+                .clone()
+                .map(|images| (images, file.drawn.clone())),
             file.buffer.clone(),
             base,
             files.split.clone(),
@@ -582,7 +663,13 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
     let Some((images, drawn)) = images else {
         return;
     };
-    let rows = image_rows(&images, window.line_height());
+    let rhs_line_height = {
+        let rhs = diff.read(cx).rhs_editor().clone();
+        rhs.update(cx, |rhs, cx| {
+            rhs.style(cx).text.line_height_in_pixels(window.rem_size())
+        })
+    };
+    let rows = image_rows(&images, rhs_line_height);
     let mut blocks = Vec::new();
     let rhs = diff.read(cx).rhs_editor().clone();
     let lhs = diff.read(cx).lhs_editor().cloned();
@@ -618,7 +705,10 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
                             (Side::Both, true) => Side::After,
                             (side, _) => side,
                         };
-                        render_images(&drawn, side, cx)
+                        match drawn.get() {
+                            Some(drawn) => render_images(drawn, side, cx),
+                            None => render_decoding(cx),
+                        }
                     }),
                     priority: 0,
                 }],
@@ -656,6 +746,18 @@ fn remove_image_blocks(blocks: Vec<(WeakEntity<Editor>, CustomBlockId)>, cx: &mu
             })
             .ok();
     }
+}
+
+/// An image block's place, kept while its images decode.
+fn render_decoding(cx: &mut BlockContext) -> AnyElement {
+    let height = cx.line_height * cx.height as f32;
+    let width = (cx.max_width - cx.em_width * 4.).max(px(120.));
+    div()
+        .id(cx.block_id)
+        .w(width)
+        .h(height)
+        .child(note("(decoding the images…)".to_string()))
+        .into_any_element()
 }
 
 /// A line of text in the middle of an image's panel, in place of the image.
@@ -718,6 +820,9 @@ fn render_images(drawn: &Drawn, side: Side, cx: &mut BlockContext) -> AnyElement
                             .aspect_ratio(image_size.width / image_size.height)
                             .object_fit(ObjectFit::ScaleDown)
                             .into_any_element(),
+                        Some(Err(error)) if error.starts_with("too large") => {
+                            note(format!("({error})"))
+                        }
                         Some(Err(error)) => note(format!("(rozed can't draw this image: {error})")),
                         None => note("(no image)".to_string()),
                     }),
@@ -752,9 +857,11 @@ mod tests {
     use workspace::{MultiWorkspace, Workspace};
 
     use crate::file_display::tests::png;
+    use crate::image_preview;
     use crate::pr_diff::tests::fixtures::{Entry, Fixture};
     use crate::pr_diff::{self, Trust};
     use crate::pr_tab::{self, PrTab};
+    use gpui::size;
 
     const PULL: &str = "https://github.com/owner/repo/pull/1";
 
@@ -1191,7 +1298,9 @@ mod tests {
         assert!(diff.read_with(cx, |diff, _| diff.is_split()));
         assert!(file(&diff, "logo.png", cx, |file, _| file.images.is_some()));
         // Decoded, ready to draw.
-        let drawn = file(&diff, "logo.png", cx, |file, _| file.drawn.clone().unwrap());
+        let drawn = file(&diff, "logo.png", cx, |file, _| {
+            file.drawn.get().cloned().unwrap()
+        });
         for side in [drawn.old, drawn.new] {
             let image = side.unwrap().unwrap();
             assert_eq!(image.size(0), size(3.into(), 2.into()));
@@ -1209,6 +1318,151 @@ mod tests {
         cx.simulate_keystrokes("alt-v");
         cx.run_until_parked();
         assert_eq!(image_blocks(&diff, "logo.png", cx), 2);
+    }
+
+    /// The decoded preview of `path`'s new side.
+    fn new_preview(
+        diff: &Entity<SplittableEditor>,
+        path: &str,
+        cx: &mut VisualTestContext,
+    ) -> Result<Arc<RenderImage>, SharedString> {
+        file(diff, path, cx, |file, _| {
+            file.drawn
+                .get()
+                .expect("decoded")
+                .new
+                .clone()
+                .expect("a new side")
+        })
+    }
+
+    #[gpui::test]
+    async fn a_pull_requests_svg_draws_nothing_from_disk(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let secret = dir.path().join("secret.png");
+        std::fs::write(&secret, image_preview::tests::png_of(20, 20)).unwrap();
+        let svg = |href: &str| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="20" height="20"><image xlink:href="{href}" width="20" height="20"/></svg>"#
+            )
+        };
+        let (local, zero) = (svg(secret.to_str().unwrap()), svg("/dev/zero"));
+        let started = Instant::now();
+        let (diff, _copy) = show(
+            &tab,
+            &[],
+            &[
+                Entry::File("local.svg", local.as_bytes()),
+                Entry::File("zero.svg", zero.as_bytes()),
+            ],
+            cx,
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        for path in ["local.svg", "zero.svg"] {
+            let preview = new_preview(&diff, path, cx).unwrap();
+            let bytes = preview.as_bytes(0).unwrap();
+            // The PNG on disk is opaque red; nothing of it is drawn.
+            assert!(
+                bytes.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
+                "{path}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn images_that_declare_huge_canvases_are_never_decoded_in_full(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        // 2048 × 2048, six frames, under 200 bytes; and a PNG header of 16385 × 64.
+        let gif = image_preview::tests::gif_of(2048, 2048, 6);
+        let wide = image_preview::tests::png_of(16385, 64);
+        let (diff, _copy) = show(
+            &tab,
+            &[],
+            &[
+                Entry::File("anim.gif", &gif),
+                Entry::File("wide.png", &wide),
+            ],
+            cx,
+        );
+
+        let gif = new_preview(&diff, "anim.gif", cx).unwrap();
+        assert_eq!(gif.frame_count(), 1);
+        assert_eq!(
+            gif.size(0),
+            size(
+                (image_preview::PREVIEW_SIDE as i32).into(),
+                (image_preview::PREVIEW_SIDE as i32).into()
+            )
+        );
+        assert!(text(&diff, cx).contains("GIF image, 2048 × 2048, animated, 6 frames"));
+        assert_eq!(
+            new_preview(&diff, "wide.png", cx).unwrap_err(),
+            "too large to preview: 16385 × 64"
+        );
+    }
+
+    #[gpui::test]
+    async fn a_collapsed_files_images_decode_only_once_it_opens(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let (diff, _copy) = show(
+            &tab,
+            &[],
+            &[
+                Entry::File(".gitattributes", b"gen/** linguist-generated\n"),
+                Entry::File("gen/chart.png", &png()),
+            ],
+            cx,
+        );
+        assert!(is_folded(&diff, "gen/chart.png", cx));
+        assert!(file(&diff, "gen/chart.png", cx, |file, _| file
+            .drawn
+            .get()
+            .is_none()));
+
+        select(&diff, "gen/chart.png", cx);
+        cx.simulate_keystrokes("alt-a");
+        cx.run_until_parked();
+        assert!(!is_folded(&diff, "gen/chart.png", cx));
+        assert!(new_preview(&diff, "gen/chart.png", cx).is_ok());
+    }
+
+    #[gpui::test]
+    async fn a_diff_replaced_lets_its_images_go(cx: &mut TestAppContext) {
+        let (tab, cx) = tab(cx).await;
+        let png = png();
+        let base = [Entry::File("logo.png", png.as_slice())];
+        let changed = [png.as_slice(), b"\0"].concat();
+        let head = [Entry::File("logo.png", changed.as_slice())];
+        let (first, first_copy) = show(&tab, &base, &head, cx);
+        let first_images: Vec<_> = file(&first, "logo.png", cx, |file, _| {
+            file.drawn
+                .get()
+                .unwrap()
+                .images()
+                .map(Arc::downgrade)
+                .collect()
+        });
+        assert_eq!(first_images.len(), 2);
+
+        let (second, _second_copy) = show(&tab, &base, &head, cx);
+        let first_diff = first.downgrade();
+        drop((first, first_copy));
+        // The last frame drawn holds what it drew until the next.
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(
+            first_diff.upgrade().is_none(),
+            "the first diff is still held"
+        );
+        assert!(
+            first_images.iter().all(|image| image.upgrade().is_none()),
+            "the first diff's images are still held"
+        );
+        let live = file(&second, "logo.png", cx, |file, _| {
+            file.drawn.get().unwrap().images().count()
+        });
+        assert_eq!(live, 2);
     }
 
     #[gpui::test]

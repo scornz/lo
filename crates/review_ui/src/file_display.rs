@@ -6,7 +6,7 @@ use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use gpui::{Image, ImageFormat};
+use gpui::ImageFormat;
 use imara_diff::{Algorithm, Diff, InternedInput};
 use review::files::{ChangedFile, Generated, LARGE_FILE_LINES, initial_state};
 
@@ -134,20 +134,26 @@ pub(crate) fn binary_text(old: Option<u64>, new: Option<u64>) -> String {
     }
 }
 
-/// One side of a changed image, read from git.
+/// One side of a changed image, read from git. It's decoded only when it shows, and then only to a
+/// small preview (`image_preview`).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ImageSide {
-    pub(crate) image: Arc<Image>,
+    pub(crate) format: ImageFormat,
+    pub(crate) bytes: Arc<[u8]>,
     /// Width and height in pixels, from the image's header. `None` for SVG.
     pub(crate) dimensions: Option<(u32, u32)>,
+    /// How many frames a GIF has, counted from its blocks, when it has more than one. Only the
+    /// first shows.
+    pub(crate) frames: Option<usize>,
 }
 
 impl fmt::Debug for ImageSide {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImageSide")
-            .field("format", &self.image.format)
-            .field("bytes", &self.image.bytes.len())
+            .field("format", &self.format)
+            .field("bytes", &self.bytes.len())
             .field("dimensions", &self.dimensions)
+            .field("frames", &self.frames)
             .finish()
     }
 }
@@ -155,14 +161,16 @@ impl fmt::Debug for ImageSide {
 impl ImageSide {
     /// `bytes` as an image, when `path` names one of the formats rozed shows (PNG, JPEG, GIF,
     /// WebP and SVG) and the bytes are one of them. `None` otherwise, such as for a Git LFS
-    /// pointer, which is text.
+    /// pointer, which is text. Reads only the image's header.
     pub(crate) fn new(path: &str, bytes: Vec<u8>) -> Option<Self> {
         let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
         if extension == "svg" {
             let text = std::str::from_utf8(&bytes).ok()?;
             return text.contains("<svg").then(|| Self {
-                image: Arc::new(Image::from_bytes(ImageFormat::Svg, bytes)),
+                format: ImageFormat::Svg,
+                bytes: bytes.into(),
                 dimensions: None,
+                frames: None,
             });
         }
         if !["png", "jpg", "jpeg", "gif", "webp"].contains(&extension.as_str()) {
@@ -180,15 +188,21 @@ impl ImageSide {
         let dimensions = image::ImageReader::with_format(Cursor::new(&bytes), found)
             .into_dimensions()
             .ok()?;
+        let frames = (format == ImageFormat::Gif)
+            .then(|| crate::image_preview::gif_frames(&bytes))
+            .flatten()
+            .filter(|frames| *frames > 1);
         Some(Self {
-            image: Arc::new(Image::from_bytes(format, bytes)),
+            format,
+            bytes: bytes.into(),
             dimensions: Some(dimensions),
+            frames,
         })
     }
 
-    /// The image's line in the diff: its format, dimensions and size.
+    /// The image's line in the diff: its format, dimensions, frames and size.
     pub(crate) fn summary(&self) -> String {
-        let format = match self.image.format {
+        let format = match self.format {
             ImageFormat::Png => "PNG",
             ImageFormat::Jpeg => "JPEG",
             ImageFormat::Gif => "GIF",
@@ -196,11 +210,15 @@ impl ImageSide {
             ImageFormat::Svg => "SVG",
             _ => "image",
         };
-        let size = size_text(self.image.bytes.len() as u64);
-        match self.dimensions {
-            Some((width, height)) => format!("{format} image, {width} × {height}, {size}"),
-            None => format!("{format} image, {size}"),
+        let mut parts = vec![format!("{format} image")];
+        if let Some((width, height)) = self.dimensions {
+            parts.push(format!("{width} × {height}"));
         }
+        if let Some(frames) = self.frames {
+            parts.push(format!("animated, {frames} frames"));
+        }
+        parts.push(size_text(self.bytes.len() as u64));
+        parts.join(", ")
     }
 }
 
@@ -350,14 +368,14 @@ pub(crate) mod tests {
     #[test]
     fn images_are_read_by_their_bytes_when_their_name_says_image() {
         let logo = ImageSide::new("assets/logo.png", png()).unwrap();
-        assert_eq!(logo.image.format, ImageFormat::Png);
+        assert_eq!(logo.format, ImageFormat::Png);
         assert_eq!(logo.dimensions, Some((3, 2)));
         assert!(logo.summary().starts_with("PNG image, 3 × 2, "), "{logo:?}");
 
         // The name decides whether it's an image, case aside, and the bytes which format.
         assert!(ImageSide::new("LOGO.JPG", png()).is_some());
         assert_eq!(
-            ImageSide::new("logo.jpg", png()).unwrap().image.format,
+            ImageSide::new("logo.jpg", png()).unwrap().format,
             ImageFormat::Png
         );
         assert_eq!(ImageSide::new("logo.bin", png()), None);
@@ -368,13 +386,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_animated_gif_says_how_many_frames_it_has() {
+        let gif =
+            ImageSide::new("spin.gif", crate::image_preview::tests::gif_of(30, 20, 3)).unwrap();
+        assert_eq!(gif.frames, Some(3));
+        assert!(
+            gif.summary()
+                .starts_with("GIF image, 30 × 20, animated, 3 frames, "),
+            "{gif:?}"
+        );
+        let still =
+            ImageSide::new("dot.gif", crate::image_preview::tests::gif_of(1, 1, 1)).unwrap();
+        assert_eq!(still.frames, None);
+        assert!(still.summary().starts_with("GIF image, 1 × 1, "));
+    }
+
+    #[test]
     fn svg_files_are_images_when_they_hold_svg() {
         let svg = ImageSide::new(
             "icon.svg",
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#.to_vec(),
         )
         .unwrap();
-        assert_eq!(svg.image.format, ImageFormat::Svg);
+        assert_eq!(svg.format, ImageFormat::Svg);
         assert_eq!(svg.summary(), "SVG image, 62 B");
         assert_eq!(ImageSide::new("icon.svg", b"not svg".to_vec()), None);
     }

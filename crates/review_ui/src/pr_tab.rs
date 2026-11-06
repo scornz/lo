@@ -10,7 +10,7 @@ use anyhow::Context as _;
 use futures::channel::oneshot;
 
 use editor::scroll::Autoscroll;
-use editor::{Editor, EditorSettings, SelectionEffects, SplittableEditor};
+use editor::{Editor, EditorEvent, EditorSettings, SelectionEffects, SplittableEditor};
 use github::files::CutShort;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
@@ -228,8 +228,9 @@ pub struct PrTab {
     _whitespace: Option<Task<()>>,
     /// Loads a large file on a key.
     _load_file: Option<Task<()>>,
-    /// Keeps the diff's images right as it goes side by side and back.
-    _diff_layout: Option<Subscription>,
+    /// Keeps the diff's images right as it goes side by side and back, and decodes a file's
+    /// images when it opens.
+    _diff_watch: Vec<Subscription>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab, until the tab closes.
@@ -315,7 +316,7 @@ impl PrTab {
             hide_whitespace: false,
             _whitespace: None,
             _load_file: None,
-            _diff_layout: None,
+            _diff_watch: Vec::new(),
             show_file_list: true,
             show_threads: true,
             watched: None,
@@ -362,6 +363,9 @@ impl PrTab {
     /// The tab closed: its poller stops watching its pull request, and a trusted checkout no other
     /// tab uses leaves the project, which stops its language servers (design §11).
     fn released(&mut self, cx: &mut App) {
+        if let Some(diff) = &self.diff {
+            shown_files::release_images(diff, None, cx);
+        }
         if let Some((poller, pull)) = self.watched.take() {
             poller.update(cx, |poller, cx| poller.unwatch(&pull, cx));
         }
@@ -1003,9 +1007,23 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
-        self._diff_layout = Some(cx.observe_in(&editor, window, |_, diff, window, cx| {
-            shown_files::sync_side_by_side(&diff, window, cx)
-        }));
+        if let Some(old) = self.diff.as_ref().filter(|old| **old != editor) {
+            shown_files::release_images(old, Some(window), cx);
+        }
+        self._diff_watch = vec![
+            cx.observe_in(&editor, window, |_, diff, window, cx| {
+                shown_files::sync_side_by_side(&diff, window, cx)
+            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |_, diff, event: &EditorEvent, window, cx| {
+                    if let EditorEvent::BufferFoldToggled { ids, folded: false } = event {
+                        shown_files::decode_shown(diff, ids, window, cx);
+                    }
+                },
+            ),
+        ];
         if let Some(history) = self.nav_history.clone() {
             let rhs_editor = editor.read(cx).rhs_editor().clone();
             rhs_editor.update(cx, |editor, _| editor.set_nav_history(Some(history)));

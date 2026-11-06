@@ -77,6 +77,10 @@ graphql_client = "0.16.0"
 image = { version = "0.25.1", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # Already in the build through buffer_diff. review_ui aligns lines to hide whitespace changes.
 imara-diff = { version = "0.2", default-features = false }
+# Already in the build through gpui, which renders SVGs with them. review_ui renders a pull
+# request's SVGs itself, with options that read nothing from disk.
+resvg = { version = "0.46.0", default-features = false }
+usvg = { version = "0.46.0", default-features = false }
 libc = "0.2"
 log = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = "0.12.1"

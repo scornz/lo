@@ -7,6 +7,7 @@ mod file_display;
 pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
+mod image_preview;
 pub mod keymap;
 pub mod local_copies;
 pub mod local_project;

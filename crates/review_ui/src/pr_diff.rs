@@ -499,7 +499,7 @@ pub(crate) async fn show_local_copy(
                         positions[index],
                         &file.display_path(),
                         file.new.is_none(),
-                        plan,
+                        *plan,
                         FileHeader::of(file),
                         cx,
                     )
@@ -803,7 +803,7 @@ async fn check_out(
 #[derive(Debug, PartialEq)]
 enum Swap {
     /// Shows the checkout's project buffer, planned so.
-    ToCheckout(FilePlan),
+    ToCheckout(Box<FilePlan>),
     /// Stays from git, and its header says why: the checkout's copy differs from the head's.
     Warn(Warning),
     /// Stays as it is.
@@ -831,7 +831,7 @@ fn swap(first: &FilePlan, with_checkout: FilePlan) -> Swap {
                     ..
                 },
             ..
-        } => Swap::ToCheckout(with_checkout),
+        } => Swap::ToCheckout(Box::new(with_checkout)),
         FilePlan {
             warning: Some(warning),
             ..
@@ -1549,9 +1549,6 @@ impl Target<'_> {
         );
         let hunks_only = rows.is_some();
         file.rows = rows;
-        if let Some(images) = &images {
-            file.drawn = Some(shown_files::decode(images, cx).await);
-        }
         file.images = images;
         file.collapsed = collapsed.clone();
         file.whitespace_hidden = self.hide_whitespace;
@@ -2164,7 +2161,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             swap(&shown_from_git, from_checkout.clone()),
-            Swap::ToCheckout(from_checkout.clone())
+            Swap::ToCheckout(Box::new(from_checkout.clone()))
         );
         assert_eq!(swap(&shown_from_git, differs), Swap::Warn(warning));
         assert_eq!(swap(&shown_from_git, shown_from_git.clone()), Swap::Keep);
@@ -2779,11 +2776,8 @@ pub(crate) mod tests {
                 }
             );
             let images = plan.images.as_ref().unwrap();
-            assert_eq!(
-                images.old.as_ref().unwrap().image.format,
-                gpui::ImageFormat::Svg
-            );
-            assert_eq!(images.new.as_ref().unwrap().image.bytes, new.as_bytes());
+            assert_eq!(images.old.as_ref().unwrap().format, gpui::ImageFormat::Svg);
+            assert_eq!(&*images.new.as_ref().unwrap().bytes, new.as_bytes());
         }
     }
 
