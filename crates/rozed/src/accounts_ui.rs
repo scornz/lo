@@ -23,7 +23,8 @@ use gpui::{
 };
 use http_client::HttpClient;
 use ui::{ListItem, ToggleState, prelude::*};
-use workspace::{ModalView, Workspace};
+use util::ResultExt as _;
+use workspace::{ModalView, MultiWorkspace, Workspace};
 
 actions!(
     accounts,
@@ -55,6 +56,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-backspace", RemoveSelected, Some(KEY_CONTEXT)),
     ]);
+    // The app menu enables an item only when something on the focused element's path handles
+    // its action, and before anything in the window is focused nothing is. This handler keeps
+    // "Accounts…" working then. It runs while the window that dispatched the action is being
+    // updated, so it defers opening the modal until that's done.
+    cx.on_action(|_: &OpenAccounts, cx| cx.defer(|cx| open_in_any_window(Start::List, cx)));
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace
             .register_action(|workspace, _: &OpenAccounts, window, cx| {
@@ -89,6 +95,33 @@ pub fn init(cx: &mut App) {
         })
     })
     .detach();
+}
+
+/// Opens the modal in the active rozed window, or the first one.
+fn open_in_any_window(start: Start, cx: &mut App) {
+    let window = cx
+        .active_window()
+        .and_then(|window| window.downcast::<MultiWorkspace>())
+        .or_else(|| {
+            cx.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<MultiWorkspace>())
+        });
+    let Some(window) = window else {
+        log::info!("no rozed window to show accounts in");
+        return;
+    };
+    window
+        .update(cx, |multi_workspace, window, cx| {
+            window.activate_window();
+            multi_workspace
+                .workspace()
+                .clone()
+                .update(cx, |workspace, cx| {
+                    AccountsModal::open(workspace, start, window, cx)
+                });
+        })
+        .log_err();
 }
 
 /// What the modal shows first.
