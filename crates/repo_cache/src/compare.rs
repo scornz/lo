@@ -74,14 +74,22 @@ impl Repo {
     /// new heads as the bases.
     ///
     /// Every commit must be in the clone already: fetch them first with [`Repo::fetch_pull`] or
-    /// [`Repo::fetch_commit`]. The file contents the replay merges download as git needs them, a
-    /// batch at a time; a replay of changes each made on one side alone needs none. Then, like
+    /// [`Repo::fetch_commit`]. A missing one is [`Error::NotFetched`], and is never downloaded.
+    /// The file contents the replay merges download as git needs them, a batch at a time; a
+    /// replay of changes each made on one side alone needs none. Then, like
     /// [`Repo::changed_files`], both sides of every changed file download in one batch.
     ///
     /// A clean replay's tree is pinned at `refs/rozed/replays/<tree>/<pin>` while the comparison
     /// is kept (see [`Comparison`]). The replay writes no other ref. Its objects stay in the clone
     /// unreferenced, and comparing the same revisions again makes the same tree.
     pub fn compare_revisions(&self, old: &Revision, new: &Revision) -> Result<Comparison, Error> {
+        // Checked without downloading: git would download a missing commit with all its history,
+        // with no progress shown and no ref keeping it.
+        for oid in [&old.base, &old.head, &new.base, &new.head] {
+            if !self.has_commit(oid)? {
+                return Err(Error::NotFetched { oid: oid.clone() });
+            }
+        }
         let plain = |replay| -> Result<Comparison, Error> {
             Ok(Comparison {
                 files: self.changed_files(&old.head, &new.head)?,

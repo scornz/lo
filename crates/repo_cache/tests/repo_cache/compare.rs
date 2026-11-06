@@ -732,20 +732,60 @@ fn a_replay_that_cant_download_is_a_fetch_error() {
     assert_eq!(paths(&comparison.files), ["c.txt"]);
 }
 
+/// A commit GitHub has but the clone never fetched, as when rozed learns of a revision from the
+/// timeline. git would download it, with its history, behind the caller's back.
 #[test]
-fn an_unknown_commit_is_an_error_not_a_conflict() {
-    let Rebased { f, m1, m2, r2, .. } = rebased();
+fn a_commit_the_clone_lacks_is_an_error_and_never_downloaded() {
+    let Rebased { f, m1, m2, r1, r2 } = rebased();
+    f.remote.switch("elsewhere").write("x.txt", "x\n");
+    let unfetched = f.remote.commit("on the server only");
+    f.remote.publish("refs/heads/elsewhere");
     let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
+    let old = Revision { base: m1, head: r1 };
+    let new = Revision { base: m2, head: r2 };
+    let git_dir = f.repo.git_dir();
+    let before = packs(git_dir);
 
-    let result = f.repo.compare_revisions(
-        &Revision {
-            base: m1,
-            head: unknown,
-        },
-        &Revision { base: m2, head: r2 },
-    );
+    for missing in [&unfetched, &unknown] {
+        for (old, new) in [
+            (
+                Revision {
+                    base: missing.clone(),
+                    ..old.clone()
+                },
+                new.clone(),
+            ),
+            (
+                Revision {
+                    head: missing.clone(),
+                    ..old.clone()
+                },
+                new.clone(),
+            ),
+            (
+                old.clone(),
+                Revision {
+                    base: missing.clone(),
+                    ..new.clone()
+                },
+            ),
+            (
+                old.clone(),
+                Revision {
+                    head: missing.clone(),
+                    ..new.clone()
+                },
+            ),
+        ] {
+            let error = f.repo.compare_revisions(&old, &new).unwrap_err();
+            assert!(
+                matches!(&error, Error::NotFetched { oid } if oid == missing),
+                "{old:?} {new:?}: {error:?}"
+            );
+        }
+    }
 
-    assert!(result.is_err(), "{result:?}");
+    assert_eq!(packs(git_dir), before);
     assert_eq!(f.replay_pins(), []);
 }
 

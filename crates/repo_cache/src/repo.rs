@@ -283,7 +283,7 @@ impl Repo {
     }
 
     /// Whether commit `oid` is in the clone. Never downloads anything.
-    fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
+    pub(crate) fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
         // `--missing` stops rev-list from fetching what's missing.
         let finished = self
             .git()
