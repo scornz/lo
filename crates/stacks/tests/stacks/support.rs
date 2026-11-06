@@ -1,8 +1,10 @@
-//! Builders for pull requests and a text rendering of the forest, so tests read as trees.
+//! Builders for pull requests and text renderings of the forest and of plans, so tests read as
+//! trees and as the confirmations rozed shows.
 
 use std::time::{Duration, SystemTime};
 
-use stacks::{NativeStackEntry, PullRequest, Rule, Stacks, State};
+use stacks::convert::{Facts, Plan, Reason, Step, plan_conversion};
+use stacks::{NativeStackEntry, PullRequest, Retarget, Rule, Stacks, State};
 
 /// An open pull request from `head` (a branch in the base repository) into `base`, with one commit,
 /// `<head>.1`, created `number` seconds after the epoch. The base branch's tip is `<base>.1`, the
@@ -124,6 +126,49 @@ pub fn render(stacks: &Stacks) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Plans converting the path through `layer`, among `prs` with no trunk branches, in a repo with
+/// the Stacks API and nothing in its merge queue.
+pub fn plan(prs: &[PullRequest], layer: u64) -> Result<Plan, Vec<Reason>> {
+    let facts = Facts {
+        stacks_api: true,
+        queued: &[],
+    };
+    plan_conversion(&Stacks::find(prs, &[]), layer, &facts)
+}
+
+/// Plans converting the path through `layer` and checks the rendered plan against `expected`, one
+/// line each.
+#[track_caller]
+pub fn assert_plan(prs: &[PullRequest], layer: u64, expected: &[&str]) -> Plan {
+    let plan = plan(prs, layer).expect("conversion is offered");
+    assert_eq!(render_plan(&plan), expected);
+    plan
+}
+
+/// Renders a conversion plan as its confirmation lists it: the root branch and the path, then one
+/// line per step.
+pub fn render_plan(plan: &Plan) -> Vec<String> {
+    let mut lines = vec![format!("{}: {}", plan.root, numbers(&plan.path))];
+    lines.extend(plan.steps.iter().map(|step| match step {
+        Step::Retarget(retarget) => render_retarget(retarget),
+        Step::CreateStack { prs } => format!("create {}", numbers(prs)),
+        Step::AddToStack { stack, prs } => format!("add {} to stack {stack}", numbers(prs)),
+    }));
+    lines
+}
+
+/// `#2 main -> a`.
+pub fn render_retarget(retarget: &Retarget) -> String {
+    let Retarget { pr, from, to } = retarget;
+    format!("#{pr} {from} -> {to}")
+}
+
+/// `#1 #2 #3`.
+pub fn numbers(prs: &[u64]) -> String {
+    let numbers: Vec<String> = prs.iter().map(|pr| format!("#{pr}")).collect();
+    numbers.join(" ")
 }
 
 /// Finds the stacks among `prs`, with no trunk branches, and checks the rendered forest against

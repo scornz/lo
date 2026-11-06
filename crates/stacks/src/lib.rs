@@ -3,7 +3,8 @@
 //! A stack is a tree of open pull requests. Each layer sits on the PR below it, and the bottom
 //! layer sits on a root branch: a trunk such as `main`, or a branch no open PR comes from, such as
 //! `feature-x`. [`Stacks::find`] builds the forest from the repo's PRs, and the result drives the
-//! stack sidebar and its walk.
+//! stack sidebar and its walk. [`convert`] plans turning a chain of layers into a GitHub stack, and
+//! [`merge`] merges one that can't become one, a layer at a time.
 //!
 //! ```
 //! use std::time::SystemTime;
@@ -35,6 +36,9 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::time::SystemTime;
+
+pub mod convert;
+pub mod merge;
 
 /// A pull request, with the fields stack detection reads. The doc on each field names the GraphQL
 /// `PullRequest` field it comes from.
@@ -202,6 +206,17 @@ pub struct NeedsRebase {
     pub compare_against: String,
 }
 
+/// A change to a pull request's base branch: `PATCH /repos/{owner}/{repo}/pulls/{pr}` with
+/// `{"base": to}`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Retarget {
+    pub pr: u64,
+    /// Its base branch now.
+    pub from: String,
+    /// The base branch it gets.
+    pub to: String,
+}
+
 /// One tree: a bottom layer sitting on a root branch, and every layer above it. Each PR sitting
 /// directly on a root branch starts its own stack, whether the root is `main` or `feature-x`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,6 +266,8 @@ pub struct Cycle {
 pub struct Stacks {
     roots: Vec<Root>,
     layers: HashMap<u64, Layer>,
+    /// What planning reads about each layer's pull request.
+    prs: HashMap<u64, LayerPr>,
     /// Each layer's stack, as indexes into `roots` and that root's `stacks`.
     stack_index: HashMap<u64, (usize, usize)>,
     cycles: Vec<Cycle>,
@@ -311,6 +328,7 @@ impl Stacks {
         let by_creation = |numbers: &mut Vec<u64>| numbers.sort_by_key(|number| order[number]);
 
         let mut layers: HashMap<u64, Layer> = HashMap::with_capacity(open.len());
+        let mut prs: HashMap<u64, LayerPr> = HashMap::with_capacity(open.len());
         let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut bottoms: BTreeMap<String, Vec<u64>> = BTreeMap::new();
         for Placed {
@@ -337,6 +355,7 @@ impl Stacks {
                 depth: 0,
             };
             layers.insert(pr.number, layer);
+            prs.insert(pr.number, pr.into());
         }
         for (number, mut above) in children {
             by_creation(&mut above);
@@ -348,6 +367,7 @@ impl Stacks {
         let mut stacks = Self {
             roots: Vec::with_capacity(bottoms.len()),
             layers,
+            prs,
             stack_index: HashMap::new(),
             cycles: Vec::new(),
         };
@@ -391,6 +411,24 @@ impl Stacks {
             pending.extend(layer.children.iter().rev().map(|&child| (child, depth + 1)));
         }
         walk
+    }
+}
+
+/// What planning reads about a layer's pull request, beyond its place in the forest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LayerPr {
+    base_ref: String,
+    head_in_base_repo: bool,
+    native_stack: Option<NativeStackEntry>,
+}
+
+impl From<&PullRequest> for LayerPr {
+    fn from(pr: &PullRequest) -> Self {
+        Self {
+            base_ref: pr.base_ref.clone(),
+            head_in_base_repo: pr.head_in_base_repo,
+            native_stack: pr.native_stack,
+        }
     }
 }
 
