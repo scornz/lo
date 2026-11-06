@@ -45,34 +45,59 @@ pub struct Facts<'a> {
     pub queued: &'a [u64],
 }
 
-/// Why "Make this a GitHub stack" isn't offered.
+/// Why "Make this a GitHub stack" isn't offered, in the order they're listed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     /// The pull request asked about isn't a layer: it isn't open, or wasn't passed to
     /// [`Stacks::find`]. The only reason given when it applies.
     NotOpen,
+    /// The path is already a GitHub stack, or part of one, so there's nothing to do. The only
+    /// reason given when it applies.
+    AlreadyStacked { stack: u64 },
     /// The repository doesn't have the Stacks API.
     NoStacksApi,
     /// The path holds one pull request, and a stack needs two. On a bottom layer with several
     /// layers on it, the tree forks right above it, so the path is that layer alone.
     TooShort,
+    /// The bottom of the path is already GitHub stack `stack`, but the stack goes on above `past`
+    /// with layers that aren't in the path. A stack takes new layers only at its top.
+    ///
+    /// Known limit: only open layers are seen. If the stack's top is a closed layer above `past`,
+    /// the Stacks API refuses the add, because the first layer added must sit on the stack's top.
+    StackGoesOn { stack: u64, past: u64 },
     /// A pull request in the path comes from a fork. A GitHub stack holds only pull requests from
     /// the repository itself.
     FromFork { pr: u64 },
     /// A pull request in the path is in a merge queue, which is already merging it.
     Queued { pr: u64 },
+    /// A pull request in the path is already in GitHub stack `stack`, which doesn't hold the
+    /// layers below it. A pull request can be in only one stack.
+    InAnotherStack { pr: u64, stack: u64 },
 }
 
 /// Plans converting the path through `layer` into a GitHub stack. Each layer that isn't on the
 /// branch the stack needs moves there first (its [`Layer::retarget_to`](crate::Layer)), and then
 /// the stack is created.
 ///
-/// When it isn't offered, the error lists every reason: those about the repository and the path
-/// first, then those about each pull request in it, bottom to top.
+/// When the bottom of the path is already a GitHub stack, the rest of the path is added to it
+/// instead, and only the layers added move. A GitHub stack's own layers keep their base branches,
+/// even when a closed layer between them means `retarget_to` would move one: GitHub holds them as
+/// they are.
+///
+/// When it isn't offered, the error lists every reason in [`Reason`]'s order, except that those
+/// about one pull request are grouped, bottom to top.
 pub fn plan_conversion(stacks: &Stacks, layer: u64, facts: &Facts) -> Result<Plan, Vec<Reason>> {
     let Some((root, path)) = path_through(stacks, layer) else {
         return Err(vec![Reason::NotOpen]);
     };
+    let (stack, stacked) = stacked_bottom(stacks, &path);
+    if let Some(stack) = stack
+        && stacked == path.len()
+    {
+        return Err(vec![Reason::AlreadyStacked { stack }]);
+    }
+    let added = &path[stacked..];
+
     let mut reasons = Vec::new();
     if !facts.stacks_api {
         reasons.push(Reason::NoStacksApi);
@@ -80,23 +105,41 @@ pub fn plan_conversion(stacks: &Stacks, layer: u64, facts: &Facts) -> Result<Pla
     if path.len() < 2 {
         reasons.push(Reason::TooShort);
     }
-    for &pr in &path {
-        if !stacks.prs[&pr].head_in_base_repo {
+    if let Some(stack) = stack {
+        let past = path[stacked - 1];
+        if goes_on(stacks, stack, past, &path) {
+            reasons.push(Reason::StackGoesOn { stack, past });
+        }
+    }
+    for (index, &pr) in path.iter().enumerate() {
+        let known = &stacks.prs[&pr];
+        if !known.head_in_base_repo {
             reasons.push(Reason::FromFork { pr });
         }
         if facts.queued.contains(&pr) {
             reasons.push(Reason::Queued { pr });
         }
+        if let Some(entry) = known.native_stack
+            && index >= stacked
+        {
+            let stack = entry.stack;
+            reasons.push(Reason::InAnotherStack { pr, stack });
+        }
     }
     if !reasons.is_empty() {
         return Err(reasons);
     }
-    let mut steps: Vec<Step> = path
+
+    let mut steps: Vec<Step> = added
         .iter()
         .filter_map(|&pr| retarget(stacks, pr))
         .map(Step::Retarget)
         .collect();
-    steps.push(Step::CreateStack { prs: path.clone() });
+    let prs = added.to_vec();
+    steps.push(match stack {
+        Some(stack) => Step::AddToStack { stack, prs },
+        None => Step::CreateStack { prs },
+    });
     Ok(Plan {
         root: root.to_string(),
         path,
@@ -124,6 +167,40 @@ fn path_through(stacks: &Stacks, layer: u64) -> Option<(&str, Vec<u64>)> {
         at = stacks.layer(above)?;
     }
     Some((root, path))
+}
+
+/// The GitHub stack the bottom layer of `path` is in, if any, and how many layers from the bottom
+/// up are in it, at rising positions.
+fn stacked_bottom(stacks: &Stacks, path: &[u64]) -> (Option<u64>, usize) {
+    let entry = |pr: &u64| stacks.prs[pr].native_stack;
+    let Some(bottom) = path.first().and_then(entry) else {
+        return (None, 0);
+    };
+    let mut position = bottom.position;
+    let above = path[1..]
+        .iter()
+        .take_while(|&pr| match entry(pr) {
+            Some(next) if next.stack == bottom.stack && next.position > position => {
+                position = next.position;
+                true
+            }
+            _ => false,
+        })
+        .count();
+    (Some(bottom.stack), 1 + above)
+}
+
+/// Whether GitHub stack `stack` has an open layer above `past` that isn't in `path`.
+fn goes_on(stacks: &Stacks, stack: u64, past: u64, path: &[u64]) -> bool {
+    let Some(top) = stacks.prs[&past].native_stack else {
+        return false;
+    };
+    stacks.prs.iter().any(|(number, pr)| {
+        let above = pr
+            .native_stack
+            .is_some_and(|entry| entry.stack == stack && entry.position > top.position);
+        above && !path.contains(number)
+    })
 }
 
 /// The base-branch change `pr` needs to be a layer of the stack, if any.
