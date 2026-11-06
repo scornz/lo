@@ -39,7 +39,8 @@
 //! Each tree becomes difftastic's syntax nodes: atoms, and lists with their delimiters. Nodes
 //! that are obviously unchanged are marked first, such as those both sides start and end with.
 //! For the rest, the diff is the cheapest route through a graph whose edges mark nodes unchanged
-//! or novel, found with Dijkstra's algorithm. Lines then pair up by their unchanged tokens.
+//! or novel, found with Dijkstra's algorithm. Among equally good diffs, the novel nodes then move
+//! to where a reader expects them. Lines pair up by their unchanged tokens.
 //!
 //! Past difftastic's limits, or with no grammar, [`compare`] returns a [`Fallback`] and the
 //! caller keeps the line diff.
@@ -54,6 +55,7 @@ mod lcs;
 mod nodes;
 mod parse;
 mod positions;
+mod sliders;
 mod unchanged;
 mod words;
 
@@ -196,6 +198,9 @@ pub fn compare(
 
     let old_lines = Lines::new(old.text);
     let new_lines = Lines::new(new.text);
+    let prefer_outer = language.prefer_outer_delimiter;
+    sliders::fix_all_sliders(&syntax, &lhs, &mut changes, &old_lines, prefer_outer);
+    sliders::fix_all_sliders(&syntax, &rhs, &mut changes, &new_lines, prefer_outer);
     let lhs_positions =
         positions::change_positions(&syntax, &lhs, &changes, &old_lines, &new_lines);
     let rhs_positions =

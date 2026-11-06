@@ -115,6 +115,12 @@ impl<'s> Lines<'s> {
         (self.starts.partition_point(|&start| start <= offset) - 1) as u32
     }
 
+    /// The 0-based line and byte column of a byte offset.
+    pub(crate) fn position(&self, offset: usize) -> (u32, usize) {
+        let line = self.line_of(offset);
+        (line, offset - self.starts[line as usize])
+    }
+
     /// A span's part on each line it covers.
     pub(crate) fn spans(&self, span: Span) -> Vec<LineSpan> {
         (self.line_of(span.start)..=self.line_of(span.end))

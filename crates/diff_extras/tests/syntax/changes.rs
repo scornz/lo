@@ -199,3 +199,43 @@ fn a_changed_line_of_a_block_comment_pairs_with_its_line() {
         ]
     );
 }
+
+#[test]
+fn a_block_wrapped_in_a_new_one_marks_only_the_wrapper() {
+    let old = "\
+fn f() {
+    go();
+}
+";
+    let new = "\
+fn f() {
+    if ready {
+        go();
+    }
+}
+";
+
+    assert_eq!(
+        rows("rust", old, new),
+        [
+            "1 fn f() { | 1 fn f() {",
+            "- | 2     [if] [ready] [{]",
+            "2     go(); | 3         go();",
+            "- | 4     [}]",
+            "3 } | 5 }",
+        ]
+    );
+}
+
+#[test]
+fn a_json_array_wrapped_in_another_marks_the_outer_one() {
+    // JSON prefers the outer list novel, where Rust prefers the inner one: the outer `[` and
+    // `]` are new, the inner ones match the old array's.
+    let old = "{\"a\": [1, 2]}\n";
+    let new = "{\"a\": [[1, 2, 3]]}\n";
+
+    assert_eq!(
+        rows("json", old, new),
+        ["1 {\"a\": [1, 2]} | 1 {\"a\": [[][1, 2[,] [3]][]]}"]
+    );
+}

@@ -93,4 +93,12 @@ impl Changes {
             self.insert(last, Change::IgnoredPunctuation);
         }
     }
+
+    /// Marks `node` and everything below it novel.
+    pub(crate) fn insert_deep_novel(&mut self, syntax: &Syntax, node: NodeId) {
+        self.insert(node, Change::Novel);
+        for &child in syntax.children(node) {
+            self.insert_deep_novel(syntax, child);
+        }
+    }
 }

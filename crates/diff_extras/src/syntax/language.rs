@@ -46,6 +46,10 @@ pub struct Language {
     /// ",")`, `[1, 2]` and `[1, 2,]` compare equal. Opt-in, because some languages give trailing
     /// tokens meaning, such as Python's `(1,)`.
     pub trailing: &'static [(&'static str, &'static str)],
+    /// Whether a list added around another shows its outer delimiters as the novel ones, rather
+    /// than the inner ones. In `[1, 2]` becoming `[[1, 2, 3]]`, JSON's outer array is the new
+    /// one; in `f(x)` becoming `f(g(x))`, the C-like reading is that `g(…)` is new.
+    pub prefer_outer_delimiter: bool,
 }
 
 impl Language {
@@ -64,6 +68,7 @@ const JSON: Language = Language {
     strings: &["string"],
     delimiters: &[("{", "}"), ("[", "]")],
     trailing: &[],
+    prefer_outer_delimiter: true,
 };
 
 const TYPESCRIPT: Language = Language {
@@ -86,6 +91,7 @@ const TYPESCRIPT: Language = Language {
         ("tuple_type", ","),
         ("type_arguments", ","),
     ],
+    prefer_outer_delimiter: false,
 };
 
 /// The grammars Zed builds in that difftastic supports. Zed reads JavaScript with the `tsx`
@@ -97,6 +103,7 @@ const LANGUAGES: &[Language] = &[
         strings: &["string", "raw_string", "heredoc_body"],
         delimiters: &[("(", ")"), ("{", "}"), ("[", "]")],
         trailing: &[],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "c",
@@ -104,6 +111,7 @@ const LANGUAGES: &[Language] = &[
         strings: &["string_literal", "char_literal"],
         delimiters: &[("(", ")"), ("{", "}"), ("[", "]")],
         trailing: &[("enumerator_list", ","), ("initializer_list", ",")],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "cpp",
@@ -111,6 +119,7 @@ const LANGUAGES: &[Language] = &[
         strings: &["string_literal", "char_literal", "raw_string_literal"],
         delimiters: &[("(", ")"), ("{", "}"), ("[", "]"), ("<", ">")],
         trailing: &[("enumerator_list", ","), ("initializer_list", ",")],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "css",
@@ -123,6 +132,7 @@ const LANGUAGES: &[Language] = &[
         strings: &["string_value"],
         delimiters: &[("{", "}"), ("(", ")")],
         trailing: &[],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "go",
@@ -134,6 +144,7 @@ const LANGUAGES: &[Language] = &[
             ("argument_list", ","),
             ("literal_value", ","),
         ],
+        prefer_outer_delimiter: false,
     },
     JSON,
     Language {
@@ -154,6 +165,7 @@ const LANGUAGES: &[Language] = &[
             ("parameters", ","),
             ("import_from_statement", ","),
         ],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "rust",
@@ -173,6 +185,7 @@ const LANGUAGES: &[Language] = &[
             // A macro can't tell `vec![1]` from `vec![1,]`.
             ("token_tree", ","),
         ],
+        prefer_outer_delimiter: false,
     },
     Language {
         grammar: "tsx",
@@ -195,6 +208,7 @@ const LANGUAGES: &[Language] = &[
         ],
         delimiters: &[("{", "}"), ("(", ")"), ("[", "]")],
         trailing: &[("flow_sequence", ","), ("flow_mapping", ",")],
+        prefer_outer_delimiter: false,
     },
 ];
 
