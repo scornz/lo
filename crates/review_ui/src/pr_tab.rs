@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::{Instant, SystemTime};
 
+use anyhow::Context as _;
+
 use editor::scroll::Autoscroll;
 use editor::{Editor, SelectionEffects, SplittableEditor};
 use github::poll::{PollEvent, Poller};
@@ -913,6 +915,43 @@ pub fn tab_title(repo: &str, number: u64, title: Option<&str>) -> String {
     text
 }
 
+/// When another tab already shows `tab`'s pull request by another of its repository's names,
+/// as after a rename, closes `tab` and brings that one to the front, trying it again if it
+/// failed. Returns whether it did.
+fn merge_into_twin(
+    workspace: &mut Workspace,
+    tab: &Entity<PrTab>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> bool {
+    let key = tab.read(cx).key.clone();
+    let Some(twin) = workspace
+        .items_of_type::<PrTab>(cx)
+        .find(|other| other != tab && other.read(cx).key.is_same_pull_request(&key))
+    else {
+        return false;
+    };
+    log::info!(
+        "{} is {} by another name; keeping that tab",
+        key.opened_as,
+        twin.read(cx).key.opened_as
+    );
+    twin.update(cx, |twin, cx| {
+        twin.key.merge(key);
+        if matches!(twin.status, Status::Failed(_)) {
+            twin.start_again(cx);
+            twin.load(window, cx);
+        }
+    });
+    if let Some(pane) = workspace.pane_for(tab) {
+        pane.update(cx, |pane, cx| {
+            pane.remove_item(tab.entity_id(), false, false, window, cx)
+        });
+    }
+    workspace.activate_item(&twin, true, true, window, cx);
+    true
+}
+
 /// How long before `now` `then` was, in words: "just now", "5 minutes ago", "2 hours ago".
 pub fn ago(then: SystemTime, now: SystemTime) -> String {
     let seconds = now.duration_since(then).unwrap_or_default().as_secs();
@@ -1007,9 +1046,19 @@ async fn load(
     };
     this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
 
-    // GitHub confirmed the pull request exists, so the account's poller watches it, and keeps
-    // the active tab's up to date most often.
+    // A tab opened by another of the repository's names may show it already.
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
+    let tab = this.upgrade().context("the tab closed")?;
+    if workspace.update_in(cx, |workspace, window, cx| {
+        merge_into_twin(workspace, &tab, window, cx)
+    })? {
+        return Ok(());
+    }
+
+    // GitHub confirmed the pull request exists, so the account's poller watches it, by the
+    // repository's name now, and keeps the active tab's up to date most often.
+    let (owner, name) = pull_request.base.repo.owner_and_name()?;
+    let pull = PullRef::new(owner, name, pull.number);
     if let Some(poller) = poller {
         this.update(cx, |this, cx| this.watch(poller, pull, cx))?;
         workspace.update(cx, |workspace, cx| sync_active(workspace, cx))?;
@@ -1873,6 +1922,80 @@ mod tests {
         assert_eq!(reopened, playground);
         assert_eq!(tabs(&workspace, cx).len(), 2);
         assert_eq!(active_tab(&workspace, cx), Some(playground));
+    }
+
+    /// `rozed-dev/renamed#2`, once called `rozed-dev/playground`, which `rozed-bot` can see.
+    async fn renamed_repository(github: &FakeGithub, git: &GitServer, cx: &mut TestAppContext) {
+        let mut pull = git.pull_request("rozed-dev/renamed", 2, &[], &[("a.rs", "a\n")]);
+        pull.old_names = vec!["rozed-dev/playground".into()];
+        github.add_pull(pull);
+        github.let_see("gho_BOT", "rozed-dev/renamed");
+        sign_in(github, &[("rozed-bot", "gho_BOT")], cx).await;
+    }
+
+    #[gpui::test]
+    async fn a_renamed_repositorys_old_name_finds_the_tab_opened_by_its_new_one(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        renamed_repository(&github, &git, cx).await;
+
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/renamed/pull/2", cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+        // The old name opens a tab until GitHub names the repository, and then it's the same
+        // pull request, so that tab goes and the first comes to the front.
+        open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        assert_eq!(tabs(&workspace, cx), vec![tab.clone()]);
+        assert_eq!(active_tab(&workspace, cx), Some(tab.clone()));
+
+        // From then on, the old name finds the tab at once.
+        github.requests();
+        let reopened = open_loaded(&workspace, "github.com/Rozed-Dev/Playground/pull/2", cx);
+        assert_eq!(reopened, tab);
+        assert_eq!(github.requests(), Vec::<String>::new());
+
+        // The poller watches the pull request once, by its name now.
+        let poller = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.update(cx, |layer, cx| layer.poller("rozed-bot", cx))
+        });
+        let open = poller.read_with(cx, |poller, _| poller.open().cloned());
+        let open = open.unwrap();
+        assert_eq!(
+            (
+                open.repo.owner.as_str(),
+                open.repo.name.as_str(),
+                open.number
+            ),
+            ("rozed-dev", "renamed", 2)
+        );
+    }
+
+    #[gpui::test]
+    async fn two_names_opened_before_either_loads_end_in_one_tab(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        renamed_repository(&github, &git, cx).await;
+
+        let old = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+        let new = open_unloaded(&workspace, "github.com/rozed-dev/renamed/pull/2", cx);
+        for tab in [&old, &new] {
+            tab.update_in(cx, |tab, window, cx| tab.load(window, cx));
+        }
+        cx.run_until_parked();
+
+        let left = tabs(&workspace, cx);
+        assert_eq!(left.len(), 1);
+        assert_eq!(status(&left[0], cx), Status::Ready);
+        for link in [
+            "github.com/rozed-dev/playground/pull/2",
+            "github.com/rozed-dev/renamed/pull/2",
+        ] {
+            assert_eq!(open_unloaded(&workspace, link, cx), left[0]);
+        }
     }
 
     #[gpui::test]
