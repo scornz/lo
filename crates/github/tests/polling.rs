@@ -1256,6 +1256,19 @@ async fn offline_it_backs_off_and_answers_from_the_cache_with_its_age(cx: &mut T
 }
 
 #[gpui::test]
+async fn offline_says_when_the_next_try_really_is(cx: &mut TestAppContext) {
+    let mut t = Polling::new("offline_retry_at", recorded(), cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(10);
+    t.http.offline.store(true, Ordering::SeqCst);
+    t.run_until(20);
+    assert_eq!(t.status().offline.unwrap().retry_at, wall(40));
+    // In the background the open PR is next polled 5 minutes after it last answered.
+    t.update(|poller, cx| poller.set_foreground(false, cx));
+    assert_eq!(t.status().offline.unwrap().retry_at, wall(300));
+}
+
+#[gpui::test]
 async fn any_answer_from_github_ends_offline(cx: &mut TestAppContext) {
     let r = recorded();
     let message = r#"{"message":"You have exceeded a secondary rate limit.","documentation_url":"https://docs.github.com/rest"}"#;

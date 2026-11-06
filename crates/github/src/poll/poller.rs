@@ -793,10 +793,16 @@ impl Poller {
             return Step::Wait(until_reset);
         };
         // Opening a PR or coming back to the foreground tries at once, whatever the backoff.
-        if let Some(offline) = &self.offline
+        if let Some(offline) = &mut self.offline
             && !forced
         {
             at = at.max(offline.retry_at);
+            // The banner says when the next try really is, which can be after the backoff.
+            let retry_at = wall + at.saturating_duration_since(now);
+            if offline.status.retry_at != retry_at {
+                offline.status.retry_at = retry_at;
+                self.refresh_status(cx);
+            }
         }
         if at <= now {
             Step::Run(Box::new(job), ticket)
