@@ -71,7 +71,7 @@ fn no_prs_make_an_empty_forest() {
 }
 
 #[test]
-fn a_repeated_number_keeps_the_first() {
+fn a_repeated_number_keeps_the_first_of_the_same_state() {
     let stacks = assert_forest(
         &[pr(1, "main", "a"), pr(1, "release", "a")],
         &["main", "  #1"],
@@ -79,5 +79,23 @@ fn a_repeated_number_keeps_the_first() {
     assert_eq!(
         stacks.layer(1).unwrap().parent,
         Parent::Branch("main".into())
+    );
+}
+
+#[test]
+fn a_repeated_number_prefers_open_then_merged_then_closed() {
+    assert_forest(
+        &[pr(1, "release", "a").closed(), pr(1, "main", "a")],
+        &["main", "  #1"],
+    );
+    // The merged #1 links #2; the closed one wouldn't.
+    assert_forest(
+        &[
+            pr(1, "main", "a").closed(),
+            pr(1, "main", "a").merged(false),
+            pr(1, "main", "a").closed(),
+            pr(2, "a", "b"),
+        ],
+        &["main", "  #2 base-branch needs-rebase(#1 a.1)"],
     );
 }

@@ -232,13 +232,14 @@ pub struct Root {
     pub stacks: Vec<Stack>,
 }
 
-/// Links that formed a cycle. [`Stacks::find`] breaks each cycle by dropping one link: the one
-/// found by the weakest rule (shared commits, then base branch, then native stack), and of those
-/// the oldest PR's.
+/// Links that formed a cycle. [`Stacks::find`] breaks each cycle by dropping one open PR's link:
+/// the one found by the weakest rule (shared commits, then base branch, then native stack), and
+/// of those the oldest PR's. A cycle of merged PRs alone is broken too, but not reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cycle {
-    /// The PRs in the cycle, each linked to the next and the last back to the first, starting with
-    /// the PR whose link was dropped. That PR sits on its own base branch instead.
+    /// The open PRs in the cycle, in link order: each linked, directly or through merged PRs, to
+    /// the next, and the last back to the first. The first is the PR whose link was dropped; it
+    /// sits on its own base branch instead.
     pub prs: Vec<u64>,
 }
 
@@ -254,8 +255,8 @@ pub struct Stacks {
 
 impl Stacks {
     /// Finds the stacks among `prs`. Every open PR becomes a layer; merged PRs only link the
-    /// layers above them, and closed PRs are ignored. When a number repeats, the first PR with it
-    /// is used.
+    /// layers above them, and closed PRs are ignored. When a number repeats, an open PR wins, then
+    /// a merged one, then the first.
     ///
     /// `trunks` are the repo's long-lived branches: its default branch plus protected or
     /// ruleset-covered ones. They're always roots: a PR from a trunk, such as a deploy PR
@@ -292,7 +293,7 @@ impl Stacks {
         Some(&self.roots[root].stacks[stack])
     }
 
-    /// The cycles found and broken, in the order found.
+    /// The cycles found and broken, by the number of the PR whose link was dropped.
     pub fn cycles(&self) -> &[Cycle] {
         &self.cycles
     }
@@ -421,10 +422,28 @@ struct Edge {
 
 impl<'a> Graph<'a> {
     fn new(prs: &'a [PullRequest], trunks: &[&'a str]) -> Self {
-        let mut seen = HashSet::new();
+        // Of PRs with the same number, keep an open one, then a merged one, then the first.
+        let preference = |pr: &PullRequest| match pr.state {
+            State::Open => 2,
+            State::Merged { .. } => 1,
+            State::Closed => 0,
+        };
+        let mut chosen: HashMap<u64, usize> = HashMap::with_capacity(prs.len());
+        for (i, pr) in prs.iter().enumerate() {
+            chosen
+                .entry(pr.number)
+                .and_modify(|best| {
+                    if preference(pr) > preference(&prs[*best]) {
+                        *best = i;
+                    }
+                })
+                .or_insert(i);
+        }
         let prs = prs
             .iter()
-            .filter(|pr| seen.insert(pr.number) && pr.state != State::Closed)
+            .enumerate()
+            .filter(|&(i, pr)| chosen[&pr.number] == i && pr.state != State::Closed)
+            .map(|(_, pr)| pr)
             .collect();
         let trunks = trunks.iter().copied().collect();
         Self { prs, trunks }
@@ -579,7 +598,12 @@ impl<'a> Graph<'a> {
                     Visit::OnPath => {
                         let start = path.iter().rposition(|&i| i == index).unwrap_or(0);
                         let cycle = &path[start..];
+                        // Drop an open PR's link if there's one, so that PR sits on its own base
+                        // branch rather than on a merged PR's.
+                        let is_open = |at: usize| self.prs[cycle[at]].state == State::Open;
+                        let any_open = (0..cycle.len()).any(is_open);
                         let weakest = (0..cycle.len())
+                            .filter(|&at| is_open(at) || !any_open)
                             .max_by_key(|&at| {
                                 let pr = self.prs[cycle[at]];
                                 let rule = links[cycle[at]].map(|edge| edge.rule);
@@ -587,10 +611,16 @@ impl<'a> Graph<'a> {
                             })
                             .unwrap_or(0);
                         links[cycle[weakest]] = None;
-                        let prs = cycle[weakest..].iter().chain(&cycle[..weakest]);
-                        cycles.push(Cycle {
-                            prs: prs.map(|&i| self.prs[i].number).collect(),
-                        });
+                        let prs: Vec<u64> = cycle[weakest..]
+                            .iter()
+                            .chain(&cycle[..weakest])
+                            .map(|&i| self.prs[i])
+                            .filter(|pr| pr.state == State::Open)
+                            .map(|pr| pr.number)
+                            .collect();
+                        if !prs.is_empty() {
+                            cycles.push(Cycle { prs });
+                        }
                         break;
                     }
                     Visit::Done => break,
@@ -600,6 +630,7 @@ impl<'a> Graph<'a> {
                 visits[index] = Visit::Done;
             }
         }
+        cycles.sort_by_key(|cycle| cycle.prs[0]);
         cycles
     }
 

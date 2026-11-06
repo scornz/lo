@@ -6,15 +6,38 @@ use crate::support::{With, assert_forest, pr};
 
 #[test]
 fn a_cycle_is_broken_at_the_oldest_prs_link() {
-    // Each targets the other's head branch.
+    // Each targets the other's head branch. #2 is older.
     let stacks = assert_forest(
-        &[pr(1, "b", "a"), pr(2, "a", "b")],
-        &["b", "  #1", "    #2 base-branch"],
+        &[pr(1, "b", "a").created(9), pr(2, "a", "b").created(1)],
+        &["a", "  #2", "    #1 base-branch"],
     );
-    assert_eq!(stacks.cycles(), [Cycle { prs: vec![1, 2] }]);
-    let layer = stacks.layer(1).unwrap();
-    assert_eq!(layer.parent, Parent::Branch("b".into()));
+    assert_eq!(stacks.cycles(), [Cycle { prs: vec![2, 1] }]);
+    let layer = stacks.layer(2).unwrap();
+    assert_eq!(layer.parent, Parent::Branch("a".into()));
     assert_eq!(layer.rule, None);
+}
+
+#[test]
+fn a_cycle_through_a_merged_pr_lists_only_open_prs() {
+    // #1 was squash-merged into #2's branch, which targets #1's.
+    let stacks = assert_forest(
+        &[pr(1, "b", "a").merged(false), pr(2, "a", "b")],
+        &["a", "  #2"],
+    );
+    assert_eq!(stacks.cycles(), [Cycle { prs: vec![2] }]);
+}
+
+#[test]
+fn a_cycle_of_merged_prs_is_broken_but_not_reported() {
+    let stacks = assert_forest(
+        &[
+            pr(1, "b", "a").merged(false),
+            pr(2, "a", "b").merged(false),
+            pr(3, "b", "c"),
+        ],
+        &["b", "  #3 base-branch needs-rebase(#2 b.1)"],
+    );
+    assert!(stacks.cycles().is_empty());
 }
 
 #[test]
