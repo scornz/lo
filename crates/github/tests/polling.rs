@@ -1520,6 +1520,7 @@ async fn a_write_fetches_what_it_changed_again(cx: &mut TestAppContext) {
     let write = t.update(post_comment);
     t.run();
     write.await.unwrap();
+    t.run();
     // At once, and in full, although the check is the same.
     assert_eq!(
         t.requests(),
@@ -1531,23 +1532,26 @@ async fn a_write_fetches_what_it_changed_again(cx: &mut TestAppContext) {
         ])
     );
 
-    // The cache forgets the check too, so a restart fetches the details in full.
+    // Not watched, it's forgotten in the cache, so it's fetched in full when it's opened again.
+    t.update(|poller, cx| {
+        poller.set_open(None, cx);
+        poller.unwatch(&pr(1), cx)
+    });
     let write = t.update(post_comment);
     t.run();
     write.await.unwrap();
-    t.requests();
-    t.restart();
+    t.run();
+    assert_eq!(t.requests(), log(&[(6, "POST /issues/1/comments")]));
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
-    let now = t.now();
     assert_eq!(
         t.requests()
             .into_iter()
             .filter(|(_, what)| !what.contains("/pulls?"))
             .collect::<Vec<_>>(),
         log(&[
-            (now, "GET /pulls/1 (since)"),
-            (now, "PullRequestCheck"),
-            (now, "PullRequest"),
+            (6, "GET /pulls/1 (since)"),
+            (6, "PullRequestCheck"),
+            (6, "PullRequest"),
         ])
     );
 }

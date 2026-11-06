@@ -621,12 +621,12 @@ impl Poller {
                 this.refresh_status(cx);
                 this.invalidate(&target, cx)
             });
-            done.send(result).ok();
             if let Ok(forget) = forget
                 && let Err(error) = forget.await
             {
                 log::warn!("writing the cache: {error:#}");
             }
+            done.send(result).ok();
         })
         .detach();
         cx.foreground_executor().spawn(async move {
