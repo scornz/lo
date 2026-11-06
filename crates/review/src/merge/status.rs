@@ -169,6 +169,23 @@ mod tests {
     }
 
     #[test]
+    fn a_pull_request_waiting_on_a_check_nothing_will_report_is_blocked() {
+        let snapshot = checks(&[("test", CheckState::Missing)]);
+
+        assert_eq!(
+            status(&snapshot),
+            MergeStatus::Blocked {
+                blockers: vec![Blocker::NotReported(RequiredCheck {
+                    name: "test".to_string(),
+                    state: CheckState::Missing,
+                    url: None,
+                })],
+                auto_merge: false,
+            }
+        );
+    }
+
+    #[test]
     fn a_pull_request_something_else_blocks_is_blocked() {
         let snapshot = with_auto_merge(checks(&[
             ("test", CheckState::Running),

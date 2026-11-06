@@ -12,7 +12,7 @@
 
 use super::reviews;
 use super::{
-    Blocker, MergeMethod, MergeSnapshot, MergeStateStatus, PullRequestState, Review,
+    Blocker, CheckState, MergeMethod, MergeSnapshot, MergeStateStatus, PullRequestState, Review,
     ReviewDecision, ReviewState, Reviewer, blockers,
 };
 
@@ -123,6 +123,9 @@ fn waits(blockers: &[Blocker]) -> String {
                 "an approval"
             }
             Blocker::Approvals(_) => "approvals",
+            Blocker::Check(check) if check.state == CheckState::AwaitingApproval => {
+                "a deployment's approval"
+            }
             Blocker::Check(_) => "checks",
             Blocker::Rule(_) => "other rules",
             Blocker::CheckingMergeability => "GitHub to check mergeability",
@@ -1072,6 +1075,25 @@ mod tests {
     }
 
     #[test]
+    fn a_check_nothing_will_report_is_expected_to_stop_it() {
+        let snapshot = MergeSnapshot {
+            required_checks: vec![check("e2e", CheckState::Missing)],
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&snapshot),
+            plan(
+                Approval::Approve,
+                blocked(vec![Blocker::NotReported(check(
+                    "e2e",
+                    CheckState::Missing
+                ))])
+            )
+        );
+    }
+
+    #[test]
     fn it_expects_auto_merge_while_github_works_out_mergeability() {
         let snapshot = MergeSnapshot {
             mergeable: MergeableState::Unknown,
@@ -1259,6 +1281,10 @@ mod tests {
             }),
             ..reviewing()
         };
+        let deployment = MergeSnapshot {
+            required_checks: vec![check("deploy", CheckState::AwaitingApproval)],
+            ..reviewing()
+        };
         let mut cannot_merge = reviewing();
         cannot_merge.viewer.can_merge = false;
 
@@ -1277,6 +1303,10 @@ mod tests {
             (
                 with_queue(needing_another_approval()),
                 "will likely wait for an approval, then join the merge queue",
+            ),
+            (
+                deployment,
+                "will likely wait for a deployment's approval, with auto-merge on",
             ),
             (auto_merge_on, "will likely merge: auto-merge is on"),
             (

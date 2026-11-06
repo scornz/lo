@@ -28,9 +28,15 @@ pub enum Blocker {
     ChangesRequested { by: Vec<String> },
     /// Approvals the base branch's rules require and it doesn't have yet.
     Approvals(MissingApprovals),
-    /// A required check that hasn't passed: it failed, is running, or hasn't reported. Never
+    /// A required check that hasn't passed: it failed, is running, is waiting on a deployment's
+    /// approval, or hasn't reported while something on the head can still report it. Never
     /// [`CheckState::Passed`].
     Check(RequiredCheck),
+    /// A required check that hasn't reported, and nothing on the head can still report it: a
+    /// workflow its `paths` skipped, a renamed job, an app that didn't run, or a first-time
+    /// contributor's workflow waiting for someone to approve running it. GitHub keeps waiting for
+    /// it, but someone has to act.
+    NotReported(RequiredCheck),
     /// Conversations still to resolve, when the base branch's rules require every one resolved.
     Conversations { unresolved: u32 },
     /// Another rule on the base branch.
@@ -44,12 +50,16 @@ pub enum Blocker {
 
 impl Blocker {
     /// Whether waiting clears it without anyone here acting: others' approvals, a required check
-    /// that's running or hasn't reported, GitHub working out mergeability, or a rule that says
-    /// waiting meets it.
+    /// that's running, waiting on a deployment's approval, or yet to report, GitHub working out
+    /// mergeability, or a rule that says waiting meets it. A deployment's approval is its own kind
+    /// of wait: someone approves it, though not here.
     pub fn waiting(&self) -> bool {
         match self {
             Self::Approvals(_) => true,
-            Self::Check(check) => matches!(check.state, CheckState::Running | CheckState::Missing),
+            Self::Check(check) => matches!(
+                check.state,
+                CheckState::Running | CheckState::AwaitingApproval | CheckState::Missing
+            ),
             Self::Rule(rule) => rule.waiting,
             Self::CheckingMergeability => true,
             Self::Merged
@@ -58,6 +68,7 @@ impl Blocker {
             | Self::Conflicts
             | Self::OutOfDate
             | Self::ChangesRequested { .. }
+            | Self::NotReported(_)
             | Self::Conversations { .. }
             | Self::Unexplained { .. } => false,
         }
@@ -68,8 +79,9 @@ impl Blocker {
 /// when GitHub's rules let it; whether you may is [`merge_action`](super::merge_action)'s concern.
 ///
 /// Blockers waiting won't fix come first, then those it will ([`Blocker::waiting`]), each kind in
-/// the order of [`Blocker`]'s variants. Checks keep the snapshot's order, with running checks
-/// before those that haven't reported.
+/// the order of [`Blocker`]'s variants. Checks keep the snapshot's order: failed ones, then those
+/// nothing will report; then, after missing approvals, those awaiting a deployment's approval,
+/// running ones, and those yet to report.
 ///
 /// - A merged or closed pull request has only [`Blocker::Merged`] or [`Blocker::Closed`].
 /// - A draft is `isDraft`, or `mergeStateStatus` `DRAFT`, which REST still reports.
@@ -78,6 +90,8 @@ impl Blocker {
 /// - Reviews block it only when `reviewDecision` says so. With `CHANGES_REQUESTED`, the
 ///   requesters are listed, and the missing approvals when any are; with `REVIEW_REQUIRED`, the
 ///   missing approvals always are.
+/// - A required check that hasn't reported is a [`Blocker::NotReported`] unless something on the
+///   head can still report it.
 /// - GitHub is still working out mergeability when `mergeable` or `mergeStateStatus` is `UNKNOWN`.
 /// - When `mergeStateStatus` is `BLOCKED` and nothing else is listed but GitHub working out
 ///   mergeability, the block is [`Blocker::Unexplained`].
@@ -91,8 +105,15 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     let checks = |state: CheckState| {
         (snapshot.required_checks.iter())
             .filter(move |check| check.state == state)
-            .map(|check| Blocker::Check(check.clone()))
+            .cloned()
     };
+    let reporting = snapshot.checks_pending
+        || (snapshot.required_checks.iter()).any(|check| {
+            matches!(
+                check.state,
+                CheckState::Running | CheckState::AwaitingApproval
+            )
+        });
     let rules = |waiting: bool| {
         (snapshot.unmet_rules.iter())
             .filter(move |rule| rule.waiting == waiting)
@@ -116,7 +137,10 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
             by: reviews::changes_requested_by(snapshot),
         });
     }
-    blockers.extend(checks(CheckState::Failed));
+    blockers.extend(checks(CheckState::Failed).map(Blocker::Check));
+    if !reporting {
+        blockers.extend(checks(CheckState::Missing).map(Blocker::NotReported));
+    }
     if snapshot.rules.conversation_resolution && snapshot.unresolved_threads > 0 {
         blockers.push(Blocker::Conversations {
             unresolved: snapshot.unresolved_threads,
@@ -132,8 +156,11 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     if approvals_missing {
         blockers.push(Blocker::Approvals(missing));
     }
-    blockers.extend(checks(CheckState::Running));
-    blockers.extend(checks(CheckState::Missing));
+    blockers.extend(checks(CheckState::AwaitingApproval).map(Blocker::Check));
+    blockers.extend(checks(CheckState::Running).map(Blocker::Check));
+    if reporting {
+        blockers.extend(checks(CheckState::Missing).map(Blocker::Check));
+    }
     blockers.extend(rules(true));
 
     if merge_state == MergeStateStatus::Blocked && blockers.is_empty() {
@@ -150,6 +177,7 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
 #[cfg(test)]
 mod tests {
     use super::super::{MergeQueue, ReviewRules};
+    use super::reviews::MissingApprovals;
     use super::*;
 
     const URL: &str = "https://github.com/rozed-dev/playground/pull/7";
@@ -328,6 +356,94 @@ mod tests {
     }
 
     #[test]
+    fn a_check_that_has_not_reported_is_a_wait_while_something_on_the_head_can_report_it() {
+        let snapshot = MergeSnapshot {
+            required_checks: vec![check("e2e", CheckState::Missing)],
+            checks_pending: true,
+            ..blocked()
+        };
+
+        let blockers = blockers(&snapshot);
+        assert_eq!(
+            blockers,
+            [Blocker::Check(check("e2e", CheckState::Missing))]
+        );
+        assert!(blockers[0].waiting());
+    }
+
+    #[test]
+    fn a_running_required_check_means_something_can_still_report() {
+        let snapshot = MergeSnapshot {
+            required_checks: vec![
+                check("e2e", CheckState::Missing),
+                check("test", CheckState::Running),
+            ],
+            ..blocked()
+        };
+
+        assert_eq!(
+            blockers(&snapshot),
+            [
+                Blocker::Check(check("test", CheckState::Running)),
+                Blocker::Check(check("e2e", CheckState::Missing)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_check_nothing_on_the_head_will_report_blocks_it_until_someone_acts() {
+        // A workflow its paths skipped, a renamed job, or an app that didn't run.
+        let snapshot = MergeSnapshot {
+            required_checks: vec![
+                check("build", CheckState::Passed),
+                check("e2e", CheckState::Missing),
+                check("lint", CheckState::Failed),
+            ],
+            ..blocked()
+        };
+
+        let blockers = blockers(&snapshot);
+        assert_eq!(
+            blockers,
+            [
+                Blocker::Check(check("lint", CheckState::Failed)),
+                Blocker::NotReported(check("e2e", CheckState::Missing)),
+            ]
+        );
+        assert!(!blockers[1].waiting());
+    }
+
+    #[test]
+    fn a_deployment_awaiting_approval_is_its_own_wait() {
+        let snapshot = MergeSnapshot {
+            required_checks: vec![
+                check("test", CheckState::Running),
+                check("deploy", CheckState::AwaitingApproval),
+            ],
+            review_decision: Some(ReviewDecision::ReviewRequired),
+            rules: ReviewRules {
+                required_approvals: 1,
+                ..Default::default()
+            },
+            ..blocked()
+        };
+
+        let blockers = blockers(&snapshot);
+        assert_eq!(
+            blockers,
+            [
+                Blocker::Approvals(MissingApprovals {
+                    more: 1,
+                    code_owners: vec![],
+                }),
+                Blocker::Check(check("deploy", CheckState::AwaitingApproval)),
+                Blocker::Check(check("test", CheckState::Running)),
+            ]
+        );
+        assert!(blockers.iter().all(Blocker::waiting));
+    }
+
+    #[test]
     fn unresolved_conversations_block_it_when_the_rules_require_resolving_them() {
         let snapshot = MergeSnapshot {
             unresolved_threads: 3,
@@ -476,10 +592,12 @@ mod tests {
     }
 
     #[test]
-    fn running_and_missing_checks_are_waits() {
+    fn running_awaiting_and_missing_checks_are_waits() {
         assert!(Blocker::Check(check("test", CheckState::Running)).waiting());
+        assert!(Blocker::Check(check("deploy", CheckState::AwaitingApproval)).waiting());
         assert!(Blocker::Check(check("test", CheckState::Missing)).waiting());
         assert!(!Blocker::Check(check("test", CheckState::Failed)).waiting());
+        assert!(!Blocker::NotReported(check("test", CheckState::Missing)).waiting());
     }
 
     #[test]

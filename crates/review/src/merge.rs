@@ -132,6 +132,10 @@ pub struct MergeSnapshot {
     /// The checks the base branch's rules require, one per name, as they stand on the head. A
     /// required check that hasn't reported is [`CheckState::Missing`].
     pub required_checks: Vec<RequiredCheck>,
+    /// Whether something on the head can still report a check: a check suite or check run on it
+    /// hasn't completed. A required check that hasn't reported is a wait only while something can
+    /// still report it; a running required check counts too.
+    pub checks_pending: bool,
     /// Review threads not yet resolved (`reviewThreads` with `isResolved` false).
     pub unresolved_threads: u32,
     /// The base branch's rules require the head to be up to date with the base, and the base has
@@ -249,9 +253,13 @@ pub enum CheckState {
     Passed,
     /// It ended any other way. Running it again is up to someone.
     Failed,
-    /// It's requested, queued, running, or waiting, such as on a deployment's approval.
+    /// It's requested, queued or running.
     Running,
-    /// It hasn't reported on the head.
+    /// It's waiting on a deployment's protection rules, usually for a reviewer to approve the
+    /// deployment (a check run's `WAITING`).
+    AwaitingApproval,
+    /// It hasn't reported on the head. It's a wait while something on the head can still report
+    /// it ([`MergeSnapshot::checks_pending`]), and otherwise blocks until someone acts.
     Missing,
 }
 
@@ -263,6 +271,7 @@ impl CheckState {
         match (status, conclusion) {
             (CheckStatus::Completed, Some(Success | Neutral | Skipped)) => Self::Passed,
             (CheckStatus::Completed, _) => Self::Failed,
+            (CheckStatus::Waiting, _) => Self::AwaitingApproval,
             _ => Self::Running,
         }
     }
@@ -419,7 +428,6 @@ mod tests {
         for status in [
             CheckStatus::Requested,
             CheckStatus::Queued,
-            CheckStatus::Waiting,
             CheckStatus::Pending,
             CheckStatus::InProgress,
         ] {
@@ -429,6 +437,14 @@ mod tests {
                 "{status:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_check_run_waiting_on_a_deployment_awaits_approval() {
+        assert_eq!(
+            CheckState::of_check_run(CheckStatus::Waiting, None),
+            CheckState::AwaitingApproval
+        );
     }
 
     #[test]
