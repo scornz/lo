@@ -110,8 +110,21 @@ fn an_unknown_option_is_an_error() {
 
 #[test]
 fn rozed_does_not_start_inside_rozed() {
-    let output = rozed(&[]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("not starting"), "{stderr}");
+    for args in [&[][..], &["https://github.com/sharkdp/fd/pull/2212"]] {
+        let output = rozed(args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("not starting"), "{stderr}");
+    }
+}
+
+#[test]
+fn an_argument_that_isnt_a_pull_request_link_is_refused_with_usage() {
+    for arg in ["https://github.com/sharkdp/fd/issues/1", "sharkdp/fd#2212"] {
+        let output = rozed(&[arg]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&format!("can't open `{arg}`")), "{stderr}");
+        assert!(stderr.contains("usage: rozed"), "{stderr}");
+    }
 }
