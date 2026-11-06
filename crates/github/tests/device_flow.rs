@@ -12,11 +12,13 @@ use http_client::http::HeaderValue;
 use http_client::{AsyncBody, HttpClient, Request, Response, Url};
 use parking_lot::Mutex;
 
-/// Replays a cassette, noting when each request was sent on the test clock.
+/// Replays a cassette, noting when each request was sent on the test clock. The polls numbered
+/// in `unreachable` (from 1) fail as if the network were down, without reaching the cassette.
 struct Timed {
     inner: Arc<ReplayHttpClient>,
     executor: BackgroundExecutor,
     sent: Mutex<Vec<(String, Instant)>>,
+    unreachable: Vec<usize>,
 }
 
 impl HttpClient for Timed {
@@ -32,12 +34,18 @@ impl HttpClient for Timed {
         &self,
         request: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
-        self.sent
-            .lock()
-            .push((request.uri().path().to_string(), self.executor.now()));
+        let path = request.uri().path().to_string();
+        let mut sent = self.sent.lock();
+        sent.push((path.clone(), self.executor.now()));
+        let polls = sent.iter().filter(|(p, _)| p == POLL_PATH).count();
+        if path == POLL_PATH && self.unreachable.contains(&polls) {
+            return Box::pin(async { Err(anyhow::anyhow!("the network is down")) });
+        }
         self.inner.send(request)
     }
 }
+
+const POLL_PATH: &str = "/login/oauth/access_token";
 
 struct Run {
     http: Arc<Timed>,
@@ -51,18 +59,27 @@ impl Run {
         let sent = self.http.sent.lock();
         let start = sent[0].1;
         sent.iter()
-            .filter(|(path, _)| path == "/login/oauth/access_token")
+            .filter(|(path, _)| path == POLL_PATH)
             .map(|(_, at)| (*at - start).as_secs())
             .collect()
     }
 }
 
 async fn sign_in(cassette: &str, cx: &mut TestAppContext) -> Run {
+    sign_in_with_unreachable(cassette, &[], cx).await
+}
+
+async fn sign_in_with_unreachable(
+    cassette: &str,
+    unreachable: &[usize],
+    cx: &mut TestAppContext,
+) -> Run {
     let executor = cx.executor();
     let http = Arc::new(Timed {
         inner: ReplayHttpClient::cassette(cassette),
         executor: executor.clone(),
         sent: Mutex::default(),
+        unreachable: unreachable.to_vec(),
     });
     let client: Arc<dyn HttpClient> = http.clone();
     let mut user_code = None;
@@ -142,6 +159,25 @@ async fn polling_stops_at_the_deadline(cx: &mut TestAppContext) {
     );
     // The code lasts 20 s: a fourth poll at 24 s would be too late, so it isn't sent.
     assert_eq!(run.poll_times(), [6, 12, 18]);
+}
+
+#[gpui::test]
+async fn a_code_entered_in_its_last_seconds_still_signs_in(cx: &mut TestAppContext) {
+    let run = sign_in("device_flow_last_poll", cx).await;
+    assert!(run.result.is_ok(), "{:?}", run.result);
+    // The code lasts 24 s. A fourth poll at 24 s would be too late, so it goes a second before
+    // the end instead, still at least an interval after the third.
+    assert_eq!(run.poll_times(), [6, 12, 18, 23]);
+}
+
+#[gpui::test]
+async fn polling_goes_on_through_server_and_network_errors(cx: &mut TestAppContext) {
+    // The first poll gets GitHub's 502 page and the second no answer at all; each failure in a
+    // row doubles the wait, and an answer resets it.
+    let run = sign_in_with_unreachable("device_flow_transient", &[2], cx).await;
+    let user = run.result.as_ref().unwrap();
+    assert_eq!(user.user.login, "rozed-bot");
+    assert_eq!(run.poll_times(), [6, 18, 42, 48]);
 }
 
 #[gpui::test]

@@ -157,14 +157,9 @@ impl GithubError {
             errors: Vec<serde_json::Value>,
         }
         let parsed: Body = serde_json::from_slice(body).unwrap_or_default();
-        let message = parsed.message.unwrap_or_else(|| {
-            let text = String::from_utf8_lossy(body).trim().to_string();
-            if text.is_empty() {
-                format!("HTTP {status}")
-            } else {
-                text
-            }
-        });
+        let message = parsed
+            .message
+            .unwrap_or_else(|| summarize_body(body).unwrap_or_else(|| format!("HTTP {status}")));
         let documentation_url = parsed.documentation_url;
         let header = |name: &str| {
             headers
@@ -266,6 +261,24 @@ impl GithubError {
         }
         Self::GraphQl { errors }
     }
+}
+
+/// The most of an error body that's worth showing: its text with whitespace collapsed, cut short,
+/// or just "(an HTML page)" for one of GitHub's error pages. `None` when it's empty.
+pub(crate) fn summarize_body(body: &[u8]) -> Option<String> {
+    const MAX_CHARS: usize = 200;
+    let text = String::from_utf8_lossy(body);
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.starts_with('<') {
+        return Some("(an HTML page)".into());
+    }
+    if text.chars().count() <= MAX_CHARS {
+        return Some(text);
+    }
+    Some(text.chars().take(MAX_CHARS).collect::<String>() + "…")
 }
 
 fn is_oauth_restriction(message: &str) -> bool {
@@ -495,6 +508,16 @@ mod tests {
 
         let error = GithubError::from_response(502, &HeaderMap::new(), b"Bad gateway");
         assert_eq!(error.to_string(), "GitHub answered 502: Bad gateway");
+
+        // A whole web page isn't a message.
+        let page = format!(
+            "<!DOCTYPE html>\n<html>{}</html>",
+            "<p>Unicorn!</p>".repeat(500)
+        );
+        let error = GithubError::from_response(503, &HeaderMap::new(), page.as_bytes());
+        assert_eq!(error.to_string(), "GitHub answered 503: (an HTML page)");
+        let error = GithubError::from_response(500, &HeaderMap::new(), "x ".repeat(500).as_bytes());
+        assert!(error.to_string().chars().count() < 250, "{error}");
     }
 
     #[test]

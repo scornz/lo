@@ -16,7 +16,7 @@ use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, Method, RedirectPo
 use serde::Deserialize;
 
 use crate::client::{GithubClient, user_agent};
-use crate::error::{CLIENT_ID, GithubError};
+use crate::error::{CLIENT_ID, GithubError, summarize_body};
 use crate::token::Token;
 use crate::user::{AuthenticatedUser, SCOPES};
 
@@ -33,6 +33,10 @@ const MIN_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// The longest a code is waited for. GitHub's codes last 15 minutes.
 const MAX_EXPIRES_IN: Duration = Duration::from_secs(60 * 60);
+/// The longest wait after polls that failed in a row.
+const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How long before the code expires the last poll goes, when the next one would be too late.
+const LAST_POLL_MARGIN: Duration = Duration::from_secs(1);
 /// How much `slow_down` adds when it doesn't say the new interval.
 const SLOW_DOWN_STEP: Duration = Duration::from_secs(5);
 /// Polls wait a little longer than the interval, so clock drift never earns a `slow_down`.
@@ -86,6 +90,8 @@ enum Poll {
     Expired,
     Denied,
     Refused(String),
+    /// GitHub didn't answer this time (a 5xx or a 429); poll again later.
+    Unavailable(String),
 }
 
 #[derive(Deserialize)]
@@ -153,10 +159,7 @@ pub async fn request_codes(http: &Arc<dyn HttpClient>) -> Result<DeviceCodes, De
     )
     .await?;
     if status != 200 {
-        return Err(DeviceFlowError::Refused(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&body).trim()
-        )));
+        return Err(DeviceFlowError::Refused(http_error(status, &body)));
     }
     if let Ok(PollResponse {
         error: Some(error),
@@ -176,12 +179,20 @@ pub async fn request_codes(http: &Arc<dyn HttpClient>) -> Result<DeviceCodes, De
     })
 }
 
+/// `HTTP <status>: <what the body says>`.
+fn http_error(status: u16, body: &[u8]) -> String {
+    match summarize_body(body) {
+        Some(summary) => format!("HTTP {status}: {summary}"),
+        None => format!("HTTP {status}"),
+    }
+}
+
 fn parse_poll(status: u16, body: &[u8]) -> Poll {
+    if status >= 500 || status == 429 {
+        return Poll::Unavailable(format!("HTTP {status}"));
+    }
     if status != 200 {
-        return Poll::Refused(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(body).trim()
-        ));
+        return Poll::Refused(http_error(status, body));
     }
     let Ok(response) = serde_json::from_slice::<PollResponse>(body) else {
         return Poll::Refused("GitHub's answer wasn't JSON".into());
@@ -204,8 +215,11 @@ fn parse_poll(status: u16, body: &[u8]) -> Poll {
 }
 
 /// Polls until the user enters the code on GitHub, returning the token. Each poll waits the
-/// interval × 1.2; a `slow_down` adopts the interval GitHub returns. It stops when the codes
-/// expire, without waiting for GitHub to say so. Dropping the future cancels it.
+/// interval × 1.2; a `slow_down` adopts the interval GitHub returns. A poll that gets no answer,
+/// or a server error, doesn't end the flow: the wait doubles with each such poll in a row, up to
+/// a minute. When the next poll would come after the codes expire, a last one goes a second
+/// before they do, if that's at least an interval after the previous one; then the flow ends
+/// without waiting for GitHub to say so. Dropping the future cancels it.
 pub async fn wait_for_token(
     http: &Arc<dyn HttpClient>,
     codes: &DeviceCodes,
@@ -213,13 +227,23 @@ pub async fn wait_for_token(
 ) -> Result<Token, DeviceFlowError> {
     let deadline = executor.now() + codes.expires_in.min(MAX_EXPIRES_IN);
     let mut interval = clamp_interval(codes.interval);
+    let mut failures = 0;
     loop {
-        let wait = interval.mul_f64(INTERVAL_MARGIN);
-        if executor.now() + wait >= deadline {
-            return Err(DeviceFlowError::Expired);
-        }
+        let wait = backoff(interval.mul_f64(INTERVAL_MARGIN), failures);
+        let now = executor.now();
+        let (wait, last) = if now + wait < deadline {
+            (wait, false)
+        } else {
+            match deadline
+                .saturating_duration_since(now)
+                .checked_sub(LAST_POLL_MARGIN)
+            {
+                Some(wait) if wait >= interval => (wait, true),
+                _ => return Err(DeviceFlowError::Expired),
+            }
+        };
         executor.timer(wait).await;
-        let (status, body) = post_form(
+        let poll = match post_form(
             http,
             ACCESS_TOKEN_URL,
             &[
@@ -228,19 +252,42 @@ pub async fn wait_for_token(
                 ("grant_type", GRANT_TYPE),
             ],
         )
-        .await?;
-        match parse_poll(status, &body) {
-            Poll::Pending => {}
+        .await
+        {
+            Ok((status, body)) => parse_poll(status, &body),
+            Err(GithubError::Network(error)) => Poll::Unavailable(format!("{error:#}")),
+            Err(error) => return Err(error.into()),
+        };
+        match poll {
+            Poll::Pending => failures = 0,
             Poll::SlowDown(new_interval) => {
+                failures = 0;
                 interval = clamp_interval(new_interval.unwrap_or(interval + SLOW_DOWN_STEP));
                 log::info!("GitHub asked to poll every {interval:?}");
+            }
+            Poll::Unavailable(why) => {
+                failures += 1;
+                log::info!("polling GitHub for the sign-in failed ({why}); trying again");
             }
             Poll::Token(token) => return Ok(token),
             Poll::Expired => return Err(DeviceFlowError::Expired),
             Poll::Denied => return Err(DeviceFlowError::Denied),
             Poll::Refused(message) => return Err(DeviceFlowError::Refused(message)),
         }
+        if last {
+            return Err(DeviceFlowError::Expired);
+        }
     }
+}
+
+/// `wait` doubled for each of `failures` polls in a row that failed, up to [`MAX_BACKOFF`] (or
+/// `wait`, if that's longer).
+fn backoff(wait: Duration, failures: u32) -> Duration {
+    if failures == 0 {
+        return wait;
+    }
+    let doubled = wait.saturating_mul(1 << failures.min(16));
+    doubled.min(MAX_BACKOFF.max(wait))
 }
 
 /// Reads who a new token belongs to (`GET /user`) and checks it has every scope rozed needs.
@@ -296,7 +343,23 @@ mod tests {
             poll("error=slow_down&interval=20"),
             Poll::Refused(_)
         ));
-        assert!(matches!(parse_poll(500, b"oops"), Poll::Refused(_)));
+        assert_eq!(
+            parse_poll(502, b"<!DOCTYPE html><html>Unicorn!</html>"),
+            Poll::Unavailable("HTTP 502".into())
+        );
+        assert!(matches!(parse_poll(429, b""), Poll::Unavailable(_)));
+        // A refusal's page is summed up, not shown whole.
+        let Poll::Refused(message) =
+            parse_poll(404, format!("<html>{}</html>", "x".repeat(5000)).as_bytes())
+        else {
+            panic!();
+        };
+        assert_eq!(message, "HTTP 404: (an HTML page)");
+        let Poll::Refused(message) = parse_poll(400, "nope ".repeat(100).as_bytes()) else {
+            panic!();
+        };
+        assert!(message.chars().count() < 220, "{message}");
+        assert!(message.ends_with('…'), "{message}");
     }
 
     #[test]
