@@ -1,3 +1,4 @@
+mod attributes;
 mod checkout;
 mod cleanup;
 mod fetch;
