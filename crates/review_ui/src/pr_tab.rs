@@ -1998,6 +1998,52 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn closing_the_only_tab_waiting_on_the_picker_closes_it(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        two_accounts_see_acme(&github, &git, cx).await;
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        assert!(picker(&workspace, cx).is_some());
+
+        close(&workspace, tab, cx);
+
+        assert_eq!(picker(&workspace, cx), None);
+    }
+
+    #[gpui::test]
+    async fn an_account_removed_while_the_picker_lists_it_isnt_used(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let accounts = two_accounts_see_acme(&github, &git, cx).await;
+        let tab = open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+        accounts
+            .update(cx, |accounts, cx| accounts.remove("work", cx))
+            .await
+            .unwrap();
+
+        cx.simulate_keystrokes("j enter");
+        cx.run_until_parked();
+
+        // It asks again, with the accounts left, rather than open as another one.
+        assert_eq!(
+            picker(&workspace, cx),
+            Some(("acme".to_string(), logins(&["home"])))
+        );
+        assert_eq!(acting(&tab, cx), None);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(acting(&tab, cx), Some(Acting::Account("home".into())));
+        assert_eq!(
+            accounts.read_with(cx, |accounts, _| accounts
+                .remembered_account("acme")
+                .unwrap()),
+            Some("home".to_string())
+        );
+    }
+
+    #[gpui::test]
     async fn an_answer_goes_only_to_the_tabs_whose_accounts_include_it(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
@@ -2785,6 +2831,31 @@ mod tests {
             assert!(tab.diff().is_none());
             assert_eq!(tab.tab_content_text(0, cx), "playground#2 Add b");
         });
+    }
+
+    #[gpui::test]
+    async fn offline_the_copy_shows_though_its_account_was_signed_out(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        playground_copied_then_offline(&workspace, &github, &git, saved_as_given, cx).await;
+        let accounts = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.read(cx).accounts().clone()
+        });
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("rozed-bot", github::accounts::SignedOut::Refused, cx)
+        });
+
+        // With no account signed in, it asks GitHub without one, and gets no answer.
+        let tab = open_loaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+
+        assert!(
+            matches!(status(&tab, cx), Status::Offline(_)),
+            "{:?}",
+            status(&tab, cx)
+        );
+        tab.read_with(cx, |tab, _| assert!(tab.diff().is_some()));
     }
 
     #[gpui::test]

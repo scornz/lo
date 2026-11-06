@@ -402,15 +402,15 @@ enum Showing {
 
 /// What can be said for a tab without asking.
 enum Known {
-    /// An account remembered for its repository by now is among its accounts, or only one of
-    /// them is still signed in.
+    /// An account remembered for its repository by now is among its accounts.
     Answer(Waiter, String),
     /// None of its accounts is signed in any more.
     NoneLeft(Waiter),
     Ask(Waiter),
 }
 
-/// What can be said for `waiter` from what's remembered now, without asking.
+/// What can be said for `waiter` from what's remembered now, without asking. Its accounts that
+/// were removed or signed out since are dropped.
 fn known(mut waiter: Waiter, accounts: &Entity<Accounts>, cx: &App) -> Known {
     let accounts = accounts.read(cx);
     waiter
@@ -423,13 +423,12 @@ fn known(mut waiter: Waiter, accounts: &Entity<Accounts>, cx: &App) -> Known {
     if let Some(login) = remembered.pick(&waiter.logins).cloned() {
         return Known::Answer(waiter, login);
     }
-    match waiter.logins.as_slice() {
-        [] => Known::NoneLeft(waiter),
-        [only] => {
-            let only = only.clone();
-            Known::Answer(waiter, only)
-        }
-        _ => Known::Ask(waiter),
+    // Even with one account left, it's asked rather than taken: the tab never quietly opens as
+    // another account than the one chosen.
+    if waiter.logins.is_empty() {
+        Known::NoneLeft(waiter)
+    } else {
+        Known::Ask(waiter)
     }
 }
 
