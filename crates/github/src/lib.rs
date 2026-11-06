@@ -25,6 +25,7 @@ mod rate_limit;
 pub mod record;
 #[cfg(any(test, feature = "test-support"))]
 pub mod replay;
+pub mod revision_marks;
 mod token;
 mod user;
 pub mod viewed;

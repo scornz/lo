@@ -198,13 +198,13 @@ pub struct PrCache {
     db: RozedDb,
 }
 
-fn to_secs(time: SystemTime) -> i64 {
+pub(crate) fn to_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or_default()
 }
 
-fn from_secs(secs: i64) -> SystemTime {
+pub(crate) fn from_secs(secs: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).unwrap_or_default())
 }
 
