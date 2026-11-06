@@ -3,6 +3,32 @@
 //! A stack is a tree of open pull requests. Each layer sits on the PR below it, and the bottom
 //! layer sits on a root branch with no open PR, such as `main` or `feature-x`. [`Stacks::find`]
 //! builds the forest from the repo's PRs, and the result drives the stack sidebar and its walk.
+//!
+//! ```
+//! use std::time::SystemTime;
+//! use stacks::{Parent, PullRequest, Rule, Stacks, State};
+//!
+//! let pr = |number: u64, base: &str, head: &str| PullRequest {
+//!     number,
+//!     state: State::Open,
+//!     base_ref: base.into(),
+//!     base_oid: format!("{base}-tip"),
+//!     head_ref: head.into(),
+//!     head_in_base_repo: true,
+//!     head_oid: format!("{head}-tip"),
+//!     commits: vec![format!("{head}-tip")],
+//!     created_at: SystemTime::UNIX_EPOCH,
+//!     native_stack: None,
+//! };
+//! let stacks = Stacks::find(&[pr(1, "main", "a"), pr(2, "a", "b")]);
+//!
+//! let layer = stacks.layer(2).unwrap();
+//! assert_eq!(layer.parent, Parent::Pr(1));
+//! assert_eq!(layer.rule, Some(Rule::BaseBranch));
+//! let stack = stacks.stack_of(2).unwrap();
+//! assert_eq!(stack.root, "main");
+//! assert_eq!(stack.layers, [1, 2]);
+//! ```
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -60,10 +86,12 @@ pub struct NativeStackEntry {
 }
 
 /// The rule that linked a layer to the PR below it. When several rules apply, the first in this
-/// order wins, so they sort strongest first.
+/// order wins, so they sort strongest first. When a rule matches several PRs equally well, an open
+/// PR wins over a merged one, then the newest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
-    /// GitHub says it's the layer above the PR below, in a stack made with GitHub's stacks.
+    /// It's the layer one position above the PR below in a GitHub stack. When that position wasn't
+    /// passed or is closed, the other rules decide.
     NativeStack,
     /// Its base branch is the head branch of the PR below. Never links to a fork's branch, nor to a
     /// merged PR's branch that has moved on since the merge.
@@ -87,12 +115,15 @@ pub enum Parent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layer {
     pub number: u64,
+    /// What it sits on. When its rule matched a merged PR, it sits where that PR sat: on the PR or
+    /// root branch the merged PR's own link leads to.
     pub parent: Parent,
-    /// The rule that linked it to the PR below, or `None` when no rule did and it sits on its own
-    /// base branch.
+    /// The rule that linked it to the PR below, which may be a merged PR. `None` when no rule did,
+    /// or its link was dropped to break a cycle; it then sits on its own base branch.
     pub rule: Option<Rule>,
-    /// Set when the PR its rule matched was merged in a way that left this layer on commits that
-    /// aren't in the base branch.
+    /// Set when a merged PR below it was squash- or rebase-merged, so this layer still carries
+    /// commits that never landed as they are. Never set on a layer linked by
+    /// [`Rule::NativeStack`], because GitHub rebases those itself.
     pub needs_rebase: Option<NeedsRebase>,
     /// The layers sitting on this one, oldest first.
     pub children: Vec<u64>,
@@ -100,18 +131,18 @@ pub struct Layer {
     pub depth: usize,
 }
 
-/// A layer sitting on a squash- or rebase-merged PR's commits, which aren't in the branch that PR
-/// merged into.
+/// Why a layer needs a rebase, and what to compare it against until then.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NeedsRebase {
-    /// The merged PR the layer's rule matched.
+    /// The merged PR the layer's rule matched: the nearest merged PR below it.
     pub merged: u64,
     /// The commit to compare the layer against: the merged PR's head, so changes that already
     /// landed stay hidden.
     pub compare_against: String,
 }
 
-/// One tree: a bottom layer sitting on a root branch, and every layer above it.
+/// One tree: a bottom layer sitting on a root branch, and every layer above it. Each PR sitting
+/// directly on a root branch starts its own stack, whether the root is `main` or `feature-x`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stack {
     /// The root branch the bottom layer sits on.
