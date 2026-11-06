@@ -121,3 +121,14 @@ fn finds_nothing_without_a_match() {
 
     assert_eq!(moves(&files), Vec::<String>::new());
 }
+
+#[test]
+fn takes_lines_in_any_order() {
+    let mut deleted = FileChanges::new("src/cart.rs").delete(10, TOTAL).deleted;
+    deleted.reverse();
+    let mut file = FileChanges::new("src/cart.rs").add(40, TOTAL);
+    file.added.swap(0, 2);
+    file.deleted = deleted;
+
+    assert_eq!(moves(&[file]), ["src/cart.rs:10-13 -> src/cart.rs:40-43"]);
+}
