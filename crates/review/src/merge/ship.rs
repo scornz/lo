@@ -147,10 +147,23 @@ fn waits(blockers: &[Blocker]) -> String {
 pub enum Approval {
     /// Approve the head on screen.
     Approve,
+    /// Approve the head on screen again: your latest review of it was dismissed, such as by a
+    /// maintainer, so the confirmation says so.
+    ReapproveDismissed,
     /// Skip it: it's your pull request, which GitHub doesn't let you approve.
     OwnPullRequest,
     /// Skip it: your latest review already approves the head on screen.
     AlreadyApproved,
+}
+
+impl Approval {
+    /// Whether this step submits an approval.
+    pub fn approves(self) -> bool {
+        match self {
+            Self::Approve | Self::ReapproveDismissed => true,
+            Self::OwnPullRequest | Self::AlreadyApproved => false,
+        }
+    }
 }
 
 /// What approve and ship does after approving.
@@ -219,8 +232,9 @@ pub enum Stop {
 ///   it never approves what you didn't see. Heads are full commit SHAs, compared ignoring case.
 /// - It approves the head on screen. It skips that on your own pull request, and when your latest
 ///   review approves that head already. An approval of an older revision is given again, so
-///   GitHub records that you approved what you saw. When GitHub doesn't let you approve someone
-///   else's pull request, it does nothing.
+///   GitHub records that you approved what you saw, and so is one of that head that was
+///   dismissed, which the plan says. When GitHub doesn't let you approve someone else's pull
+///   request, it does nothing.
 /// - [`Plan::likely`] is what [`after_approving`] would return if GitHub reported what rozed
 ///   expects once you've approved. It's only a prediction, for the confirmation's wording.
 pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
@@ -245,22 +259,28 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
     let yours = reviews::latest(snapshot)
         .into_iter()
         .find(|review| reviews::same_login(&review.author, &viewer.login));
+    let yours_on_screen = |state: ReviewState| {
+        yours.is_some_and(|review| {
+            review.state == state
+                && (review.commit.as_deref())
+                    .is_some_and(|commit| same_commit(commit, &snapshot.head_on_screen))
+        })
+    };
     let approval = if viewer.did_author {
         Approval::OwnPullRequest
-    } else if yours.is_some_and(|review| {
-        review.state == ReviewState::Approved
-            && (review.commit.as_deref())
-                .is_some_and(|commit| same_commit(commit, &snapshot.head_on_screen))
-    }) {
+    } else if yours_on_screen(ReviewState::Approved) {
         Approval::AlreadyApproved
-    } else if viewer.can_approve {
-        Approval::Approve
-    } else {
+    } else if !viewer.can_approve {
         return ApproveAndShip::CannotApprove;
+    } else if yours_on_screen(ReviewState::Dismissed) {
+        Approval::ReapproveDismissed
+    } else {
+        Approval::Approve
     };
-    let after = match approval {
-        Approval::Approve => with_your_approval(snapshot),
-        Approval::OwnPullRequest | Approval::AlreadyApproved => snapshot.clone(),
+    let after = if approval.approves() {
+        with_your_approval(snapshot)
+    } else {
+        snapshot.clone()
     };
     let likely = ship(&after);
     let may_auto_merge = match &likely {
@@ -866,6 +886,34 @@ mod tests {
             approve_and_ship(&snapshot),
             plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
         );
+    }
+
+    #[test]
+    fn it_says_when_it_approves_again_after_your_review_was_dismissed() {
+        let dismissed = MergeSnapshot {
+            reviews: vec![review("alice", ReviewState::Dismissed, HEAD)],
+            ..reviewing()
+        };
+        let dismissed_earlier = MergeSnapshot {
+            reviews: vec![review("alice", ReviewState::Dismissed, OLD_HEAD)],
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&dismissed),
+            plan(
+                Approval::ReapproveDismissed,
+                Ship::Merge(MergeMethod::Squash)
+            )
+        );
+        assert_eq!(
+            approve_and_ship(&dismissed_earlier),
+            plan(Approval::Approve, Ship::Merge(MergeMethod::Squash))
+        );
+        assert!(Approval::ReapproveDismissed.approves());
+        assert!(Approval::Approve.approves());
+        assert!(!Approval::OwnPullRequest.approves());
+        assert!(!Approval::AlreadyApproved.approves());
     }
 
     #[test]
