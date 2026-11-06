@@ -9,7 +9,7 @@ use repo_cache::{
 };
 use tempfile::TempDir;
 
-use crate::support::{Remote, Server, blob_id, missing_objects, rust_source};
+use crate::support::{Remote, Server, blob_id, git, missing_objects, rust_source};
 
 /// The commits the submodule points at. Neither is on the server, so fetching either fails.
 const SUBMODULE_BEFORE: &str = "1111111111111111111111111111111111111111";
@@ -388,4 +388,27 @@ fn finds_merge_bases_and_ancestors() {
     // A commit the clone doesn't have is an error, not "no history in common".
     let unknown: Oid = "3333333333333333333333333333333333333333".parse().unwrap();
     assert!(repo.merge_base(&unknown, &f.head).is_err());
+}
+
+#[test]
+fn the_clones_own_config_cant_turn_attributes_on() {
+    let f = fixture();
+    // Every commit's `.gitattributes` calls `*.txt` binary. Config naming a tree to read
+    // attributes from, as `attr.tree` does, would apply it.
+    git(
+        f.repo.git_dir(),
+        &["config", "attr.tree", "refs/rozed/pull/1/head"],
+    );
+
+    let files = f.repo.changed_files(&f.base, &f.head).unwrap();
+
+    let keep = files.iter().find(|file| file.path() == "keep.txt").unwrap();
+    assert!(!keep.binary);
+    assert_eq!(
+        keep.lines,
+        Some(LineCounts {
+            added: 1,
+            deleted: 1
+        })
+    );
 }

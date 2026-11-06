@@ -1,8 +1,8 @@
 //! Checkouts of pull request heads.
 
 use std::fs;
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use repo_cache::{Oid, PullRequestRefs, Repo, RepoCache};
@@ -273,4 +273,97 @@ fn hashes_a_checkouts_files_as_git_would() {
         error.to_string().contains("isn't a valid checkout"),
         "{error}"
     );
+}
+
+/// A program that leaves a marker named `name` in `markers` when it runs, so a test can see it did.
+fn marker_program(markers: &Path, name: &str) -> PathBuf {
+    fs::create_dir_all(markers).unwrap();
+    let path = markers.with_file_name(format!("{name}-program"));
+    let script = format!("#!/bin/sh\ntouch '{}/{name}'\nexit 0\n", markers.display());
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn hostile_config_in_the_clone_has_no_effect() {
+    let f = fixture();
+    let scratch = TempDir::new().unwrap();
+    let markers = scratch.path().join("markers");
+    // What anything able to write the clone's config could set: hooks, a file-system monitor, and
+    // attributes for every file.
+    let hooks = scratch.path().join("hooks");
+    let own_hooks = f.repo.git_dir().join("hooks");
+    for (dir, prefix) in [(&hooks, ""), (&own_hooks, "own-")] {
+        fs::create_dir_all(dir).unwrap();
+        for hook in ["post-checkout", "reference-transaction"] {
+            let program = marker_program(&markers, &format!("{prefix}{hook}"));
+            fs::copy(program, dir.join(hook)).unwrap();
+        }
+    }
+    let attributes = scratch.path().join("attributes");
+    fs::write(&attributes, "* ident eol=crlf\n").unwrap();
+    let fsmonitor = marker_program(&markers, "fsmonitor");
+    for (key, value) in [
+        ("core.hooksPath", hooks.to_str().unwrap()),
+        ("core.fsmonitor", fsmonitor.to_str().unwrap()),
+        ("core.attributesFile", attributes.to_str().unwrap()),
+    ] {
+        git(f.repo.git_dir(), &["config", key, value]);
+    }
+
+    // A checkout made, moved to a new head, and its files hashed.
+    let dir = f.repo.checkout(1, &f.r1).unwrap();
+    f.push_r2();
+    let dir_r2 = f.repo.checkout(1, &f.r2).unwrap();
+    for dir in [&dir, &dir_r2] {
+        if dir.join("src/lib.rs").is_file() {
+            f.repo.hash_checkout_file(dir, "src/lib.rs").unwrap();
+        }
+    }
+
+    let ran: Vec<_> = fs::read_dir(&markers)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(ran, Vec::<std::ffi::OsString>::new());
+    assert_eq!(
+        fs::read_to_string(dir_r2.join("src/lib.rs")).unwrap(),
+        "pub fn a() { 2 }\n"
+    );
+}
+
+#[test]
+fn a_pull_requests_own_attributes_never_apply_in_its_checkout() {
+    let f = fixture();
+    f.remote.switch("feature");
+    // Attributes that would change the checkout's bytes: keyword expansion, line endings and a
+    // re-encoding. git applies the last when committing, so the blob is UTF-8.
+    f.remote
+        .write(
+            ".gitattributes",
+            "*.txt ident eol=crlf\n*.enc working-tree-encoding=UTF-16LE\n",
+        )
+        .write("id.txt", "$Id$\nline\n")
+        .write("x.enc", b"h\0i\0\n\0");
+    let head = f.remote.commit("attributes");
+    f.remote.publish("refs/pull/1/head");
+    assert_eq!(fetch(&f.repo), head);
+
+    let dir = f.repo.checkout(1, &head).unwrap();
+
+    for path in ["id.txt", "x.enc", ".gitattributes"] {
+        let blob = f.repo.read_file(&head, path).unwrap().unwrap();
+        assert_eq!(
+            fs::read(dir.join(path)).unwrap(),
+            blob,
+            "{path} differs from its blob"
+        );
+        let id = git(&f.remote.work, &["rev-parse", &format!("{head}:{path}")]);
+        assert_eq!(
+            f.repo.hash_checkout_file(&dir, path).unwrap(),
+            Some(id.parse().unwrap()),
+            "{path}"
+        );
+    }
 }

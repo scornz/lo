@@ -18,7 +18,10 @@
 //!   rather than prompting. Redirects are off anyway: rozed always fetches a repository by its
 //!   canonical name.
 //! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
-//!   a repository's own `.gitattributes`), no replace refs, and literal pathspecs.
+//!   a repository's own `.gitattributes`, in a clone or a checkout), no replace refs, and literal
+//!   pathspecs.
+//! - Nothing a server offers sends git to another host: no bundle URIs, promisor remotes or
+//!   packfile URIs.
 //! - Every command names its repository (`--git-dir`, and `--work-tree` for a checkout), and git
 //!   never looks for one in the cache's folder or above it (`GIT_CEILING_DIRECTORIES`). A clone
 //!   that's half deleted is an error, never a reason to use some repository further up, such as
@@ -48,11 +51,12 @@ pub struct GitVersion {
 }
 
 impl GitVersion {
-    /// The oldest git rozed runs: 2.40 added `git merge-tree --write-tree --merge-base`, which
-    /// rebase-aware comparison needs.
+    /// The oldest git rozed runs: 2.41 added `--attr-source`, which keeps a repository's own
+    /// `.gitattributes` out of its checkouts (2.40 added `git merge-tree --write-tree
+    /// --merge-base`, which rebase-aware comparison needs).
     pub const MINIMUM: GitVersion = GitVersion {
         major: 2,
-        minor: 40,
+        minor: 41,
         patch: 0,
     };
 
@@ -108,14 +112,39 @@ impl fmt::Debug for Token {
     }
 }
 
-/// The git rozed runs.
-#[derive(Clone, Debug)]
+/// The git rozed runs. Its `Debug` hides the proxy variables' values, which can hold a password.
+#[derive(Clone)]
 pub struct Git {
     program: PathBuf,
     version: GitVersion,
     /// The variables every git inherits from rozed's environment (see [`inherited_env`]).
     inherited: Vec<(OsString, OsString)>,
 }
+
+impl fmt::Debug for Git {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let inherited: Vec<String> = self
+            .inherited
+            .iter()
+            .map(|(name, value)| {
+                let name = name.to_string_lossy();
+                if name.to_ascii_lowercase().ends_with("_proxy") {
+                    format!("{name}=(redacted)")
+                } else {
+                    format!("{name}={}", value.to_string_lossy())
+                }
+            })
+            .collect();
+        f.debug_struct("Git")
+            .field("program", &self.program)
+            .field("version", &self.version)
+            .field("inherited", &inherited)
+            .finish()
+    }
+}
+
+/// The empty tree's ID, which git knows without having it.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Where rozed looks for git first: Apple's, from the Xcode Command Line Tools.
 const SYSTEM_GIT: &str = "/usr/bin/git";
@@ -322,18 +351,25 @@ impl Git {
             "-c",
             "core.fsmonitor=false",
             // No attributes: not the user's file, and not a repository's own `.gitattributes`,
-            // which git reads from `attr.tree` in a bare repository. rozed's clones never have a
-            // HEAD to read them from either; the empty tree makes that explicit.
+            // whatever a clone's config says (`attr.tree`). `--attr-source`, below, reads
+            // attributes from the empty tree instead of a checkout's files.
             "-c",
             "core.attributesFile=/dev/null",
+            // Nothing a server offers makes git fetch from another host, which would ask for
+            // credentials: no bundles, no other promisor remotes, no packfile URIs.
             "-c",
-            "attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "transfer.bundleURI=false",
+            "-c",
+            "promisor.acceptFromServer=None",
+            "-c",
+            "fetch.uriProtocols=",
             // HTTPS only: no ssh, git or ext transports, and no local paths.
             "-c",
             "protocol.allow=never",
             "-c",
             "protocol.https.allow=always",
         ]);
+        command.arg(format!("--attr-source={EMPTY_TREE}"));
         for config in config {
             command.args(["-c", config]);
         }
@@ -531,10 +567,10 @@ mod tests {
     }
 
     #[test]
-    fn needs_git_2_40() {
-        assert_eq!(GitVersion::MINIMUM, version(2, 40, 0));
-        assert!(version(2, 39, 9) < GitVersion::MINIMUM);
-        assert!(version(2, 40, 0) >= GitVersion::MINIMUM);
+    fn needs_git_2_41() {
+        assert_eq!(GitVersion::MINIMUM, version(2, 41, 0));
+        assert!(version(2, 40, 1) < GitVersion::MINIMUM);
+        assert!(version(2, 41, 0) >= GitVersion::MINIMUM);
         assert!(version(2, 100, 0) > version(2, 40, 0));
         assert_eq!(version(2, 40, 1).to_string(), "2.40.1");
     }
@@ -555,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_git_older_than_2_40() {
+    fn refuses_a_git_older_than_2_41() {
         let dir = TempDir::new().unwrap();
         let program = fake_git(dir.path(), "2.39.5 (Apple Git-154)");
         let error = Git::at(&program).unwrap_err();
@@ -564,13 +600,18 @@ mod tests {
         };
         assert_eq!(*found, version(2, 39, 5));
         let message = error.to_string();
-        assert!(message.contains("git 2.40.0 or newer"), "{message}");
+        assert!(message.contains("git 2.41.0 or newer"), "{message}");
         assert!(message.contains("is git 2.39.5"), "{message}");
         assert!(message.contains("xcode-select --install"), "{message}");
+        // 2.40 has no `--attr-source`, which keeps a repository's attributes out of checkouts.
+        assert!(matches!(
+            Git::at(fake_git(dir.path(), "2.40.1")),
+            Err(Error::GitTooOld { .. })
+        ));
 
         assert_eq!(
-            Git::at(fake_git(dir.path(), "2.40.0")).unwrap().version(),
-            version(2, 40, 0)
+            Git::at(fake_git(dir.path(), "2.41.0")).unwrap().version(),
+            version(2, 41, 0)
         );
     }
 
@@ -650,10 +691,10 @@ mod tests {
         /// The remote's URL.
         url: String,
         /// A working copy, with `first` and `second` commits on `trunk`. Both have a
-        /// `.gitattributes` saying `*.txt -diff`, and `second` changes `a.txt`.
+        /// `.gitattributes` saying `*.txt -diff`, and `second` changes `a.txt`. Replace refs make
+        /// `first` read as `second`.
         work: PathBuf,
         first: String,
-        second: String,
         /// rozed's own `HOME` for git.
         home: PathBuf,
         env: Vec<(OsString, OsString)>,
@@ -758,7 +799,6 @@ mod tests {
                 url,
                 work,
                 first,
-                second,
                 home,
                 env,
             }
@@ -815,8 +855,21 @@ mod tests {
         for absent in ["insteadof", "hostile", "markers", "protocol.allow=always"] {
             assert!(!config.contains(absent), "{absent} in {config}");
         }
-        assert!(config.contains("credential.helper="), "{config}");
-        assert!(config.contains("core.hookspath=/dev/null"), "{config}");
+        for pinned in [
+            "credential.helper=",
+            "core.askpass=",
+            "http.followredirects=false",
+            "core.hookspath=/dev/null",
+            "core.fsmonitor=false",
+            "transfer.bundleuri=false",
+            "promisor.acceptfromserver=None",
+            "fetch.uriprotocols=",
+        ] {
+            assert!(
+                config.lines().any(|line| line.ends_with(pinned)),
+                "{pinned} not in {config}"
+            );
+        }
         assert_eq!(hostile.programs_run(), Vec::<String>::new());
     }
 
@@ -885,7 +938,8 @@ mod tests {
     fn hostile_attributes_and_replace_refs_have_no_effect() {
         let hostile = Hostile::new();
 
-        // Neither the user's attributes nor GIT_ATTR_SOURCE's.
+        // Neither the user's attributes nor GIT_ATTR_SOURCE's. A repository's own are the clone and
+        // checkout tests' business.
         let attributes = hostile
             .git(Location::Clone(&hostile.dir.path().join("remote.git")), &[])
             .args(["check-attr", "binary", "diff", "--", "a.txt"])
@@ -895,14 +949,6 @@ mod tests {
             String::from_utf8(attributes).unwrap(),
             "a.txt: binary: unspecified\na.txt: diff: unspecified\n"
         );
-        // Nor the repository's own `.gitattributes`, though the bare remote's HEAD has one.
-        let numstat = hostile
-            .git(Location::Clone(&hostile.dir.path().join("remote.git")), &[])
-            .args(["diff", "--numstat", &hostile.first, &hostile.second])
-            .run()
-            .unwrap();
-        assert_eq!(String::from_utf8(numstat).unwrap(), "1\t1\ta.txt\n");
-
         // `first` is itself, despite refs/replace/ and GIT_REPLACE_REF_BASE.
         let subject = hostile
             .git(
@@ -1035,6 +1081,26 @@ mod tests {
         );
         // Not GIT_ASKPASS's or SSH_ASKPASS's helper either.
         assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn proxy_passwords_stay_out_of_debug_output() {
+        let git = Git::with_env(
+            Git::find().unwrap().program,
+            vars(&[
+                ("PATH", "/usr/bin:/bin"),
+                ("https_proxy", "http://alice:hunter2@proxy:3128"),
+                ("ALL_PROXY", "socks5://bob:swordfish@proxy:1080"),
+            ]),
+        )
+        .unwrap();
+
+        let debug = format!("{git:?}");
+
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert!(!debug.contains("swordfish"), "{debug}");
+        assert!(debug.contains("https_proxy"), "{debug}");
+        assert!(debug.contains("/usr/bin:/bin"), "{debug}");
     }
 
     #[test]
