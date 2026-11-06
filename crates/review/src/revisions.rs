@@ -1,10 +1,36 @@
-//! A pull request's revisions: one per push to its branch (design §6, "Revisions").
+//! A pull request's revisions, one per push to its branch, and what to compare when it opens
+//! (design §6, "Revisions" and "Viewed marks").
 //!
 //! No single GitHub source lists every push. The repository activity API does when it's available;
 //! otherwise force-push events, reviews, check suites and rozed's own poller each saw some heads.
 //! [`build_revisions`] merges what they saw into one list, keyed by head SHA and ordered oldest
 //! first. Revisions are stored by head SHA and numbered r1, r2… only for display, because a source
-//! that reports late can insert one.
+//! that reports late can insert one. [`default_comparison`] picks what the pull request compares
+//! when it opens, and [`viewed_file_comparison`] what a file shows once a push changed it after you
+//! marked it viewed.
+//!
+//! ```
+//! use std::time::{Duration, SystemTime};
+//! use review::revisions::{Comparison, PushRecord, build_revisions, default_comparison};
+//!
+//! let at = |minute: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(minute * 60);
+//! let records = [
+//!     PushRecord::Polled { head: "a1".into(), at: at(10) },
+//!     // You reviewed a2, which a force-push then replaced with a rebased b1.
+//!     PushRecord::Review { commit: "a2".into(), at: at(25) },
+//!     PushRecord::ForcePush { before: Some("a2".into()), after: "b1".into(), at: at(30) },
+//! ];
+//! let revisions = build_revisions(&records, &["b0".into(), "b1".into()]);
+//!
+//! let heads: Vec<_> = revisions.iter().map(|revision| revision.head.as_str()).collect();
+//! assert_eq!(heads, ["a1", "a2", "b1"]);
+//! assert_eq!(revisions.label("b1").as_deref(), Some("r3"));
+//! assert_eq!(revisions.get("b1").unwrap().forced, Some(true));
+//! assert_eq!(
+//!     default_comparison(&revisions, Some("a2"), None),
+//!     Comparison::Between { from: "a2".into(), to: "b1".into() },
+//! );
+//! ```
 
 mod build;
 mod compare;
@@ -26,9 +52,9 @@ pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
 pub enum PushRecord {
     /// A push in the repository activity API for the head branch
     /// (`GET /repos/{owner}/{repo}/activity?ref=refs/heads/{branch}`): `before`, `after`,
-    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller keeps the
-    /// entries from the one that was the head when the pull request opened onwards, and drops
-    /// `branch_deletion`.
+    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller passes the
+    /// entries from the one that was the head when the pull request opened onwards, without
+    /// `branch_deletion` entries.
     Activity {
         before: Option<String>,
         after: String,
@@ -170,8 +196,8 @@ impl Revisions {
     }
 
     /// The revision a marker commit points at, such as the commit of your last review: the
-    /// revision with that head, or else the first whose head contains it, which the current
-    /// commits tell. A review the API made on an older commit is on a commit that was never a head.
+    /// revision with that head, or else the first whose head contains it, as far as the current
+    /// commits tell. The second is for a review the API made on a commit that was never a head.
     pub fn find(&self, commit: &str) -> Option<&Revision> {
         self.locate(commit).map(|index| &self.list[index])
     }
