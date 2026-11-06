@@ -90,7 +90,7 @@ pub fn build_revisions(
             }
         })
         .collect();
-    Revisions { list }
+    Revisions::new(list)
 }
 
 /// Whether the push from `previous` to `head` was forced, as far as the current commits tell. A

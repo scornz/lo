@@ -36,7 +36,7 @@ mod build;
 mod compare;
 mod viewed;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
 pub use build::build_revisions;
@@ -155,9 +155,18 @@ pub struct Revision {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Revisions {
     list: Vec<Revision>,
+    /// Each revision's position in `list`, by head.
+    positions: HashMap<String, usize>,
 }
 
 impl Revisions {
+    fn new(list: Vec<Revision>) -> Self {
+        let positions = (list.iter().enumerate())
+            .map(|(position, revision)| (revision.head.clone(), position))
+            .collect();
+        Self { list, positions }
+    }
+
     /// The revisions, oldest first.
     pub fn as_slice(&self) -> &[Revision] {
         &self.list
@@ -215,7 +224,7 @@ impl Revisions {
     }
 
     fn position(&self, head: &str) -> Option<usize> {
-        self.list.iter().position(|revision| revision.head == head)
+        self.positions.get(head).copied()
     }
 
     /// The nearest revision at or before `index` that rozed can still get.
