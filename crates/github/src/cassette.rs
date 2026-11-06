@@ -242,24 +242,126 @@ pub fn read_cassette(dir: &Path) -> Result<(CassetteInfo, Vec<(String, Interacti
 }
 
 /// Patterns of GitHub tokens: OAuth, personal, user-to-server, server-to-server and refresh
-/// tokens, and fine-grained personal access tokens.
+/// tokens, and fine-grained personal access tokens, also with their underscores
+/// percent-encoded, as in a URL.
 static TOKEN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"gh[opsur]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,}").expect("valid regex")
+    Regex::new(
+        r"gh[opsur](?:_|%5[Ff])[A-Za-z0-9]{36,}|github(?:_|%5[Ff])pat(?:_|%5[Ff])(?:[A-Za-z0-9]|_|%5[Ff]){50,}",
+    )
+    .expect("valid regex")
 });
 
-/// Why `bytes` can't be written to a fixture, if it holds a token: one of `secrets`, or anything
-/// shaped like a GitHub token.
+/// Why `bytes` can't be written to a fixture, if it holds a token: one of `secrets`, as is,
+/// percent-encoded or in base64, or anything shaped like a GitHub token.
 pub fn find_secret(bytes: &[u8], secrets: &[Vec<u8>]) -> Option<&'static str> {
+    let secrets: Vec<&Vec<u8>> = secrets.iter().filter(|secret| !secret.is_empty()).collect();
+    let decoded = percent_decoded(bytes);
     if secrets
         .iter()
-        .any(|secret| !secret.is_empty() && contains(bytes, secret))
+        .any(|secret| contains(bytes, secret) || contains(&decoded, secret))
     {
         return Some("the recording token");
+    }
+    // Base64 bodies, such as the contents API's, are broken into lines, which JSON escapes.
+    let unwrapped = unwrap_lines(bytes);
+    if secrets
+        .iter()
+        .flat_map(|secret| base64_forms(secret))
+        .any(|form| contains(&unwrapped, &form))
+    {
+        return Some("the recording token, in base64");
     }
     if TOKEN_PATTERN.is_match(bytes) {
         return Some("something shaped like a GitHub token");
     }
     None
+}
+
+/// `bytes` with every `%XX` replaced by the byte it stands for.
+fn percent_decoded(bytes: &[u8]) -> Vec<u8> {
+    let hex = |byte: u8| (byte as char).to_digit(16).map(|digit| digit as u8);
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(index + 1).copied().and_then(hex),
+                bytes.get(index + 2).copied().and_then(hex),
+            )
+        {
+            decoded.push(high << 4 | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    decoded
+}
+
+/// `bytes` without line breaks, raw or escaped in JSON.
+fn unwrap_lines(bytes: &[u8]) -> Vec<u8> {
+    let mut unwrapped = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while let Some((&byte, tail)) = rest.split_first() {
+        match (byte, tail.first()) {
+            (b'\\', Some(b'n' | b'r')) => rest = &tail[1..],
+            (b'\n' | b'\r', _) => rest = tail,
+            _ => {
+                unwrapped.push(byte);
+                rest = tail;
+            }
+        }
+    }
+    unwrapped
+}
+
+/// What `secret` looks like inside base64, in both alphabets, wherever it starts: the characters
+/// that depend on its bytes alone, at each of the three offsets in a 3-byte group.
+fn base64_forms(secret: &[u8]) -> Vec<Vec<u8>> {
+    let mut forms = Vec::new();
+    for offset in 0..3 {
+        let mut padded = vec![0; offset];
+        padded.extend_from_slice(secret);
+        let encoded = base64(&padded);
+        let start = (8 * offset).div_ceil(6);
+        let end = 8 * (offset + secret.len()) / 6;
+        let form = encoded.as_bytes()[start..end].to_vec();
+        let url_safe = form
+            .iter()
+            .map(|byte| match byte {
+                b'+' => b'-',
+                b'/' => b'_',
+                other => *other,
+            })
+            .collect();
+        forms.push(form);
+        forms.push(url_safe);
+    }
+    forms
+}
+
+/// Standard base64, with padding.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let group = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let bits = u32::from_be_bytes([0, group[0], group[1], group[2]]);
+        for index in 0..4 {
+            if index <= chunk.len() {
+                let sextet = (bits >> (18 - 6 * index)) & 0x3f;
+                encoded.push(ALPHABET[sextet as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    encoded
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -356,5 +458,41 @@ mod tests {
         let pat = format!("github_pat_{}", "A_".repeat(30));
         assert!(find_secret(pat.as_bytes(), &[]).is_some());
         assert_eq!(find_secret(b"gho_FAKE short", &[secret]), None);
+    }
+
+    #[test]
+    fn base64_encodes_like_everyone_else() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
+    }
+
+    #[test]
+    fn find_secret_spots_the_token_percent_encoded_or_in_base64() {
+        let secret = b"gho_not-a-real-token-but-secret".to_vec();
+        let secrets = std::slice::from_ref(&secret);
+        // In a URL's query.
+        assert!(find_secret(b"?t=gho%5Fnot-a-real-token-but-secret", secrets).is_some());
+        assert!(find_secret(b"?t=gho%5fnot-a-real-token-but-secret", secrets).is_some());
+        // In a file's base64 body, as the contents API returns it: at any offset, with GitHub's
+        // line breaks, escaped in JSON.
+        for prefix in ["", "x", "xy", "a longer prefix: "] {
+            let file = format!("{prefix}token = gho_not-a-real-token-but-secret\n");
+            let encoded = base64(file.as_bytes());
+            let wrapped: Vec<String> = encoded
+                .as_bytes()
+                .chunks(60)
+                .map(|line| String::from_utf8(line.to_vec()).unwrap())
+                .collect();
+            let json = format!(r#"{{"content":"{}"}}"#, wrapped.join("\\n"));
+            assert!(find_secret(json.as_bytes(), secrets).is_some(), "{json}");
+        }
+        // And a token shape, percent-encoded.
+        let shaped = format!("gho%5F{}", "a1".repeat(18));
+        assert!(find_secret(shaped.as_bytes(), &[]).is_some());
+        assert_eq!(find_secret(b"nothing to see", secrets), None);
     }
 }

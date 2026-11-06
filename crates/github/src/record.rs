@@ -1,10 +1,11 @@
 //! An HTTP client that records GitHub's responses into a cassette, keeping tokens out.
 //!
 //! Request headers are never stored, only the method, URL and what identifies the body. Response
-//! headers are kept only from [`cassette::KEPT_HEADERS`], and signed S3 URLs are redacted. Before
-//! each file is written, and again over the whole cassette at the end, the recorder checks for the
-//! token's bytes and for anything shaped like a GitHub token; if it finds one, it deletes the
-//! cassette and fails.
+//! headers are kept only from [`cassette::KEPT_HEADERS`], and query values that grant access,
+//! such as signed URLs' signatures, are redacted. Before each file is written, and again over the
+//! whole cassette at the end, the recorder checks for the token, as is, percent-encoded or in
+//! base64, and for anything shaped like a GitHub token; if it finds one, it deletes the cassette
+//! and fails.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -104,28 +105,32 @@ impl RecordingHttpClient {
     }
 }
 
-/// `NNN-<METHOD>-<path or operation>.json`.
+/// `NNN-<METHOD>-<path or operation>.json`, with anything but letters, digits and dashes in the
+/// path or operation replaced, so a name can't leave the cassette's folder.
 fn file_name(index: usize, request: &RecordedRequest) -> String {
+    let sanitize = |text: &str| -> String {
+        text.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
     let what = match &request.operation {
-        Some(operation) => format!("graphql-{operation}"),
+        Some(operation) => format!("graphql-{}", sanitize(operation)),
         None => {
             let url = Url::parse(&request.url).ok();
             let path = url
                 .as_ref()
                 .map(|url| url.path().trim_matches('/').to_string())
                 .unwrap_or_default();
-            path.chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '-' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect()
+            sanitize(&path)
         }
     };
-    format!("{index:03}-{}-{what}.json", request.method)
+    format!("{index:03}-{}-{what}.json", sanitize(&request.method))
 }
 
 /// What identifies a request, without its headers.
@@ -183,11 +188,19 @@ fn recorded_response(
     }
 }
 
-/// Replaces the signature parts of signed S3 URLs with `REDACTED`.
+/// Replaces the values of query parameters that grant access with `REDACTED`: signed S3 and
+/// Azure URLs (Actions logs, release assets), tokens on private raw and codeload URLs, signed
+/// private images, and single sign-on requests. They're short-lived, but still not for a
+/// public repository.
 fn redact_signed_urls(text: &str) -> String {
     static SIGNED: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(r"(X-Amz-(?:Signature|Credential|Security-Token)=)[^&\s\x22]+")
-            .expect("valid regex")
+        Regex::new(concat!(
+            r"((?:^|[?&;])",
+            r"(?:X-Amz-(?:Signature|Credential|Security-Token)|token|access_token|refresh_token",
+            r"|jwt|sig|se|sv|authorization_request)",
+            r"=)[^&\s\x22'<>]+",
+        ))
+        .expect("valid regex")
     });
     SIGNED.replace_all(text, "${1}REDACTED").into_owned()
 }
@@ -386,6 +399,61 @@ mod tests {
         assert_eq!(
             response.headers["location"],
             "https://b.s3.amazonaws.com/x?X-Amz-Credential=REDACTED&X-Amz-Signature=REDACTED&X-Amz-Expires=300"
+        );
+    }
+
+    #[test]
+    fn redacts_signed_query_values() {
+        let redacted = redact_signed_urls(concat!(
+            "https://raw.githubusercontent.com/o/r/main/a.txt?token=GHSAT0AAAAA ",
+            "https://private-user-images.githubusercontent.com/1/x.png?jwt=eyJhbGciOi.x.y ",
+            "https://productionresultssa1.blob.core.windows.net/logs/1.txt?sv=2021-08-06&se=2026-11-06T10%3A00Z&sr=b&sp=r&sig=abc%2Bdef ",
+            "required; url=https://github.com/orgs/acme/sso?authorization_request=ABCDEF ",
+            "<a href=\"https://codeload.github.com/o/r/zip/main?x=1&amp;token=AAAA\">",
+        ));
+        assert_eq!(
+            redacted,
+            concat!(
+                "https://raw.githubusercontent.com/o/r/main/a.txt?token=REDACTED ",
+                "https://private-user-images.githubusercontent.com/1/x.png?jwt=REDACTED ",
+                "https://productionresultssa1.blob.core.windows.net/logs/1.txt?sv=REDACTED&se=REDACTED&sr=b&sp=r&sig=REDACTED ",
+                "required; url=https://github.com/orgs/acme/sso?authorization_request=REDACTED ",
+                "<a href=\"https://codeload.github.com/o/r/zip/main?x=1&amp;token=REDACTED\">",
+            )
+        );
+    }
+
+    #[test]
+    fn a_kept_sso_header_is_redacted() {
+        let response = recorded_response(
+            403,
+            &[(
+                http_client::http::HeaderName::from_static("x-github-sso"),
+                HeaderValue::from_static(
+                    "required; url=https://github.com/orgs/acme/sso?authorization_request=SECRET",
+                ),
+            )]
+            .into_iter()
+            .collect(),
+            b"{}",
+        );
+        assert_eq!(
+            response.headers["x-github-sso"],
+            "required; url=https://github.com/orgs/acme/sso?authorization_request=REDACTED"
+        );
+    }
+
+    #[test]
+    fn file_names_never_leave_the_cassette() {
+        let request = RecordedRequest {
+            method: "POST".into(),
+            url: "https://api.github.com/graphql".into(),
+            operation: Some("../../../evil/Name".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            file_name(1, &request),
+            "001-POST-graphql-_________evil_Name.json"
         );
     }
 
