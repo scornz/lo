@@ -269,7 +269,7 @@ fn a_pull_request_from_a_fork_reads_the_forks_branch() {
 }
 
 #[test]
-fn a_merged_pull_request_whose_fork_is_gone_has_no_pushes_but_its_reviews() {
+fn a_merged_pull_request_whose_fork_is_gone_has_no_pushes_but_its_reviews_and_check_suites() {
     let pull = PullRef::new("sharkdp", "fd", 2202);
     let (history, _, http) = read("push_history_fd_2202", &pull);
 
@@ -282,10 +282,12 @@ fn a_merged_pull_request_whose_fork_is_gone_has_no_pushes_but_its_reviews() {
     );
     let revisions = revisions(&history, &[]);
     assert_eq!(short(&revisions), ["4feccf0", "31f36c8"]);
-    assert_eq!(
-        revisions.as_slice()[0].pushed_at,
-        PushedAt::By(time("2026-10-29T06:09:16Z"))
-    );
+    // Without the fork's pushes, the base repository's check suites, which no push started,
+    // still say each was the head by the time they were made: a day before the first review.
+    assert!(!history.complete_log());
+    let r1 = &revisions.as_slice()[0];
+    assert_eq!(r1.pushed_at, PushedAt::By(time("2026-10-28T03:56:10Z")));
+    assert_eq!(r1.sources, [Source::Review, Source::CheckSuite].into());
 
     // Merged with a merge commit: every revision's base is its first parent.
     let merge = history.merge_commit.as_ref().unwrap();
@@ -757,8 +759,7 @@ fn merged_otherwise(edit: impl Fn(&mut serde_json::Value)) -> PushHistory {
 }
 
 #[test]
-fn a_squash_or_rebase_merge_takes_master_before_the_merge_and_a_fast_forward_without_it_is_uncertain()
- {
+fn merges_without_a_merge_commit_take_master_as_it_was() {
     let bases = |history: &PushHistory| -> Vec<(String, BaseTipSource)> {
         let base = history.base_history(Some(&sha(9)));
         revisions(history, &[])
@@ -784,8 +785,13 @@ fn a_squash_or_rebase_merge_takes_master_before_the_merge_and_a_fast_forward_wit
         commit["parents"]["nodes"] =
             serde_json::json!([{"oid": "4feccf0ae8840cad866647eaf76127bab756ccfd"}]);
     });
-    let exact = ("5e10274".to_string(), BaseTipSource::Activity);
-    assert_eq!(bases(&fast_forwarded), [exact.clone(), exact]);
+    assert_eq!(
+        bases(&fast_forwarded),
+        [
+            ("d76b4e3".to_string(), BaseTipSource::Activity),
+            ("5e10274".to_string(), BaseTipSource::Activity),
+        ]
+    );
     // Without them, today's tip would make every revision's diff empty: it's uncertain.
     fast_forwarded.base_activity.clear();
     let uncertain = (sha(9)[..7].to_string(), BaseTipSource::Uncertain);
@@ -904,4 +910,221 @@ fn a_base_branch_behind_single_sign_on_is_unavailable_with_its_link() {
         Some("https://github.com/orgs/acme/sso?authorization_request=REDACTED")
     );
     assert!(main.failed.is_none());
+}
+
+// Edits of e2e#14's answers.
+
+/// e2e#14's first read, each answer as `edit` leaves it, with `extra` answers added.
+fn e2e_14_with(
+    edit: impl Fn(&mut Interaction),
+    extra: Vec<Interaction>,
+) -> (PushHistory, Arc<ReplayHttpClient>) {
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    let mut interactions: Vec<Interaction> = (recorded.into_iter())
+        .map(|(_, interaction)| interaction)
+        .filter(|interaction| interaction.request.if_none_match.is_none())
+        .take(3)
+        .collect();
+    interactions.iter_mut().for_each(edit);
+    interactions.extend(extra);
+    let http =
+        Arc::new(ReplayHttpClient::from_interactions("e2e_14_edited", interactions).unwrap());
+    let history = block_on(client(http.clone()).push_history(&e2e(14), BOT, None)).unwrap();
+    (history, http)
+}
+
+fn graphql_pull(interaction: &mut Interaction) -> Option<&mut serde_json::Value> {
+    interaction.request.operation.as_ref()?;
+    Some(&mut interaction.response.body.as_mut().unwrap()["data"]["repository"]["pullRequest"])
+}
+
+fn head_pushes(interaction: &mut Interaction) -> Option<&mut Vec<serde_json::Value>> {
+    if !interaction.request.url.contains("revisions-3") {
+        return None;
+    }
+    interaction.response.body.as_mut().unwrap().as_array_mut()
+}
+
+const R4: &str = "28b21f232a7ed2ac8682a792045dcbb49a80183f";
+const R5: &str = "7513db38608b5bdda9fb488daf00b31c846c1dc1";
+
+#[test]
+fn e1s_full_run_has_a_complete_log() {
+    let (history, _, _) = read("push_history_e2e_14", &e2e(14));
+    assert!(history.complete_log());
+    assert_eq!(history.unavailable_heads(), [] as [String; 0]);
+}
+
+#[test]
+fn a_force_push_whose_head_github_lost_is_named_by_the_issue_timeline() {
+    // The fork is gone and GitHub lost r5: only the issue timeline names it.
+    let timeline = Interaction {
+        request: RecordedRequest {
+            method: "GET".into(),
+            url: "https://api.github.com/repos/rozed-dev/e2e/issues/14/timeline?per_page=100"
+                .into(),
+            ..Default::default()
+        },
+        response: RecordedResponse {
+            status: 200,
+            headers: Default::default(),
+            body: Some(serde_json::json!([
+                {"event": "commented", "created_at": "2026-11-06T19:28:00Z"},
+                {"event": "head_ref_force_pushed", "commit_id": R5,
+                 "created_at": "2026-11-06T19:28:48Z"},
+            ])),
+            body_text: None,
+        },
+    };
+    let (history, _) = e2e_14_with(
+        |interaction| {
+            if let Some(pull) = graphql_pull(interaction) {
+                pull["headRepository"] = serde_json::Value::Null;
+                pull["timelineItems"]["nodes"][0]["afterCommit"] = serde_json::Value::Null;
+            }
+        },
+        vec![timeline],
+    );
+
+    assert_eq!(history.unavailable_heads(), [R5.to_string()]);
+    let mut revisions = revisions(&history, &[]);
+    assert_eq!(
+        short(&revisions),
+        ["2e2d4be", "28b21f2", "7513db3", "adb7208"]
+    );
+    assert_eq!(revisions.get(R5).unwrap().forced, Some(true));
+    // The caller shows it as no longer available.
+    for head in history.unavailable_heads() {
+        revisions.mark_unavailable(head);
+    }
+    assert!(!revisions.get(R5).unwrap().available);
+}
+
+#[test]
+fn a_review_on_a_commit_the_complete_log_never_had_as_its_head_is_marked() {
+    // r5's first commit, which came in r5's push, was never the head.
+    let (history, _) = e2e_14_with(
+        |interaction| {
+            if let Some(pull) = graphql_pull(interaction) {
+                let commit = pull["commits"]["nodes"][0]["commit"]["oid"].clone();
+                pull["reviews"]["nodes"][0]["commit"]["oid"] = commit;
+            }
+        },
+        Vec::new(),
+    );
+
+    assert!(history.complete_log());
+    let revisions = revisions(&history, &[]);
+    let reviewed = history.reviews[0].commit.as_deref().unwrap();
+    assert_eq!(
+        revisions.get(reviewed).unwrap().sources,
+        [Source::ReviewedCommit].into()
+    );
+    assert!(!revisions.get(R4).unwrap().sources.contains(&Source::Review));
+}
+
+#[test]
+fn pushes_after_the_pull_request_closed_belong_to_whatever_reused_the_branch() {
+    let (history, _) = e2e_14_with(
+        |interaction| {
+            if let Some(pushes) = head_pushes(interaction) {
+                let mut later = pushes[0].clone();
+                later["id"] = 1.into();
+                later["before"] = pushes[0]["after"].clone();
+                later["after"] = sha(7).into();
+                later["timestamp"] = "2026-11-07T09:00:00Z".into();
+                pushes.insert(0, later);
+            }
+        },
+        Vec::new(),
+    );
+
+    let revisions = revisions(&history, &[]);
+    assert!(revisions.get(&sha(7)).is_none());
+    assert_eq!(revisions.len(), 6);
+}
+
+#[test]
+fn check_suites_on_another_branch_name_no_heads() {
+    let (history, _) = e2e_14_with(
+        |interaction| {
+            if let Some(pull) = graphql_pull(interaction) {
+                pull["headRepository"] = serde_json::Value::Null;
+                let commit = pull["commits"]["nodes"][0]["commit"]["oid"].clone();
+                pull["commits"]["nodes"][0]["commit"]["checkSuites"]["nodes"] = serde_json::json!([
+                    {"createdAt": "2026-11-06T19:28:50Z", "branch": {"name": "backport"},
+                     "push": {"previousSha": sha(3), "nextSha": commit}},
+                    {"createdAt": "2026-11-06T19:28:51Z", "branch": {"name": "backport"},
+                     "push": null},
+                ]);
+            }
+        },
+        Vec::new(),
+    );
+
+    let commit = history.check_suites[0].commit.clone();
+    assert_eq!(history.check_suites.len(), 2);
+    let records = history.push_records(&[]);
+    assert!(!records.iter().any(|record| matches!(
+        record,
+        review::revisions::PushRecord::CheckSuite { next, .. } if *next == commit
+    )));
+}
+
+#[test]
+fn every_branch_the_pull_request_targeted_is_read_back_to_its_first_revision() {
+    let old_base = "https://api.github.com/repos/rozed-dev/e2e/activity?ref=refs%2Fheads%2Fe1%2Fold-base&direction=desc&per_page=100";
+    let second = format!("{old_base}&after=C1");
+    // r1 was pushed at 19:27:50. The old base's first page is all later pushes, so its second
+    // page is read too, which reaches back far enough; a third would never be asked for.
+    let old_pages = vec![
+        page(
+            old_base,
+            "\"o1\"",
+            Some(&second),
+            &[serde_json::json!({
+                "id": 3, "before": sha(2), "after": sha(3), "activity_type": "push",
+                "timestamp": "2026-11-06T19:28:00Z", "actor": null
+            })],
+        ),
+        page(
+            &second,
+            "\"o2\"",
+            Some(&format!("{old_base}&after=C2")),
+            &[serde_json::json!({
+                "id": 2, "before": sha(1), "after": sha(2), "activity_type": "push",
+                "timestamp": "2026-11-06T19:20:00Z", "actor": null
+            })],
+        ),
+    ];
+    let (history, http) = e2e_14_with(
+        |interaction| {
+            if let Some(pull) = graphql_pull(interaction) {
+                pull["timelineItems"]["nodes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({
+                        "__typename": "BaseRefChangedEvent",
+                        "createdAt": "2026-11-06T19:28:30Z",
+                        "previousRefName": "e1/old-base",
+                        "currentRefName": "main",
+                    }));
+            }
+        },
+        old_pages,
+    );
+
+    let branches: Vec<&str> = history
+        .base_activity
+        .iter()
+        .map(|a| a.branch.as_str())
+        .collect();
+    assert_eq!(branches, ["main", "e1/old-base"]);
+    assert_eq!(history.base_activity[1].pages.len(), 2);
+    assert!(!http.seen().iter().any(|seen| seen.url.contains("after=C2")));
+    // r1 targeted the old base, at its tip then.
+    let base = history.base_history(None);
+    let r1 = revisions(&history, &[]).as_slice()[0].clone();
+    assert_eq!(base_tip_at(&base, r1.pushed_at).unwrap().commit, sha(2));
 }

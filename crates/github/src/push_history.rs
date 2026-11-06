@@ -74,6 +74,9 @@ pub struct PushHistory {
     pub viewer_last_review: Option<SubmittedReview>,
     /// The pushes that started check suites on the latest 100 commits.
     pub check_suites: Vec<CheckSuitePush>,
+    /// Heads of force-pushes GitHub no longer has, named by the issue timeline.
+    #[serde(default)]
+    pub lost_heads: Vec<String>,
 }
 
 /// A repository holding a head branch.
@@ -224,6 +227,7 @@ impl PushHistory {
                 })
                 .next_back(),
             check_suites: Vec::new(),
+            lost_heads: Vec::new(),
         };
         for event in data
             .timeline_items
@@ -300,15 +304,22 @@ impl PushHistory {
     ///
     /// - the head branch's pushes from the activity API, but deletions, and pushes after the pull
     ///   request was closed, which belong to whatever reused the branch;
-    /// - force-push events, but those whose head GitHub no longer has;
-    /// - submitted reviews on commits GitHub still has;
+    /// - force-push events, those whose head GitHub lost included when the issue timeline named
+    ///   it ([`Self::unavailable_heads`]);
+    /// - submitted reviews on commits GitHub still has. When the activity API's log of the head
+    ///   branch is complete ([`Self::complete_log`]), a review on a commit it never had as its
+    ///   head is a [`PushRecord::ReviewedCommit`];
     /// - check suites a push to the head branch started on the commit it pushed, made before the
     ///   pull request was closed. A suite's branch is unknown once it's deleted, and then it
-    ///   counts.
+    ///   counts. Without a complete log, a suite on one of the latest commits that no push started,
+    ///   as a fork's pull request's are in the base repository, says the commit was the head by
+    ///   then: GitHub makes suites for the heads a pull request is pushed to.
     pub fn push_records(&self, seen: &[SeenHead]) -> Vec<PushRecord> {
         let open_then = |at: &DateTime<Utc>| self.closed_at.is_none_or(|closed| *at <= closed);
+        let complete = self.complete_log();
+        let entries = self.head_activity.entries();
         let mut records = Vec::new();
-        for entry in self.head_activity.entries() {
+        for entry in &entries {
             if !entry.is_deletion() && open_then(&entry.timestamp) {
                 records.push(PushRecord::Activity {
                     before: Some(entry.before.clone()),
@@ -328,25 +339,36 @@ impl PushHistory {
             }
         }
         for review in &self.reviews {
-            if let Some(commit) = &review.commit {
-                records.push(PushRecord::Review {
-                    commit: commit.clone(),
-                    at: review.at.into(),
-                });
-            }
+            let Some(commit) = review.commit.clone() else {
+                continue;
+            };
+            let at = review.at.into();
+            let pushed = entries.iter().any(|entry| entry.after == commit);
+            records.push(if complete && !pushed {
+                PushRecord::ReviewedCommit { commit, at }
+            } else {
+                PushRecord::Review { commit, at }
+            });
         }
         for suite in &self.check_suites {
             let on_head_branch = suite.branch.as_ref().is_none_or(|b| *b == self.head_branch);
-            if let Some(next) = &suite.next
-                && *next == suite.commit
-                && on_head_branch
-                && open_then(&suite.at)
-            {
-                records.push(PushRecord::CheckSuite {
-                    previous: suite.previous.clone(),
-                    next: next.clone(),
+            if !on_head_branch || !open_then(&suite.at) {
+                continue;
+            }
+            match (&suite.previous, &suite.next) {
+                (previous, Some(next)) if *next == suite.commit => {
+                    records.push(PushRecord::CheckSuite {
+                        previous: previous.clone(),
+                        next: next.clone(),
+                        at: suite.at.into(),
+                    })
+                }
+                (None, None) if !complete => records.push(PushRecord::CheckSuite {
+                    previous: None,
+                    next: suite.commit.clone(),
                     at: suite.at.into(),
-                });
+                }),
+                _ => {}
             }
         }
         for head in seen {
@@ -356,6 +378,34 @@ impl PushHistory {
             });
         }
         records
+    }
+
+    /// Whether the activity API's log of the head branch holds every push the pull request had:
+    /// it was read, back to the push the pull request opened with, and each push since starts
+    /// where the one before ended, up to the head.
+    pub fn complete_log(&self) -> bool {
+        let activity = &self.head_activity;
+        if activity.unavailable.is_some() || activity.failed.is_some() || activity.truncated {
+            return false;
+        }
+        let entries: Vec<_> = (activity.entries().into_iter())
+            .filter(|entry| !entry.is_deletion())
+            .collect();
+        let reached_back = entries
+            .iter()
+            .any(|entry| entry.timestamp <= self.opened_at);
+        let unbroken = entries
+            .windows(2)
+            .all(|pair| pair[1].before == pair[0].after);
+        let ends_at_head = entries.last().is_some_and(|entry| entry.after == self.head);
+        reached_back && unbroken && ends_at_head
+    }
+
+    /// The heads GitHub no longer has, which its force-push events name only through the issue
+    /// timeline: `review::revisions::Revisions::mark_unavailable` shows them as no longer
+    /// available (design §11).
+    pub fn unavailable_heads(&self) -> &[String] {
+        &self.lost_heads
     }
 
     /// What's known of the base branches over time, for `review::revisions::base_tip_at`, with
@@ -453,6 +503,13 @@ impl GithubClient {
             .pull_request_revisions(owner, name, pull.number, login)
             .await?;
         let mut history = PushHistory::from_graphql(data);
+        if history
+            .head_force_pushes
+            .iter()
+            .any(|push| push.after.is_none())
+        {
+            self.name_lost_heads(pull, &mut history).await?;
+        }
         // Newest first, back to the push the pull request opened with: a long-lived branch, or
         // one a bot reuses for every release, can have far more pushes from before.
         let opened = history.opened_at;
@@ -492,7 +549,64 @@ impl GithubClient {
     }
 }
 
+/// The most pages of the issue timeline read for the heads of force-pushes GitHub lost.
+const MAX_TIMELINE_PAGES: usize = 10;
+
 impl GithubClient {
+    /// Names the heads of `history`'s force-pushes whose commit GitHub lost, from the REST issue
+    /// timeline, whose `head_ref_force_pushed` events keep `commit_id` when GraphQL's
+    /// `afterCommit` is null (`docs/research/revisions.md` §6). They're matched by time. Only the
+    /// network, the rate limit and the token fail the read; anything else leaves them unnamed.
+    async fn name_lost_heads(
+        &self,
+        pull: &PullRef,
+        history: &mut PushHistory,
+    ) -> Result<(), GithubError> {
+        let mut url = Some(format!(
+            "/repos/{}/{}/issues/{}/timeline?per_page={PAGE_SIZE}",
+            pull.repo.owner, pull.repo.name, pull.number
+        ));
+        let mut named: Vec<(DateTime<Utc>, String)> = Vec::new();
+        for _ in 0..MAX_TIMELINE_PAGES {
+            let Some(current) = url.take() else {
+                break;
+            };
+            let response = match self
+                .send(http_client::Method::GET, &current, None, None)
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if stops_the_read(&error) => return Err(error),
+                Err(error) => {
+                    log::warn!("reading {pull}'s timeline for lost heads: {error:#}");
+                    return Ok(());
+                }
+            };
+            let events: Vec<serde_json::Value> = response.json()?;
+            for event in events {
+                if event["event"] == "head_ref_force_pushed"
+                    && let Some(commit) = event["commit_id"].as_str()
+                    && let Some(at) = event["created_at"].as_str()
+                    && let Ok(at) = at.parse::<DateTime<Utc>>()
+                {
+                    named.push((at, commit.to_string()));
+                }
+            }
+            url = response.header("link").and_then(crate::activity::next_link);
+        }
+        for push in &mut history.head_force_pushes {
+            if push.after.is_some() {
+                continue;
+            }
+            if let Some(index) = named.iter().position(|(at, _)| *at == push.at) {
+                let (_, commit) = named.remove(index);
+                history.lost_heads.push(commit.clone());
+                push.after = Some(commit);
+            }
+        }
+        Ok(())
+    }
+
     /// [`GithubClient::branch_activity`], newest first. An error that isn't the network's, the
     /// rate limit's or the token's fails only this branch's read: it keeps what `known` read
     /// before, flagged `failed`, so the rest of the push history still shows and is kept, and

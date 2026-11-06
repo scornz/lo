@@ -78,6 +78,12 @@ pub enum PushRecord {
     /// an older commit makes that commit one. Pending reviews have no `submittedAt` and don't
     /// count.
     Review { commit: String, at: SystemTime },
+    /// A submitted review's commit and `submittedAt`, as [`Self::Review`], where the activity
+    /// API's complete log of the head branch shows the commit was never its head, as when a
+    /// review is made through the API on an older commit. Design §6 makes each push a revision,
+    /// and this commit was no push; it's kept as a revision all the same, since your last review
+    /// can be on it, and its source ([`Source::ReviewedCommit`]) says it was never pushed.
+    ReviewedCommit { commit: String, at: SystemTime },
     /// The push that started a check suite (`CheckSuite.push`): `previousSha`, `nextSha`, and the
     /// suite's `createdAt`, up to a minute after the push. The caller drops suites whose `branch`
     /// is set and isn't the head branch; it's null once the branch is deleted. A suite whose
@@ -99,6 +105,7 @@ impl PushRecord {
             Self::Activity { .. } => Source::Activity,
             Self::ForcePush { .. } => Source::ForcePush,
             Self::Review { .. } => Source::Review,
+            Self::ReviewedCommit { .. } => Source::ReviewedCommit,
             Self::CheckSuite { .. } => Source::CheckSuite,
             Self::Polled { .. } => Source::Poller,
         }
@@ -114,6 +121,9 @@ pub enum Source {
     ForcePush,
     /// A review on the commit.
     Review,
+    /// A review on a commit the complete push log shows was never the head
+    /// ([`PushRecord::ReviewedCommit`]).
+    ReviewedCommit,
     /// A check suite started by the push.
     CheckSuite,
     /// rozed's poller.

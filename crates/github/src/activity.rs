@@ -173,7 +173,7 @@ pub fn activity_path(repo: &RepoRef, branch: &str, direction: Direction) -> Stri
 }
 
 /// The URL a `Link` header gives for `rel="next"`.
-fn next_link(link: &str) -> Option<String> {
+pub(crate) fn next_link(link: &str) -> Option<String> {
     link.split(',').find_map(|part| {
         let (url, params) = part.split_once(';')?;
         let url = url.trim().strip_prefix('<')?.strip_suffix('>')?;
