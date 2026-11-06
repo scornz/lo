@@ -471,12 +471,7 @@ mod tests {
         assert_eq!(account.login, "rozed-bot");
         assert_eq!(account.scopes, ["read:org", "repo", "workflow"]);
         assert_eq!(
-            store
-                .fake
-                .state
-                .lock()
-                .keys
-                .get("rozed://github.com/rozed-bot"),
+            store.fake.state.lock().keys.get(&server_for("rozed-bot")),
             Some(&b"gho_FAKE".to_vec())
         );
         accounts.read_with(cx, |accounts, _| {
@@ -508,7 +503,7 @@ mod tests {
         }
         accounts.read_with(cx, |accounts, _| assert_eq!(accounts.accounts().len(), 1));
         assert_eq!(
-            store.fake.state.lock().keys.get("rozed://github.com/a"),
+            store.fake.state.lock().keys.get(&server_for("a")),
             Some(&b"gho_NEW".to_vec())
         );
     }
@@ -541,7 +536,7 @@ mod tests {
                 .collect();
             assert_eq!(logins, ["b"]);
         });
-        assert_eq!(store.keys(), ["rozed://github.com/b"]);
+        assert_eq!(store.keys(), [server_for("b")]);
         assert_eq!(db.accounts().unwrap().len(), 1);
     }
 

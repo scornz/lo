@@ -60,13 +60,12 @@ const CONNECTION_INITIALIZE_QUERY: &str = sql!(
 );
 
 /// Where rozed's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
-/// release builds, so a debug build's accounts (whose tokens are in a file) never mix with a
-/// release build's (whose tokens are in the Keychain).
+/// release builds, so a debug build's accounts never mix with a release build's. Their tokens are
+/// kept apart the same way ([`crate::credentials::server_for`]).
 pub fn default_path() -> PathBuf {
-    let scope = if cfg!(debug_assertions) {
-        "dev"
-    } else {
-        "stable"
+    let scope = match crate::credentials::Build::current() {
+        crate::credentials::Build::Debug => "dev",
+        crate::credentials::Build::Release => "stable",
     };
     paths::database_dir()
         .join(format!("0-{scope}"))

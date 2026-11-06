@@ -3,6 +3,8 @@
 //! Both implement Zed's [`CredentialsProvider`], so tests can use its in-memory fake. Each token
 //! is stored under its own server string, `rozed://github.com/<login>`, because the Keychain
 //! looks items up by server alone: two accounts under one server would overwrite each other.
+//! Debug builds use `rozed-dev://github.com/<login>`, so one that opts into the Keychain never
+//! touches a release build's tokens, just as it never opens a release build's database.
 //!
 //! Debug builds use a file because macOS asks for Keychain access again after every unsigned
 //! rebuild. Zed's own development file isn't private (`std::fs::write` leaves it at 0644), so
@@ -26,9 +28,35 @@ use serde::{Deserialize, Serialize};
 /// The host rozed signs in to. GitHub Enterprise hosts would get their own server strings.
 pub const HOST: &str = "github.com";
 
-/// The server string an account's token is stored under.
+/// Which kind of build is running. Debug and release builds keep separate accounts: separate
+/// databases ([`crate::db::default_path`]) and separately named tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Build {
+    Debug,
+    Release,
+}
+
+impl Build {
+    pub fn current() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Debug
+        } else {
+            Self::Release
+        }
+    }
+}
+
+/// The server string an account's token is stored under in this build.
 pub fn server_for(login: &str) -> String {
-    format!("rozed://{HOST}/{login}")
+    server(Build::current(), login)
+}
+
+fn server(build: Build, login: &str) -> String {
+    let scheme = match build {
+        Build::Debug => "rozed-dev",
+        Build::Release => "rozed",
+    };
+    format!("{scheme}://{HOST}/{login}")
 }
 
 /// Setting this to `1` makes a debug build use the Keychain, like a release build.
@@ -236,9 +264,20 @@ mod tests {
     }
 
     #[test]
-    fn server_strings_are_per_account() {
-        assert_eq!(server_for("rozed-bot"), "rozed://github.com/rozed-bot");
+    fn server_strings_are_per_account_and_per_build() {
         assert_ne!(server_for("a"), server_for("b"));
+        // A debug build's items never share a name with a release build's, even when it opts
+        // into the Keychain.
+        assert_eq!(
+            server(Build::Release, "rozed-bot"),
+            "rozed://github.com/rozed-bot"
+        );
+        assert_eq!(
+            server(Build::Debug, "rozed-bot"),
+            "rozed-dev://github.com/rozed-bot"
+        );
+        // Tests are debug builds.
+        assert_eq!(server_for("rozed-bot"), "rozed-dev://github.com/rozed-bot");
     }
 
     #[test]
