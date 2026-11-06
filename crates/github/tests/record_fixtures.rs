@@ -43,6 +43,17 @@ fn record<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
+    record_with_schema(name, description, None, run);
+}
+
+/// [`record`], noting the GraphQL schema the queries were checked against, if any. The recorder
+/// writes `cassette.json` and checks it like every other file.
+fn record_with_schema<F: Future<Output = ()>>(
+    name: &str,
+    description: &str,
+    schema: Option<String>,
+    run: impl FnOnce(GithubClient) -> F,
+) {
     let token = token();
     let http = Arc::new(
         reqwest_client::ReqwestClient::user_agent(&github::user_agent())
@@ -64,7 +75,7 @@ fn record<F: Future<Output = ()>>(
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
             repo: Some(REPO.into()),
-            schema: None,
+            schema,
         })
         .expect("finishing the cassette");
 }
@@ -139,11 +150,7 @@ fn record_graphql<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    record(name, description, run);
-    let path = fixtures_dir().join(name).join("cassette.json");
-    let mut info: CassetteInfo = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    info.schema = schema_commit();
-    std::fs::write(&path, serde_json::to_string_pretty(&info).unwrap() + "\n").unwrap();
+    record_with_schema(name, description, schema_commit(), run);
 }
 
 #[test]

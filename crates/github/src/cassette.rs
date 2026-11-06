@@ -2,8 +2,9 @@
 //!
 //! A cassette is a folder with a `cassette.json` describing it and one file per request and
 //! response, named `NNN-<METHOD>-<what>.json` and replayed in name order. Requests are matched by
-//! a [`key`]: the method and URL with its query sorted; for GraphQL the operation's name and its
-//! variables; for any other request with a body, a hash of the body.
+//! a [`key`]: the method and URL with its query sorted, and the ETag a conditional request sent;
+//! for GraphQL the operation's name and its variables; for any other request with a body, a hash
+//! of the body.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -134,25 +135,26 @@ pub fn graphql_body(url: &Url, body: &[u8]) -> Option<GraphQlBody> {
     serde_json::from_slice(body).ok()
 }
 
-/// The key a request is matched by.
-pub fn key(method: &str, url: &Url, body: &[u8]) -> String {
+/// The key a request is matched by. A conditional request only matches the response recorded
+/// for the same ETag, so a wrong ETag can't get a recorded `304`.
+pub fn key(method: &str, url: &Url, body: &[u8], if_none_match: Option<&str>) -> String {
     let graphql = graphql_body(url, body);
     let url = normalize_url(url);
-    if let Some(graphql) = graphql {
-        return graphql_key(method, &url, &graphql.operation_name, &graphql.variables);
-    }
-    if body.is_empty() {
+    let key = if let Some(graphql) = graphql {
+        graphql_key(method, &url, &graphql.operation_name, &graphql.variables)
+    } else if body.is_empty() {
         format!("{method} {url}")
     } else {
         format!("{method} {url} body={}", sha256(body))
-    }
+    };
+    with_etag(key, if_none_match)
 }
 
 /// The key of a recorded request.
 pub fn recorded_key(request: &RecordedRequest) -> Result<String> {
     let url = Url::parse(&request.url).with_context(|| format!("bad URL {}", request.url))?;
     let normalized = normalize_url(&url);
-    Ok(if let Some(operation) = &request.operation {
+    let key = if let Some(operation) = &request.operation {
         let variables = request.variables.clone().unwrap_or(serde_json::Value::Null);
         graphql_key(&request.method, &normalized, operation, &variables)
     } else if let Some(body) = &request.body {
@@ -161,7 +163,15 @@ pub fn recorded_key(request: &RecordedRequest) -> Result<String> {
         format!("{} {normalized} body={hash}", request.method)
     } else {
         format!("{} {normalized}", request.method)
-    })
+    };
+    Ok(with_etag(key, request.if_none_match.as_deref()))
+}
+
+fn with_etag(key: String, if_none_match: Option<&str>) -> String {
+    match if_none_match {
+        Some(etag) => format!("{key} if-none-match={etag}"),
+        None => key,
+    }
 }
 
 fn graphql_key(method: &str, url: &str, operation: &str, variables: &serde_json::Value) -> String {
@@ -242,24 +252,126 @@ pub fn read_cassette(dir: &Path) -> Result<(CassetteInfo, Vec<(String, Interacti
 }
 
 /// Patterns of GitHub tokens: OAuth, personal, user-to-server, server-to-server and refresh
-/// tokens, and fine-grained personal access tokens.
+/// tokens, and fine-grained personal access tokens, also with their underscores
+/// percent-encoded, as in a URL.
 static TOKEN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"gh[opsur]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,}").expect("valid regex")
+    Regex::new(
+        r"gh[opsur](?:_|%5[Ff])[A-Za-z0-9]{36,}|github(?:_|%5[Ff])pat(?:_|%5[Ff])(?:[A-Za-z0-9]|_|%5[Ff]){50,}",
+    )
+    .expect("valid regex")
 });
 
-/// Why `bytes` can't be written to a fixture, if it holds a token: one of `secrets`, or anything
-/// shaped like a GitHub token.
+/// Why `bytes` can't be written to a fixture, if it holds a token: one of `secrets`, as is,
+/// percent-encoded or in base64, or anything shaped like a GitHub token.
 pub fn find_secret(bytes: &[u8], secrets: &[Vec<u8>]) -> Option<&'static str> {
+    let secrets: Vec<&Vec<u8>> = secrets.iter().filter(|secret| !secret.is_empty()).collect();
+    let decoded = percent_decoded(bytes);
     if secrets
         .iter()
-        .any(|secret| !secret.is_empty() && contains(bytes, secret))
+        .any(|secret| contains(bytes, secret) || contains(&decoded, secret))
     {
         return Some("the recording token");
+    }
+    // Base64 bodies, such as the contents API's, are broken into lines, which JSON escapes.
+    let unwrapped = unwrap_lines(bytes);
+    if secrets
+        .iter()
+        .flat_map(|secret| base64_forms(secret))
+        .any(|form| contains(&unwrapped, &form))
+    {
+        return Some("the recording token, in base64");
     }
     if TOKEN_PATTERN.is_match(bytes) {
         return Some("something shaped like a GitHub token");
     }
     None
+}
+
+/// `bytes` with every `%XX` replaced by the byte it stands for.
+fn percent_decoded(bytes: &[u8]) -> Vec<u8> {
+    let hex = |byte: u8| (byte as char).to_digit(16).map(|digit| digit as u8);
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(index + 1).copied().and_then(hex),
+                bytes.get(index + 2).copied().and_then(hex),
+            )
+        {
+            decoded.push(high << 4 | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    decoded
+}
+
+/// `bytes` without line breaks, raw or escaped in JSON.
+fn unwrap_lines(bytes: &[u8]) -> Vec<u8> {
+    let mut unwrapped = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while let Some((&byte, tail)) = rest.split_first() {
+        match (byte, tail.first()) {
+            (b'\\', Some(b'n' | b'r')) => rest = &tail[1..],
+            (b'\n' | b'\r', _) => rest = tail,
+            _ => {
+                unwrapped.push(byte);
+                rest = tail;
+            }
+        }
+    }
+    unwrapped
+}
+
+/// What `secret` looks like inside base64, in both alphabets, wherever it starts: the characters
+/// that depend on its bytes alone, at each of the three offsets in a 3-byte group.
+fn base64_forms(secret: &[u8]) -> Vec<Vec<u8>> {
+    let mut forms = Vec::new();
+    for offset in 0..3 {
+        let mut padded = vec![0; offset];
+        padded.extend_from_slice(secret);
+        let encoded = base64(&padded);
+        let start = (8 * offset).div_ceil(6);
+        let end = 8 * (offset + secret.len()) / 6;
+        let form = encoded.as_bytes()[start..end].to_vec();
+        let url_safe = form
+            .iter()
+            .map(|byte| match byte {
+                b'+' => b'-',
+                b'/' => b'_',
+                other => *other,
+            })
+            .collect();
+        forms.push(form);
+        forms.push(url_safe);
+    }
+    forms
+}
+
+/// Standard base64, with padding.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let group = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let bits = u32::from_be_bytes([0, group[0], group[1], group[2]]);
+        for index in 0..4 {
+            if index <= chunk.len() {
+                let sextet = (bits >> (18 - 6 * index)) & 0x3f;
+                encoded.push(ALPHABET[sextet as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    encoded
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -279,11 +391,11 @@ mod tests {
     #[test]
     fn query_order_does_not_change_the_key() {
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?b=2&a=1"), b""),
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b""),
+            key("GET", &url("https://api.github.com/x?b=2&a=1"), b"", None),
+            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
         );
         assert_eq!(
-            key("GET", &url("https://api.github.com/x?a=1&b=2"), b""),
+            key("GET", &url("https://api.github.com/x?a=1&b=2"), b"", None),
             "GET https://api.github.com/x?a=1&b=2"
         );
     }
@@ -293,10 +405,18 @@ mod tests {
         let a = br#"{"query":"query A { x }","operationName":"A","variables":{"b":1,"a":2}}"#;
         let b = br#"{"operationName":"A","variables":{"a":2,"b":1},"query":"query A {x}"}"#;
         let graphql = url("https://api.github.com/graphql");
-        assert_eq!(key("POST", &graphql, a), key("POST", &graphql, b));
-        assert!(key("POST", &graphql, a).starts_with("POST https://api.github.com/graphql A "));
+        assert_eq!(
+            key("POST", &graphql, a, None),
+            key("POST", &graphql, b, None)
+        );
+        assert!(
+            key("POST", &graphql, a, None).starts_with("POST https://api.github.com/graphql A ")
+        );
         let other = br#"{"query":"query A { x }","operationName":"A","variables":{"a":3}}"#;
-        assert_ne!(key("POST", &graphql, a), key("POST", &graphql, other));
+        assert_ne!(
+            key("POST", &graphql, a, None),
+            key("POST", &graphql, other, None)
+        );
     }
 
     #[test]
@@ -312,7 +432,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &graphql, body)
+            key("POST", &graphql, body, None)
         );
 
         let form = "client_id=abc&scope=repo";
@@ -325,7 +445,7 @@ mod tests {
         };
         assert_eq!(
             recorded_key(&recorded).unwrap(),
-            key("POST", &device, form.as_bytes())
+            key("POST", &device, form.as_bytes(), None)
         );
     }
 
@@ -356,5 +476,41 @@ mod tests {
         let pat = format!("github_pat_{}", "A_".repeat(30));
         assert!(find_secret(pat.as_bytes(), &[]).is_some());
         assert_eq!(find_secret(b"gho_FAKE short", &[secret]), None);
+    }
+
+    #[test]
+    fn base64_encodes_like_everyone_else() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
+    }
+
+    #[test]
+    fn find_secret_spots_the_token_percent_encoded_or_in_base64() {
+        let secret = b"gho_not-a-real-token-but-secret".to_vec();
+        let secrets = std::slice::from_ref(&secret);
+        // In a URL's query.
+        assert!(find_secret(b"?t=gho%5Fnot-a-real-token-but-secret", secrets).is_some());
+        assert!(find_secret(b"?t=gho%5fnot-a-real-token-but-secret", secrets).is_some());
+        // In a file's base64 body, as the contents API returns it: at any offset, with GitHub's
+        // line breaks, escaped in JSON.
+        for prefix in ["", "x", "xy", "a longer prefix: "] {
+            let file = format!("{prefix}token = gho_not-a-real-token-but-secret\n");
+            let encoded = base64(file.as_bytes());
+            let wrapped: Vec<String> = encoded
+                .as_bytes()
+                .chunks(60)
+                .map(|line| String::from_utf8(line.to_vec()).unwrap())
+                .collect();
+            let json = format!(r#"{{"content":"{}"}}"#, wrapped.join("\\n"));
+            assert!(find_secret(json.as_bytes(), secrets).is_some(), "{json}");
+        }
+        // And a token shape, percent-encoded.
+        let shaped = format!("gho%5F{}", "a1".repeat(18));
+        assert!(find_secret(shaped.as_bytes(), &[]).is_some());
+        assert_eq!(find_secret(b"nothing to see", secrets), None);
     }
 }

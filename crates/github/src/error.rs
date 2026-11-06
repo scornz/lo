@@ -69,6 +69,18 @@ pub enum GithubError {
     #[error("{}", graphql_messages(.errors))]
     GraphQl { errors: Vec<GraphQlError> },
 
+    /// GitHub's pages didn't fit together: a cursor that doesn't move on, or a pull request that
+    /// kept changing while its pages were read. Trying again later may work.
+    #[error("GitHub's pages didn't fit together: {0}")]
+    Inconsistent(String),
+
+    /// A request to somewhere other than GitHub's API. rozed sends its token nowhere else, so
+    /// it never sent this one.
+    #[error(
+        "rozed sends GitHub requests only to api.github.com and uploads.github.com, not {host}"
+    )]
+    RefusedUrl { host: String },
+
     /// The request didn't get an answer.
     #[error("couldn't reach GitHub: {0:#}")]
     Network(anyhow::Error),
@@ -87,11 +99,35 @@ fn graphql_messages(errors: &[GraphQlError]) -> String {
     }
 }
 
-/// A link that helps the user fix an error, labelled for a button.
+/// A link that helps the user fix an error, labelled for a button. It's always an `https` page
+/// on github.com: GitHub's answers can name a link, such as the single sign-on URL, and rozed
+/// opens nothing else they name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelpLink {
-    pub label: &'static str,
-    pub url: String,
+    label: &'static str,
+    url: String,
+}
+
+impl HelpLink {
+    /// A link to `url`, if it's an `https` page on github.com.
+    pub fn new(label: &'static str, url: impl Into<String>) -> Option<Self> {
+        let url = url.into();
+        let parsed = http_client::Url::parse(&url).ok()?;
+        let on_github = parsed.scheme() == "https"
+            && parsed.host_str() == Some("github.com")
+            && parsed.port().is_none()
+            && parsed.username().is_empty()
+            && parsed.password().is_none();
+        on_github.then_some(Self { label, url })
+    }
+
+    pub fn label(&self) -> &'static str {
+        self.label
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
 }
 
 impl GithubError {
@@ -99,14 +135,12 @@ impl GithubError {
     /// to approve rozed.
     pub fn help_link(&self) -> Option<HelpLink> {
         match self {
-            Self::SsoRequired { url: Some(url), .. } => Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: url.clone(),
-            }),
-            Self::OAuthAppRestricted { .. } => Some(HelpLink {
-                label: "Request approval on GitHub",
-                url: approval_url(),
-            }),
+            Self::SsoRequired { url: Some(url), .. } => {
+                HelpLink::new("Authorize on GitHub", url.as_str())
+            }
+            Self::OAuthAppRestricted { .. } => {
+                HelpLink::new("Request approval on GitHub", approval_url())
+            }
             _ => None,
         }
     }
@@ -128,14 +162,9 @@ impl GithubError {
             errors: Vec<serde_json::Value>,
         }
         let parsed: Body = serde_json::from_slice(body).unwrap_or_default();
-        let message = parsed.message.unwrap_or_else(|| {
-            let text = String::from_utf8_lossy(body).trim().to_string();
-            if text.is_empty() {
-                format!("HTTP {status}")
-            } else {
-                text
-            }
-        });
+        let message = parsed
+            .message
+            .unwrap_or_else(|| summarize_body(body).unwrap_or_else(|| format!("HTTP {status}")));
         let documentation_url = parsed.documentation_url;
         let header = |name: &str| {
             headers
@@ -194,49 +223,79 @@ impl GithubError {
         }
     }
 
-    /// The error for a GraphQL response's `errors`, which come with HTTP 200.
+    /// The error for a GraphQL response's `errors`, which come with HTTP 200. Every error is
+    /// looked at, and the one rozed can say most about wins: single sign-on, then an org's
+    /// OAuth restriction, then the rate limit, then not found.
     pub fn from_graphql(errors: Vec<GraphQlError>, headers: &HeaderMap) -> Self {
-        let sso_required = headers
-            .get("x-github-sso")
-            .and_then(|value| value.to_str().ok())
-            .and_then(SsoHeader::parse)
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let sso_required = header("x-github-sso")
+            .and_then(|value| SsoHeader::parse(&value))
             .filter(|sso| sso.required);
-        let first = errors.first();
-        let message = first.map(|e| e.message.clone()).unwrap_or_default();
-        let kind = first.and_then(|e| e.r#type.as_deref()).unwrap_or_default();
+        let kind = |error: &GraphQlError| error.r#type.clone().unwrap_or_default();
+        let find = |matches: &dyn Fn(&GraphQlError) -> bool| {
+            errors.iter().find(|error| matches(error)).cloned()
+        };
 
-        if sso_required.is_some() || message.contains("SAML enforcement") {
+        let sso_error = find(&|error| error.message.contains("SAML enforcement"));
+        if sso_required.is_some() || sso_error.is_some() {
             return Self::SsoRequired {
-                message,
+                message: sso_error
+                    .or_else(|| errors.first().cloned())
+                    .map(|error| error.message)
+                    .unwrap_or_default(),
                 url: sso_required.and_then(|sso| sso.url),
             };
         }
-        if is_oauth_restriction(&message) {
+        if let Some(error) = find(&|error| is_oauth_restriction(&error.message)) {
             return Self::OAuthAppRestricted {
-                org: restricting_org(&message),
-                message,
+                org: restricting_org(&error.message),
+                message: error.message,
                 documentation_url: None,
             };
         }
-        if kind == "RATE_LIMITED" || kind == "RATE_LIMIT" {
+        if let Some(error) =
+            find(&|error| matches!(kind(error).as_str(), "RATE_LIMITED" | "RATE_LIMIT"))
+        {
             return Self::RateLimited {
-                message,
+                message: error.message,
                 secondary: false,
-                reset: headers
-                    .get("x-ratelimit-reset")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok()),
-                retry_after: None,
+                reset: header("x-ratelimit-reset").and_then(|v| v.parse().ok()),
+                retry_after: header("retry-after")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(Duration::from_secs),
             };
         }
-        if kind == "NOT_FOUND" {
+        if let Some(error) = find(&|error| kind(error) == "NOT_FOUND") {
             return Self::NotFound {
-                message,
+                message: error.message,
                 documentation_url: None,
             };
         }
         Self::GraphQl { errors }
     }
+}
+
+/// The most of an error body that's worth showing: its text with whitespace collapsed, cut short,
+/// or just "(an HTML page)" for one of GitHub's error pages. `None` when it's empty.
+pub(crate) fn summarize_body(body: &[u8]) -> Option<String> {
+    const MAX_CHARS: usize = 200;
+    let text = String::from_utf8_lossy(body);
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.starts_with('<') {
+        return Some("(an HTML page)".into());
+    }
+    if text.chars().count() <= MAX_CHARS {
+        return Some(text);
+    }
+    Some(text.chars().take(MAX_CHARS).collect::<String>() + "…")
 }
 
 fn is_oauth_restriction(message: &str) -> bool {
@@ -340,11 +399,38 @@ mod tests {
         );
         assert_eq!(
             error.help_link(),
-            Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: "https://github.com/orgs/acme/sso?authorization_request=ABC".into()
-            })
+            HelpLink::new(
+                "Authorize on GitHub",
+                "https://github.com/orgs/acme/sso?authorization_request=ABC"
+            )
         );
+    }
+
+    #[test]
+    fn help_links_open_only_https_pages_on_github() {
+        let sso = |url: &str| GithubError::SsoRequired {
+            message: "SAML".into(),
+            url: Some(url.into()),
+        };
+        for url in [
+            "file:///Applications/Calculator.app",
+            "x-apple-systempreferences:com.apple.preference",
+            "http://github.com/orgs/acme/sso",
+            "https://github.com.evil.example/orgs/acme/sso",
+            "https://evil.example/github.com/orgs/acme/sso",
+            "https://gist.github.com/x",
+            "https://user@github.com/orgs/acme/sso",
+        ] {
+            assert_eq!(sso(url).help_link(), None, "{url}");
+        }
+        let link = sso("https://github.com/orgs/acme/sso?authorization_request=X")
+            .help_link()
+            .unwrap();
+        assert_eq!(
+            link.url(),
+            "https://github.com/orgs/acme/sso?authorization_request=X"
+        );
+        assert_eq!(link.label(), "Authorize on GitHub");
     }
 
     #[test]
@@ -365,7 +451,7 @@ mod tests {
         assert_eq!(org.as_deref(), Some("rozed-dev"));
         assert!(documentation_url.is_some());
         assert_eq!(
-            error.help_link().unwrap().url,
+            error.help_link().unwrap().url(),
             "https://github.com/settings/connections/applications/Ov23liBORqwRdiPzqsPP"
         );
     }
@@ -439,6 +525,16 @@ mod tests {
 
         let error = GithubError::from_response(502, &HeaderMap::new(), b"Bad gateway");
         assert_eq!(error.to_string(), "GitHub answered 502: Bad gateway");
+
+        // A whole web page isn't a message.
+        let page = format!(
+            "<!DOCTYPE html>\n<html>{}</html>",
+            "<p>Unicorn!</p>".repeat(500)
+        );
+        let error = GithubError::from_response(503, &HeaderMap::new(), page.as_bytes());
+        assert_eq!(error.to_string(), "GitHub answered 503: (an HTML page)");
+        let error = GithubError::from_response(500, &HeaderMap::new(), "x ".repeat(500).as_bytes());
+        assert!(error.to_string().chars().count() < 250, "{error}");
     }
 
     #[test]
@@ -485,6 +581,56 @@ mod tests {
             other.to_string(),
             "Field 'nope' doesn't exist on type 'PullRequest'"
         );
+    }
+
+    #[test]
+    fn graphql_errors_are_classified_by_all_of_them() {
+        let error = |json: serde_json::Value, headers: &HeaderMap| {
+            let errors: Vec<GraphQlError> = serde_json::from_value(json).unwrap();
+            GithubError::from_graphql(errors, headers)
+        };
+        // An org's restriction on a fork, after an unrelated error, still reads as the
+        // restriction, with its link.
+        let restricted = error(
+            serde_json::json!([
+                {"type": "NOT_FOUND", "path": ["repository", "pullRequest", "author"], "message": "gone"},
+                {"type": "FORBIDDEN", "path": ["repository", "pullRequest", "headRepository"], "message": RESTRICTED},
+            ]),
+            &HeaderMap::new(),
+        );
+        assert!(
+            matches!(restricted, GithubError::OAuthAppRestricted { ref org, .. } if org.as_deref() == Some("rozed-dev")),
+            "{restricted:?}"
+        );
+        // Single sign-on comes before a restriction.
+        let sso = error(
+            serde_json::json!([
+                {"type": "FORBIDDEN", "message": RESTRICTED},
+                {"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization."},
+            ]),
+            &HeaderMap::new(),
+        );
+        assert!(matches!(sso, GithubError::SsoRequired { .. }), "{sso:?}");
+        // A rate limit after another error, with how long GitHub asked to wait.
+        let limited = error(
+            serde_json::json!([
+                {"type": "NOT_FOUND", "message": "gone"},
+                {"type": "RATE_LIMITED", "message": "API rate limit exceeded"},
+            ]),
+            &headers(&[("retry-after", "30"), ("x-ratelimit-reset", "1762419600")]),
+        );
+        let GithubError::RateLimited {
+            message,
+            retry_after,
+            reset,
+            ..
+        } = &limited
+        else {
+            panic!("{limited:?}");
+        };
+        assert_eq!(message, "API rate limit exceeded");
+        assert_eq!(*retry_after, Some(Duration::from_secs(30)));
+        assert_eq!(*reset, Some(1762419600));
     }
 
     #[test]

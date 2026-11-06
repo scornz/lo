@@ -3,8 +3,8 @@
 //!
 //! Opened from the command palette (`accounts: open accounts`, `accounts: sign in`,
 //! `accounts: import from gh`) and the app menu. Up and down move the selection, enter acts on
-//! it, space picks accounts to import, cmd-backspace removes the selected account, and escape
-//! goes back or closes.
+//! it, space picks accounts to import, cmd-backspace pressed twice removes the selected account,
+//! and escape goes back or closes.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use github::accounts::Accounts;
+use github::accounts::{Accounts, SignedOut};
 use github::db::{Account, AccountSource, RozedDb};
 use github::device_flow::{self, DeviceFlowError};
 use github::gh_import::{self, GhAccount};
@@ -22,7 +22,7 @@ use gpui::{
     Focusable, Global, KeyBinding, Render, SharedString, Subscription, Task, Window, actions,
 };
 use http_client::HttpClient;
-use ui::{ListItem, ToggleState, prelude::*};
+use ui::{ListItem, TintColor, ToggleState, prelude::*};
 use util::ResultExt as _;
 use workspace::{ModalView, MultiWorkspace, Workspace};
 
@@ -35,7 +35,7 @@ actions!(
         SignIn,
         /// Imports accounts from the gh CLI.
         ImportFromGh,
-        /// Removes the selected account and its token.
+        /// Removes the selected account and its token, on a second press.
         RemoveSelected,
         /// Picks or unpicks the selected gh account for import.
         ToggleChosen,
@@ -79,20 +79,16 @@ pub fn init(cx: &mut App) {
     let store = github::credentials::token_store();
     let path = github::db::default_path();
     cx.spawn(async move |cx| {
-        let loaded = match RozedDb::open(&path).await {
-            Ok(db) => Accounts::new(db, store, http),
-            Err(error) => Err(error),
-        };
-        cx.update(|cx| match loaded {
-            Ok(accounts) => {
-                let accounts = cx.new(|_| accounts);
-                Accounts::set_global(accounts, cx);
-            }
-            Err(error) => {
-                log::error!("accounts are unavailable: {error:#}");
-                cx.set_global(AccountsUnavailable(format!("{error:#}").into()));
-            }
-        })
+        let db = RozedDb::open(&path).await;
+        cx.update(
+            |cx| match db.and_then(|db| Accounts::load(db, store, http, cx)) {
+                Ok(accounts) => Accounts::set_global(accounts, cx),
+                Err(error) => {
+                    log::error!("accounts are unavailable: {error:#}");
+                    cx.set_global(AccountsUnavailable(format!("{error:#}").into()));
+                }
+            },
+        )
     })
     .detach();
 }
@@ -143,8 +139,10 @@ enum SignInStep {
     RequestingCode,
     WaitingForUser {
         user_code: SharedString,
-        verification_uri: String,
         expires_at: Instant,
+        /// Whether rozed put the code on the clipboard. The modal never reads the clipboard to
+        /// find out, since it may hold something else the user copied, such as a password.
+        copied: bool,
     },
     Finishing,
 }
@@ -217,6 +215,8 @@ pub struct AccountsModal {
     task: Option<Task<()>>,
     /// Redraws the sign-in countdown every second.
     ticker: Option<Task<()>>,
+    /// The account a first press of Remove asked about; a second press removes it.
+    confirming_remove: Option<String>,
     _observe_accounts: Option<Subscription>,
 }
 
@@ -273,6 +273,7 @@ impl AccountsModal {
             gh_override: None,
             task: None,
             ticker: None,
+            confirming_remove: None,
             _observe_accounts: observe_accounts,
         }
     }
@@ -309,6 +310,7 @@ impl AccountsModal {
     fn show_list(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.ticker = None;
+        self.confirming_remove = None;
         self.mode = Mode::List;
         self.clamp_selection(cx);
         cx.notify();
@@ -349,16 +351,15 @@ impl AccountsModal {
             let result = async {
                 let codes = device_flow::request_codes(&http).await?;
                 this.update(cx, |this, cx| {
-                    // Copy the code and open GitHub's page, so the user only has to paste.
-                    cx.write_to_clipboard(ClipboardItem::new_string(codes.user_code.clone()));
-                    cx.open_url(&codes.verification_uri);
                     this.mode = Mode::SignIn(SignInStep::WaitingForUser {
                         user_code: codes.user_code.clone().into(),
-                        verification_uri: codes.verification_uri.clone(),
                         expires_at: Instant::now() + codes.expires_in,
+                        copied: false,
                     });
+                    // Copy the code and open GitHub's page, so the user only has to paste.
+                    this.copy_code(cx);
+                    cx.open_url(device_flow::VERIFICATION_URL);
                     this.start_ticker(cx);
-                    cx.notify();
                 })?;
                 let executor = cx.background_executor().clone();
                 let token = device_flow::wait_for_token(&http, &codes, &executor).await?;
@@ -384,6 +385,26 @@ impl AccountsModal {
             })
             .ok();
         }));
+    }
+
+    /// Puts the sign-in code on the clipboard.
+    fn copy_code(&mut self, cx: &mut Context<Self>) {
+        if let Mode::SignIn(SignInStep::WaitingForUser {
+            user_code, copied, ..
+        }) = &mut self.mode
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(user_code.to_string()));
+            *copied = true;
+            cx.notify();
+        }
+    }
+
+    /// The copy button's label: "Copied" once rozed has put the code on the clipboard.
+    pub fn copy_label(&self) -> &'static str {
+        match &self.mode {
+            Mode::SignIn(SignInStep::WaitingForUser { copied: true, .. }) => "Copied",
+            _ => "Copy code",
+        }
     }
 
     fn start_ticker(&mut self, cx: &mut Context<Self>) {
@@ -522,13 +543,17 @@ impl AccountsModal {
         let Some(accounts) = self.accounts.clone() else {
             return;
         };
+        let source = accounts
+            .read(cx)
+            .account(login)
+            .map(|account| account.source);
         let task = accounts.update(cx, |accounts, cx| accounts.remove(login, cx));
         let login = login.to_string();
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.notice = Some(match result {
-                    Ok(()) => Notice::info(format!("Removed {login}.")),
+                    Ok(()) => removed_notice(&login, source),
                     Err(error) => Notice::error(&error),
                 });
                 cx.notify();
@@ -538,11 +563,27 @@ impl AccountsModal {
         .detach();
     }
 
+    /// Removes the account on a second press for it; the first only asks.
+    pub fn request_remove(&mut self, login: &str, cx: &mut Context<Self>) {
+        if self
+            .confirming_remove
+            .as_deref()
+            .is_some_and(|asked| asked.eq_ignore_ascii_case(login))
+        {
+            self.confirming_remove = None;
+            self.remove(login, cx);
+        } else {
+            self.confirming_remove = Some(login.to_string());
+            self.notice = None;
+        }
+        cx.notify();
+    }
+
     fn remove_selected(&mut self, _: &RemoveSelected, _: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.mode, Mode::List)
             && let Some(account) = self.account_list(cx).get(self.selected)
         {
-            self.remove(&account.login.clone(), cx);
+            self.request_remove(&account.login.clone(), cx);
         }
     }
 
@@ -550,6 +591,7 @@ impl AccountsModal {
         let count = self.row_count(cx);
         if count > 0 {
             self.selected = (self.selected + 1) % count;
+            self.confirming_remove = None;
             cx.notify();
         }
     }
@@ -563,6 +605,7 @@ impl AccountsModal {
         let count = self.row_count(cx);
         if count > 0 {
             self.selected = (self.selected + count - 1) % count;
+            self.confirming_remove = None;
             cx.notify();
         }
     }
@@ -577,13 +620,9 @@ impl AccountsModal {
                     self.start_import(cx);
                 }
             }
-            Mode::SignIn(SignInStep::WaitingForUser {
-                user_code,
-                verification_uri,
-                ..
-            }) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(user_code.to_string()));
-                cx.open_url(verification_uri);
+            Mode::SignIn(SignInStep::WaitingForUser { .. }) => {
+                self.copy_code(cx);
+                cx.open_url(device_flow::VERIFICATION_URL);
             }
             Mode::Import(ImportStep::Choose { .. }) => self.import_chosen(cx),
             _ => {}
@@ -591,7 +630,14 @@ impl AccountsModal {
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.mode, Mode::List) {
+        self.go_back(cx);
+    }
+
+    /// Escape: takes back a pending removal, else goes back to the list, else closes.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if self.confirming_remove.take().is_some() {
+            cx.notify();
+        } else if matches!(self.mode, Mode::List) {
             cx.emit(DismissEvent);
         } else {
             self.show_list(cx);
@@ -636,6 +682,85 @@ impl AccountsModal {
     pub fn is_listing(&self) -> bool {
         matches!(self.mode, Mode::List)
     }
+
+    /// The account a first press of Remove asked about.
+    pub fn confirming_remove(&self) -> Option<&str> {
+        self.confirming_remove.as_deref()
+    }
+}
+
+/// Where the user revokes an OAuth app's access to their account.
+const AUTHORIZED_APPS_URL: &str = "https://github.com/settings/applications";
+
+/// What removing an account did and didn't do. Removing deletes rozed's copy of the token, but
+/// rozed has no client secret, so only GitHub's settings can revoke the grant behind it. An
+/// imported token is gh's, and revoking it would sign gh out too.
+fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
+    match source {
+        Some(AccountSource::Gh) => Notice::info(format!(
+            "Removed {login}. Its token is gh's, so gh stays signed in."
+        )),
+        _ => Notice {
+            message: format!(
+                "Removed {login}. rozed stays authorized on GitHub until you revoke it there.",
+            )
+            .into(),
+            is_error: false,
+            link: HelpLink::new("Revoke on GitHub", AUTHORIZED_APPS_URL),
+        },
+    }
+}
+
+/// What needs the user's attention about an account: why it's signed out, or the scopes its
+/// token lacks.
+fn account_warning(signed_out: Option<SignedOut>, scopes: &[String]) -> Option<String> {
+    match signed_out {
+        Some(SignedOut::Refused) => {
+            return Some("Signed out: GitHub refused its token. Sign in again.".into());
+        }
+        Some(SignedOut::TokenMissing) => {
+            return Some("Signed out: its token is missing. Sign in again.".into());
+        }
+        None => {}
+    }
+    // GitHub lists scopes only for OAuth and classic tokens. A GitHub App's user token or a
+    // fine-grained one has permissions instead, which GitHub doesn't report.
+    if scopes.is_empty() {
+        return Some(
+            "A token without OAuth scopes: what it can do depends on its permissions.".into(),
+        );
+    }
+    let missing = github::missing_scopes(scopes);
+    (!missing.is_empty()).then(|| format!("Missing scopes: {}", missing.join(", ")))
+}
+
+/// The notes beside an account in gh's list.
+fn gh_account_notes(account: &GhAccount, already_in_rozed: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if account.active {
+        notes.push("active in gh".to_string());
+    }
+    if !account.is_usable() {
+        notes.push(format!("gh reports {}", account.state));
+    }
+    if account.refreshable {
+        notes.push("short-lived token".to_string());
+    }
+    if account.is_usable() && account.scopes.is_empty() {
+        notes.push("a token without OAuth scopes, such as a GitHub App's".to_string());
+    } else {
+        match account.missing_scopes().as_slice() {
+            [] => {}
+            ["workflow"] => {
+                notes.push("no workflow scope: can't merge PRs that change workflows".to_string())
+            }
+            missing => notes.push(format!("missing scopes: {}", missing.join(", "))),
+        }
+    }
+    if already_in_rozed {
+        notes.push("already in rozed; importing replaces its token".to_string());
+    }
+    notes
 }
 
 fn source_label(source: AccountSource) -> &'static str {
@@ -655,18 +780,19 @@ impl AccountsModal {
         let signed_out = self
             .accounts
             .as_ref()
-            .is_some_and(|accounts| accounts.read(cx).is_signed_out(&account.login));
-        let missing = github::missing_scopes(&account.scopes);
+            .and_then(|accounts| accounts.read(cx).signed_out(&account.login));
         let mut detail = vec![source_label(account.source).to_string()];
         if let Some(name) = &account.name {
             detail.insert(0, name.clone());
         }
-        let warning = if signed_out {
-            Some("Signed out: GitHub refused its token. Sign in again.".to_string())
-        } else if !missing.is_empty() {
-            Some(format!("Missing scopes: {}", missing.join(", ")))
+        let confirming = self
+            .confirming_remove
+            .as_deref()
+            .is_some_and(|asked| asked.eq_ignore_ascii_case(&account.login));
+        let warning = if confirming {
+            Some("Press ⌘⌫ or Remove again to remove it from rozed.".to_string())
         } else {
-            None
+            account_warning(signed_out, &account.scopes)
         };
         let login = account.login.clone();
         ListItem::new(("account", index))
@@ -688,9 +814,16 @@ impl AccountsModal {
                     })),
             )
             .end_slot(
-                Button::new(("remove", index), "Remove")
-                    .style(ButtonStyle::Subtle)
-                    .on_click(cx.listener(move |this, _, _, cx| this.remove(&login, cx))),
+                Button::new(
+                    ("remove", index),
+                    if confirming { "Remove?" } else { "Remove" },
+                )
+                .style(if confirming {
+                    ButtonStyle::Tinted(TintColor::Error)
+                } else {
+                    ButtonStyle::Subtle
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.request_remove(&login, cx))),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected = index;
@@ -748,15 +881,11 @@ impl AccountsModal {
                 .into_any_element(),
             SignInStep::WaitingForUser {
                 user_code,
-                verification_uri,
                 expires_at,
+                copied,
             } => {
                 let remaining = expires_at.saturating_duration_since(Instant::now());
-                let copied = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .is_some_and(|text| text == user_code.as_ref());
-                let (code, uri) = (user_code.clone(), verification_uri.clone());
+                let copied = *copied;
                 v_flex()
                     .gap_2()
                     .items_center()
@@ -775,26 +904,20 @@ impl AccountsModal {
                         h_flex()
                             .gap_2()
                             .child(
-                                Button::new(
-                                    "copy-code",
-                                    if copied { "Copied" } else { "Copy code" },
-                                )
-                                .start_icon(Icon::new(if copied {
-                                    IconName::Check
-                                } else {
-                                    IconName::Copy
-                                }))
-                                .on_click(move |_, window, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        code.to_string(),
-                                    ));
-                                    window.refresh();
-                                }),
+                                Button::new("copy-code", self.copy_label())
+                                    .start_icon(Icon::new(if copied {
+                                        IconName::Check
+                                    } else {
+                                        IconName::Copy
+                                    }))
+                                    .on_click(cx.listener(|this, _, _, cx| this.copy_code(cx))),
                             )
                             .child(
                                 Button::new("open-github", "Open github.com/login/device")
                                     .end_icon(Icon::new(IconName::ArrowUpRight))
-                                    .on_click(move |_, _, cx| cx.open_url(&uri)),
+                                    .on_click(move |_, _, cx| {
+                                        cx.open_url(device_flow::VERIFICATION_URL)
+                                    }),
                             ),
                     )
                     .child(
@@ -832,30 +955,12 @@ impl AccountsModal {
                     ),
                 )
                 .children(accounts.iter().enumerate().map(|(index, account)| {
-                    let mut notes = Vec::new();
-                    if account.active {
-                        notes.push("active in gh".to_string());
-                    }
-                    if !account.is_usable() {
-                        notes.push(format!("gh reports {}", account.state));
-                    }
-                    if account.refreshable {
-                        notes.push("short-lived token".to_string());
-                    }
-                    let missing = account.missing_scopes();
-                    if !missing.is_empty() {
-                        notes.push(format!(
-                            "no {} scope: can't merge PRs that change workflows",
-                            missing.join(", ")
-                        ));
-                    }
                     let already = self
                         .accounts
                         .as_ref()
                         .is_some_and(|a| a.read(cx).account(&account.login).is_some());
-                    if already {
-                        notes.push("already in rozed; importing replaces its token".to_string());
-                    }
+                    let notes = gh_account_notes(account, already);
+                    let missing = account.missing_scopes();
                     let checked = if chosen.contains(&account.login) {
                         ToggleState::Selected
                     } else {
@@ -916,9 +1021,9 @@ impl AccountsModal {
             )
             .child(Label::new(notice.message.clone()).size(LabelSize::Small))
             .children(notice.link.clone().map(|link| {
-                Button::new("help-link", link.label)
+                Button::new("help-link", link.label())
                     .end_icon(Icon::new(IconName::ArrowUpRight))
-                    .on_click(move |_, _, cx| cx.open_url(&link.url))
+                    .on_click(move |_, _, cx| cx.open_url(link.url()))
             }))
             .into_any_element()
     }
@@ -992,7 +1097,7 @@ mod tests {
     ) -> Entity<Accounts> {
         let db = RozedDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
-        cx.new(|_| Accounts::new(db, store, http).unwrap())
+        cx.update(|cx| Accounts::load(db, store, http, cx)).unwrap()
     }
 
     /// Runs what's ready without moving the fake clock, so a sign-in stops at its next poll.
@@ -1008,9 +1113,24 @@ mod tests {
         }
     }
 
+    /// The successful sign-in, with GitHub's answer naming another page to enter the code on.
+    fn sign_in_naming(verification_uri: &str) -> Arc<dyn HttpClient> {
+        let dir = github::cassette::fixtures_dir().join("device_flow_success");
+        let (_, interactions) = github::cassette::read_cassette(&dir).unwrap();
+        let interactions = interactions.into_iter().map(|(_, mut interaction)| {
+            if interaction.request.url == device_flow::DEVICE_CODE_URL {
+                interaction.response.body.as_mut().unwrap()["verification_uri"] =
+                    verification_uri.into();
+            }
+            interaction
+        });
+        Arc::new(ReplayHttpClient::from_interactions("sign_in", interactions).unwrap())
+    }
+
     #[gpui::test]
     async fn signing_in_shows_the_code_then_adds_the_account(cx: &mut TestAppContext) {
-        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("device_flow_success");
+        // Whatever page GitHub's answer names, rozed opens GitHub's own.
+        let http = sign_in_naming("file:///Applications/Calculator.app");
         let accounts = accounts("ui_sign_in", http.clone(), cx).await;
         let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
 
@@ -1030,6 +1150,11 @@ mod tests {
             cx.opened_url().as_deref(),
             Some("https://github.com/login/device")
         );
+        // "Copied" comes from what rozed did, not from reading the clipboard, which may hold
+        // something the user copied since, such as a password.
+        modal.read_with(cx, |modal, _| assert_eq!(modal.copy_label(), "Copied"));
+        cx.write_to_clipboard(ClipboardItem::new_string("hunter2".into()));
+        modal.read_with(cx, |modal, _| assert_eq!(modal.copy_label(), "Copied"));
 
         // Polls go out 6, 12 and 18 s in; the third gets the token.
         wait(10, cx);
@@ -1125,6 +1250,114 @@ esac
     }
 
     #[gpui::test]
+    async fn removing_says_revoking_happens_on_github(cx: &mut TestAppContext) {
+        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
+        let accounts = accounts("ui_remove", http.clone(), cx).await;
+        for (login, source) in [
+            ("signed-in", AccountSource::DeviceFlow),
+            ("from-gh", AccountSource::Gh),
+        ] {
+            let user = github::AuthenticatedUser {
+                user: github::User {
+                    login: login.into(),
+                    id: 1,
+                    name: None,
+                    avatar_url: None,
+                },
+                scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+            };
+            accounts
+                .update(cx, |accounts, cx| {
+                    accounts.add(user, github::Token::new("gho_FAKE"), source, cx)
+                })
+                .await
+                .unwrap();
+        }
+        let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
+
+        // rozed has no client secret, so it can't revoke its own grant: GitHub's settings can.
+        modal.update(cx, |modal, cx| modal.remove("signed-in", cx));
+        cx.run_until_parked();
+        modal.read_with(cx, |modal, _| {
+            let notice = modal.notice().unwrap();
+            assert!(!notice.is_error);
+            assert_eq!(
+                notice.message.as_ref(),
+                "Removed signed-in. rozed stays authorized on GitHub until you revoke it there."
+            );
+            assert_eq!(
+                notice.link.as_ref().map(HelpLink::url),
+                Some("https://github.com/settings/applications")
+            );
+        });
+
+        // An imported token is gh's: revoking it would sign gh out too.
+        modal.update(cx, |modal, cx| modal.remove("from-gh", cx));
+        cx.run_until_parked();
+        modal.read_with(cx, |modal, _| {
+            let notice = modal.notice().unwrap();
+            assert_eq!(
+                notice.message.as_ref(),
+                "Removed from-gh. Its token is gh's, so gh stays signed in."
+            );
+            assert_eq!(notice.link, None);
+        });
+        accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
+    }
+
+    #[gpui::test]
+    async fn removing_takes_a_second_press(cx: &mut TestAppContext) {
+        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
+        let accounts = accounts("ui_remove_confirm", http.clone(), cx).await;
+        for login in ["a", "b"] {
+            let user = github::AuthenticatedUser {
+                user: github::User {
+                    login: login.into(),
+                    id: 1,
+                    name: None,
+                    avatar_url: None,
+                },
+                scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+            };
+            accounts
+                .update(cx, |accounts, cx| {
+                    accounts.add(user, github::Token::new("gho_FAKE"), AccountSource::Gh, cx)
+                })
+                .await
+                .unwrap();
+        }
+        let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
+        let count = |cx: &mut TestAppContext| accounts.read_with(cx, |a, _| a.accounts().len());
+
+        // The first press asks; escape then takes it back without closing the modal.
+        modal.update(cx, |modal, cx| modal.request_remove("a", cx));
+        cx.run_until_parked();
+        assert_eq!(count(cx), 2);
+        modal.read_with(cx, |modal, _| {
+            assert_eq!(modal.confirming_remove(), Some("a"))
+        });
+        modal.update(cx, |modal, cx| modal.go_back(cx));
+        modal.read_with(cx, |modal, _| {
+            assert_eq!(modal.confirming_remove(), None);
+            assert!(modal.is_listing());
+        });
+
+        // Pressing for another account asks about that one instead.
+        modal.update(cx, |modal, cx| {
+            modal.request_remove("a", cx);
+            modal.request_remove("b", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(count(cx), 2);
+
+        // A second press removes it.
+        modal.update(cx, |modal, cx| modal.request_remove("b", cx));
+        cx.run_until_parked();
+        assert_eq!(count(cx), 1);
+        modal.read_with(cx, |modal, _| assert_eq!(modal.confirming_remove(), None));
+    }
+
+    #[gpui::test]
     async fn without_a_database_the_modal_says_so(cx: &mut TestAppContext) {
         let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
         let modal = cx.new(|cx| {
@@ -1153,7 +1386,7 @@ esac
             "acme hasn't approved rozed. Request approval on GitHub."
         );
         assert_eq!(
-            notice.link.unwrap().url,
+            notice.link.unwrap().url(),
             "https://github.com/settings/connections/applications/Ov23liBORqwRdiPzqsPP"
         );
 
@@ -1165,14 +1398,62 @@ esac
         assert!(notice.is_error);
         assert_eq!(
             notice.link,
-            Some(HelpLink {
-                label: "Authorize on GitHub",
-                url: "https://github.com/orgs/acme/sso?authorization_request=X".into()
-            })
+            HelpLink::new(
+                "Authorize on GitHub",
+                "https://github.com/orgs/acme/sso?authorization_request=X"
+            )
         );
 
         let plain = Notice::error(&anyhow!("gh couldn't list its accounts: boom"));
         assert_eq!(plain.link, None);
+    }
+
+    #[test]
+    fn an_account_says_why_it_needs_attention() {
+        let scopes = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = scopes(&["read:org", "repo", "workflow"]);
+        assert_eq!(account_warning(None, &all), None);
+        assert_eq!(
+            account_warning(Some(SignedOut::Refused), &all).as_deref(),
+            Some("Signed out: GitHub refused its token. Sign in again.")
+        );
+        assert_eq!(
+            account_warning(Some(SignedOut::TokenMissing), &all).as_deref(),
+            Some("Signed out: its token is missing. Sign in again.")
+        );
+        assert_eq!(
+            account_warning(None, &scopes(&["gist", "repo"])).as_deref(),
+            Some("Missing scopes: read:org, workflow")
+        );
+        // GitHub lists no scopes for a GitHub App's or a fine-grained token: they have
+        // permissions instead, so none are "missing".
+        assert_eq!(
+            account_warning(None, &[]).as_deref(),
+            Some("A token without OAuth scopes: what it can do depends on its permissions.")
+        );
+    }
+
+    #[test]
+    fn a_gh_account_without_scopes_isnt_said_to_miss_them() {
+        let account = |scopes: &[&str]| GhAccount {
+            login: "a".into(),
+            active: false,
+            state: "success".into(),
+            scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            refreshable: false,
+        };
+        assert_eq!(
+            gh_account_notes(&account(&["gist", "read:org", "repo"]), false),
+            ["no workflow scope: can't merge PRs that change workflows"]
+        );
+        assert_eq!(
+            gh_account_notes(&account(&["gist"]), false),
+            ["missing scopes: repo, read:org, workflow"]
+        );
+        assert_eq!(
+            gh_account_notes(&account(&[]), false),
+            ["a token without OAuth scopes, such as a GitHub App's"]
+        );
     }
 
     #[test]

@@ -14,10 +14,26 @@ pub struct GraphQlError {
     /// GitHub's error type, such as `NOT_FOUND` or `FORBIDDEN`. Validation errors have none.
     #[serde(default, rename = "type")]
     pub r#type: Option<String>,
-    #[serde(default)]
+    /// Where in the data the error happened, from the query's root. Empty for an error about
+    /// the whole query.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub path: Vec<serde_json::Value>,
     #[serde(default)]
     pub extensions: Option<serde_json::Value>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<serde_json::Value>, D::Error> {
+    Ok(Option::<Vec<serde_json::Value>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+impl GraphQlError {
+    /// Whether the error is about a field deeper than `depth` from the root: one GitHub left out
+    /// of data it otherwise returned.
+    pub fn is_below(&self, depth: usize) -> bool {
+        self.path.len() > depth
+    }
 }
 
 /// A GraphQL response: data, errors, or both when GitHub returns partial data.
@@ -36,7 +52,8 @@ struct Envelope {
 }
 
 /// Splits a response body into its data, its errors, and the `rateLimit` field if the query
-/// asked for one.
+/// asked for one. When the data doesn't fit `T` but there are errors, which is what a field
+/// nulled by an error looks like, the errors are returned without the data.
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(
     body: &[u8],
 ) -> Result<(GraphQlResponse<T>, Option<GraphQlRateLimit>), String> {
@@ -49,9 +66,14 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(
         .and_then(|field| serde_json::from_value(field.clone()).ok());
     let data = match envelope.data {
         Some(serde_json::Value::Null) | None => None,
-        Some(data) => Some(
-            serde_json::from_value(data).map_err(|error| format!("unexpected data: {error}"))?,
-        ),
+        Some(data) => match serde_json::from_value(data) {
+            Ok(data) => Some(data),
+            Err(error) if !envelope.errors.is_empty() => {
+                log::debug!("GraphQL data that doesn't fit, explained by its errors: {error}");
+                None
+            }
+            Err(error) => return Err(format!("unexpected data: {error}")),
+        },
     };
     Ok((
         GraphQlResponse {
@@ -94,6 +116,30 @@ mod tests {
         let body = br#"{"data":{"rateLimit":{"cost":1,"limit":5000,"remaining":4999,"used":1,"resetAt":"2026-11-06T09:00:00Z"},"repository":{}}}"#;
         let (_, rate_limit) = decode::<Data>(body).unwrap();
         assert_eq!(rate_limit.unwrap().remaining, 4999);
+    }
+
+    #[test]
+    fn errors_are_kept_when_the_data_doesnt_fit() {
+        // A typed error nulls a field the generated types don't expect to be null; the error is
+        // what explains it.
+        #[derive(Deserialize, Debug)]
+        struct Strict {
+            #[allow(dead_code)]
+            repository: serde_json::Map<String, serde_json::Value>,
+        }
+        let body = br#"{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository"}]}"#;
+        let (response, _) = decode::<Strict>(body).unwrap();
+        assert!(response.data.is_none());
+        assert_eq!(response.errors[0].r#type.as_deref(), Some("NOT_FOUND"));
+        // Without errors to explain it, data that doesn't fit is still a decoding error.
+        assert!(decode::<Strict>(br#"{"data":{"repository":null}}"#).is_err());
+    }
+
+    #[test]
+    fn an_error_whose_path_is_null_is_read() {
+        let body = br#"{"errors":[{"message":"Something went wrong","path":null}]}"#;
+        let (response, _) = decode::<Data>(body).unwrap();
+        assert_eq!(response.errors[0].path, Vec::<serde_json::Value>::new());
     }
 
     #[test]

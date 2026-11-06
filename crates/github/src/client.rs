@@ -4,10 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::AsyncReadExt as _;
+use futures::future::BoxFuture;
 use graphql_client::GraphQLQuery;
-use http_client::http::{HeaderMap, StatusCode};
-use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, Method, RedirectPolicy, Request};
-use parking_lot::Mutex;
+use http_client::http::{HeaderMap, HeaderValue, StatusCode};
+use http_client::{
+    AsyncBody, HttpClient, HttpRequestExt as _, Method, RedirectPolicy, Request, Url,
+};
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -18,6 +21,10 @@ use crate::token::Token;
 use crate::user::AuthenticatedUser;
 
 pub const API_URL: &str = "https://api.github.com";
+/// The only hosts a client sends its token to: the API, and the API's host for uploads, which
+/// responses name in full URLs. Anything else found in a response, such as an image or a check's
+/// details page, is fetched without the token by whatever shows it.
+const API_HOSTS: &[&str] = &["api.github.com", "uploads.github.com"];
 /// The REST API version rozed is written against. Responses echo it in
 /// `x-github-api-version-selected`.
 pub const API_VERSION: &str = "2022-11-28";
@@ -31,13 +38,21 @@ pub fn user_agent() -> String {
     format!("rozed/{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// One account's client. Clones share the account's rate limits.
+/// What a client does when GitHub refuses its token (a `401`). It's given the refused token,
+/// and returns a token to retry the request with once, or `None` to fail it. [`Accounts`] gives
+/// its clients one that signs the account out, after re-reading a `gh` account's token once.
+///
+/// [`Accounts`]: crate::accounts::Accounts
+pub type OnUnauthorized = Arc<dyn Fn(Token) -> BoxFuture<'static, Option<Token>> + Send + Sync>;
+
+/// One account's client. Clones share the account's token and rate limits.
 #[derive(Clone)]
 pub struct GithubClient {
     http: Arc<dyn HttpClient>,
-    token: Token,
+    token: Arc<RwLock<Token>>,
     api_url: Arc<str>,
     state: Arc<Mutex<ClientState>>,
+    on_unauthorized: Option<OnUnauthorized>,
 }
 
 /// What the account's responses have said about it.
@@ -85,14 +100,27 @@ impl GithubClient {
     pub fn new(http: Arc<dyn HttpClient>, token: Token) -> Self {
         Self {
             http,
-            token,
+            token: Arc::new(RwLock::new(token)),
             api_url: API_URL.into(),
             state: Arc::default(),
+            on_unauthorized: None,
         }
     }
 
-    pub fn token(&self) -> &Token {
-        &self.token
+    /// Calls `hook` whenever GitHub refuses the token, retrying the request once with the token
+    /// it returns.
+    pub fn with_unauthorized_hook(mut self, hook: OnUnauthorized) -> Self {
+        self.on_unauthorized = Some(hook);
+        self
+    }
+
+    pub fn token(&self) -> Token {
+        self.token.read().clone()
+    }
+
+    /// Replaces the token for this client and every clone of it.
+    pub fn set_token(&self, token: Token) {
+        *self.token.write() = token;
     }
 
     pub fn state(&self) -> ClientState {
@@ -103,25 +131,50 @@ impl GithubClient {
         self.state.lock().rate_limits.clone()
     }
 
-    fn url(&self, path: &str) -> String {
-        if path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{}/{}", self.api_url, path.trim_start_matches('/'))
+    /// The URL for `path`, which is either relative to the API or a full URL on one of
+    /// [`API_HOSTS`], over HTTPS on the default port. Anything else is refused.
+    fn url(&self, path: &str) -> Result<String, GithubError> {
+        let url = match Url::parse(path) {
+            Ok(url) => url,
+            Err(_) => Url::parse(&format!(
+                "{}/{}",
+                self.api_url,
+                path.trim_start_matches('/')
+            ))
+            .map_err(|_| GithubError::RefusedUrl {
+                host: "a malformed URL".into(),
+            })?,
+        };
+        let allowed = url.scheme() == "https"
+            && url.host_str().is_some_and(|host| API_HOSTS.contains(&host))
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none();
+        if !allowed {
+            return Err(GithubError::RefusedUrl {
+                host: url
+                    .host_str()
+                    .map_or_else(|| url.scheme().to_string(), str::to_string),
+            });
         }
+        Ok(url.to_string())
     }
 
     fn request(
         &self,
+        token: &Token,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
         etag: Option<&str>,
     ) -> Result<Request<AsyncBody>, GithubError> {
+        let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
+            .map_err(|_| GithubError::Decode("the token isn't a valid header value".into()))?;
+        authorization.set_sensitive(true);
         Request::builder()
             .method(method)
-            .uri(self.url(path))
-            .header("Authorization", format!("token {}", self.token.expose()))
+            .uri(self.url(path)?)
+            .header("Authorization", authorization)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
             .header("User-Agent", user_agent())
@@ -166,7 +219,9 @@ impl GithubClient {
         })
     }
 
-    /// Sends a REST request. Any status other than 2xx or `304` becomes an error.
+    /// Sends a REST request. Any status other than 2xx or `304` becomes an error. When GitHub
+    /// refuses the token, the client's [`OnUnauthorized`] hook may hand it a new one, and the
+    /// request is retried once with it.
     pub async fn send(
         &self,
         method: Method,
@@ -174,7 +229,32 @@ impl GithubClient {
         body: Option<Vec<u8>>,
         etag: Option<&str>,
     ) -> Result<RestResponse, GithubError> {
-        let request = self.request(method, path, body, etag)?;
+        let token = self.token();
+        let result = self
+            .send_with(&token, method.clone(), path, body.clone(), etag)
+            .await;
+        let Some(hook) = &self.on_unauthorized else {
+            return result;
+        };
+        if !matches!(&result, Err(error) if error.is_unauthorized()) {
+            return result;
+        }
+        let Some(new_token) = hook(token).await else {
+            return result;
+        };
+        self.set_token(new_token.clone());
+        self.send_with(&new_token, method, path, body, etag).await
+    }
+
+    async fn send_with(
+        &self,
+        token: &Token,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        etag: Option<&str>,
+    ) -> Result<RestResponse, GithubError> {
+        let request = self.request(token, method, path, body, etag)?;
         let response = self.execute(request).await?;
         if response.status.is_success() || response.status == StatusCode::NOT_MODIFIED {
             Ok(response)
@@ -284,6 +364,34 @@ impl GithubClient {
             .ok_or_else(|| GithubError::Decode("the response had no data".into()))
     }
 
+    /// Runs a GraphQL query whose answer is still useful when GitHub left out a field it
+    /// couldn't show, such as a fork's repository in an org that restricts OAuth apps. Errors
+    /// about fields deeper than `depth` from the root are logged and the rest of the data is
+    /// returned; any other error fails the query, as in [`Self::graphql`].
+    pub(crate) async fn graphql_keeping_partial<Q: GraphQLQuery>(
+        &self,
+        variables: Q::Variables,
+        depth: usize,
+    ) -> Result<Q::ResponseData, GithubError> {
+        let (response, headers) = self.graphql_partial::<Q>(variables).await?;
+        match response.data {
+            Some(data) if response.errors.iter().all(|error| error.is_below(depth)) => {
+                for error in &response.errors {
+                    log::warn!(
+                        "GitHub left out {}: {}",
+                        serde_json::Value::from(error.path.clone()),
+                        error.message
+                    );
+                }
+                Ok(data)
+            }
+            data if response.errors.is_empty() => {
+                data.ok_or_else(|| GithubError::Decode("the response had no data".into()))
+            }
+            _ => Err(GithubError::from_graphql(response.errors, &headers)),
+        }
+    }
+
     /// The signed-in user and the token's scopes (`GET /user`).
     pub async fn user(&self) -> Result<AuthenticatedUser, GithubError> {
         let response = self.send(Method::GET, "/user", None, None).await?;
@@ -389,6 +497,113 @@ mod tests {
         assert_eq!(account.state().sso.unwrap().organizations, vec![1, 2]);
         assert_eq!(other.rate_limits().core(), None);
         assert_eq!(account.clone().rate_limits().core().unwrap().used, 679);
+    }
+
+    /// A hook that hands out `new`, noting each token it was given.
+    fn hook(new: Option<&'static str>) -> (OnUnauthorized, Arc<Mutex<Vec<String>>>) {
+        let refused = Arc::new(Mutex::new(Vec::new()));
+        let hook: OnUnauthorized = Arc::new({
+            let refused = refused.clone();
+            move |token: Token| {
+                refused.lock().push(token.expose().to_string());
+                Box::pin(async move { new.map(Token::new) })
+            }
+        });
+        (hook, refused)
+    }
+
+    const BAD_CREDENTIALS: &str = r#"{"message":"Bad credentials","status":"401"}"#;
+
+    #[test]
+    fn a_401_asks_the_hook_and_retries_once_with_its_token() {
+        let http = replay(vec![
+            (
+                "GET",
+                "https://api.github.com/user",
+                401,
+                &[],
+                BAD_CREDENTIALS,
+            ),
+            ("GET", "https://api.github.com/user", 200, &[], "{}"),
+        ]);
+        let (hook, refused) = hook(Some("gho_NEW"));
+        let client = client(&http).with_unauthorized_hook(hook);
+        let other = client.clone();
+        let _: serde_json::Value = futures::executor::block_on(client.get("/user")).unwrap();
+        assert_eq!(*refused.lock(), ["gho_FAKE"]);
+        let seen = http.seen();
+        assert_eq!(seen[0].header("authorization"), Some("token gho_FAKE"));
+        assert_eq!(seen[1].header("authorization"), Some("token gho_NEW"));
+        // Every clone uses the new token from now on.
+        assert_eq!(other.token().expose(), "gho_NEW");
+    }
+
+    #[test]
+    fn without_a_new_token_the_401_is_returned() {
+        let http = replay(vec![(
+            "GET",
+            "https://api.github.com/user",
+            401,
+            &[],
+            BAD_CREDENTIALS,
+        )]);
+        let (hook, refused) = hook(None);
+        let client = client(&http).with_unauthorized_hook(hook);
+        let error =
+            futures::executor::block_on(client.get::<serde_json::Value>("/user")).unwrap_err();
+        assert!(error.is_unauthorized(), "{error:?}");
+        assert_eq!(refused.lock().len(), 1);
+        assert_eq!(http.seen().len(), 1);
+    }
+
+    #[test]
+    fn a_401_on_the_retry_is_returned_without_asking_again() {
+        let http = replay(vec![(
+            "GET",
+            "https://api.github.com/user",
+            401,
+            &[],
+            BAD_CREDENTIALS,
+        )]);
+        let (hook, refused) = hook(Some("gho_NEW"));
+        let client = client(&http).with_unauthorized_hook(hook);
+        let error =
+            futures::executor::block_on(client.get::<serde_json::Value>("/user")).unwrap_err();
+        assert!(error.is_unauthorized(), "{error:?}");
+        assert_eq!(*refused.lock(), ["gho_FAKE"]);
+        assert_eq!(http.seen().len(), 2);
+    }
+
+    #[test]
+    fn the_token_goes_only_to_githubs_api_hosts() {
+        let http = replay(vec![]);
+        let client = client(&http);
+        for url in [
+            "https://evil.example/x",
+            "https://api.github.com.evil.example/x",
+            "https://github.com/login",
+            "http://api.github.com/user",
+            "https://api.github.com:8443/user",
+            "https://someone@api.github.com/user",
+            "file:///etc/passwd",
+        ] {
+            let error =
+                futures::executor::block_on(client.get::<serde_json::Value>(url)).unwrap_err();
+            assert!(
+                matches!(error, GithubError::RefusedUrl { .. }),
+                "{url}: {error:?}"
+            );
+            assert!(!error.to_string().contains("/x"), "{error}");
+        }
+        assert!(http.seen().is_empty());
+    }
+
+    #[test]
+    fn the_authorization_header_is_marked_sensitive() {
+        let http = replay(vec![("GET", "https://api.github.com/user", 200, &[], "{}")]);
+        let _: serde_json::Value = futures::executor::block_on(client(&http).get("/user")).unwrap();
+        let seen = &http.seen()[0];
+        assert!(seen.headers["authorization"].is_sensitive());
     }
 
     #[test]

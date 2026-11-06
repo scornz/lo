@@ -100,13 +100,12 @@ const CONNECTION_INITIALIZE_QUERY: &str = sql!(
 );
 
 /// Where rozed's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
-/// release builds, so a debug build's accounts (whose tokens are in a file) never mix with a
-/// release build's (whose tokens are in the Keychain).
+/// release builds, so a debug build's accounts never mix with a release build's. Their tokens are
+/// kept apart the same way ([`crate::credentials::server_for`]).
 pub fn default_path() -> PathBuf {
-    let scope = if cfg!(debug_assertions) {
-        "dev"
-    } else {
-        "stable"
+    let scope = match crate::credentials::Build::current() {
+        crate::credentials::Build::Debug => "dev",
+        crate::credentials::Build::Release => "stable",
     };
     paths::database_dir()
         .join(format!("0-{scope}"))
@@ -465,7 +464,15 @@ mod tests {
         // A folder where the file should be: SQLite can't open it.
         let path = dir.path().join("rozed.sqlite");
         std::fs::create_dir(&path).unwrap();
-        let result = futures::executor::block_on(RozedDb::open(&path));
-        assert!(result.is_err());
+        let Err(error) = futures::executor::block_on(RozedDb::open(&path)) else {
+            panic!("opened a folder as a database");
+        };
+        // sqlez fell back to memory, and rozed's own check refused that.
+        let message = format!("{error:#}");
+        assert!(
+            message.starts_with(&format!("couldn't open {}", path.display())),
+            "{message}"
+        );
+        assert!(message.contains("SQLite opened"), "{message}");
     }
 }
