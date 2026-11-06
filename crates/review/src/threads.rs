@@ -11,6 +11,7 @@
 mod commentable;
 mod panel;
 mod place;
+mod suggestion;
 
 use std::time::SystemTime;
 
@@ -19,6 +20,7 @@ use crate::github::github_enum;
 pub use commentable::{CommentableLines, Hunk, HunkLine, PatchError, RangeError};
 pub use panel::{PanelFilter, panel};
 pub use place::{Left, Placement, Screen, place};
+pub use suggestion::suggestion_block;
 
 github_enum! {
     /// A side of a pull request's diff: GraphQL's `DiffSide`. `Left` is the base's version of a
