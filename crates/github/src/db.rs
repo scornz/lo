@@ -21,32 +21,72 @@ pub struct RozedDb(ThreadSafeConnection);
 
 impl Domain for RozedDb {
     const NAME: &str = "rozed";
-    const MIGRATIONS: &[&str] = &[sql!(
-        // One row per signed-in account. Tokens aren't here: they're in the token store.
-        CREATE TABLE accounts(
-            host TEXT NOT NULL,
-            login TEXT NOT NULL COLLATE NOCASE,
-            user_id INTEGER NOT NULL,
-            name TEXT,
-            avatar_url TEXT,
-            // Comma-separated, as GitHub's x-oauth-scopes header lists them.
-            scopes TEXT NOT NULL,
-            // "device_flow" or "gh".
-            source TEXT NOT NULL,
-            // Seconds since the Unix epoch.
-            added_at INTEGER NOT NULL,
-            PRIMARY KEY(host, login)
-        ) STRICT;
+    const MIGRATIONS: &[&str] = &[
+        sql!(
+            // One row per signed-in account. Tokens aren't here: they're in the token store.
+            CREATE TABLE accounts(
+                host TEXT NOT NULL,
+                login TEXT NOT NULL COLLATE NOCASE,
+                user_id INTEGER NOT NULL,
+                name TEXT,
+                avatar_url TEXT,
+                // Comma-separated, as GitHub's x-oauth-scopes header lists them.
+                scopes TEXT NOT NULL,
+                // "device_flow" or "gh".
+                source TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                added_at INTEGER NOT NULL,
+                PRIMARY KEY(host, login)
+            ) STRICT;
 
-        // The account to open an owner's PRs with, when several accounts can see them.
-        CREATE TABLE owner_accounts(
-            host TEXT NOT NULL,
-            owner TEXT NOT NULL COLLATE NOCASE,
-            login TEXT NOT NULL COLLATE NOCASE,
-            PRIMARY KEY(host, owner),
-            FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
-        ) STRICT;
-    )];
+            // The account to open an owner's PRs with, when several accounts can see them.
+            CREATE TABLE owner_accounts(
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                login TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY(host, owner),
+                FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
+        sql!(
+            // GitHub's answers, cached per account: a reopened PR shows at once, its first poll can
+            // still be a free 304, and offline rozed shows what it last saw. The only table that's
+            // ever cleared; removing an account removes its rows.
+            CREATE TABLE pr_cache(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                // The pull request's number, or 0 for an answer about the whole repository.
+                number INTEGER NOT NULL,
+                // What was asked: a GraphQL operation's name, or a name for a REST endpoint.
+                query TEXT NOT NULL,
+                // The shape the JSON was written in. A row in another shape reads as missing.
+                version TEXT NOT NULL,
+                json TEXT NOT NULL,
+                // The ETag of the REST answer that tells whether this one changed.
+                etag TEXT,
+                // When GitHub last confirmed it, in seconds since the Unix epoch.
+                fetched_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, query),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+
+            // The pull requests opened most recently, and the account each was opened with.
+            CREATE TABLE recent_prs(
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // Unknown until the pull request was fetched once.
+                title TEXT,
+                account TEXT NOT NULL COLLATE NOCASE,
+                // Seconds since the Unix epoch.
+                opened_at INTEGER NOT NULL,
+                PRIMARY KEY(host, owner, repo, number)
+            ) STRICT;
+        ),
+    ];
 }
 
 const DB_INITIALIZE_QUERY: &str = sql!(
@@ -88,6 +128,10 @@ impl RozedDb {
         let db = Self(connection);
         db.check_file(path)?;
         Ok(db)
+    }
+
+    pub(crate) fn connection(&self) -> &ThreadSafeConnection {
+        &self.0
     }
 
     /// `sqlez` opens an in-memory database when it can't open the file. Refuse that.
@@ -357,6 +401,62 @@ mod tests {
             db.save_account(account("a", 1)).await.unwrap();
         });
         assert!(path.exists());
+    }
+
+    /// rozed's database as it was before the cache.
+    struct BeforeTheCache;
+
+    impl Domain for BeforeTheCache {
+        const NAME: &str = RozedDb::NAME;
+        const MIGRATIONS: &[&str] = &[RozedDb::MIGRATIONS[0]];
+    }
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Note(u32);
+
+    impl crate::cache::CacheEntry for Note {
+        const NAME: &'static str = "note";
+
+        fn version() -> String {
+            "1".into()
+        }
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rozed.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeTheCache>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = RozedDb::open(&path).await.unwrap();
+            assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
+            let cache = crate::cache::PrCache::new(db);
+            let target = crate::PullRef::new("o", "r", 1).into();
+            cache
+                .put("a", &target, &Note(1), None, std::time::SystemTime::now())
+                .await
+                .unwrap();
+            assert_eq!(
+                cache.get::<Note>("a", &target).unwrap().unwrap().value,
+                Note(1)
+            );
+        });
     }
 
     #[test]

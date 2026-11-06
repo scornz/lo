@@ -5,6 +5,7 @@
 //! carry `#[deprecated]`, so after a schema refresh CI's clippy fails on any use of one.
 
 use graphql_client::GraphQLQuery;
+use serde::{Deserialize, Serialize};
 
 use crate::client::GithubClient;
 use crate::error::GithubError;
@@ -33,7 +34,7 @@ pub struct Viewer;
 #[graphql(
     schema_path = "graphql/schema.graphql",
     query_path = "graphql/pull_request.graphql",
-    response_derives = "Debug, Clone, PartialEq",
+    response_derives = "Debug, Clone, PartialEq, Serialize",
     variables_derives = "Debug, Clone"
 )]
 pub struct PullRequest;
@@ -42,7 +43,7 @@ pub struct PullRequest;
 #[graphql(
     schema_path = "graphql/schema.graphql",
     query_path = "graphql/pull_request_check.graphql",
-    response_derives = "Debug, Clone, PartialEq",
+    response_derives = "Debug, Clone, PartialEq, Serialize",
     variables_derives = "Debug, Clone"
 )]
 pub struct PullRequestCheck;
@@ -51,7 +52,7 @@ pub struct PullRequestCheck;
 #[graphql(
     schema_path = "graphql/schema.graphql",
     query_path = "graphql/open_pull_requests.graphql",
-    response_derives = "Debug, Clone, PartialEq",
+    response_derives = "Debug, Clone, PartialEq, Serialize",
     variables_derives = "Debug, Clone"
 )]
 pub struct OpenPullRequests;
@@ -64,7 +65,7 @@ pub type PullRequestCheckData = pull_request_check::PullRequestCheckRepositoryPu
 pub type OpenPullRequest = open_pull_requests::OpenPullRequestsRepositoryPullRequestsNodes;
 
 /// A repository's open pull requests.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenPullRequestList {
     pub pull_requests: Vec<OpenPullRequest>,
     /// How many are open, which is more than `pull_requests` holds when it was capped.
