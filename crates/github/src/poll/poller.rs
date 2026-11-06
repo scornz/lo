@@ -658,7 +658,8 @@ impl Poller {
                         value,
                         stamp,
                         fetched_at,
-                        failed_at: None,
+                        failures: 0,
+                        retry_at: None,
                     },
                 );
                 self.wake();
@@ -920,25 +921,27 @@ impl Poller {
         if let Some(open) = &self.open
             && let Some(state) = self.pulls.get(open)
             && let Some(check) = &state.check_json
-            && let Some(retry) = interval(
+            && interval(
                 Tier::Open,
                 self.foreground,
                 &self.status.rate_limit,
                 &self.config,
             )
+            .is_some()
         {
             for (name, read) in &state.reads {
                 let current = stamp(check, read.ty.watched);
                 let at = if read.value.is_none() || read.stamp.as_deref() != Some(current.as_str())
                 {
-                    // A read that just failed waits out the open PR's interval.
-                    Some(read.failed_at.map_or(now, |failed| failed + retry))
+                    Some(now)
                 } else if refresh_details && let Some(fetched_at) = read.fetched_at {
                     let age = wall.duration_since(fetched_at).unwrap_or_default();
                     Some(now + self.config.details_max_age.saturating_sub(age))
                 } else {
                     None
                 };
+                // A read that keeps failing waits longer each time, whatever made it due.
+                let at = at.map(|at| read.retry_at.map_or(at, |retry_at| at.max(retry_at)));
                 if let Some(at) = at
                     && next.as_ref().is_none_or(|(best, ..)| at < *best)
                 {
@@ -1049,10 +1052,7 @@ impl Poller {
             Err(error) => match (read, &target) {
                 (Some(name), Target::Pull(pull)) => {
                     log::info!("reading {name} for {pull}: {error:#}");
-                    let state = self.pulls.get_mut(pull);
-                    if let Some(read) = state.and_then(|state| state.reads.get_mut(name)) {
-                        read.failed_at = Some(now);
-                    }
+                    self.read_failed(pull, name, now);
                     if self.is_watched(&target) {
                         cx.emit(PollEvent::ReadFailed {
                             pull: pull.clone(),
@@ -1082,6 +1082,23 @@ impl Poller {
         }
         self.refresh_status(cx);
         writes
+    }
+
+    /// Notes that a read failed, or gave a value that isn't complete, so it waits before it's
+    /// read again: the open pull request's interval, doubling with each failure in a row, up to
+    /// the 5-minute refresh's.
+    fn read_failed(&mut self, pull: &PullRef, name: &'static str, now: Instant) {
+        let (first, max, jitter) = (
+            self.config.open_interval,
+            self.config.details_max_age,
+            self.config.jitter,
+        );
+        let state = self.pulls.get_mut(pull);
+        if let Some(read) = state.and_then(|state| state.reads.get_mut(name)) {
+            read.failures += 1;
+            let wait = backoff(read.failures, first, max, jitter, jitter_sample());
+            read.retry_at = Some(now + wait);
+        }
     }
 
     /// Pauses polling as a rate-limit error asks: until the limit that was hit resets, or, for
@@ -1384,17 +1401,30 @@ impl Poller {
                 };
                 let changed =
                     (read.value.as_ref()).is_none_or(|known| !(read.ty.same)(known, &value));
-                let restamped = read.stamp.as_deref() != Some(stamp.as_str());
+                // A value that isn't complete is kept without a stamp, so it's read again once
+                // its wait is over.
+                let complete = (read.ty.complete)(&value);
+                let stamp = complete.then_some(stamp);
+                let restamped = read.stamp != stamp;
                 read.value = Some(value.clone());
-                read.stamp = Some(stamp.clone());
+                read.stamp = stamp.clone();
                 read.fetched_at = Some(wall);
-                read.failed_at = None;
+                if complete {
+                    read.failures = 0;
+                    read.retry_at = None;
+                }
                 let target = target.clone();
-                writes.push(if changed || restamped {
-                    (read.ty.put)(cache, login, target, Some(stamp), value, wall)
+                writes.push(if changed {
+                    (read.ty.put)(cache, login, target, stamp, value, wall)
+                } else if restamped {
+                    (read.ty.restamp)(cache, login, target, stamp, wall)
                 } else {
                     (read.ty.touch)(cache, login, target, wall)
                 });
+                if !complete {
+                    let now = cx.background_executor().now();
+                    self.read_failed(pull, name, now);
+                }
                 if changed {
                     cx.emit(PollEvent::Read {
                         pull: pull.clone(),

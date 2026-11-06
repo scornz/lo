@@ -19,11 +19,19 @@ use crate::pulls::Target;
 /// Something about a pull request that [`Poller::read_cached`](super::Poller::read_cached) reads,
 /// keeps in the cache under [`CacheEntry::NAME`], and reads again while the pull request is open
 /// when the fields it watches in the pull request's check change, and on the 5-minute refresh.
+/// No two have the same name.
 pub trait CachedRead: CacheEntry + Clone + PartialEq + Send + Sync + 'static {
     /// The fields of the open pull request's check (`queries::PullRequestCheckData`) whose
     /// change means it's out of date, as JSON pointers into the check, which names fields as
-    /// GraphQL does: `/headRefOid`, `/timelineItems/updatedAt`.
+    /// GraphQL does: `/headRefOid`, `/reviews/totalCount`.
     const WATCHED: &'static [&'static str];
+
+    /// Whether every part of it was read. One that isn't, because a part failed for a reason
+    /// that may pass, is kept and shown, and read again after a wait, as a read that failed is,
+    /// whatever its watched fields say.
+    fn is_complete(&self) -> bool {
+        true
+    }
 }
 
 /// A read's value as the cache holds it, with the watched fields of the check it was read at.
@@ -42,14 +50,15 @@ impl<T: CachedRead> CacheEntry for Stamped<T> {
     }
 }
 
-/// The values of the fields `watched` names in a check's JSON.
+/// The values of the fields `watched` names in a check's JSON. A field the check doesn't have
+/// reads apart from a null one, so a misspelt field can't match a stamp made when it was there.
 pub(crate) fn stamp(check: &serde_json::Value, watched: &[&str]) -> String {
     let values: Vec<String> = watched
         .iter()
         .map(|pointer| {
             check
                 .pointer(pointer)
-                .map_or("null".into(), ToString::to_string)
+                .map_or("<absent>".into(), ToString::to_string)
         })
         .collect();
     values.join("\n")
@@ -77,6 +86,8 @@ type Put = fn(
     SystemTime,
 ) -> BoxFuture<'static, Result<()>>;
 type Touch = fn(PrCache, String, Target, SystemTime) -> BoxFuture<'static, Result<()>>;
+type Restamp =
+    fn(PrCache, String, Target, Option<String>, SystemTime) -> BoxFuture<'static, Result<()>>;
 
 /// What the poller does with one type of read, whatever it is.
 #[derive(Clone, Copy)]
@@ -84,12 +95,16 @@ pub(crate) struct ReadType {
     pub watched: &'static [&'static str],
     /// Whether two values are the same.
     pub same: fn(&Value, &Value) -> bool,
+    /// Whether every part of a value was read ([`CachedRead::is_complete`]).
+    pub complete: fn(&Value) -> bool,
     /// The value in the cache, the stamp it was read at, and when GitHub last confirmed it.
     pub load: Load,
     /// Stores a value and its stamp.
     pub put: Put,
     /// Notes that GitHub confirmed the stored value.
     pub touch: Touch,
+    /// Notes that GitHub confirmed the stored value at another stamp, without writing it again.
+    pub restamp: Restamp,
 }
 
 impl ReadType {
@@ -97,15 +112,25 @@ impl ReadType {
         Self {
             watched: T::WATCHED,
             same: same::<T>,
+            complete: complete::<T>,
             load: load::<T>,
             put: put::<T>,
             touch: touch::<T>,
+            restamp: restamp::<T>,
         }
     }
 }
 
+/// Whether two values are the same. Values of another type never are.
 fn same<T: CachedRead>(a: &Value, b: &Value) -> bool {
-    a.downcast_ref::<T>() == b.downcast_ref::<T>()
+    match (a.downcast_ref::<T>(), b.downcast_ref::<T>()) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn complete<T: CachedRead>(value: &Value) -> bool {
+    value.downcast_ref::<T>().is_some_and(T::is_complete)
 }
 
 fn load<T: CachedRead>(cache: &PrCache, login: &str, target: &Target) -> Option<Loaded> {
@@ -147,17 +172,34 @@ fn touch<T: CachedRead>(
     async move { cache.touch::<Stamped<T>>(&login, &target, at).await }.boxed()
 }
 
+fn restamp<T: CachedRead>(
+    cache: PrCache,
+    login: String,
+    target: Target,
+    stamp: Option<String>,
+    at: SystemTime,
+) -> BoxFuture<'static, Result<()>> {
+    async move {
+        let stamp = serde_json::to_string(&stamp)?;
+        (cache.update_json::<Stamped<T>>(&login, &target, "$.stamp", stamp, at)).await
+    }
+    .boxed()
+}
+
 /// A read the poller keeps for a pull request.
 pub(crate) struct ReadState {
     pub ty: ReadType,
     pub run: ReadFn,
     pub value: Option<Value>,
-    /// The watched fields of the check the value was read at.
+    /// The watched fields of the check the value was read at, or `None` when it must be read
+    /// again whatever they are.
     pub stamp: Option<String>,
     /// When GitHub last confirmed the value.
     pub fetched_at: Option<SystemTime>,
-    /// When reading it last failed, so it isn't tried again at once.
-    pub failed_at: Option<Instant>,
+    /// How many times in a row reading it failed, or gave a value that isn't complete.
+    pub failures: u32,
+    /// When it may be read again after those failures.
+    pub retry_at: Option<Instant>,
 }
 
 /// One run of a read, as a poll.
@@ -188,14 +230,17 @@ mod tests {
     fn a_stamp_holds_the_watched_fields_values() {
         let check = serde_json::json!({
             "headRefOid": "abc",
-            "timelineItems": {"updatedAt": "2026-11-06T19:28:56Z", "totalCount": 9},
+            "reviews": {"totalCount": 9},
         });
         assert_eq!(
-            stamp(&check, &["/headRefOid", "/timelineItems/updatedAt"]),
-            "\"abc\"\n\"2026-11-06T19:28:56Z\""
+            stamp(&check, &["/headRefOid", "/reviews/totalCount"]),
+            "\"abc\"\n9"
         );
-        // A field the check doesn't have reads as null, so the stamp never matches a typo's
-        // by accident of an older check.
-        assert_eq!(stamp(&check, &["/nope"]), "null");
+        // A field the check doesn't have isn't a null one.
+        assert_eq!(stamp(&check, &["/nope"]), "<absent>");
+        assert_eq!(
+            stamp(&serde_json::json!({"nope": null}), &["/nope"]),
+            "null"
+        );
     }
 }

@@ -2002,6 +2002,15 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
     assert_eq!(cached_count(&t), Some(1));
     t.run_until(100);
     assert_eq!(answers.runs(), 2);
+
+    // The cache took the new stamp, so after a restart it isn't read again.
+    t.restart();
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run_until(105);
+    assert_eq!(answers.runs(), 2);
 }
 
 #[gpui::test]
@@ -2073,6 +2082,38 @@ async fn a_cached_read_that_fails_says_so_and_is_tried_again_at_the_open_prs_int
     assert_eq!(answers.runs(), 2);
     assert_eq!(t.events(), ["read Counted #1"]);
     assert_eq!(cached_count(&t), Some(7));
+}
+
+#[gpui::test]
+async fn a_cached_read_whose_refresh_keeps_failing_waits_longer_each_time(cx: &mut TestAppContext) {
+    let mut t = Polling::new("cached_read_refresh_fails", recorded(), cx).await;
+    let answers = Answers::default();
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    assert_eq!(answers.runs(), 1);
+
+    // GitHub starts failing it, from its 5-minute refresh on.
+    answers.answer(Err("bad gateway"));
+    t.run_until(300);
+    assert_eq!(answers.runs(), 2);
+    t.run_until(319);
+    assert_eq!(answers.runs(), 2);
+    // It waits the open PR's 20 s, then 40, 80 and 160, then the 5-minute refresh's 300 each
+    // time: tries at 320, 360, 440, 600, 900, 1200, 1500, 1800 and 2100 s.
+    t.run_until(300 + 30 * 60);
+    assert_eq!(answers.runs(), 11);
+    assert_eq!(cached_count(&t), Some(1));
+
+    // One that works again is read as before.
+    answers.answer(Ok(5));
+    t.run_until(2400);
+    assert_eq!(answers.runs(), 12);
+    assert_eq!(cached_count(&t), Some(5));
+    t.run_until(2690);
+    assert_eq!(answers.runs(), 12);
 }
 
 #[gpui::test]

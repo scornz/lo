@@ -377,6 +377,30 @@ impl PrCache {
             .await
     }
 
+    /// Replaces the value at `path` in a stored answer's JSON with the JSON `json`, and records
+    /// that GitHub confirmed the answer at `fetched_at`.
+    pub(crate) async fn update_json<T: CacheEntry>(
+        &self,
+        account: &str,
+        target: &Target,
+        path: &'static str,
+        json: String,
+        fetched_at: SystemTime,
+    ) -> Result<()> {
+        let (key, version) = (key::<T>(account, target), T::version());
+        let fetched_at = to_secs(fetched_at);
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    UPDATE pr_cache SET json = json_set(json, ?8, json(?9)), fetched_at = ?10
+                    WHERE host = ?1 AND account = ?2 AND owner = ?3 AND repo = ?4
+                        AND number = ?5 AND query = ?6 AND version = ?7
+                ))?((key, version, path.to_string(), json, fetched_at))
+            })
+            .await
+    }
+
     /// Forgets an answer.
     pub async fn remove<T: CacheEntry>(&self, account: &str, target: &Target) -> Result<()> {
         let key = key::<T>(account, target);
