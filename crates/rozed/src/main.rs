@@ -68,6 +68,8 @@ fn main() {
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
         std::env::set_var("ZED_DISABLE_STAFF", "1");
+        // Zed's client prefers this to the `server_url` setting, which rozed forces.
+        std::env::remove_var("ZED_SERVER_URL");
     }
 
     if let Err(error) = create_dirs() {
