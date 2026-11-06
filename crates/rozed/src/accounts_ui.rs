@@ -3,8 +3,8 @@
 //!
 //! Opened from the command palette (`accounts: open accounts`, `accounts: sign in`,
 //! `accounts: import from gh`) and the app menu. Up and down move the selection, enter acts on
-//! it, space picks accounts to import, cmd-backspace removes the selected account, and escape
-//! goes back or closes.
+//! it, space picks accounts to import, cmd-backspace pressed twice removes the selected account,
+//! and escape goes back or closes.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -22,7 +22,7 @@ use gpui::{
     Focusable, Global, KeyBinding, Render, SharedString, Subscription, Task, Window, actions,
 };
 use http_client::HttpClient;
-use ui::{ListItem, ToggleState, prelude::*};
+use ui::{ListItem, TintColor, ToggleState, prelude::*};
 use util::ResultExt as _;
 use workspace::{ModalView, MultiWorkspace, Workspace};
 
@@ -35,7 +35,7 @@ actions!(
         SignIn,
         /// Imports accounts from the gh CLI.
         ImportFromGh,
-        /// Removes the selected account and its token.
+        /// Removes the selected account and its token, on a second press.
         RemoveSelected,
         /// Picks or unpicks the selected gh account for import.
         ToggleChosen,
@@ -215,6 +215,8 @@ pub struct AccountsModal {
     task: Option<Task<()>>,
     /// Redraws the sign-in countdown every second.
     ticker: Option<Task<()>>,
+    /// The account a first press of Remove asked about; a second press removes it.
+    confirming_remove: Option<String>,
     _observe_accounts: Option<Subscription>,
 }
 
@@ -271,6 +273,7 @@ impl AccountsModal {
             gh_override: None,
             task: None,
             ticker: None,
+            confirming_remove: None,
             _observe_accounts: observe_accounts,
         }
     }
@@ -307,6 +310,7 @@ impl AccountsModal {
     fn show_list(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.ticker = None;
+        self.confirming_remove = None;
         self.mode = Mode::List;
         self.clamp_selection(cx);
         cx.notify();
@@ -559,11 +563,27 @@ impl AccountsModal {
         .detach();
     }
 
+    /// Removes the account on a second press for it; the first only asks.
+    pub fn request_remove(&mut self, login: &str, cx: &mut Context<Self>) {
+        if self
+            .confirming_remove
+            .as_deref()
+            .is_some_and(|asked| asked.eq_ignore_ascii_case(login))
+        {
+            self.confirming_remove = None;
+            self.remove(login, cx);
+        } else {
+            self.confirming_remove = Some(login.to_string());
+            self.notice = None;
+        }
+        cx.notify();
+    }
+
     fn remove_selected(&mut self, _: &RemoveSelected, _: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.mode, Mode::List)
             && let Some(account) = self.account_list(cx).get(self.selected)
         {
-            self.remove(&account.login.clone(), cx);
+            self.request_remove(&account.login.clone(), cx);
         }
     }
 
@@ -571,6 +591,7 @@ impl AccountsModal {
         let count = self.row_count(cx);
         if count > 0 {
             self.selected = (self.selected + 1) % count;
+            self.confirming_remove = None;
             cx.notify();
         }
     }
@@ -584,6 +605,7 @@ impl AccountsModal {
         let count = self.row_count(cx);
         if count > 0 {
             self.selected = (self.selected + count - 1) % count;
+            self.confirming_remove = None;
             cx.notify();
         }
     }
@@ -608,7 +630,14 @@ impl AccountsModal {
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.mode, Mode::List) {
+        self.go_back(cx);
+    }
+
+    /// Escape: takes back a pending removal, else goes back to the list, else closes.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if self.confirming_remove.take().is_some() {
+            cx.notify();
+        } else if matches!(self.mode, Mode::List) {
             cx.emit(DismissEvent);
         } else {
             self.show_list(cx);
@@ -652,6 +681,11 @@ impl AccountsModal {
 
     pub fn is_listing(&self) -> bool {
         matches!(self.mode, Mode::List)
+    }
+
+    /// The account a first press of Remove asked about.
+    pub fn confirming_remove(&self) -> Option<&str> {
+        self.confirming_remove.as_deref()
     }
 }
 
@@ -751,7 +785,15 @@ impl AccountsModal {
         if let Some(name) = &account.name {
             detail.insert(0, name.clone());
         }
-        let warning = account_warning(signed_out, &account.scopes);
+        let confirming = self
+            .confirming_remove
+            .as_deref()
+            .is_some_and(|asked| asked.eq_ignore_ascii_case(&account.login));
+        let warning = if confirming {
+            Some("Press ⌘⌫ or Remove again to remove it from rozed.".to_string())
+        } else {
+            account_warning(signed_out, &account.scopes)
+        };
         let login = account.login.clone();
         ListItem::new(("account", index))
             .inset(true)
@@ -772,9 +814,16 @@ impl AccountsModal {
                     })),
             )
             .end_slot(
-                Button::new(("remove", index), "Remove")
-                    .style(ButtonStyle::Subtle)
-                    .on_click(cx.listener(move |this, _, _, cx| this.remove(&login, cx))),
+                Button::new(
+                    ("remove", index),
+                    if confirming { "Remove?" } else { "Remove" },
+                )
+                .style(if confirming {
+                    ButtonStyle::Tinted(TintColor::Error)
+                } else {
+                    ButtonStyle::Subtle
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.request_remove(&login, cx))),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.selected = index;
@@ -1254,6 +1303,58 @@ esac
             assert_eq!(notice.link, None);
         });
         accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
+    }
+
+    #[gpui::test]
+    async fn removing_takes_a_second_press(cx: &mut TestAppContext) {
+        let http: Arc<dyn HttpClient> = ReplayHttpClient::cassette("user");
+        let accounts = accounts("ui_remove_confirm", http.clone(), cx).await;
+        for login in ["a", "b"] {
+            let user = github::AuthenticatedUser {
+                user: github::User {
+                    login: login.into(),
+                    id: 1,
+                    name: None,
+                    avatar_url: None,
+                },
+                scopes: vec!["read:org".into(), "repo".into(), "workflow".into()],
+            };
+            accounts
+                .update(cx, |accounts, cx| {
+                    accounts.add(user, github::Token::new("gho_FAKE"), AccountSource::Gh, cx)
+                })
+                .await
+                .unwrap();
+        }
+        let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
+        let count = |cx: &mut TestAppContext| accounts.read_with(cx, |a, _| a.accounts().len());
+
+        // The first press asks; escape then takes it back without closing the modal.
+        modal.update(cx, |modal, cx| modal.request_remove("a", cx));
+        cx.run_until_parked();
+        assert_eq!(count(cx), 2);
+        modal.read_with(cx, |modal, _| {
+            assert_eq!(modal.confirming_remove(), Some("a"))
+        });
+        modal.update(cx, |modal, cx| modal.go_back(cx));
+        modal.read_with(cx, |modal, _| {
+            assert_eq!(modal.confirming_remove(), None);
+            assert!(modal.is_listing());
+        });
+
+        // Pressing for another account asks about that one instead.
+        modal.update(cx, |modal, cx| {
+            modal.request_remove("a", cx);
+            modal.request_remove("b", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(count(cx), 2);
+
+        // A second press removes it.
+        modal.update(cx, |modal, cx| modal.request_remove("b", cx));
+        cx.run_until_parked();
+        assert_eq!(count(cx), 1);
+        modal.read_with(cx, |modal, _| assert_eq!(modal.confirming_remove(), None));
     }
 
     #[gpui::test]
