@@ -167,16 +167,23 @@ impl Accounts {
         })
     }
 
-    /// Deletes the account's token and forgets the account.
+    /// Deletes the account's token and forgets the account. The account is forgotten even when
+    /// its token is already gone or can't be deleted; the error then says the token is left.
     pub fn remove(&mut self, login: &str, cx: &mut Context<Self>) -> Task<Result<()>> {
         let store = self.store.clone();
         let db = self.db.clone();
         let login = login.to_string();
         cx.spawn(async move |this, cx| {
-            store
-                .delete_credentials(&server_for(&login), cx)
-                .await
-                .context("deleting the token")?;
+            let server = server_for(&login);
+            // The Keychain fails to delete an item that isn't there, so a failed delete only
+            // counts if the token can still be read.
+            let token_left = match store.delete_credentials(&server, cx).await {
+                Ok(()) => None,
+                Err(error) => match store.read_credentials(&server, cx).await {
+                    Ok(None) => None,
+                    Ok(Some(_)) | Err(_) => Some(error),
+                },
+            };
             db.delete_account(HOST.to_string(), login.clone())
                 .await
                 .context("removing the account")?;
@@ -187,7 +194,12 @@ impl Accounts {
                 this.clients.remove(&login);
                 cx.notify();
             })?;
-            Ok(())
+            match token_left {
+                None => Ok(()),
+                Some(error) => {
+                    Err(error.context(format!("removed {login}, but couldn't delete its token")))
+                }
+            }
         })
     }
 
@@ -304,13 +316,71 @@ impl Accounts {
 mod tests {
     use super::*;
 
+    use std::future::Future;
+    use std::pin::Pin;
+
     use credentials_provider::test_support::FakeCredentialsProvider;
     use futures::future::BoxFuture;
-    use gpui::TestAppContext;
+    use gpui::{AsyncApp, TestAppContext};
     use http_client::http::HeaderValue;
     use http_client::{AsyncBody, Request, Response, Url};
 
     use crate::user::User;
+
+    /// Behaves like GPUI's Keychain: deleting a token that isn't there is an error
+    /// (`errSecItemNotFound`), unlike [`FakeCredentialsProvider`], which ignores it.
+    #[derive(Default)]
+    struct KeychainLike {
+        fake: FakeCredentialsProvider,
+        /// Refuse every delete, as when the user denies Keychain access.
+        refuse_deletes: parking_lot::Mutex<bool>,
+    }
+
+    impl KeychainLike {
+        fn keys(&self) -> Vec<String> {
+            let mut keys: Vec<_> = self.fake.state.lock().keys.keys().cloned().collect();
+            keys.sort();
+            keys
+        }
+
+        fn clear(&self) {
+            self.fake.state.lock().keys.clear();
+        }
+    }
+
+    type Boxed<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + 'a>>;
+
+    impl CredentialsProvider for KeychainLike {
+        fn read_credentials<'a>(
+            &'a self,
+            url: &'a str,
+            cx: &'a AsyncApp,
+        ) -> Boxed<'a, Option<(String, Vec<u8>)>> {
+            self.fake.read_credentials(url, cx)
+        }
+
+        fn write_credentials<'a>(
+            &'a self,
+            url: &'a str,
+            username: &'a str,
+            password: &'a [u8],
+            cx: &'a AsyncApp,
+        ) -> Boxed<'a, ()> {
+            self.fake.write_credentials(url, username, password, cx)
+        }
+
+        fn delete_credentials<'a>(&'a self, url: &'a str, cx: &'a AsyncApp) -> Boxed<'a, ()> {
+            if *self.refuse_deletes.lock() {
+                return Box::pin(async { Err(anyhow!("keychain Delete was cancelled")) });
+            }
+            if !self.fake.state.lock().keys.contains_key(url) {
+                return Box::pin(async {
+                    Err(anyhow!("keychain Delete failed with OSStatus -25300"))
+                });
+            }
+            self.fake.delete_credentials(url, cx)
+        }
+    }
 
     /// Answers `GET /repos/...` with 200 for the tokens in `sees`, 401 for `revoked`, else 404.
     struct ByToken {
@@ -370,9 +440,9 @@ mod tests {
         name: &str,
         http: Arc<dyn HttpClient>,
         cx: &mut TestAppContext,
-    ) -> (Entity<Accounts>, Arc<FakeCredentialsProvider>, RozedDb) {
+    ) -> (Entity<Accounts>, Arc<KeychainLike>, RozedDb) {
         let db = RozedDb::open_test(name).await;
-        let store = Arc::new(FakeCredentialsProvider::default());
+        let store = Arc::new(KeychainLike::default());
         let accounts = cx.new(|_| Accounts::new(db.clone(), store.clone(), http).unwrap());
         (accounts, store, db)
     }
@@ -401,7 +471,12 @@ mod tests {
         assert_eq!(account.login, "rozed-bot");
         assert_eq!(account.scopes, ["read:org", "repo", "workflow"]);
         assert_eq!(
-            store.state.lock().keys.get("rozed://github.com/rozed-bot"),
+            store
+                .fake
+                .state
+                .lock()
+                .keys
+                .get("rozed://github.com/rozed-bot"),
             Some(&b"gho_FAKE".to_vec())
         );
         accounts.read_with(cx, |accounts, _| {
@@ -433,7 +508,7 @@ mod tests {
         }
         accounts.read_with(cx, |accounts, _| assert_eq!(accounts.accounts().len(), 1));
         assert_eq!(
-            store.state.lock().keys.get("rozed://github.com/a"),
+            store.fake.state.lock().keys.get("rozed://github.com/a"),
             Some(&b"gho_NEW".to_vec())
         );
     }
@@ -466,9 +541,56 @@ mod tests {
                 .collect();
             assert_eq!(logins, ["b"]);
         });
-        assert!(!store.state.lock().keys.contains_key("rozed://github.com/a"));
-        assert!(store.state.lock().keys.contains_key("rozed://github.com/b"));
+        assert_eq!(store.keys(), ["rozed://github.com/b"]);
         assert_eq!(db.accounts().unwrap().len(), 1);
+    }
+
+    async fn add(accounts: &Entity<Accounts>, login: &str, cx: &mut TestAppContext) {
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.add(
+                    user(login, 1),
+                    Token::new("gho_FAKE"),
+                    AccountSource::DeviceFlow,
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn an_account_whose_token_is_gone_can_still_be_removed(cx: &mut TestAppContext) {
+        let (accounts, store, db) = setup("removing_without_token", no_http(), cx).await;
+        add(&accounts, "a", cx).await;
+        // Deleted in Keychain Access, say.
+        store.clear();
+        accounts
+            .update(cx, |accounts, cx| accounts.remove("a", cx))
+            .await
+            .unwrap();
+        accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
+        assert_eq!(db.accounts().unwrap(), []);
+    }
+
+    #[gpui::test]
+    async fn removing_forgets_the_account_even_when_its_token_cant_be_deleted(
+        cx: &mut TestAppContext,
+    ) {
+        let (accounts, store, db) = setup("removing_refused", no_http(), cx).await;
+        add(&accounts, "a", cx).await;
+        *store.refuse_deletes.lock() = true;
+        let error = accounts
+            .update(cx, |accounts, cx| accounts.remove("a", cx))
+            .await
+            .unwrap_err();
+        // The account is gone, and the error says the token wasn't.
+        assert!(
+            format!("{error:#}").contains("couldn't delete its token"),
+            "{error:#}"
+        );
+        accounts.read_with(cx, |accounts, _| assert!(accounts.accounts().is_empty()));
+        assert_eq!(db.accounts().unwrap(), []);
     }
 
     #[gpui::test]
@@ -536,7 +658,7 @@ mod tests {
             })
             .await
             .unwrap();
-        store.state.lock().keys.clear();
+        store.clear();
         accounts.update(cx, |accounts, _| accounts.clients.clear());
         let result = accounts
             .update(cx, |accounts, cx| accounts.client("a", cx))
