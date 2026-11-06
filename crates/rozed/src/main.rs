@@ -7,10 +7,12 @@ mod forced_settings;
 mod github_api;
 mod http;
 mod local_copy;
+mod pr_diff;
 mod pr_link;
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context as _;
 use assets::Assets;
@@ -32,6 +34,7 @@ use session::{AppSession, Session};
 use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, Settings as _, SettingsAssets};
 use theme::ActiveTheme as _;
 use util::ResultExt as _;
+use workspace::notifications::NotifyTaskExt as _;
 use workspace::{AppState, MultiWorkspace, Workspace, WorkspaceStore};
 
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
@@ -44,6 +47,7 @@ const USAGE: &str = "usage: rozed [<pull request link>]
 example: rozed https://github.com/sharkdp/fd/pull/2212";
 
 fn main() {
+    let launched = Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version") => {
@@ -180,7 +184,7 @@ fn main() {
         })
         .detach();
 
-        if let Err(error) = open_window(app_state, pull_request, cx) {
+        if let Err(error) = open_window(app_state, pull_request, launched, cx) {
             log::error!("{error:#}");
             cx.quit();
         }
@@ -287,6 +291,16 @@ fn load_keymaps(cx: &mut App) {
 }
 
 fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
+    // Wide enough for a side-by-side diff, which Zed's editor turns into one column below about
+    // 100 characters a side, but never bigger than the screen.
+    let screen = cx
+        .primary_display()
+        .map(|display| display.bounds().size)
+        .unwrap_or(size(px(1600.), px(1000.)));
+    let window_size = size(
+        px(1600.).min(screen.width * 0.9),
+        px(1000.).min(screen.height * 0.9),
+    );
     WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("rozed".into()),
@@ -294,17 +308,19 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
         }),
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(1200.), px(800.)),
+            window_size,
             cx,
         ))),
         ..Default::default()
     }
 }
 
-/// Opens rozed's window: a workspace showing this file, read-only.
+/// Opens rozed's window: a workspace showing the pull request, or without one this file,
+/// read-only.
 fn open_window(
     app_state: Arc<AppState>,
     pull_request: Option<PrLink>,
+    launched: Instant,
     cx: &mut App,
 ) -> anyhow::Result<()> {
     let mut options = (app_state.build_window_options)(None, cx);
@@ -339,10 +355,18 @@ fn open_window(
         })
         .context("opening rozed's window")?;
     window.update(cx, |multi_workspace, window, cx| {
-        multi_workspace
-            .workspace()
-            .clone()
-            .update(cx, |workspace, cx| show_source(workspace, window, cx));
+        let workspace = multi_workspace.workspace().clone();
+        match pull_request {
+            Some(pull_request) => {
+                let weak_workspace = workspace.downgrade();
+                window
+                    .spawn(cx, async move |cx| {
+                        pr_diff::open(weak_workspace, pull_request, launched, cx).await
+                    })
+                    .detach_and_notify_err(workspace.downgrade(), window, cx);
+            }
+            None => workspace.update(cx, |workspace, cx| show_source(workspace, window, cx)),
+        }
     })?;
     Ok(())
 }

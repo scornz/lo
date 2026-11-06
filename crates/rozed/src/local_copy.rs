@@ -138,10 +138,6 @@ impl RepoCache {
 }
 
 impl Repo {
-    pub fn git_dir(&self) -> &Path {
-        &self.git_dir
-    }
-
     /// The contents of `path` at revision `rev`.
     pub fn read_file(&self, rev: &str, path: &str) -> anyhow::Result<Vec<u8>> {
         self.git(&["cat-file", "blob", &format!("{rev}:{path}")])
@@ -632,7 +628,7 @@ mod tests {
 
         // A bare clone in the cache, with the fetched revisions under rozed's own refs.
         let git_dir = cache.repo_dir("Owner", "Repo.rs");
-        assert_eq!(pr.repo.git_dir(), git_dir);
+        assert_eq!(pr.repo.git_dir.as_path(), git_dir);
         assert_eq!(
             git(&git_dir, &["rev-parse", "--is-bare-repository"]),
             "true"
@@ -674,7 +670,7 @@ mod tests {
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path());
         let pr = cache.prepare(&remote.source()).unwrap();
-        let git_dir = pr.repo.git_dir();
+        let git_dir = pr.repo.git_dir.as_path();
 
         assert_eq!(git(git_dir, &["config", "remote.origin.promisor"]), "true");
         assert_eq!(
@@ -728,7 +724,7 @@ mod tests {
         let cache_dir = TempDir::new().unwrap();
         let cache = RepoCache::new(cache_dir.path());
         let first = cache.prepare(&remote.source()).unwrap();
-        fs::remove_dir_all(first.repo.git_dir()).unwrap();
+        fs::remove_dir_all(&first.repo.git_dir).unwrap();
 
         let pr = cache.prepare(&remote.source()).unwrap();
 

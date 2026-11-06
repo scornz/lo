@@ -7898,6 +7898,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assets",
+ "buffer_diff",
  "client",
  "clock",
  "db",
@@ -7905,6 +7906,7 @@ dependencies = [
  "feature_flags",
  "fs",
  "futures",
+ "git",
  "gpui",
  "gpui_platform",
  "gpui_tokio",
@@ -7912,6 +7914,7 @@ dependencies = [
  "language",
  "languages",
  "log",
+ "multi_buffer",
  "node_runtime",
  "paths",
  "project",

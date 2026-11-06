@@ -2,8 +2,8 @@
 //!
 //! They sit in Zed's top settings layer (the "server" layer, merged after the user's), so a
 //! user's `settings.json` can't override them. They keep Zed's account, telemetry, update and AI
-//! code from starting, and point every Zed service URL at a placeholder that rozed's HTTP client
-//! refuses ([`crate::http`]).
+//! code from starting, point every Zed service URL at a placeholder that rozed's HTTP client
+//! refuses ([`crate::http`]), and keep rust-analyzer from running a repository's code.
 
 use gpui::{App, UpdateGlobal as _};
 use settings::SettingsStore;
@@ -18,7 +18,22 @@ pub const FORCED_SETTINGS: &str = r#"{
   // No AI features. This also keeps the multi-workspace sidebar off.
   "disable_ai": true,
   // If Zed's extension host is ever started, it mustn't install anything from Zed's servers.
-  "auto_install_extensions": { "html": false }
+  "auto_install_extensions": { "html": false },
+  "lsp": {
+    "rust-analyzer": {
+      // Use the rust-analyzer rozed downloads from its GitHub releases, never one found on PATH.
+      // With rustup, that one is a proxy that runs, and may first install, whatever toolchain the
+      // repository's rust-toolchain.toml names.
+      "binary": { "ignore_system_version": true },
+      // Never run the repository's code or download its dependencies (design §1): no build
+      // scripts, no proc macros, no `cargo check`, and no `cargo metadata` for dependencies.
+      "initialization_options": {
+        "cargo": { "buildScripts": { "enable": false }, "noDeps": true },
+        "procMacro": { "enable": false },
+        "checkOnSave": false
+      }
+    }
+  }
 }"#;
 
 pub fn apply(cx: &mut App) {
@@ -48,6 +63,21 @@ mod tests {
             content.extension.auto_install_extensions.get("html"),
             Some(&false)
         );
+    }
+
+    #[test]
+    fn rust_analyzer_is_downloaded_and_runs_nothing_from_the_repository() {
+        let content = SettingsContent::parse_json_with_comments(FORCED_SETTINGS).unwrap();
+        let rust_analyzer = &content.project.lsp.0["rust-analyzer"];
+        assert_eq!(
+            rust_analyzer.binary.as_ref().unwrap().ignore_system_version,
+            Some(true)
+        );
+        let options = rust_analyzer.initialization_options.as_ref().unwrap();
+        assert_eq!(options["cargo"]["buildScripts"]["enable"], false);
+        assert_eq!(options["cargo"]["noDeps"], true);
+        assert_eq!(options["procMacro"]["enable"], false);
+        assert_eq!(options["checkOnSave"], false);
     }
 
     #[test]

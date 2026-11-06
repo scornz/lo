@@ -14,12 +14,14 @@ publish = false
 [workspace.dependencies]
 # Zed's crates, by path into the submodule. See CLAUDE.md, "Zed submodule".
 assets = { path = "third_party/zed/crates/assets" }
+buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
 db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
 feature_flags = { path = "third_party/zed/crates/feature_flags" }
 fs = { path = "third_party/zed/crates/fs" }
+git = { path = "third_party/zed/crates/git" }
 gpui = { path = "third_party/zed/crates/gpui" }
 # Without font-kit, gpui renders no text on macOS.
 gpui_platform = { path = "third_party/zed/crates/gpui_platform", features = ["font-kit"] }
@@ -28,6 +30,7 @@ http_client = { path = "third_party/zed/crates/http_client" }
 language = { path = "third_party/zed/crates/language" }
 # load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
 languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
+multi_buffer = { path = "third_party/zed/crates/multi_buffer" }
 node_runtime = { path = "third_party/zed/crates/node_runtime" }
 paths = { path = "third_party/zed/crates/paths" }
 project = { path = "third_party/zed/crates/project" }
