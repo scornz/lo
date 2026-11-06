@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use github::accounts::Accounts;
 use github::cache::PrCache;
@@ -103,6 +104,8 @@ struct State {
     /// Answers that win over the rest, by token (`""` for none) and path.
     answers: HashMap<(String, String), Answer>,
     offline: bool,
+    /// Requests to these paths wait until they're let go, each with what lets it go.
+    held: HashMap<String, Vec<oneshot::Sender<()>>>,
     /// Each request, as `GET /path as token`.
     requests: Vec<String>,
 }
@@ -138,9 +141,22 @@ impl FakeGithub {
             .insert((token.to_string(), path.to_string()), answer);
     }
 
-    /// Whether every request fails as if the network were down.
+    /// Whether every request fails as if the network were down: no connection can be made.
     pub fn set_offline(&self, offline: bool) {
         self.0.lock().offline = offline;
+    }
+
+    /// Makes requests to `path`, with any token, wait until [`Self::let_go`].
+    pub fn hold(&self, path: &str) {
+        self.0.lock().held.entry(path.to_string()).or_default();
+    }
+
+    /// Lets the requests to `path` that [`Self::hold`] held through, and any later ones.
+    pub fn let_go(&self, path: &str) {
+        let waiting = self.0.lock().held.remove(path).unwrap_or_default();
+        for waiter in waiting {
+            waiter.send(()).ok();
+        }
     }
 
     /// Stops answering `path` asked with `token` as [`Self::answer`] said.
@@ -161,7 +177,11 @@ impl FakeGithub {
         let who = if token.is_empty() { "nobody" } else { token };
         state.requests.push(format!("{method} {path} as {who}"));
         if state.offline {
-            anyhow::bail!("the network is down");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "the network is down",
+            )
+            .into());
         }
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
@@ -186,15 +206,16 @@ impl FakeGithub {
                         .iter()
                         .any(|old| old.eq_ignore_ascii_case(&asked))
             })
-            .map(|pull| pull.repo.to_ascii_lowercase())
+            .map(|pull| pull.repo.clone())
         else {
             return Ok(not_found());
         };
-        let visible = state.public.contains(&canonical)
+        let key = canonical.to_ascii_lowercase();
+        let visible = state.public.contains(&key)
             || state
                 .sees
                 .get(token)
-                .is_some_and(|repos| repos.contains(&canonical));
+                .is_some_and(|repos| repos.contains(&key));
         if !visible {
             return Ok(not_found());
         }
@@ -263,9 +284,22 @@ impl HttpClient for FakeGithub {
             .path_and_query()
             .map(|path| path.to_string())
             .unwrap_or_default();
-        let answer = self.respond(request.method().as_str(), &path, &token);
+        let method = request.method().to_string();
+        let held = {
+            let mut state = self.0.lock();
+            let bare = path.split('?').next().unwrap_or_default().to_string();
+            state.held.get_mut(&bare).map(|waiting| {
+                let (let_go, held) = oneshot::channel();
+                waiting.push(let_go);
+                held
+            })
+        };
+        let this = self.clone();
         Box::pin(async move {
-            let answer = answer?;
+            if let Some(held) = held {
+                held.await.ok();
+            }
+            let answer = this.respond(&method, &path, &token)?;
             let mut response = Response::builder().status(answer.status);
             for (name, value) in answer.headers {
                 response = response.header(name, value);

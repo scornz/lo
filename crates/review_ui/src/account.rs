@@ -27,14 +27,15 @@ impl Acting {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccountDecision {
     Open(Acting),
-    /// Several accounts can see the repository and none was chosen for its owner yet.
+    /// Several accounts can see the repository and none of them was chosen for it.
     Ask(Vec<String>),
     /// No account can open it, and GitHub said why.
     Refuse(Refusal),
 }
 
-/// Why rozed won't open a pull request with any account: the account remembered for its owner
-/// can't check its repository, or no account could and GitHub said why. rozed doesn't fall back
+/// Why rozed won't open a pull request with any account: the account remembered for its
+/// repository, or for its owner, can't check the repository, or no account could and GitHub said
+/// why. rozed doesn't fall back
 /// to another account, which would review as someone else, nor open it without signing in,
 /// which would hide what's wrong. GitHub's links say how to fix it, such as authorizing single
 /// sign-on (design §3 "Blocked by an org", §11 "Single sign-on").
@@ -55,13 +56,14 @@ impl std::error::Error for Refusal {}
 /// Decides from what [`Accounts::account_for_repo`] found, or `None` when rozed has no accounts
 /// database. A pull request opens with the account that can see its repository, and without
 /// signing in when none can and none ran into anything else, which works for public
-/// repositories.
+/// repositories. Messages name the repository as GitHub does now.
 ///
 /// [`Accounts::account_for_repo`]: github::accounts::Accounts::account_for_repo
-pub fn decide(owner: &str, repo: &str, found: Option<&RepoAccount>) -> AccountDecision {
+pub fn decide(found: Option<&RepoAccount>) -> AccountDecision {
     let Some(found) = found else {
         return AccountDecision::Open(Acting::Anonymous);
     };
+    let (owner, repo) = (&found.owner, &found.name);
     match &found.choice {
         AccountChoice::Account(login) => AccountDecision::Open(Acting::Account(login.clone())),
         AccountChoice::Ask(logins) => AccountDecision::Ask(logins.clone()),
@@ -99,10 +101,20 @@ pub fn decide(owner: &str, repo: &str, found: Option<&RepoAccount>) -> AccountDe
                 .find(|(problem, _)| problem.eq_ignore_ascii_case(login))
                 .map(|(_, error)| error);
             let why = problem.map_or_else(|| "GitHub didn't say why".to_string(), describe);
+            let for_repo = found
+                .remembered
+                .repo
+                .as_deref()
+                .is_some_and(|chosen| chosen.eq_ignore_ascii_case(login));
+            let uses_for = if for_repo {
+                format!("{owner}/{repo}")
+            } else {
+                owner.clone()
+            };
             AccountDecision::Refuse(Refusal {
                 message: format!(
-                    "{login}, the account rozed uses for {owner}, couldn't check {owner}/{repo}: \
-                     {why}"
+                    "{login}, the account rozed uses for {uses_for}, couldn't check \
+                     {owner}/{repo}: {why}"
                 ),
                 links: problem
                     .and_then(GithubError::help_link)
@@ -127,7 +139,10 @@ mod tests {
 
     fn found(choice: AccountChoice, problems: Vec<(&str, GithubError)>) -> RepoAccount {
         RepoAccount {
+            owner: "org".into(),
+            name: "repo".into(),
             choice,
+            remembered: Default::default(),
             problems: problems
                 .into_iter()
                 .map(|(login, error)| (login.to_string(), error))
@@ -146,17 +161,14 @@ mod tests {
 
     #[test]
     fn without_an_accounts_database_it_opens_without_signing_in() {
-        assert_eq!(
-            decide("sharkdp", "fd", None),
-            AccountDecision::Open(Acting::Anonymous)
-        );
+        assert_eq!(decide(None), AccountDecision::Open(Acting::Anonymous));
     }
 
     #[test]
     fn the_account_that_can_see_the_repository_opens_it() {
         let found = found(AccountChoice::Account("rozed-bot".into()), vec![]);
         assert_eq!(
-            decide("rozed-dev", "playground", Some(&found)),
+            decide(Some(&found)),
             AccountDecision::Open(Acting::Account("rozed-bot".into()))
         );
     }
@@ -165,7 +177,7 @@ mod tests {
     fn when_no_account_can_see_it_it_opens_without_signing_in() {
         let found = found(AccountChoice::None, vec![]);
         assert_eq!(
-            decide("sharkdp", "fd", Some(&found)),
+            decide(Some(&found)),
             AccountDecision::Open(Acting::Anonymous)
         );
     }
@@ -174,7 +186,7 @@ mod tests {
     fn several_accounts_with_none_chosen_for_the_owner_means_asking() {
         let found = found(AccountChoice::Ask(vec!["a".into(), "b".into()]), vec![]);
         assert_eq!(
-            decide("org", "repo", Some(&found)),
+            decide(Some(&found)),
             AccountDecision::Ask(vec!["a".into(), "b".into()])
         );
     }
@@ -186,13 +198,43 @@ mod tests {
             vec![("other", server_error()), ("work", server_error())],
         );
         assert_eq!(
-            decide("org", "repo", Some(&found)),
+            decide(Some(&found)),
             AccountDecision::Refuse(Refusal {
                 message: "Work, the account rozed uses for org, couldn't check org/repo: GitHub \
                           answered 500: Server Error"
                     .into(),
                 links: Vec::new(),
             })
+        );
+    }
+
+    #[test]
+    fn a_repositorys_own_account_that_couldnt_check_says_its_the_repositorys() {
+        let mut found = found(
+            AccountChoice::Unavailable("personal".into()),
+            vec![("personal", server_error())],
+        );
+        found.remembered.repo = Some("personal".into());
+        found.remembered.owner = Some("work".into());
+        assert_eq!(
+            refusal(decide(Some(&found))).message,
+            "personal, the account rozed uses for org/repo, couldn't check org/repo: GitHub \
+             answered 500: Server Error"
+        );
+    }
+
+    #[test]
+    fn messages_name_the_repository_as_github_does_now() {
+        let mut found = found(
+            AccountChoice::Unavailable("work".into()),
+            vec![("work", server_error())],
+        );
+        found.owner = "bigorg".into();
+        found.name = "tool".into();
+        assert!(
+            refusal(decide(Some(&found)))
+                .message
+                .starts_with("work, the account rozed uses for bigorg, couldn't check bigorg/tool")
         );
     }
 
@@ -226,7 +268,7 @@ mod tests {
             AccountChoice::Unavailable("work".into()),
             vec![("work", sso())],
         );
-        let refusal = refusal(decide("org", "repo", Some(&found)));
+        let refusal = refusal(decide(Some(&found)));
         assert_eq!(
             refusal.message,
             "work, the account rozed uses for org, couldn't check org/repo: Resource protected by \
@@ -245,7 +287,7 @@ mod tests {
             AccountChoice::Unavailable("work".into()),
             vec![("work", oauth_restricted())],
         );
-        let refusal = refusal(decide("org", "repo", Some(&found)));
+        let refusal = refusal(decide(Some(&found)));
         assert!(
             refusal
                 .message
@@ -276,7 +318,7 @@ mod tests {
             AccountChoice::None,
             vec![("home", rate_limited), ("work", sso())],
         );
-        let refusal = refusal(decide("org", "repo", Some(&found)));
+        let refusal = refusal(decide(Some(&found)));
         assert_eq!(
             refusal.message,
             "No account rozed is signed in to could check org/repo, so it didn't open without \
@@ -298,7 +340,7 @@ mod tests {
         };
         let found = found(AccountChoice::None, vec![("old", refused)]);
         assert_eq!(
-            decide("sharkdp", "fd", Some(&found)),
+            decide(Some(&found)),
             AccountDecision::Open(Acting::Anonymous)
         );
     }
