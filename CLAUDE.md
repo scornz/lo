@@ -67,13 +67,13 @@ cargo test --workspace
 with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
-`docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Without a link,
-rozed shows its own `main.rs`.
+`docs/spike.md`, "Trust risks"). Milestone 10's trust prompt replaces the flag. Each pull request
+opens in its own tab; `cmd-o` opens another from its link, and without a link rozed starts there.
 
 The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
-your git config, HTTPS only. Until rozed can sign in, it opens pull requests in private repositories
-with a token from `ROZED_GITHUB_TOKEN`, which it removes from its environment at launch so nothing
-it starts inherits it.
+your git config, HTTPS only. A pull request opens with the GitHub account that can see its
+repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git
+in, and without signing in when none can, which works for public repositories.
 
 rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
 `~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
