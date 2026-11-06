@@ -5,13 +5,17 @@ use super::{ChangedFile, Generated};
 /// Files with more changed lines than this start collapsed, and their diff loads on a key.
 pub const LARGE_FILE_LINES: u64 = 5_000;
 
+/// Files larger than this on either side start collapsed too, and load on a key: a minified
+/// bundle or generated data can be megabytes in a few lines.
+pub const LARGE_FILE_BYTES: u64 = 1024 * 1024;
+
 /// How a file's diff starts out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InitialState {
     /// Why the file is generated, if it is. Generated files start collapsed.
     pub generated: Option<Generated>,
-    /// The file has more than [`LARGE_FILE_LINES`] changed lines. It starts collapsed, and its
-    /// diff loads only on a key.
+    /// The file has more than [`LARGE_FILE_LINES`] changed lines, or is larger than
+    /// [`LARGE_FILE_BYTES`] on either side. It starts collapsed, and its diff loads only on a key.
     pub large: bool,
     /// The file is binary, so it has no text diff: images show before and after, and anything
     /// else shows as "binary file changed".
@@ -29,7 +33,8 @@ impl InitialState {
 pub fn initial_state(file: &ChangedFile) -> InitialState {
     InitialState {
         generated: super::generated(file),
-        large: file.changed_lines() > LARGE_FILE_LINES,
+        large: file.changed_lines() > LARGE_FILE_LINES
+            || file.size.is_some_and(|size| size > LARGE_FILE_BYTES),
         binary: file.binary,
     }
 }
@@ -122,6 +127,21 @@ mod tests {
     #[test]
     fn line_counts_at_their_limits_do_not_overflow() {
         assert!(initial_state(&file("data/huge.txt", u32::MAX, u32::MAX)).large);
+    }
+
+    #[test]
+    fn a_file_larger_than_a_mebibyte_starts_collapsed_whatever_its_line_count() {
+        let minified = |size| ChangedFile {
+            size: Some(size),
+            ..file("dist/app.min.js", 1, 1)
+        };
+
+        assert!(!initial_state(&minified(LARGE_FILE_BYTES)).large);
+        let state = initial_state(&minified(LARGE_FILE_BYTES + 1));
+        assert!(state.large);
+        assert!(state.collapsed());
+        // Without a size, as GitHub's list of files gives none, only lines count.
+        assert!(!initial_state(&file("dist/app.min.js", 1, 1)).large);
     }
 
     #[test]

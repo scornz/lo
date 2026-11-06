@@ -31,6 +31,7 @@
 //! # Ok::<(), repo_cache::Error>(())
 //! ```
 
+mod attributes;
 mod cache;
 mod cat_file;
 mod checkout;
@@ -46,6 +47,7 @@ mod oid;
 mod progress;
 mod repo;
 
+pub use attributes::{Attribute, MAX_ATTRIBUTE_FILES};
 pub use cache::RepoCache;
 pub use compare::{ComparedFile, Comparison, Replay, Revision};
 pub use diff::{Change, ChangedFile, FileMode, FileVersion, LineCounts};
