@@ -59,6 +59,10 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-o", ToggleFileOrder, Some(KEY_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
+        // Back and forward through where the diff's cursor has been (design §10), beside Zed's
+        // ctrl-- and ctrl-_.
+        KeyBinding::new("ctrl-o", workspace::pane::GoBack, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-i", workspace::pane::GoForward, Some(KEY_CONTEXT)),
         // The workspace binds escape to stop following a collaborator.
         KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
         KeyBinding::new("enter", menu::Confirm, Some(FILE_LIST_CONTEXT)),
@@ -177,6 +181,9 @@ pub struct PrTab {
     /// What the tab should tell about what its diff shows, under its header.
     banners: Entity<Banners>,
     diff: Option<Entity<SplittableEditor>>,
+    /// The pane's history, for the diff to record where its cursor goes. The pane hands it over
+    /// when the tab joins it, before the diff exists.
+    nav_history: Option<ItemNavHistory>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab, until the tab closes.
@@ -229,6 +236,7 @@ impl PrTab {
             saved: None,
             banners,
             diff: None,
+            nav_history: None,
             show_file_list: true,
             show_threads: true,
             watched: None,
@@ -493,6 +501,10 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
+        if let Some(history) = self.nav_history.clone() {
+            let rhs_editor = editor.read(cx).rhs_editor().clone();
+            rhs_editor.update(cx, |editor, _| editor.set_nav_history(Some(history)));
+        }
         self.diff = Some(editor.clone());
         if focused && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
@@ -639,7 +651,8 @@ impl PrTab {
         };
         rhs_editor.update(cx, |editor, cx| {
             editor.change_selections(
-                SelectionEffects::scroll(Autoscroll::top_relative(1.)),
+                // A jump to another file, which back goes back from.
+                SelectionEffects::scroll(Autoscroll::top_relative(1.)).nav_history(true),
                 window,
                 cx,
                 |selections| selections.select_ranges([location..location]),
@@ -1263,8 +1276,11 @@ impl Item for PrTab {
     fn set_nav_history(&mut self, history: ItemNavHistory, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(diff) = &self.diff {
             let editor = diff.read(cx).rhs_editor().clone();
-            editor.update(cx, |editor, _| editor.set_nav_history(Some(history)));
+            editor.update(cx, |editor, _| {
+                editor.set_nav_history(Some(history.clone()))
+            });
         }
+        self.nav_history = Some(history);
     }
 
     /// Keeps files and folders dropped on the tab from the pane, which would open them. The
@@ -2158,6 +2174,58 @@ mod tests {
         close(&workspace, second, cx);
         assert_eq!(worktrees(&workspace, cx), 0);
         assert_eq!(running(cx), 0);
+    }
+
+    /// The row of the diff's cursor.
+    fn cursor_row(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> u32 {
+        let editor = tab.read_with(cx, |tab, cx| {
+            tab.diff().unwrap().read(cx).rhs_editor().clone()
+        });
+        editor.update(cx, |editor, cx| {
+            let snapshot = editor.display_snapshot(cx);
+            editor
+                .selections
+                .newest::<language::Point>(&snapshot)
+                .head()
+                .row
+        })
+    }
+
+    #[gpui::test]
+    async fn back_and_forward_retrace_jumps_between_files(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let lines = |prefix: &str| {
+            (0..30)
+                .map(|n| format!("{prefix} {n}\n"))
+                .collect::<String>()
+        };
+        let (a, b) = (lines("a"), lines("b"));
+        let pull = git.pull_request(
+            "sharkdp/fd",
+            1,
+            &[("a.rs", "a\n"), ("b.rs", "b\n")],
+            &[("a.rs", &a), ("b.rs", &b)],
+        );
+        github.add_pull(pull);
+        github.make_public("sharkdp/fd");
+        anonymous(&github, cx);
+        let tab = open_loaded(&workspace, "github.com/sharkdp/fd/pull/1", cx);
+        assert_eq!(status(&tab, cx), Status::Ready);
+
+        // In the file list, j goes to the first file and then the next, and enter goes back to
+        // the diff.
+        cx.simulate_keystrokes("cmd-b cmd-b j");
+        let at_a = cursor_row(&tab, cx);
+        cx.simulate_keystrokes("j enter");
+        let at_b = cursor_row(&tab, cx);
+        assert!(at_b > at_a, "{at_a} → {at_b}");
+
+        cx.simulate_keystrokes("ctrl-o");
+        assert_eq!(cursor_row(&tab, cx), at_a);
+        cx.simulate_keystrokes("ctrl-i");
+        assert_eq!(cursor_row(&tab, cx), at_b);
     }
 
     #[gpui::test]
