@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use github::accounts::Accounts;
+use github::accounts::{Accounts, SignedOut};
 use github::db::{Account, AccountSource, RozedDb};
 use github::device_flow::{self, DeviceFlowError};
 use github::gh_import::{self, GhAccount};
@@ -677,6 +677,58 @@ fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
     }
 }
 
+/// What needs the user's attention about an account: why it's signed out, or the scopes its
+/// token lacks.
+fn account_warning(signed_out: Option<SignedOut>, scopes: &[String]) -> Option<String> {
+    match signed_out {
+        Some(SignedOut::Refused) => {
+            return Some("Signed out: GitHub refused its token. Sign in again.".into());
+        }
+        Some(SignedOut::TokenMissing) => {
+            return Some("Signed out: its token is missing. Sign in again.".into());
+        }
+        None => {}
+    }
+    // GitHub lists scopes only for OAuth and classic tokens. A GitHub App's user token or a
+    // fine-grained one has permissions instead, which GitHub doesn't report.
+    if scopes.is_empty() {
+        return Some(
+            "A token without OAuth scopes: what it can do depends on its permissions.".into(),
+        );
+    }
+    let missing = github::missing_scopes(scopes);
+    (!missing.is_empty()).then(|| format!("Missing scopes: {}", missing.join(", ")))
+}
+
+/// The notes beside an account in gh's list.
+fn gh_account_notes(account: &GhAccount, already_in_rozed: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if account.active {
+        notes.push("active in gh".to_string());
+    }
+    if !account.is_usable() {
+        notes.push(format!("gh reports {}", account.state));
+    }
+    if account.refreshable {
+        notes.push("short-lived token".to_string());
+    }
+    if account.is_usable() && account.scopes.is_empty() {
+        notes.push("a token without OAuth scopes, such as a GitHub App's".to_string());
+    } else {
+        match account.missing_scopes().as_slice() {
+            [] => {}
+            ["workflow"] => {
+                notes.push("no workflow scope: can't merge PRs that change workflows".to_string())
+            }
+            missing => notes.push(format!("missing scopes: {}", missing.join(", "))),
+        }
+    }
+    if already_in_rozed {
+        notes.push("already in rozed; importing replaces its token".to_string());
+    }
+    notes
+}
+
 fn source_label(source: AccountSource) -> &'static str {
     match source {
         AccountSource::DeviceFlow => "Signed in with GitHub",
@@ -694,19 +746,12 @@ impl AccountsModal {
         let signed_out = self
             .accounts
             .as_ref()
-            .is_some_and(|accounts| accounts.read(cx).is_signed_out(&account.login));
-        let missing = github::missing_scopes(&account.scopes);
+            .and_then(|accounts| accounts.read(cx).signed_out(&account.login));
         let mut detail = vec![source_label(account.source).to_string()];
         if let Some(name) = &account.name {
             detail.insert(0, name.clone());
         }
-        let warning = if signed_out {
-            Some("Signed out: GitHub refused its token. Sign in again.".to_string())
-        } else if !missing.is_empty() {
-            Some(format!("Missing scopes: {}", missing.join(", ")))
-        } else {
-            None
-        };
+        let warning = account_warning(signed_out, &account.scopes);
         let login = account.login.clone();
         ListItem::new(("account", index))
             .inset(true)
@@ -861,30 +906,12 @@ impl AccountsModal {
                     ),
                 )
                 .children(accounts.iter().enumerate().map(|(index, account)| {
-                    let mut notes = Vec::new();
-                    if account.active {
-                        notes.push("active in gh".to_string());
-                    }
-                    if !account.is_usable() {
-                        notes.push(format!("gh reports {}", account.state));
-                    }
-                    if account.refreshable {
-                        notes.push("short-lived token".to_string());
-                    }
-                    let missing = account.missing_scopes();
-                    if !missing.is_empty() {
-                        notes.push(format!(
-                            "no {} scope: can't merge PRs that change workflows",
-                            missing.join(", ")
-                        ));
-                    }
                     let already = self
                         .accounts
                         .as_ref()
                         .is_some_and(|a| a.read(cx).account(&account.login).is_some());
-                    if already {
-                        notes.push("already in rozed; importing replaces its token".to_string());
-                    }
+                    let notes = gh_account_notes(account, already);
+                    let missing = account.missing_scopes();
                     let checked = if chosen.contains(&account.login) {
                         ToggleState::Selected
                     } else {
@@ -1278,6 +1305,54 @@ esac
 
         let plain = Notice::error(&anyhow!("gh couldn't list its accounts: boom"));
         assert_eq!(plain.link, None);
+    }
+
+    #[test]
+    fn an_account_says_why_it_needs_attention() {
+        let scopes = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let all = scopes(&["read:org", "repo", "workflow"]);
+        assert_eq!(account_warning(None, &all), None);
+        assert_eq!(
+            account_warning(Some(SignedOut::Refused), &all).as_deref(),
+            Some("Signed out: GitHub refused its token. Sign in again.")
+        );
+        assert_eq!(
+            account_warning(Some(SignedOut::TokenMissing), &all).as_deref(),
+            Some("Signed out: its token is missing. Sign in again.")
+        );
+        assert_eq!(
+            account_warning(None, &scopes(&["gist", "repo"])).as_deref(),
+            Some("Missing scopes: read:org, workflow")
+        );
+        // GitHub lists no scopes for a GitHub App's or a fine-grained token: they have
+        // permissions instead, so none are "missing".
+        assert_eq!(
+            account_warning(None, &[]).as_deref(),
+            Some("A token without OAuth scopes: what it can do depends on its permissions.")
+        );
+    }
+
+    #[test]
+    fn a_gh_account_without_scopes_isnt_said_to_miss_them() {
+        let account = |scopes: &[&str]| GhAccount {
+            login: "a".into(),
+            active: false,
+            state: "success".into(),
+            scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            refreshable: false,
+        };
+        assert_eq!(
+            gh_account_notes(&account(&["gist", "read:org", "repo"]), false),
+            ["no workflow scope: can't merge PRs that change workflows"]
+        );
+        assert_eq!(
+            gh_account_notes(&account(&["gist"]), false),
+            ["missing scopes: repo, read:org, workflow"]
+        );
+        assert_eq!(
+            gh_account_notes(&account(&[]), false),
+            ["a token without OAuth scopes, such as a GitHub App's"]
+        );
     }
 
     #[test]

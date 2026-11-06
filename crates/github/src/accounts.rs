@@ -1,6 +1,6 @@
 //! The signed-in accounts: their tokens, their database rows, and which one opens a PR.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +31,7 @@ pub struct Accounts {
     http: Arc<dyn HttpClient>,
     accounts: Vec<Account>,
     /// Lowercased logins whose token GitHub refused, or whose token is missing.
-    signed_out: HashSet<String>,
+    signed_out: HashMap<String, SignedOut>,
     /// Clients for accounts whose token has been read, by lowercased login.
     clients: HashMap<String, GithubClient>,
     /// Where clients report a refused token. [`Self::refused`] handles one at a time.
@@ -39,6 +39,15 @@ pub struct Accounts {
     /// The `gh` to re-read tokens from, when not searched for.
     gh: Option<PathBuf>,
     _handle_refusals: Task<()>,
+}
+
+/// Why an account is signed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignedOut {
+    /// GitHub refused its token (a `401`).
+    Refused,
+    /// Its token isn't in the token store any more.
+    TokenMissing,
 }
 
 /// A client's report that GitHub refused `token`, waiting for a token to retry with.
@@ -142,7 +151,7 @@ impl Accounts {
                 store,
                 http,
                 accounts,
-                signed_out: HashSet::new(),
+                signed_out: HashMap::new(),
                 clients: HashMap::new(),
                 refusals,
                 gh: None,
@@ -203,7 +212,12 @@ impl Accounts {
     }
 
     pub fn is_signed_out(&self, login: &str) -> bool {
-        self.signed_out.contains(&key(login))
+        self.signed_out.contains_key(&key(login))
+    }
+
+    /// Why the account is signed out, if it is.
+    pub fn signed_out(&self, login: &str) -> Option<SignedOut> {
+        self.signed_out.get(&key(login)).copied()
     }
 
     /// Stores the token and adds the account, replacing any account with the same login.
@@ -324,10 +338,10 @@ impl Accounts {
 
     /// Marks an account signed out: its token was revoked, or is missing. Its tabs ask the user
     /// to sign in again; other accounts keep working (design §11).
-    pub fn mark_signed_out(&mut self, login: &str, cx: &mut Context<Self>) {
+    pub fn mark_signed_out(&mut self, login: &str, why: SignedOut, cx: &mut Context<Self>) {
         let login = key(login);
         self.clients.remove(&login);
-        if self.signed_out.insert(login) {
+        if self.signed_out.insert(login, why) != Some(why) {
             cx.notify();
         }
     }
@@ -358,7 +372,7 @@ impl Accounts {
         }
         if account.source != AccountSource::Gh {
             log::info!("GitHub refused {login}'s token; signing the account out");
-            self.mark_signed_out(login, cx);
+            self.mark_signed_out(login, SignedOut::Refused, cx);
             return Task::ready(None);
         }
         log::info!("GitHub refused {login}'s token; reading it from gh again");
@@ -393,8 +407,10 @@ impl Accounts {
                         "couldn't read {login}'s token from gh again ({error:#}); signing the \
                          account out"
                     );
-                    this.update(cx, |this, cx| this.mark_signed_out(&login, cx))
-                        .ok();
+                    this.update(cx, |this, cx| {
+                        this.mark_signed_out(&login, SignedOut::Refused, cx)
+                    })
+                    .ok();
                     None
                 }
             }
@@ -404,7 +420,7 @@ impl Accounts {
     /// A client for the account, reading its token from the store the first time.
     pub fn client(&mut self, login: &str, cx: &mut Context<Self>) -> Task<Result<GithubClient>> {
         let login_key = key(login);
-        if self.signed_out.contains(&login_key) {
+        if self.signed_out.contains_key(&login_key) {
             return Task::ready(Err(anyhow!("{login} is signed out")));
         }
         if let Some(client) = self.clients.get(&login_key) {
@@ -420,7 +436,9 @@ impl Accounts {
                 .await
                 .context("reading the token")?;
             let Some((_, token)) = stored else {
-                this.update(cx, |this, cx| this.mark_signed_out(&account.login, cx))?;
+                this.update(cx, |this, cx| {
+                    this.mark_signed_out(&account.login, SignedOut::TokenMissing, cx)
+                })?;
                 return Err(anyhow!("{}'s token is missing", account.login));
             };
             let token =
@@ -923,8 +941,8 @@ mod tests {
         assert!(error.is_unauthorized(), "{error:?}");
         b.get::<serde_json::Value>(REPO).await.unwrap();
         accounts.read_with(cx, |accounts, _| {
-            assert!(accounts.is_signed_out("a"));
-            assert!(!accounts.is_signed_out("b"));
+            assert_eq!(accounts.signed_out("a"), Some(SignedOut::Refused));
+            assert_eq!(accounts.signed_out("b"), None);
         });
         let result = accounts
             .update(cx, |accounts, cx| accounts.client("a", cx))
@@ -1066,7 +1084,9 @@ esac
             .update(cx, |accounts, cx| accounts.client("a", cx))
             .await;
         assert!(result.is_err());
-        accounts.read_with(cx, |accounts, _| assert!(accounts.is_signed_out("a")));
+        accounts.read_with(cx, |accounts, _| {
+            assert_eq!(accounts.signed_out("a"), Some(SignedOut::TokenMissing))
+        });
     }
 
     #[test]
