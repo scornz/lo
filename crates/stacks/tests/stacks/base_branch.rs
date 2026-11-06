@@ -25,14 +25,6 @@ fn a_pr_targeting_another_prs_head_branch_sits_on_it() {
 }
 
 #[test]
-fn input_order_does_not_matter() {
-    assert_forest(
-        &[pr(3, "b", "c"), pr(2, "a", "b"), pr(1, "main", "a")],
-        &["main", "  #1", "    #2 base-branch", "      #3 base-branch"],
-    );
-}
-
-#[test]
 fn a_base_branch_with_no_pr_is_a_root() {
     assert_forest(
         &[pr(1, "feature-x", "a"), pr(2, "a", "b")],

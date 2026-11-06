@@ -240,3 +240,25 @@ fn a_github_stack_layer_on_a_merged_layer_needs_no_rebase() {
     );
     assert_eq!(stacks.layer(2).unwrap().needs_rebase, None);
 }
+
+#[test]
+fn a_merged_fork_pr_links_only_by_commits() {
+    // #1 came from a fork's `feature` branch, which isn't the base repo's.
+    let stacks = assert_forest(
+        &[
+            pr(1, "main", "feature")
+                .fork()
+                .commits(&["f.1", "f.2"])
+                .merged(false),
+            pr(2, "main", "more").fork().commits(&["f.1", "m.1"]),
+            pr(3, "feature", "x"),
+        ],
+        &[
+            "feature",
+            "  #3",
+            "main",
+            "  #2 shared-commits needs-rebase(#1 f.1)",
+        ],
+    );
+    assert_eq!(stacks.layer(2).unwrap().retarget_to, None);
+}

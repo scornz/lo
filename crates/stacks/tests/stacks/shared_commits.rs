@@ -107,3 +107,25 @@ fn base_branch_wins_over_shared_commits() {
         &["main", "  #1", "    #3 base-branch", "  #2"],
     );
 }
+
+#[test]
+fn prs_listing_no_commits_still_link_by_head_and_branch() {
+    assert_forest(
+        &[
+            pr(1, "main", "a").no_commits(),
+            pr(2, "a", "b").no_commits(),
+            pr(3, "main", "c").no_commits(),
+            pr(4, "main", "d").commits(&["a.1", "d.1"]),
+            pr(5, "main", "e").merged(false).no_commits(),
+            pr(6, "main", "f").commits(&["e.1", "f.1"]),
+        ],
+        &[
+            "main",
+            "  #1",
+            "    #2 base-branch",
+            "    #4 shared-commits",
+            "  #3",
+            "  #6 shared-commits needs-rebase(#5 e.1)",
+        ],
+    );
+}

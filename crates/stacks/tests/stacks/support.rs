@@ -30,6 +30,8 @@ pub fn at(seconds: u64) -> SystemTime {
 pub trait With: Sized {
     /// Sets the commits, oldest first. The last is the head.
     fn commits(self, commits: &[&str]) -> Self;
+    /// Lists no commits, keeping the head.
+    fn no_commits(self) -> Self;
     /// Sets the base branch's tip.
     fn base_at(self, oid: &str) -> Self;
     /// Makes the base branch deleted, so it has no tip.
@@ -47,6 +49,11 @@ impl With for PullRequest {
     fn commits(mut self, commits: &[&str]) -> Self {
         self.commits = commits.iter().map(|oid| oid.to_string()).collect();
         self.head_oid = self.commits.last().cloned().unwrap_or_default();
+        self
+    }
+
+    fn no_commits(mut self) -> Self {
+        self.commits.clear();
         self
     }
 
