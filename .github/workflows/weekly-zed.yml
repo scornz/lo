@@ -1,0 +1,132 @@
+# Builds rozed against Zed's latest release every week, so each Zed bump starts with a known list of
+# breakages. script/zed-latest.sh does the work: it replays rozed's patches onto the release in a
+# scratch copy of Zed and runs CI's checks there. Nothing is pushed.
+#
+# While the release breaks rozed, one open issue labelled zed-update holds the latest report. The
+# run itself stays green; it fails only when the script can't run.
+name: weekly-zed
+
+on:
+  schedule:
+    # Thursdays at 07:23 UTC. Zed's stable releases usually come out on Wednesdays.
+    - cron: "23 7 * * 4"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: weekly-zed
+  cancel-in-progress: false
+
+jobs:
+  # Runs the build scripts of Zed's release and its dependencies, so its token can only read.
+  build:
+    name: build
+    # As in ci.yml.
+    runs-on: macos-26
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      result: ${{ steps.build.outputs.result }}
+      report: ${{ steps.build.outputs.report }}
+    steps:
+      # The script fetches Zed itself, so the submodule isn't needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # cmake, pinned in mise.toml, builds wasmtime for Zed's tree-sitter.
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+        with:
+          install_args: cmake
+
+      # rozed's toolchain, which runs `cargo xtask`. The script installs the release's if it differs.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install && rustc --version && cmake --version
+
+      # No Rust cache: a week apart, a new Zed release rebuilds most of the tree anyway, and GitHub
+      # evicts caches unused for a week.
+
+      - name: Find Zed's latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api repos/zed-industries/zed/releases/latest --jq .tag_name)
+          echo "Zed's latest release is $tag."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build rozed against it
+        id: build
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          dir=$RUNNER_TEMP/zed-latest
+          status=0
+          script/zed-latest.sh --tag "$TAG" --dir "$dir" || status=$?
+          case $status in
+            0) result=pass ;;
+            1)
+              result=broken
+              echo "::warning title=Zed $TAG breaks rozed::The zed-update issue has the report."
+              ;;
+            *) exit "$status" ;;
+          esac
+          report=$(cat "$dir/report.md")
+          printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY"
+          delimiter="report-$(uuidgen)"
+          {
+            echo "result=$result"
+            echo "report<<$delimiter"
+            printf '%s\n' "$report"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  # Opens or updates the zed-update issue while the release breaks rozed, and closes it once rozed
+  # builds. It runs no repository code.
+  issue:
+    name: issue
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.build.outputs.tag }}
+      RESULT: ${{ needs.build.outputs.result }}
+      REPORT: ${{ needs.build.outputs.report }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open, update or close the zed-update issue
+        run: |
+          issue=$(gh issue list --label zed-update --state open --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ "$RESULT" = pass ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment "rozed builds and passes its checks against Zed $TAG ([run]($RUN_URL))."
+            fi
+            exit 0
+          fi
+
+          title="Zed $TAG breaks rozed"
+          body=$RUNNER_TEMP/body.md
+          printf '%s\n\nFrom the weekly build against Zed'\''s latest release ([run](%s)). The issue closes when a later run passes.\n' \
+            "$REPORT" "$RUN_URL" > "$body"
+
+          if [ -z "$issue" ]; then
+            if [ "$(gh label list --search zed-update --json name --jq 'any(.[]; .name == "zed-update")')" != true ]; then
+              gh label create zed-update --color d93f0b --description "rozed doesn't build against Zed's latest release"
+            fi
+            gh issue create --title "$title" --label zed-update --body-file "$body"
+            exit 0
+          fi
+
+          old_title=$(gh issue view "$issue" --json title --jq .title)
+          gh issue edit "$issue" --title "$title" --body-file "$body"
+          # Editing notifies nobody, so say when a newer release breaks rozed too.
+          if [ "$old_title" != "$title" ]; then
+            gh issue comment "$issue" --body "Zed $TAG breaks rozed too. The description has its report ([run]($RUN_URL))."
+          fi
