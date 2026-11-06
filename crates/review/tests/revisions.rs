@@ -136,7 +136,17 @@ fn normal_pushes_from_the_activity_api() {
         previous(&revisions),
         [None, Some(r1), Some(r2), Some(r3), Some(r4), Some(r5)]
     );
-    assert_eq!(forced(&revisions), [Some(false); 6]);
+    assert_eq!(
+        forced(&revisions),
+        [
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false)
+        ]
+    );
     assert_eq!(
         revisions.as_slice()[3].pushed_at,
         PushedAt::Exact(time("2026-10-05T11:58:02Z"))
@@ -244,7 +254,7 @@ fn force_pushes_from_every_source() {
     );
     assert_eq!(
         forced(&revisions),
-        [Some(false), Some(true), Some(false), Some(true), Some(true)]
+        [None, Some(true), Some(false), Some(true), Some(true)]
     );
     assert_eq!(
         revisions.get(R2).unwrap().pushed_at,

@@ -52,7 +52,8 @@ pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
 pub enum PushRecord {
     /// A push in the repository activity API for the head branch
     /// (`GET /repos/{owner}/{repo}/activity?ref=refs/heads/{branch}`): `before`, `after`,
-    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. The caller drops
+    /// `timestamp`, and whether `activity_type` is `force_push`. Exact. A `branch_creation`
+    /// entry's `before` is the all-zero SHA, and its `forced` is ignored. The caller drops
     /// `branch_deletion` entries; entries from before the pull request opened are dropped here.
     Activity {
         before: Option<String>,

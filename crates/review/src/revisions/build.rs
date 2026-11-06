@@ -27,10 +27,12 @@ use super::{PushRecord, PushedAt, Revision, Revisions, Source, sha};
 ///   a head was pushed again, the heads in the loop go by their own times, whatever order the
 ///   records came in.
 /// - **Previous head and forced.** The activity API is trusted first, then force-push events,
-///   then check suites. A check suite names the previous head only when its previous SHA is a head
-///   another record names or a current commit, and the earliest such suite does. With no source's
-///   word, the previous head is the revision before, and
-///   ancestry in the current commits tells whether the push was forced when it can.
+///   then check suites, though a push that creates the branch says nothing about forcing. A check
+///   suite names the previous head only when its previous SHA is a head another record names or a
+///   current commit, and the earliest such suite does. With no source's word, the previous head is
+///   the revision before, and ancestry in the current commits tells whether the push was forced
+///   when it can. A branch re-created after a revision counts as forced unless ancestry says
+///   otherwise.
 pub fn build_revisions(
     records: &[PushRecord],
     commits: &[String],
@@ -72,7 +74,8 @@ pub fn build_revisions(
                 .previous()
                 .or_else(|| Some(seen[order[position.checked_sub(1)?]].head));
             let forced = (head.forced())
-                .or_else(|| forced_by_ancestry(previous?, head.head, &positions, &heads.index));
+                .or_else(|| forced_by_ancestry(previous?, head.head, &positions, &heads.index))
+                .or_else(|| (head.recreated() && previous.is_some()).then_some(true));
             Revision {
                 head: head.head.to_string(),
                 previous: previous.map(str::to_string),
@@ -342,7 +345,10 @@ impl<'a> Heads<'a> {
                 forced,
             } => {
                 if let Some(head) = self.see(after, source) {
-                    keep_latest(&mut head.activity, Push::new(*at, before, Some(*forced)));
+                    // A push that creates the branch has no head before it to be forced over.
+                    let created = before.as_deref().and_then(sha).is_none();
+                    let forced = (!created).then_some(*forced);
+                    keep_latest(&mut head.activity, Push::new(*at, before, forced));
                 }
             }
             PushRecord::ForcePush { before, after, at } => {
@@ -483,6 +489,12 @@ impl<'a> Seen<'a> {
     fn forced(&self) -> Option<bool> {
         self.reported().find_map(|push| push.forced)
     }
+
+    /// Whether the activity API says the push created the branch, which is a re-creation when a
+    /// revision came before it.
+    fn recreated(&self) -> bool {
+        self.activity.is_some_and(|push| push.before.is_none())
+    }
 }
 
 #[cfg(test)]
@@ -589,7 +601,7 @@ mod tests {
                 Revision {
                     head: "a1".into(),
                     previous: None,
-                    forced: Some(false),
+                    forced: None,
                     pushed_at: PushedAt::Exact(at(10)),
                     sources: [Source::Activity].into(),
                     available: true,
@@ -1152,7 +1164,70 @@ mod tests {
             "a2",
         );
 
-        assert_eq!(forced(&revisions), [Some(false), Some(true)]);
+        assert_eq!(forced(&revisions), [None, Some(true)]);
+    }
+
+    #[test]
+    fn a_branch_recreated_over_an_unrelated_head_was_forced() {
+        // The branch was deleted at a2 and created again at b1.
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+                activity(Some(NO_COMMIT), "b1", 40, false),
+            ],
+            &["b0", "b1"],
+            "b1",
+        );
+
+        let b1 = revisions.latest().unwrap();
+        assert_eq!(b1.previous.as_deref(), Some("a2"));
+        assert_eq!(b1.forced, Some(true));
+    }
+
+    #[test]
+    fn a_branch_recreated_at_a_descendant_was_not_forced() {
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+                activity(None, "a3", 40, false),
+            ],
+            &["a1", "a2", "a3"],
+            "a3",
+        );
+
+        assert_eq!(forced(&revisions), [None, Some(false), Some(false)]);
+    }
+
+    #[test]
+    fn a_branch_recreated_with_no_ancestry_to_go_on_counts_as_forced() {
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(None, "b1", 40, false),
+            ],
+            &[],
+            "b1",
+        );
+
+        assert_eq!(forced(&revisions), [None, Some(true)]);
+    }
+
+    #[test]
+    fn a_branch_restored_at_its_head_is_one_revision() {
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a2", 20, false),
+                activity(None, "a2", 40, false),
+            ],
+            &["a1", "a2"],
+            "a2",
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "a2"]);
+        assert_eq!(forced(&revisions), [None, Some(false)]);
     }
 
     #[test]
