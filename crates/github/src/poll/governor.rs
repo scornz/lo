@@ -41,6 +41,10 @@ pub struct PollConfig {
     /// The least time between the end of one write and the start of the next. GitHub asks for a
     /// second between mutations.
     pub write_spacing: Duration,
+    /// The longest the poller sleeps before working out again what's due. Timers don't count
+    /// while the Mac sleeps, so a pause until a rate limit's reset is checked against the wall
+    /// clock at least this often.
+    pub max_wait: Duration,
     /// Wall-clock time, for rate-limit resets and the age of cached data.
     pub wall_clock: WallClock,
 }
@@ -61,6 +65,7 @@ impl Default for PollConfig {
             secondary_max_wait: Duration::from_secs(15 * 60),
             jitter: 0.2,
             write_spacing: Duration::from_secs(1),
+            max_wait: Duration::from_secs(60),
             wall_clock: WallClock::system(),
         }
     }
@@ -73,6 +78,11 @@ pub struct WallClock(Arc<dyn Fn() -> SystemTime + Send + Sync>);
 impl WallClock {
     pub fn system() -> Self {
         Self(Arc::new(SystemTime::now))
+    }
+
+    /// A clock that reads `now`.
+    pub fn new(now: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
+        Self(Arc::new(now))
     }
 
     /// A clock that reads `start` now and then moves with `executor`'s clock, which in tests is

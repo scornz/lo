@@ -312,7 +312,8 @@ impl Job {
 enum Step {
     /// Run a poll, chosen when its target's `Schedule::forced` was the number given.
     Run(Box<Job>, u64),
-    /// Nothing is due: wait this long, or until woken.
+    /// Nothing is due: wait this long, or until woken. The loop waits at most
+    /// [`PollConfig::max_wait`] before asking again.
     Wait(Option<Duration>),
 }
 
@@ -743,8 +744,19 @@ impl Poller {
                 have_list: state.list.is_some(),
             });
         }
+        // While the limit is low, intervals are longer and some tiers aren't polled at all. Wake at
+        // its reset, when they're back.
+        let until_reset = match &self.status.rate_limit {
+            RateLimitState::Slowed(low) | RateLimitState::OpenOnly(low) => Some(
+                low.reset
+                    .duration_since(self.config.wall_clock.now())
+                    .unwrap_or_default()
+                    .max(Duration::from_millis(1)),
+            ),
+            _ => None,
+        };
         let Some((mut at, job, ticket)) = next else {
-            return Step::Wait(None);
+            return Step::Wait(until_reset);
         };
         if let Some(offline) = &self.offline {
             at = at.max(offline.retry_at);
@@ -752,7 +764,8 @@ impl Poller {
         if at <= now {
             Step::Run(Box::new(job), ticket)
         } else {
-            Step::Wait(Some(at - now))
+            let wait = at - now;
+            Step::Wait(Some(until_reset.map_or(wait, |reset| wait.min(reset))))
         }
     }
 
@@ -1177,16 +1190,14 @@ async fn poll(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let executor = cx.background_executor().clone();
+    let max_wait = this.read_with(cx, |this, _| this.config.max_wait)?;
     loop {
         match this.update(cx, |this, cx| this.next_step(cx))? {
             Step::Wait(wait) => {
-                let timer = async {
-                    match wait {
-                        Some(wait) => executor.timer(wait).await,
-                        None => futures::future::pending().await,
-                    }
-                };
-                futures::future::select(pin!(timer), woken.next()).await;
+                // Timers stop while the Mac sleeps, and waits are worked out from the wall clock,
+                // so none is trusted for longer than `max_wait`.
+                let wait = wait.map_or(max_wait, |wait| wait.min(max_wait));
+                futures::future::select(pin!(executor.timer(wait)), woken.next()).await;
                 while woken.try_recv().is_ok() {}
             }
             Step::Run(job, ticket) => {

@@ -129,6 +129,8 @@ struct Polling {
     events: Rc<RefCell<Vec<PollEvent>>>,
     executor: BackgroundExecutor,
     clock: WallClock,
+    /// How long the Mac has slept, in seconds: wall-clock time that GPUI's clock didn't see.
+    slept: Arc<std::sync::atomic::AtomicU64>,
     cx: TestAppContext,
 }
 
@@ -178,7 +180,12 @@ impl Polling {
             .await
             .unwrap();
         let cache = PrCache::new(db.clone());
-        let clock = WallClock::following(executor.clone(), wall(0));
+        let slept = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let clock = {
+            let (executor, slept) = (executor.clone(), slept.clone());
+            let origin = executor.now();
+            WallClock::new(move || wall(slept.load(Ordering::SeqCst)) + (executor.now() - origin))
+        };
         let mut this = Self {
             poller: cx
                 .new(|cx| Poller::new(accounts.clone(), LOGIN, cache.clone(), config(&clock), cx)),
@@ -190,6 +197,7 @@ impl Polling {
             events: Rc::default(),
             executor,
             clock,
+            slept,
             cx: cx.clone(),
         };
         this.subscribe();
@@ -242,6 +250,11 @@ impl Polling {
 
     fn status(&self) -> PollStatus {
         self.read(|poller| poller.status().clone())
+    }
+
+    /// The Mac sleeps for `secs`: the wall clock moves on, GPUI's clock and its timers don't.
+    fn sleep(&self, secs: u64) {
+        self.slept.fetch_add(secs, Ordering::SeqCst);
     }
 
     /// Runs what's ready at the current second.
@@ -1022,6 +1035,52 @@ async fn a_used_up_rate_limit_pauses_polling_until_the_reset(cx: &mut TestAppCon
             (600, "GET /pulls?state=open&per_page=100 (etag)"),
             (620, "GET /pulls/1 (since)"),
             (620, "PullRequestCheck"),
+        ])
+    );
+    assert_eq!(t.status().rate_limit, RateLimitState::Normal);
+}
+
+#[gpui::test]
+async fn a_pause_ends_on_time_after_the_mac_sleeps(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.insert(6, with_headers(r[6].clone(), &rate_limit("core", 0, 600)));
+    let mut t = Polling::new("sleep", interactions, cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(30);
+    assert!(t.status().rate_limit.is_paused());
+    t.requests();
+    // Asleep from 30 s for 1,000 s, well past the reset.
+    t.sleep(1000);
+    t.run_until(100);
+    let requests = t.requests();
+    assert!(!requests.is_empty(), "still paused");
+    assert!(requests[0].0 <= 80, "{requests:?}");
+    assert_eq!(t.status().rate_limit, RateLimitState::Normal);
+}
+
+#[gpui::test]
+async fn an_open_only_limit_with_nothing_open_wakes_at_the_reset(cx: &mut TestAppContext) {
+    let low = with_headers(recorded()[6].clone(), &rate_limit("core", 100, 3600));
+    let mut t = Polling::new("open_only_reset", with_second_answer(low), cx).await;
+    t.update(|poller, cx| {
+        poller.watch(pr(2), cx);
+        poller.set_open(Some(pr(1)), cx)
+    });
+    t.run_until(20);
+    t.update(|poller, cx| poller.set_open(None, cx));
+    t.requests();
+    t.run_until(3599);
+    assert_eq!(t.requests(), []);
+    assert!(matches!(t.status().rate_limit, RateLimitState::OpenOnly(_)));
+    // The window resets at 3,600 s: everything is polled, and the banner goes.
+    t.run_until(3600);
+    assert_eq!(
+        t.requests(),
+        log(&[
+            (3600, "GET /pulls/2 (since)"),
+            (3600, "GET /pulls?state=open&per_page=100 (etag)"),
+            (3600, "GET /pulls/1 (since)"),
         ])
     );
     assert_eq!(t.status().rate_limit, RateLimitState::Normal);
