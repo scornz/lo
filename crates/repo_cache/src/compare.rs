@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::diff::ChangedFile;
-use crate::git::failure_message;
+use crate::git::{Finished, failure_message};
 use crate::{Error, Oid, Repo, RepoCache};
 
 /// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<pin>`.
@@ -157,28 +157,36 @@ impl Repo {
         ]);
         let display = command.display();
         let finished = command.finish(None)?;
-        // The exit status says whether it's clean: 0 is, 1 conflicted, and anything else failed.
-        // A conflict can leave no path conflicted, so the paths don't say.
-        let clean = match finished.status.code() {
-            Some(0) => true,
-            Some(1) => false,
-            _ => return Err(Error::from_git(display, failure_message(&finished), None)),
-        };
-        let Some((tree, paths)) = parse_merge_tree(&finished.stdout) else {
-            return Err(Error::Git {
-                command: display,
-                message: format!(
-                    "printed unexpected output {:?}",
-                    String::from_utf8_lossy(&finished.stdout)
-                ),
-            });
-        };
-        Ok(if clean {
-            Replayed::Clean(tree)
-        } else {
-            Replayed::Conflicted(paths)
-        })
+        read_replay(display, &finished)
     }
+}
+
+/// Reads how `git merge-tree`, run as `display`, went.
+fn read_replay(display: String, finished: &Finished) -> Result<Replayed, Error> {
+    // The exit status says whether it's clean: 0 is, 1 conflicted, and anything else failed.
+    // A conflict can leave no path conflicted, so the paths don't say.
+    let clean = match finished.status.code() {
+        Some(0) => true,
+        Some(1) => false,
+        _ => return Err(Error::from_git(display, failure_message(finished), None)),
+    };
+    let Some((tree, paths)) = parse_merge_tree(&finished.stdout) else {
+        // git's message, which can say a download failed: git 2.41 exits 1, as for a conflict,
+        // when it can't read a commit.
+        let message = match finished.stderr.trim() {
+            "" => format!(
+                "printed unexpected output {:?}",
+                String::from_utf8_lossy(&finished.stdout)
+            ),
+            stderr => stderr.to_string(),
+        };
+        return Err(Error::from_git(display, message, None));
+    };
+    Ok(if clean {
+        Replayed::Clean(tree)
+    } else {
+        Replayed::Conflicted(paths)
+    })
 }
 
 impl RepoCache {
@@ -205,6 +213,7 @@ impl RepoCache {
 }
 
 /// How a replay went.
+#[derive(Debug)]
 enum Replayed {
     Clean(Oid),
     Conflicted(Vec<Vec<u8>>),
@@ -281,7 +290,82 @@ impl fmt::Debug for ReplayPin {
 mod tests {
     use super::*;
 
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
     const TREE: &str = "f74d6ab317132cd8ec8c2165016f89a7d9e03caa";
+
+    fn finished(code: i32, stdout: &[u8], stderr: &str) -> Finished {
+        Finished {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_string(),
+        }
+    }
+
+    #[test]
+    fn output_that_doesnt_parse_is_reported_with_gits_message() {
+        // What git 2.41 does when it can't read a commit, as when downloading it failed: exit 1,
+        // as for a conflict, with nothing on stdout.
+        let error = read_replay(
+            "git merge-tree".into(),
+            &finished(
+                1,
+                b"",
+                "fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: \
+                 github.com\nfatal: could not fetch 6178079 from promisor remote\nmerge-tree: \
+                 6178079 - not something we can merge",
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Fetch {
+                    failure: crate::FetchFailure::Network,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(error.is_retryable());
+
+        let error = read_replay(
+            "git merge-tree".into(),
+            &finished(1, b"", "merge-tree: 6178079 - not something we can merge"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "`git merge-tree` failed: merge-tree: 6178079 - not something we can merge"
+        );
+
+        // With nothing on stderr, what it printed.
+        let error =
+            read_replay("git merge-tree".into(), &finished(0, b"not a tree\0", "")).unwrap_err();
+        assert!(
+            matches!(&error, Error::Git { message, .. } if message.contains("not a tree")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn reads_whether_a_replay_was_clean_from_its_exit_status() {
+        let output = format!("{TREE}\0");
+        let clean = read_replay("git merge-tree".into(), &finished(0, output.as_bytes(), ""));
+        assert!(matches!(clean, Ok(Replayed::Clean(tree)) if tree.as_str() == TREE));
+        // A conflict can leave no path conflicted, as over where a renamed folder's files go.
+        let conflicted = read_replay("git merge-tree".into(), &finished(1, output.as_bytes(), ""));
+        assert!(matches!(conflicted, Ok(Replayed::Conflicted(paths)) if paths.is_empty()));
+        let failed = read_replay(
+            "git merge-tree".into(),
+            &finished(128, b"", "fatal: bad object 3333"),
+        );
+        assert!(
+            matches!(&failed, Err(Error::Git { message, .. }) if message == "fatal: bad object 3333"),
+            "{failed:?}"
+        );
+    }
 
     #[test]
     fn a_comparison_can_go_to_another_thread() {
