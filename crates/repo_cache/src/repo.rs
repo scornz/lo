@@ -29,6 +29,8 @@ use crate::{Error, FetchFailure};
 /// - `refs/rozed/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
 /// - `refs/rozed/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
 /// - `refs/rozed/commits/<oid>`: commits fetched by ID.
+/// - `refs/rozed/replays/<tree>/<pin>`: a tree [`Repo::compare_revisions`] replayed, while a
+///   [`crate::Comparison`] shows it.
 #[derive(Clone)]
 pub struct Repo {
     shared: Arc<Shared>,

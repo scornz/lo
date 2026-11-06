@@ -1,9 +1,16 @@
 //! Comparing two revisions of a pull request so that only what its author changed shows, even
 //! across a rebase (design §6, "Rebase-aware comparison").
 
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::diff::ChangedFile;
 use crate::git::failure_message;
 use crate::{Error, Oid, Repo};
+
+/// Where replayed trees are pinned: `refs/rozed/replays/<tree>/<pin>`.
+const REPLAYS: &str = "refs/rozed/replays/";
 
 /// One revision of a pull request, as git sees it: its head, and the commit its changes start
 /// from.
@@ -17,6 +24,9 @@ pub struct Revision {
 }
 
 /// What changed between two revisions, from [`Repo::compare_revisions`].
+///
+/// A clean replay's tree is pinned in the clone while the comparison, or any copy of it, is
+/// kept, so its files stay readable. Dropping the last copy removes the pin, which runs git once.
 #[derive(Clone, Debug)]
 pub struct Comparison {
     /// The files that changed, as [`Repo::changed_files`] lists them, from [`Self::old`] to
@@ -29,6 +39,7 @@ pub struct Comparison {
     pub new: Oid,
     /// Whether the old revision was replayed onto the new base, and how that went.
     pub replay: Replay,
+    _pin: Option<Arc<ReplayPin>>,
 }
 
 /// Whether [`Repo::compare_revisions`] replayed the old revision onto the new base.
@@ -66,8 +77,9 @@ impl Repo {
     /// batch at a time; a replay of changes each made on one side alone needs none. Then, like
     /// [`Repo::changed_files`], both sides of every changed file download in one batch.
     ///
-    /// The replay writes no ref. Its objects stay in the clone unreferenced, and comparing the
-    /// same revisions again makes the same tree.
+    /// A clean replay's tree is pinned at `refs/rozed/replays/<tree>/<pin>` while the comparison
+    /// is kept (see [`Comparison`]). The replay writes no other ref. Its objects stay in the clone
+    /// unreferenced, and comparing the same revisions again makes the same tree.
     pub fn compare_revisions(&self, old: &Revision, new: &Revision) -> Result<Comparison, Error> {
         let plain = |replay| -> Result<Comparison, Error> {
             Ok(Comparison {
@@ -75,18 +87,24 @@ impl Repo {
                 old: old.head.clone(),
                 new: new.head.clone(),
                 replay,
+                _pin: None,
             })
         };
         if old.base == new.base {
             return plain(Replay::SameBase);
         }
         match self.replay(old, &new.base)? {
-            Replayed::Clean(tree) => Ok(Comparison {
-                files: self.changed_files(&tree, &new.head)?,
-                old: tree,
-                new: new.head.clone(),
-                replay: Replay::Clean,
-            }),
+            Replayed::Clean(tree) => {
+                // Pinned first, so nothing can remove the tree while it's being compared.
+                let pin = ReplayPin::new(self, &tree)?;
+                Ok(Comparison {
+                    files: self.changed_files(&tree, &new.head)?,
+                    old: tree,
+                    new: new.head.clone(),
+                    replay: Replay::Clean,
+                    _pin: Some(Arc::new(pin)),
+                })
+            }
             Replayed::Conflicted(paths) => {
                 log::info!(
                     "{}: replaying {} onto {} conflicted in {} files, so comparing the heads",
@@ -160,6 +178,55 @@ fn parse_merge_tree(output: &[u8]) -> Option<(Oid, Vec<Vec<u8>>)> {
         }
     }
     Some((tree, paths))
+}
+
+/// A ref keeping a replayed tree in the clone, removed when dropped. Each comparison has its own,
+/// named for this process, so one dropped never unpins a tree another comparison, or another
+/// rozed, still shows. The clone stays open while it's kept, so cleanup leaves it alone.
+struct ReplayPin {
+    repo: Repo,
+    reference: String,
+    tree: Oid,
+}
+
+impl ReplayPin {
+    fn new(repo: &Repo, tree: &Oid) -> Result<Self, Error> {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let reference = format!(
+            "{REPLAYS}{tree}/{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        // No lock: one ref, which nothing else writes, and git writes it atomically.
+        repo.run(repo.git().args(["update-ref", &reference, tree.as_str()]))?;
+        Ok(Self {
+            repo: repo.clone(),
+            reference,
+            tree: tree.clone(),
+        })
+    }
+}
+
+impl Drop for ReplayPin {
+    fn drop(&mut self) {
+        let command =
+            self.repo
+                .git()
+                .args(["update-ref", "-d", &self.reference, self.tree.as_str()]);
+        if let Err(error) = self.repo.run(command) {
+            log::warn!(
+                "{}: can't unpin {}: {error}",
+                self.repo.name(),
+                self.reference
+            );
+        }
+    }
+}
+
+impl fmt::Debug for ReplayPin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reference)
+    }
 }
 
 #[cfg(test)]

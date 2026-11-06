@@ -4,7 +4,7 @@ use std::fs;
 
 use repo_cache::{
     Change, ChangedFile, Comparison, Error, FetchFailure, Oid, PullRequestRefs, Replay, Repo,
-    Revision,
+    RepoCache, Revision,
 };
 use tempfile::TempDir;
 
@@ -37,6 +37,7 @@ struct Fixture {
     _server: Server,
     remote: Remote,
     repo: Repo,
+    cache: RepoCache,
     _cache_dir: TempDir,
 }
 
@@ -49,6 +50,7 @@ fn fixture() -> Fixture {
         _server: server,
         remote,
         repo,
+        cache,
         _cache_dir: cache_dir,
     }
 }
@@ -81,6 +83,28 @@ impl Fixture {
             .unwrap()
             .map(|bytes| String::from_utf8(bytes).unwrap())
     }
+
+    /// The replayed trees pinned in the clone: `(tree, ref)` pairs.
+    fn replay_pins(&self) -> Vec<(String, String)> {
+        replay_pins(&self.repo)
+    }
+}
+
+fn replay_pins(repo: &Repo) -> Vec<(String, String)> {
+    git(
+        repo.git_dir(),
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname)",
+            "refs/rozed/replays/",
+        ],
+    )
+    .lines()
+    .map(|line| {
+        let (oid, name) = line.split_once(' ').unwrap();
+        (oid.to_string(), name.to_string())
+    })
+    .collect()
 }
 
 fn paths(files: &[ChangedFile]) -> Vec<String> {
@@ -259,6 +283,8 @@ fn a_conflicting_rebase_falls_back_to_the_plain_comparison_with_the_conflicted_p
     assert_eq!(comparison.files, f.repo.changed_files(&r1, &r2).unwrap());
     assert_eq!(comparison.old, r1);
     assert_eq!(comparison.new, r2);
+    // Nothing replayed is shown, so nothing is pinned.
+    assert_eq!(f.replay_pins(), []);
 }
 
 #[test]
@@ -303,6 +329,7 @@ fn revisions_on_the_same_base_get_the_plain_comparison() {
     assert_eq!(paths(&comparison.files), ["c.txt"]);
     assert_eq!(comparison.files, f.repo.changed_files(&r1, &r2).unwrap());
     assert_eq!((&comparison.old, &comparison.new), (&r1, &r2));
+    assert_eq!(f.replay_pins(), []);
 }
 
 /// A stack: pull request #2 (`upper`) on #1 (`lower`), on `trunk`. The lower layer is amended and
@@ -494,6 +521,85 @@ fn renames_across_a_rebase_show_only_what_the_author_renamed() {
     );
 }
 
+#[test]
+fn a_replayed_tree_is_pinned_only_while_its_comparison_is_kept() {
+    let Rebased { f, m1, m2, r1, r2 } = rebased();
+    let old = Revision { base: m1, head: r1 };
+    let new = Revision { base: m2, head: r2 };
+
+    let comparison = f.repo.compare_revisions(&old, &new).unwrap();
+
+    let pins = f.replay_pins();
+    assert_eq!(pins.len(), 1, "{pins:?}");
+    assert_eq!(pins[0].0, comparison.old.as_str());
+    assert!(
+        pins[0]
+            .1
+            .starts_with(&format!("refs/rozed/replays/{}/", comparison.old)),
+        "{pins:?}"
+    );
+    // A copy shares the pin, and a second comparison of the same revisions pins its own.
+    let copy = comparison.clone();
+    let again = f.repo.compare_revisions(&old, &new).unwrap();
+    assert_eq!(again.old, comparison.old);
+    assert_eq!(f.replay_pins().len(), 2);
+
+    drop(comparison);
+    assert_eq!(f.replay_pins().len(), 2);
+    drop(copy);
+    assert_eq!(f.replay_pins().len(), 1);
+    drop(again);
+    assert_eq!(f.replay_pins(), []);
+    // Nothing else of the replay is in a ref, and fetching still works with none left.
+    let refs = git(f.repo.git_dir(), &["for-each-ref", "--format=%(refname)"]);
+    assert!(
+        refs.lines()
+            .all(|name| name.starts_with("refs/rozed/pull/")),
+        "{refs}"
+    );
+    f.push(1, "trunk");
+}
+
+/// A pin is a ref to a tree whose files are partly on the server, which repacking a partial clone
+/// and fetching into it must take in stride.
+#[test]
+fn a_pinned_replay_survives_a_repack_and_fetches() {
+    let (f, old, new) = content_merges();
+    let comparison = f.repo.compare_revisions(&old, &new).unwrap();
+    let merged = [(6, "line 6, the PR's"), (19, "line 19, trunk's")];
+    // The merged c.txt, without r2's change to line 12, was made here and is nowhere else.
+    let replayed_c = git(
+        f.repo.git_dir(),
+        &["rev-parse", &format!("{}:c.txt", comparison.old)],
+    );
+    assert!(!f.remote.has(&replayed_c.parse().unwrap()));
+
+    // A fetch, with a tree pinned among the refs.
+    f.remote.switch("trunk").write("f.txt", "f\n");
+    f.remote.commit("m3");
+    f.remote.publish("refs/heads/trunk");
+    f.remote.switch("feature-2");
+    f.push(1, "trunk");
+    // Everything repacked with the server gone, as maintenance at launch does, then fully, as
+    // it does with git older than 2.52.
+    let moved = f.remote.git_dir.with_extension("moved");
+    fs::rename(&f.remote.git_dir, &moved).unwrap();
+    assert_eq!(f.cache.maintain(0).unwrap(), ["owner/repo"]);
+    git(
+        f.repo.git_dir(),
+        &["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
+    );
+
+    assert_eq!(f.read(&comparison.old, "a.txt"), Some(text("a", &merged)));
+    assert_eq!(f.read(&comparison.old, "c.txt"), Some(text("c", &merged)));
+    // What was never downloaded still downloads.
+    fs::rename(&moved, &f.remote.git_dir).unwrap();
+    assert_eq!(
+        f.read(&comparison.old, "untouched.txt"),
+        Some(text("untouched", &[]))
+    );
+}
+
 /// Pull request #1 changes line 6 of a.txt, b.txt and c.txt; trunk then changes line 19 of each,
 /// and the rebased r2 also changes line 12 of c.txt. Replaying r1 merges all three files.
 fn content_merges() -> (Fixture, Revision, Revision) {
@@ -609,6 +715,7 @@ fn a_replay_that_cant_download_is_a_fetch_error() {
         ),
         "{error:?}"
     );
+    assert_eq!(f.replay_pins(), []);
     fs::rename(&moved, &f.remote.git_dir).unwrap();
     let comparison: Comparison = f.repo.compare_revisions(&old, &new).unwrap();
     assert_eq!(paths(&comparison.files), ["c.txt"]);
@@ -628,4 +735,5 @@ fn an_unknown_commit_is_an_error_not_a_conflict() {
     );
 
     assert!(result.is_err(), "{result:?}");
+    assert_eq!(f.replay_pins(), []);
 }
