@@ -246,6 +246,22 @@ impl Repo {
             .collect()
     }
 
+    /// The tip of pull request `number`'s base branch as last fetched, pinned at
+    /// `refs/rozed/pull/<n>/base`, or `None` before its first fetch. Reads only the clone, so it
+    /// works offline.
+    pub fn fetched_base(&self, number: u64) -> Result<Option<Oid>, Error> {
+        let output = self.run(self.git().args([
+            "for-each-ref",
+            "--format=%(objectname)",
+            &format!("refs/rozed/pull/{number}/base"),
+        ]))?;
+        String::from_utf8_lossy(&output)
+            .lines()
+            .next()
+            .map(str::parse)
+            .transpose()
+    }
+
     /// Makes sure commit `oid` is in the clone, fetching it by ID if it isn't, and pins it at
     /// `refs/rozed/commits/<oid>`. For a revision rozed knows from GitHub's API but never fetched.
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.

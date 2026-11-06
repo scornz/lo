@@ -237,6 +237,31 @@ fn fetches_a_pull_requests_head_and_base_and_pins_them() {
 }
 
 #[test]
+fn what_was_fetched_reads_without_the_server() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    assert_eq!(repo.fetched_base(1).unwrap(), None);
+    assert_eq!(repo.pull_revisions(1).unwrap(), Vec::<Oid>::new());
+    fetch(&repo, 1);
+    let files = repo.changed_files(&pr.base, &pr.head).unwrap();
+
+    // Offline.
+    drop(pr.remote);
+    drop(server);
+
+    assert_eq!(repo.fetched_base(1).unwrap(), Some(pr.trunk_tip.clone()));
+    assert_eq!(repo.pull_revisions(1).unwrap(), vec![pr.head.clone()]);
+    assert_eq!(
+        repo.merge_base(&pr.head, &pr.trunk_tip).unwrap(),
+        Some(pr.base.clone())
+    );
+    assert_eq!(repo.changed_files(&pr.base, &pr.head).unwrap(), files);
+    assert_eq!(repo.fetched_base(2).unwrap(), None);
+}
+
+#[test]
 fn fetches_a_pull_request_from_a_fork() {
     let server = Server::new();
     let pr = pull_request(&server);
