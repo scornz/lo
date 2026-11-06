@@ -59,7 +59,12 @@
 //! // Your approval is the one missing, and the tests will finish: approve, and likely auto-merge.
 //! let ApproveAndShip::Plan(plan) = approve_and_ship(&snapshot) else { unreachable!() };
 //! assert_eq!(plan.approval, Approval::Approve);
-//! assert_eq!(plan.wording(), "will likely wait for checks, with auto-merge on");
+//! // The base branch keeps approvals when someone pushes, GitHub's default, so it warns.
+//! assert_eq!(
+//!     plan.wording(),
+//!     "will likely wait for checks, with auto-merge on. \
+//!      While auto-merge is on, a push could merge without a new review",
+//! );
 //!
 //! // Once the approval lands, GitHub's verdict decides: still blocked by the running tests.
 //! let mut after = snapshot.clone();
@@ -91,7 +96,10 @@ pub use github::{
     ReviewDecision, ReviewState, StatusState, UnknownValue,
 };
 pub use reviews::MissingApprovals;
-pub use ship::{Approval, ApproveAndShip, Plan, Ship, Stop, after_approving, approve_and_ship};
+pub use ship::{
+    AfterPush, Approval, ApproveAndShip, Plan, Ship, Stop, after_approving, after_push,
+    approve_and_ship,
+};
 pub use status::{MergeStatus, status};
 
 /// What GitHub says about a pull request's merge, and the head on screen. The GitHub layer fills
@@ -203,6 +211,23 @@ pub struct ReviewRules {
     /// Whether every conversation must be resolved (`requiredReviewThreadResolution`,
     /// `requiresConversationResolution`).
     pub conversation_resolution: bool,
+    /// Whether a push dismisses the approvals given before it (`dismissStaleReviewsOnPush`,
+    /// `dismissesStaleReviews`). GitHub's default is not to, so a push keeps them.
+    pub dismiss_stale_reviews: bool,
+    /// Whether the latest push needs approving by someone other than whoever pushed it
+    /// (`requireLastPushApproval`, `requireLastPushApproval` on the branch protection rule).
+    pub last_push_approval: bool,
+}
+
+impl ReviewRules {
+    /// Whether a push makes GitHub want a new approval before the pull request merges: the rules
+    /// require reviews, and dismiss stale approvals or require the latest push's approval.
+    /// Otherwise a push merges with the approvals already given, or with none when none are
+    /// required.
+    pub fn push_needs_new_approval(&self) -> bool {
+        let reviews_required = self.required_approvals > 0 || self.code_owner_review;
+        reviews_required && (self.dismiss_stale_reviews || self.last_push_approval)
+    }
 }
 
 /// A check the base branch's rules require.

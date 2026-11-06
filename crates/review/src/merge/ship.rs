@@ -52,12 +52,31 @@ pub struct Plan {
     /// can still block the merge for a rule rozed can't see, and then approve and ship turns on
     /// auto-merge instead of merging.
     pub likely: Ship,
+    /// Whether the confirmation warns that a push before it merges could merge without a new
+    /// review. GitHub keeps auto-merge on when someone with write access pushes, so it warns when
+    /// the next step may be auto-merge and the base branch's rules don't want a new approval after
+    /// a push ([`ReviewRules::push_needs_new_approval`]). The next step may be auto-merge when it's
+    /// likely, and also when a merge is likely only because rozed expects GitHub to stop blocking
+    /// once you've approved. While rozed runs, [`after_push`] turns auto-merge off on such a push.
+    ///
+    /// [`ReviewRules::push_needs_new_approval`]: super::ReviewRules::push_needs_new_approval
+    pub stale_approval_warning: bool,
 }
 
 impl Plan {
     /// What the confirmation says follows the approval, from [`likely`](Self::likely), such as
-    /// "will likely merge" or "will likely wait for checks, with auto-merge on".
+    /// "will likely merge" or "will likely wait for checks, with auto-merge on", and then the
+    /// stale-approval warning when there is one.
     pub fn wording(&self) -> String {
+        let next = self.next();
+        if self.stale_approval_warning {
+            format!("{next}. While auto-merge is on, a push could merge without a new review")
+        } else {
+            next
+        }
+    }
+
+    fn next(&self) -> String {
         match &self.likely {
             Ship::Merge(_) => "will likely merge".to_string(),
             Ship::Enqueue => "will likely join the merge queue".to_string(),
@@ -238,10 +257,19 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
         Approval::Approve => with_your_approval(snapshot),
         Approval::OwnPullRequest | Approval::AlreadyApproved => snapshot.clone(),
     };
+    let likely = ship(&after);
+    let may_auto_merge = match &likely {
+        Ship::AutoMerge { .. }
+        | Ship::EnqueueWhenReady { .. }
+        | Ship::AutoMergeAlreadyOn { .. } => true,
+        Ship::Merge(_) | Ship::Enqueue => !github_lets_it_merge(snapshot),
+        Ship::AlreadyQueued | Ship::Stop(_) => false,
+    };
     ApproveAndShip::Plan(Plan {
         head: snapshot.head_on_screen.clone(),
         approval,
-        likely: ship(&after),
+        likely,
+        stale_approval_warning: may_auto_merge && !snapshot.rules.push_needs_new_approval(),
     })
 }
 
@@ -271,6 +299,47 @@ pub fn after_approving(snapshot: &MergeSnapshot, plan: &Plan) -> Ship {
         });
     }
     ship(snapshot)
+}
+
+/// What to do about a push to a pull request on which approve and ship approved [`Plan::head`]
+/// and then turned on auto-merge, or merge when ready.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AfterPush {
+    /// Turn auto-merge off, and tell the user: `head` was pushed after they approved `approved`,
+    /// and it would merge with their approval.
+    TurnOffAutoMerge { approved: String, head: String },
+    /// Nothing.
+    Nothing,
+}
+
+/// What to do when the poller sees a pull request on which approve and ship turned on auto-merge,
+/// or merge when ready, with this plan.
+///
+/// GitHub keeps auto-merge on when someone with write access pushes. Unless the base branch's
+/// rules want a new approval after a push ([`ReviewRules::push_needs_new_approval`]), the new head
+/// then merges with the approvals already given, yours included. So when GitHub's head isn't the
+/// one you approved, and auto-merge is still on, rozed turns it off and says so. It leaves it on
+/// when you approved nothing (your own pull request), when someone else has turned it on since,
+/// and once the pull request is merged or closed.
+///
+/// [`ReviewRules::push_needs_new_approval`]: super::ReviewRules::push_needs_new_approval
+pub fn after_push(snapshot: &MergeSnapshot, plan: &Plan) -> AfterPush {
+    let yours = |login: &str| reviews::same_login(login, &snapshot.viewer.login);
+    let turn_off = snapshot.state == PullRequestState::Open
+        && plan.approval != Approval::OwnPullRequest
+        && !snapshot.rules.push_needs_new_approval()
+        && (snapshot.auto_merge.as_ref())
+            .is_some_and(|auto_merge| auto_merge.enabled_by.as_deref().is_none_or(yours))
+        && !snapshot.head.is_empty()
+        && !same_commit(&snapshot.head, &plan.head);
+    if turn_off {
+        AfterPush::TurnOffAutoMerge {
+            approved: plan.head.clone(),
+            head: snapshot.head.clone(),
+        }
+    } else {
+        AfterPush::Nothing
+    }
 }
 
 /// Whether two full commit SHAs name the same commit. Git writes them in lowercase, but nothing
@@ -411,6 +480,7 @@ mod tests {
             review_decision: Some(ReviewDecision::ReviewRequired),
             rules: ReviewRules {
                 required_approvals: 1,
+                dismiss_stale_reviews: true,
                 ..Default::default()
             },
             methods: AllowedMethods {
@@ -439,7 +509,7 @@ mod tests {
         MergeSnapshot {
             rules: ReviewRules {
                 required_approvals: 2,
-                ..Default::default()
+                ..reviewing().rules
             },
             ..reviewing()
         }
@@ -507,6 +577,21 @@ mod tests {
             head: HEAD.to_string(),
             approval,
             likely,
+            stale_approval_warning: false,
+        })
+    }
+
+    /// The base branch's rules keep approvals when someone pushes.
+    fn keeping_stale_approvals(mut snapshot: MergeSnapshot) -> MergeSnapshot {
+        snapshot.rules.dismiss_stale_reviews = false;
+        snapshot
+    }
+
+    /// Auto-merge, turned on by `by`.
+    fn auto_merge_on(by: Option<&str>) -> Option<AutoMerge> {
+        Some(AutoMerge {
+            method: MergeMethod::Squash,
+            enabled_by: by.map(str::to_string),
         })
     }
 
@@ -770,7 +855,7 @@ mod tests {
             rules: ReviewRules {
                 required_approvals: 1,
                 code_owner_review: true,
-                ..Default::default()
+                ..reviewing().rules
             },
             review_requests: vec![code_owner("rozed-dev/github")],
             ..reviewing()
@@ -788,7 +873,7 @@ mod tests {
             rules: ReviewRules {
                 required_approvals: 1,
                 code_owner_review: true,
-                ..Default::default()
+                ..reviewing().rules
             },
             review_requests: vec![code_owner("rozed-dev/github"), code_owner("rozed-dev/ui")],
             ..reviewing()
@@ -896,7 +981,7 @@ mod tests {
             rules: ReviewRules {
                 required_approvals: 1,
                 code_owner_review: true,
-                ..Default::default()
+                ..reviewing().rules
             },
             reviews: vec![review("erin", ReviewState::Approved, HEAD)],
             review_requests: vec![ReviewRequest {
@@ -1210,6 +1295,171 @@ mod tests {
         }
     }
 
+    // Pushes while auto-merge is on.
+
+    #[test]
+    fn the_confirmation_warns_when_a_later_push_could_merge_with_your_approval() {
+        let waiting = keeping_stale_approvals(needing_another_approval());
+        let plan = the_plan(&waiting);
+
+        assert_eq!(plan.likely, auto_merge(vec![approvals(1)]));
+        assert!(plan.stale_approval_warning);
+        assert_eq!(
+            plan.wording(),
+            "will likely wait for an approval, with auto-merge on. While auto-merge is on, a push \
+             could merge without a new review"
+        );
+    }
+
+    #[test]
+    fn the_confirmation_warns_whenever_the_next_step_may_be_auto_merge() {
+        let mut queue = keeping_stale_approvals(with_queue(needing_another_approval()));
+        queue.viewer.can_enable_auto_merge = false;
+        let already_on = MergeSnapshot {
+            auto_merge: auto_merge_on(Some("bob")),
+            ..keeping_stale_approvals(needing_another_approval())
+        };
+        // Expected to merge, but only if GitHub agrees once you've approved: otherwise auto-merge.
+        let merge_if_github_agrees = keeping_stale_approvals(reviewing());
+        let no_reviews_required = MergeSnapshot {
+            review_decision: None,
+            rules: ReviewRules {
+                dismiss_stale_reviews: true,
+                ..Default::default()
+            },
+            required_checks: vec![check("test", CheckState::Running)],
+            ..reviewing()
+        };
+
+        for snapshot in [
+            queue,
+            already_on,
+            merge_if_github_agrees,
+            no_reviews_required,
+        ] {
+            assert!(
+                the_plan(&snapshot).stale_approval_warning,
+                "{:?}",
+                the_plan(&snapshot).likely
+            );
+        }
+    }
+
+    #[test]
+    fn the_confirmation_does_not_warn_when_a_push_needs_a_new_approval_or_it_will_not_wait() {
+        let dismissing = needing_another_approval();
+        let latest_push_approved = MergeSnapshot {
+            rules: ReviewRules {
+                last_push_approval: true,
+                ..keeping_stale_approvals(needing_another_approval()).rules
+            },
+            ..needing_another_approval()
+        };
+        let clean = MergeSnapshot {
+            merge_state: MergeStateStatus::Clean,
+            review_decision: Some(ReviewDecision::Approved),
+            reviews: vec![review("carol", ReviewState::Approved, HEAD)],
+            ..keeping_stale_approvals(reviewing())
+        };
+        let stopping = MergeSnapshot {
+            out_of_date: true,
+            ..keeping_stale_approvals(reviewing())
+        };
+
+        for snapshot in [dismissing, latest_push_approved, clean, stopping] {
+            let plan = the_plan(&snapshot);
+            assert!(!plan.stale_approval_warning, "{:?}", plan.likely);
+            assert!(!plan.wording().contains("push"), "{}", plan.wording());
+        }
+    }
+
+    #[test]
+    fn a_push_after_you_approved_turns_off_the_auto_merge_rozed_turned_on() {
+        let plan = the_plan(&keeping_stale_approvals(needing_another_approval()));
+        let pushed = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e";
+        for enabled_by in [Some("alice"), Some("ALICE"), None] {
+            let snapshot = MergeSnapshot {
+                head: pushed.to_string(),
+                auto_merge: auto_merge_on(enabled_by),
+                ..keeping_stale_approvals(needing_another_approval())
+            };
+
+            assert_eq!(
+                after_push(&snapshot, &plan),
+                AfterPush::TurnOffAutoMerge {
+                    approved: HEAD.to_string(),
+                    head: pushed.to_string(),
+                },
+                "{enabled_by:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_push_leaves_auto_merge_alone_otherwise() {
+        let waiting = keeping_stale_approvals(needing_another_approval());
+        let plan = the_plan(&waiting);
+        let pushed = |snapshot: MergeSnapshot| MergeSnapshot {
+            head: "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e".to_string(),
+            auto_merge: auto_merge_on(Some("alice")),
+            ..snapshot
+        };
+        let mut own = plan.clone();
+        own.approval = Approval::OwnPullRequest;
+
+        let cases = [
+            (
+                "same head",
+                plan.clone(),
+                MergeSnapshot {
+                    auto_merge: auto_merge_on(Some("alice")),
+                    ..waiting.clone()
+                },
+            ),
+            (
+                "no head",
+                plan.clone(),
+                MergeSnapshot {
+                    head: String::new(),
+                    ..pushed(waiting.clone())
+                },
+            ),
+            (
+                "auto-merge off",
+                plan.clone(),
+                MergeSnapshot {
+                    auto_merge: None,
+                    ..pushed(waiting.clone())
+                },
+            ),
+            (
+                "someone else turned it on",
+                plan.clone(),
+                MergeSnapshot {
+                    auto_merge: auto_merge_on(Some("bob")),
+                    ..pushed(waiting.clone())
+                },
+            ),
+            (
+                "stale approvals dismissed",
+                plan.clone(),
+                pushed(needing_another_approval()),
+            ),
+            (
+                "merged",
+                plan.clone(),
+                MergeSnapshot {
+                    state: PullRequestState::Merged,
+                    ..pushed(waiting.clone())
+                },
+            ),
+            ("your own pull request", own, pushed(waiting.clone())),
+        ];
+        for (case, plan, snapshot) in cases {
+            assert_eq!(after_push(&snapshot, &plan), AfterPush::Nothing, "{case}");
+        }
+    }
+
     // The second step: what GitHub reports after the approval decides.
 
     #[test]
@@ -1292,7 +1542,7 @@ mod tests {
             rules: ReviewRules {
                 required_approvals: 1,
                 code_owner_review: true,
-                ..Default::default()
+                ..reviewing().rules
             },
             ..reviewing()
         };

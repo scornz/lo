@@ -92,7 +92,19 @@ fn plan(approval: Approval, likely: Ship) -> ApproveAndShip {
         head: HEAD.to_string(),
         approval,
         likely,
+        stale_approval_warning: false,
     })
+}
+
+/// The plan, with the confirmation warning that a later push could merge without a new review.
+fn warned(plan: ApproveAndShip) -> ApproveAndShip {
+    match plan {
+        ApproveAndShip::Plan(plan) => ApproveAndShip::Plan(Plan {
+            stale_approval_warning: true,
+            ..plan
+        }),
+        other => other,
+    }
 }
 
 /// The plan for a snapshot that gets one.
@@ -181,7 +193,7 @@ fn a_dependency_bump_waits_on_ci_and_an_approval() {
     );
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(
+        warned(plan(
             Approval::Approve,
             Ship::AutoMerge {
                 method: MergeMethod::Squash,
@@ -190,7 +202,7 @@ fn a_dependency_bump_waits_on_ci_and_an_approval() {
                     Blocker::Check(check_run("test (macos)", "QUEUED", None)),
                 ],
             }
-        )
+        ))
     );
 }
 
@@ -203,7 +215,10 @@ fn a_dependency_bump_with_ci_done_merges_once_github_agrees_after_you_approve() 
 
     assert_eq!(plan.approval, Approval::Approve);
     assert_eq!(plan.likely, Ship::Merge(MergeMethod::Squash));
-    assert_eq!(plan.wording(), "will likely merge");
+    assert_eq!(
+        plan.wording(),
+        "will likely merge. While auto-merge is on, a push could merge without a new review"
+    );
     assert_eq!(
         after_approving(&approved_by_you(&snapshot, "APPROVED", "CLEAN"), &plan),
         Ship::Merge(MergeMethod::Squash)
@@ -264,6 +279,8 @@ fn checkout_change() -> MergeSnapshot {
             required_approvals: 1,
             code_owner_review: true,
             conversation_resolution: true,
+            dismiss_stale_reviews: true,
+            last_push_approval: false,
         },
         required_checks: vec![check_run("ci", "COMPLETED", Some("SUCCESS"))],
         methods: AllowedMethods {
@@ -396,19 +413,19 @@ fn queued_repository() -> MergeSnapshot {
 #[test]
 fn a_queue_branch_joins_the_queue_once_you_approve() {
     let snapshot = queued_repository();
-    let plan = the_plan(&snapshot);
+    let queue = the_plan(&snapshot);
 
     assert_eq!(
         approve_and_ship(&snapshot),
-        ApproveAndShip::Plan(Plan {
-            head: HEAD.to_string(),
-            approval: Approval::Approve,
-            likely: Ship::Enqueue,
-        })
+        warned(plan(Approval::Approve, Ship::Enqueue))
     );
-    assert_eq!(plan.wording(), "will likely join the merge queue");
     assert_eq!(
-        after_approving(&approved_by_you(&snapshot, "APPROVED", "CLEAN"), &plan),
+        queue.wording(),
+        "will likely join the merge queue. While auto-merge is on, a push could merge without \
+         a new review"
+    );
+    assert_eq!(
+        after_approving(&approved_by_you(&snapshot, "APPROVED", "CLEAN"), &queue),
         Ship::Enqueue
     );
 }
@@ -459,7 +476,7 @@ fn a_queue_branch_with_another_approval_missing_joins_when_ready() {
 
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(
+        warned(plan(
             Approval::Approve,
             Ship::EnqueueWhenReady {
                 waiting_on: vec![Blocker::Approvals(MissingApprovals {
@@ -467,7 +484,7 @@ fn a_queue_branch_with_another_approval_missing_joins_when_ready() {
                     code_owners: vec![],
                 })],
             }
-        )
+        ))
     );
 }
 
@@ -514,12 +531,12 @@ fn your_pull_request_with_auto_merge_on_waits_for_ci() {
     );
     assert_eq!(
         approve_and_ship(&snapshot),
-        plan(
+        warned(plan(
             Approval::OwnPullRequest,
             Ship::AutoMergeAlreadyOn {
                 waiting_on: vec![Blocker::Check(commit_status("ci/build", "pending"))],
             }
-        )
+        ))
     );
 }
 
