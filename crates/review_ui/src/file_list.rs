@@ -49,7 +49,7 @@ pub struct FileEntry {
     /// whether it's binary.
     pub file: ChangedFile,
     pub change: FileChange,
-    /// GitHub's viewed mark for the account acting, or `None` when rozed doesn't know it: before
+    /// GitHub's viewed mark for the account acting, or `None` when Lo doesn't know it: before
     /// GitHub answered, or without signing in.
     pub viewed: Option<ViewedState>,
 }

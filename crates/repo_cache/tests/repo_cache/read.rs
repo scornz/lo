@@ -24,7 +24,7 @@ const SUBMODULE_AFTER: &str = "2222222222222222222222222222222222222222";
 /// - `link`, a symlink, replaced by a file;
 /// - `vendor/lib`, a submodule, moved to another commit.
 ///
-/// Every commit has a `.gitattributes` calling `*.txt` binary, which rozed ignores.
+/// Every commit has a `.gitattributes` calling `*.txt` binary, which Lo ignores.
 struct Fixture {
     server: Server,
     remote: Remote,
@@ -137,7 +137,7 @@ fn lists_what_changed_with_renames_binary_files_modes_and_submodules() {
             path: "vendor/lib".into(),
             oid: oid.parse().unwrap(),
             mode: FileMode::Submodule,
-            // A commit in another repository, which rozed never reads.
+            // A commit in another repository, which Lo never reads.
             size: None,
         })
     };

@@ -1,6 +1,6 @@
-//! rozed's command-line flags that return without opening a window.
+//! Lo's command-line flags that return without opening a window.
 //!
-//! Each child runs with the guard that stops a rozed started by another rozed, so a broken flag
+//! Each child runs with the guard that stops a Lo started by another Lo, so a broken flag
 //! fails the test instead of opening the app.
 
 use std::io::{Read as _, Write as _};
@@ -16,15 +16,15 @@ fn lo_command(args: &[&str]) -> Command {
     command
 }
 
-fn rozed(args: &[&str]) -> Output {
-    lo_command(args).output().expect("running rozed")
+fn lo(args: &[&str]) -> Output {
+    lo_command(args).output().expect("running Lo")
 }
 
 #[test]
 fn printenv_prints_the_environment_as_json() {
     // Zed's shell-environment capture runs `lo --printenv` inside the user's shell and reads
     // this JSON back.
-    let output = rozed(&["--printenv"]);
+    let output = lo(&["--printenv"]);
     assert!(output.status.success(), "{output:?}");
     let env: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&output.stdout).expect("--printenv printed a JSON object");
@@ -33,15 +33,15 @@ fn printenv_prints_the_environment_as_json() {
 
 #[test]
 fn version_prints_the_version() {
-    let output = rozed(&["--version"]);
+    let output = lo(&["--version"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        format!("rozed {}\n", env!("CARGO_PKG_VERSION"))
+        format!("Lo {}\n", env!("CARGO_PKG_VERSION"))
     );
 }
 
-/// Plays the running rozed's side of askpass: reads one prompt from the socket, which ends with a
+/// Plays the running Lo's side of askpass: reads one prompt from the socket, which ends with a
 /// NUL byte, and answers it.
 fn answer_one_prompt(
     listener: UnixListener,
@@ -91,7 +91,7 @@ fn askpass_relays_a_prompt_and_prints_the_answer() {
 
 #[test]
 fn askpass_without_a_socket_is_an_error() {
-    let output = rozed(&["--askpass="]);
+    let output = lo(&["--askpass="]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("--askpass needs a socket"), "{stderr}");
@@ -99,7 +99,7 @@ fn askpass_without_a_socket_is_an_error() {
 
 #[test]
 fn an_unknown_option_is_an_error() {
-    let output = rozed(&["--no-such-flag"]);
+    let output = lo(&["--no-such-flag"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
@@ -111,7 +111,7 @@ fn an_unknown_option_is_an_error() {
 #[test]
 fn lo_does_not_start_inside_lo() {
     for args in [&[][..], &["https://github.com/sharkdp/fd/pull/2212"]] {
-        let output = rozed(args);
+        let output = lo(args);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("not starting"), "{stderr}");
@@ -121,7 +121,7 @@ fn lo_does_not_start_inside_lo() {
 #[test]
 fn an_argument_that_isnt_a_pull_request_link_is_refused_with_usage() {
     for arg in ["https://github.com/sharkdp/fd/issues/1", "sharkdp/fd#2212"] {
-        let output = rozed(&[arg]);
+        let output = lo(&[arg]);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains(&format!("can't open `{arg}`")), "{stderr}");
@@ -136,14 +136,14 @@ fn render_preview(request: &[u8]) -> Output {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("running rozed");
+        .expect("running Lo");
     child.stdin.take().unwrap().write_all(request).unwrap();
     child.wait_with_output().unwrap()
 }
 
 #[test]
 fn render_preview_draws_an_image_and_never_starts_the_app() {
-    // The guard that stops a rozed started by another rozed is set, as it is for the helper:
+    // The guard that stops a Lo started by another Lo is set, as it is for the helper:
     // the helper must run anyway, and never open a window.
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="blue"/></svg>"#;
     let output = render_preview(&[b"svg 2 2\n".as_slice(), svg].concat());

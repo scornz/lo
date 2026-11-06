@@ -1,5 +1,5 @@
-//! Signing in with GitHub's device flow: rozed shows a code, the user enters it on GitHub, and
-//! rozed polls until GitHub hands over a token.
+//! Signing in with GitHub's device flow: Lo shows a code, the user enters it on GitHub, and
+//! Lo polls until GitHub hands over a token.
 //!
 //! GitHub answers every poll with HTTP 200 and an `error` field while it waits
 //! (`authorization_pending`), when polled too fast (`slow_down`, with a new, longer interval), and
@@ -22,13 +22,13 @@ use crate::user::{AuthenticatedUser, SCOPES};
 
 pub const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 pub const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-/// Where the user enters the code. rozed opens this rather than the `verification_uri` GitHub's
+/// Where the user enters the code. Lo opens this rather than the `verification_uri` GitHub's
 /// answer names, so an answer from anything posing as GitHub can't open another page or app.
 pub const VERIFICATION_URL: &str = "https://github.com/login/device";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// GitHub's minimum gap between polls.
 const MIN_INTERVAL: Duration = Duration::from_secs(5);
-/// The longest gap between polls rozed accepts. GitHub's are seconds; a bigger number is a
+/// The longest gap between polls Lo accepts. GitHub's are seconds; a bigger number is a
 /// broken answer, and left as is would overflow the clock.
 const MAX_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// The longest a code is waited for. GitHub's codes last 15 minutes.
@@ -290,7 +290,7 @@ fn backoff(wait: Duration, failures: u32) -> Duration {
     doubled.min(MAX_BACKOFF.max(wait))
 }
 
-/// Reads who a new token belongs to (`GET /user`) and checks it has every scope rozed needs.
+/// Reads who a new token belongs to (`GET /user`) and checks it has every scope Lo needs.
 pub async fn check_token(
     http: &Arc<dyn HttpClient>,
     token: Token,

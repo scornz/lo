@@ -10,7 +10,7 @@
 //! The local copy is `repo_cache`'s. No changed file is left out. Generated files, lockfiles and
 //! files with no changes to their text start collapsed, and files with more than 5,000 changed
 //! lines or over 1 MiB start collapsed without loading, until a key loads them; each header says
-//! why. An image shows before and after; any other binary file says it changed. A file rozed
+//! why. An image shows before and after; any other binary file says it changed. A file Lo
 //! can't read gets a placeholder saying why, and the title counts the ones not shown. A submodule
 //! shows "Subproject commit a" against "Subproject commit b". A header shows a rename as
 //! "old →" before the new path, and a badge marks type and mode changes, names that aren't UTF-8
@@ -134,7 +134,7 @@ pub async fn open(
 }
 
 /// Shows the pull request from the local copy, without GitHub, when GitHub can't be reached
-/// (design §11 "Offline"): the head rozed saved as GitHub's, `headRefOid`, if the copy fetched
+/// (design §11 "Offline"): the head Lo saved as GitHub's, `headRefOid`, if the copy fetched
 /// it, against the saved base (see [`copy_offline`]). Returns whether the copy had them;
 /// without them, it shows nothing. It reads only what's in the clone: no fetch, no download, no
 /// write, and no checkout or language servers.
@@ -205,7 +205,7 @@ pub async fn open_offline(
 const FIRST_RETRY: Duration = Duration::from_secs(5);
 const LAST_RETRY: Duration = Duration::from_secs(5 * 60);
 
-/// How many times a copy that fails for a reason rozed doesn't know is tried before rozed stops
+/// How many times a copy that fails for a reason Lo doesn't know is tried before Lo stops
 /// and offers to try again. One that fails on the network, or on a rate limit, is tried for as long
 /// as the tab is open.
 const UNKNOWN_TRIES: usize = 5;
@@ -213,7 +213,7 @@ const UNKNOWN_TRIES: usize = 5;
 /// Copies the pull request locally with `copy_once`, which starts one try and sends git's
 /// progress, showing that progress in `tab`. A copy that fails for a reason that may pass, such as
 /// the network, is tried again, waiting longer each time, while a banner in the tab says why. One
-/// that keeps failing for a reason rozed doesn't know stops after [`UNKNOWN_TRIES`] until the
+/// that keeps failing for a reason Lo doesn't know stops after [`UNKNOWN_TRIES`] until the
 /// banner's button asks for another try. Any other failure is returned.
 pub(crate) async fn copy_with_retries(
     tab: &WeakEntity<PrTab>,
@@ -336,12 +336,12 @@ fn latest(updates: &mut mpsc::UnboundedReceiver<CopyProgress>) -> Option<CopyPro
 enum Retry {
     /// For as long as it takes: the network failed, or GitHub is limiting requests, which passes.
     Always,
-    /// A few times: the fetch failed for a reason rozed doesn't know.
+    /// A few times: the fetch failed for a reason Lo doesn't know.
     Few,
 }
 
 /// Whether a failed copy may work if tried again, and how often to try: a fetch that failed on
-/// the network, on a rate limit, or for a reason rozed doesn't know.
+/// the network, on a rate limit, or for a reason Lo doesn't know.
 fn retry(error: &anyhow::Error) -> Option<Retry> {
     use repo_cache::{Error, FetchFailure};
     error
@@ -389,7 +389,7 @@ pub(crate) async fn show_local_copy(
                     BannerKind::AttributesUnread,
                     Severity::Info,
                     format!(
-                        "rozed couldn't read this pull request's .gitattributes, so files it \
+                        "Lo couldn't read this pull request's .gitattributes, so files it \
                          marks generated start expanded: {why}"
                     ),
                     cx,
@@ -560,7 +560,7 @@ pub(crate) async fn show_local_copy(
                     BannerKind::CheckoutFailed,
                     Severity::Warning,
                     format!(
-                        "rozed couldn't check {link} out, so language servers are off and every \
+                        "Lo couldn't check {link} out, so language servers are off and every \
                          file shows from git: {error:#}"
                     ),
                     cx,
@@ -1287,7 +1287,7 @@ pub(crate) enum Content {
         old_text: Option<String>,
         new: NewSide,
     },
-    /// Text that stands in for a file rozed doesn't compare: a binary file that isn't an image, a
+    /// Text that stands in for a file Lo doesn't compare: a binary file that isn't an image, a
     /// file too large to load at once, or one it couldn't read.
     Placeholder {
         text: String,
@@ -1314,7 +1314,7 @@ pub(crate) struct Warning {
     pub(crate) detail: SharedString,
 }
 
-/// The header label of a file rozed couldn't show.
+/// The header label of a file Lo couldn't show.
 const NOT_SHOWN: &str = "Not shown";
 
 impl FilePlan {
@@ -1366,9 +1366,9 @@ impl FilePlan {
         Self {
             warning: Some(Warning {
                 label: NOT_SHOWN.into(),
-                detail: format!("rozed couldn't show this file: {error:#}").into(),
+                detail: format!("Lo couldn't show this file: {error:#}").into(),
             }),
-            ..Self::placeholder(format!("(rozed couldn't show this file: {error:#})"), false)
+            ..Self::placeholder(format!("(Lo couldn't show this file: {error:#})"), false)
         }
     }
 }
@@ -1517,7 +1517,7 @@ fn try_plan_file(
         Err(error) => from_git(Some(Warning {
             label: "Checkout unchecked: shown from git".into(),
             detail: format!(
-                "rozed couldn't hash the checkout's copy of this file ({error:#}), so this shows \
+                "Lo couldn't hash the checkout's copy of this file ({error:#}), so this shows \
                  the head's text from git, without language servers."
             )
             .into(),
@@ -2375,7 +2375,7 @@ pub(crate) mod tests {
         let banner = |head_source| head_banner(&link, &oid('a'), &head_source);
 
         assert_eq!(banner(HeadSource::PullRef), None);
-        // GitHub moves refs/pull/<n>/head a moment after a push, and rozed shows the API's head.
+        // GitHub moves refs/pull/<n>/head a moment after a push, and Lo shows the API's head.
         assert_eq!(banner(HeadSource::Api { pull_ref: oid('b') }), None);
         assert_eq!(
             banner(HeadSource::PullRefNotApi { api: oid('c') }),
@@ -2551,7 +2551,7 @@ pub(crate) mod tests {
             panic!("expected one file");
         };
 
-        let why = "5001 lines added and 0 deleted, more than the 5000 rozed loads at once";
+        let why = "5001 lines added and 0 deleted, more than the 5000 Lo loads at once";
         assert_eq!(
             plan.content,
             Content::Placeholder {
@@ -2600,7 +2600,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             text,
-            "(not loaded: 2.0 MiB, more than the 1 MiB rozed loads at once)"
+            "(not loaded: 2.0 MiB, more than the 1 MiB Lo loads at once)"
         );
         assert!(plan.collapsed.as_ref().unwrap().is_large());
         let [(_, loaded)] = &copied.plans_loading(true)[..] else {
@@ -2885,7 +2885,7 @@ pub(crate) mod tests {
             panic!("{plan:?}");
         };
         assert!(
-            text.starts_with("(rozed couldn't show this file: reading the head's version"),
+            text.starts_with("(Lo couldn't show this file: reading the head's version"),
             "{text}"
         );
         let warning = plan.warning.unwrap();
@@ -3231,9 +3231,9 @@ pub(crate) mod tests {
                 .args(args)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_AUTHOR_NAME", "rozed test")
+                .env("GIT_AUTHOR_NAME", "Lo test")
                 .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
-                .env("GIT_COMMITTER_NAME", "rozed test")
+                .env("GIT_COMMITTER_NAME", "Lo test")
                 .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

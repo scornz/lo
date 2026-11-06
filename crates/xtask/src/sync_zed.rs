@@ -1,6 +1,6 @@
-//! `cargo xtask sync-zed`: copies the Cargo settings rozed needs from Zed's tree.
+//! `cargo xtask sync-zed`: copies the Cargo settings Lo needs from Zed's tree.
 //!
-//! Cargo ignores a dependency's `[patch]`, `[profile]` and `.cargo/config.toml`, so rozed keeps
+//! Cargo ignores a dependency's `[patch]`, `[profile]` and `.cargo/config.toml`, so Lo keeps
 //! copies of Zed's in its own root, between generated-section markers:
 //!
 //! - `Cargo.toml`: Zed's `[patch.*]` sections, with `path` entries rewritten to point into
@@ -8,7 +8,7 @@
 //! - `.cargo/config.toml`: the parts of Zed's that apply on macOS.
 //! - `rust-toolchain.toml`: Zed's toolchain channel.
 //!
-//! Patches and per-package profile settings for crates that aren't in rozed's `Cargo.lock` are
+//! Patches and per-package profile settings for crates that aren't in Lo's `Cargo.lock` are
 //! left out, because cargo warns about each one on every build.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,7 +18,7 @@ use std::process::{Command, ExitCode, Stdio};
 use anyhow::{Context as _, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
-/// Zed's checkout, relative to rozed's root.
+/// Zed's checkout, relative to Lo's root.
 pub const ZED_DIR: &str = "third_party/zed";
 
 /// Top-level keys of Zed's `Cargo.toml`: what's copied, and what's deliberately not.
@@ -37,16 +37,16 @@ const CONFIG_SKIPPED: &[&str] = &["alias"];
 const USAGE: &str = "\
 usage: cargo xtask sync-zed [--check | --seed-lock]
 
-Copies the Cargo settings rozed needs from third_party/zed into rozed's root: Zed's [patch] and
+Copies the Cargo settings Lo needs from third_party/zed into Lo's root: Zed's [patch] and
 [profile] sections into Cargo.toml, the macOS parts of its .cargo/config.toml, and its toolchain
 channel into rust-toolchain.toml.
 
   --check      change nothing; exit 1, naming what differs, if the copies are stale
-  --seed-lock  first merge Zed's Cargo.lock into rozed's, so packages Zed uses resolve to the
-               versions Zed tested and rozed's other packages keep their versions; then sync.
+  --seed-lock  first merge Zed's Cargo.lock into Lo's, so packages Zed uses resolve to the
+               versions Zed tested and Lo's other packages keep their versions; then sync.
                Run it after a Zed bump or after adding a Zed crate dependency.";
 
-/// One file rozed keeps in sync with Zed: where it lives and what it should contain.
+/// One file Lo keeps in sync with Zed: where it lives and what it should contain.
 struct Synced {
     path: &'static str,
     current: String,
@@ -84,7 +84,7 @@ enum Mode {
     SeedLock,
 }
 
-/// rozed's root: two levels above this crate's manifest.
+/// Lo's root: two levels above this crate's manifest.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -107,10 +107,10 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
         Mode::Check => {
             let stale = check(&compute(root)?);
             if stale.is_empty() {
-                println!("sync-zed: rozed's copies of Zed's Cargo settings are up to date.");
+                println!("sync-zed: Lo's copies of Zed's Cargo settings are up to date.");
                 Ok(true)
             } else {
-                eprintln!("sync-zed: rozed's copies of Zed's Cargo settings are stale:");
+                eprintln!("sync-zed: Lo's copies of Zed's Cargo settings are stale:");
                 for line in stale {
                     eprintln!("  {line}");
                 }
@@ -128,9 +128,9 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
                 &read(root, "Cargo.lock")?,
             )?;
             std::fs::write(root.join("Cargo.lock"), merged).context("writing Cargo.lock")?;
-            println!("sync-zed: merged Zed's Cargo.lock into rozed's.");
+            println!("sync-zed: merged Zed's Cargo.lock into Lo's.");
             // Against the merged lockfile nothing is pruned yet. Let cargo resolve with every patch in
-            // place, which drops what rozed doesn't use from the lockfile, then prune against it.
+            // place, which drops what Lo doesn't use from the lockfile, then prune against it.
             // Pruning changes no package, so a last resolve only clears the pruned patches from
             // the lockfile's `[[patch.unused]]` list.
             write(root, &compute(root)?)?;
@@ -142,12 +142,12 @@ fn run_mode(root: &Path, mode: Mode) -> Result<bool> {
     }
 }
 
-/// Zed's `Cargo.lock`, plus rozed's entries for packages Zed's doesn't have. Resolving against it
+/// Zed's `Cargo.lock`, plus Lo's entries for packages Zed's doesn't have. Resolving against it
 /// keeps each locked version that still fits, so packages Zed uses get the versions Zed tested and
-/// rozed's other dependencies keep their pins instead of moving to the newest release.
-fn merge_locks(zed: &str, rozed: &str) -> Result<String> {
+/// Lo's other dependencies keep their pins instead of moving to the newest release.
+fn merge_locks(zed: &str, lo: &str) -> Result<String> {
     let mut merged: DocumentMut = zed.parse().context("parsing Zed's Cargo.lock")?;
-    let rozed: DocumentMut = rozed.parse().context("parsing Cargo.lock")?;
+    let lo: DocumentMut = lo.parse().context("parsing Cargo.lock")?;
     let zed_packages = lock_packages(zed)?;
     let Some(packages) = merged
         .get_mut("package")
@@ -155,7 +155,7 @@ fn merge_locks(zed: &str, rozed: &str) -> Result<String> {
     else {
         bail!("Zed's Cargo.lock lists no packages");
     };
-    if let Some(lo_packages) = rozed.get("package").and_then(Item::as_array_of_tables) {
+    if let Some(lo_packages) = lo.get("package").and_then(Item::as_array_of_tables) {
         for package in lo_packages {
             let name = package.get("name").and_then(Item::as_str);
             if name.is_some_and(|name| !zed_packages.contains(name)) {
@@ -166,8 +166,8 @@ fn merge_locks(zed: &str, rozed: &str) -> Result<String> {
     Ok(merged.to_string())
 }
 
-/// Runs `cargo metadata`, which updates `Cargo.lock` to rozed's graph. It runs in rozed's root, so
-/// cargo reads rozed's `.cargo/config.toml`.
+/// Runs `cargo metadata`, which updates `Cargo.lock` to Lo's graph. It runs in Lo's root, so
+/// cargo reads Lo's `.cargo/config.toml`.
 fn resolve(root: &Path) -> Result<()> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let status = Command::new(cargo)
@@ -373,7 +373,7 @@ fn check_known_keys(table: &Table, file: &str, copied: &[&str], skipped: &[&str]
         if !copied.contains(&key) && !skipped.contains(&key) {
             bail!(
                 "{ZED_DIR}/{file} has a section `{key}` that sync-zed doesn't know. Decide whether \
-                 rozed needs it and add it to the copied or skipped list in \
+                 Lo needs it and add it to the copied or skipped list in \
                  crates/xtask/src/sync_zed.rs."
             );
         }
@@ -381,7 +381,7 @@ fn check_known_keys(table: &Table, file: &str, copied: &[&str], skipped: &[&str]
     Ok(())
 }
 
-/// Zed's `[patch.*]` and `[profile.*]` sections as rozed's root needs them.
+/// Zed's `[patch.*]` and `[profile.*]` sections as Lo's root needs them.
 fn manifest_block(zed_manifest: &str, packages: &BTreeSet<String>) -> Result<String> {
     let zed: DocumentMut = zed_manifest.parse().context("parsing Zed's Cargo.toml")?;
     check_known_keys(
@@ -489,7 +489,7 @@ fn config_block(zed_config: &str) -> Result<String> {
     Ok(out.to_string())
 }
 
-/// rozed's `rust-toolchain.toml` with Zed's channel. Everything else in it is rozed's.
+/// Lo's `rust-toolchain.toml` with Zed's channel. Everything else in it is Lo's.
 fn sync_toolchain(zed_toolchain: &str, toolchain: &str) -> Result<String> {
     let zed: DocumentMut = zed_toolchain
         .parse()
@@ -529,9 +529,9 @@ mod tests {
 members = ["crates/zed"]
 
 [patch.crates-io]
-# Kept: rozed uses it.
+# Kept: Lo uses it.
 notify = { git = "https://github.com/zed-industries/notify", rev = "abc" }
-# Pruned: nothing in rozed uses it.
+# Pruned: nothing in Lo uses it.
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "def" }
 # Kept, with its path rewritten.
 scratch = { path = "tooling/patches/scratch" }
@@ -557,7 +557,7 @@ zed = { codegen-units = 16 }
             block,
             r#"
 [patch.crates-io]
-# Kept: rozed uses it.
+# Kept: Lo uses it.
 notify = { git = "https://github.com/zed-industries/notify", rev = "abc" }
 # Kept, with its path rewritten.
 scratch = { path = "third_party/zed/tooling/patches/scratch" }
@@ -720,14 +720,14 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
     #[test]
     fn sync_toolchain_sets_zeds_channel_and_keeps_comments() {
         let zed = "[toolchain]\nchannel = \"1.99.0\"\ntargets = [\"wasm32-wasip2\"]\n";
-        let rozed = "# Zed's toolchain.\n[toolchain]\nchannel = \"1.98.1\" # pinned\nprofile = \"minimal\"\n";
+        let lo = "# Zed's toolchain.\n[toolchain]\nchannel = \"1.98.1\" # pinned\nprofile = \"minimal\"\n";
         assert_eq!(
-            sync_toolchain(zed, rozed).unwrap(),
+            sync_toolchain(zed, lo).unwrap(),
             "# Zed's toolchain.\n[toolchain]\nchannel = \"1.99.0\" # pinned\nprofile = \"minimal\"\n"
         );
         assert_eq!(
-            sync_toolchain(zed, &sync_toolchain(zed, rozed).unwrap()).unwrap(),
-            sync_toolchain(zed, rozed).unwrap()
+            sync_toolchain(zed, &sync_toolchain(zed, lo).unwrap()).unwrap(),
+            sync_toolchain(zed, lo).unwrap()
         );
     }
 
@@ -796,13 +796,13 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
     #[test]
     fn merge_locks_takes_zeds_versions_and_keeps_los_own() {
         let zed = lock(&[("shared", "1.1.0", true), ("zed_only", "2.0.0", true)]);
-        let rozed = lock(&[
+        let lo = lock(&[
             ("app", "0.1.0", false),
             ("shared", "1.0.0", true),
             ("own", "1.0.0", true),
         ]);
         assert_eq!(
-            locked(&merge_locks(&zed, &rozed).unwrap()),
+            locked(&merge_locks(&zed, &lo).unwrap()),
             pairs(&[
                 ("app", "0.1.0"),
                 ("own", "1.0.0"),
@@ -842,8 +842,8 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
 
     #[test]
     fn seed_lock_keeps_the_pin_of_a_dependency_zed_doesnt_have() {
-        // rozed's `app` depends on `shared`, which Zed uses too, and on `own`, which Zed doesn't.
-        // Both have a newer release than rozed's lockfile pins.
+        // Lo's `app` depends on `shared`, which Zed uses too, and on `own`, which Zed doesn't.
+        // Both have a newer release than Lo's lockfile pins.
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
         for (name, version) in [

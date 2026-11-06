@@ -1,10 +1,10 @@
 //! Approve and ship, `⌘⇧⏎` (design §9, "Approve and ship"; §11, "Acting on what you saw").
 //!
-//! It runs in two steps, so what it does after approving rests on GitHub's verdict, not rozed's
+//! It runs in two steps, so what it does after approving rests on GitHub's verdict, not Lo's
 //! prediction:
 //!
 //! 1. [`approve_and_ship`], on the snapshot read right before it runs, refuses or returns a
-//!    [`Plan`]: the head to approve, whether to approve it, and what rozed expects to happen next,
+//!    [`Plan`]: the head to approve, whether to approve it, and what Lo expects to happen next,
 //!    which only words the confirmation.
 //! 2. Once the approval lands, the caller reads the pull request again and calls
 //!    [`after_approving`] with that snapshot and the plan. It merges or joins the queue only when
@@ -19,7 +19,7 @@ use super::{
 /// Approve and ship's first step: nothing, and why, or the plan its one confirmation lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApproveAndShip {
-    /// Nothing: someone pushed since the revision on screen. rozed shows the new revision, with
+    /// Nothing: someone pushed since the revision on screen. Lo shows the new revision, with
     /// the changes since the one you saw.
     HeadMoved { on_screen: String, head: String },
     /// Nothing: GitHub's head or the head on screen is missing, so nothing would make GitHub check
@@ -38,7 +38,7 @@ pub enum ApproveAndShip {
     Plan(Plan),
 }
 
-/// What approve and ship approves, and what rozed expects to happen next.
+/// What approve and ship approves, and what Lo expects to happen next.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
     /// The head on screen, which is GitHub's head too. Approving approves it. Merging, joining the
@@ -47,17 +47,17 @@ pub struct Plan {
     pub head: String,
     /// The first step.
     pub approval: Approval,
-    /// What rozed expects [`after_approving`] to return, from the snapshot as it expects GitHub to
+    /// What Lo expects [`after_approving`] to return, from the snapshot as it expects GitHub to
     /// report it once you've approved. It only words the confirmation ([`Plan::wording`]): GitHub
-    /// can still block the merge for a rule rozed can't see, and then approve and ship turns on
+    /// can still block the merge for a rule Lo can't see, and then approve and ship turns on
     /// auto-merge instead of merging.
     pub likely: Ship,
     /// Whether the confirmation warns that a push before it merges could merge without a new
     /// review. GitHub keeps auto-merge on when someone with write access pushes, so it warns when
     /// the next step may be auto-merge and the base branch's rules don't want a new approval after
     /// a push ([`ReviewRules::push_needs_new_approval`]). The next step may be auto-merge when it's
-    /// likely, and also when a merge is likely only because rozed expects GitHub to stop blocking
-    /// once you've approved. While rozed runs, [`after_push`] turns off the auto-merge approve and
+    /// likely, and also when a merge is likely only because Lo expects GitHub to stop blocking
+    /// once you've approved. While Lo runs, [`after_push`] turns off the auto-merge approve and
     /// ship turned on when such a push follows your approval.
     ///
     /// [`ReviewRules::push_needs_new_approval`]: super::ReviewRules::push_needs_new_approval
@@ -171,7 +171,7 @@ impl Approval {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ship {
     /// Merge it with this method. [`after_approving`] returns it only when GitHub reports the pull
-    /// request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and nothing rozed sees blocks it, so
+    /// request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and nothing Lo sees blocks it, so
     /// it never relies on an admin's bypass.
     Merge(MergeMethod),
     /// Add it to the base branch's merge queue, on the same terms as [`Ship::Merge`], or when
@@ -179,7 +179,7 @@ pub enum Ship {
     Enqueue,
     /// Turn on auto-merge with this method, so GitHub merges it once what it's waiting on clears:
     /// `waiting_on`, every blocker left, each one waiting clears. A `BLOCKED` can also hide a rule
-    /// rozed can't see, which auto-merge waits for too.
+    /// Lo can't see, which auto-merge waits for too.
     ///
     /// If GitHub refuses because the pull request can merge already ("clean status" or "unstable
     /// status"), read it again and call [`after_approving`] again. Never merge on any other
@@ -205,10 +205,10 @@ pub enum Ship {
 /// Why approve and ship stops.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stop {
-    /// GitHub's head isn't the one approved: someone pushed after the approval. rozed shows the new
+    /// GitHub's head isn't the one approved: someone pushed after the approval. Lo shows the new
     /// revision.
     HeadMoved { approved: String, head: String },
-    /// GitHub reported no head, so rozed can't tell that it's still the one approved.
+    /// GitHub reported no head, so Lo can't tell that it's still the one approved.
     HeadUnknown,
     /// Something waiting won't fix blocks it. These are every blocker, those waiting won't fix
     /// first, as [`blockers`](super::blockers) orders them. With `auto_merge`, auto-merge is on, so
@@ -237,7 +237,7 @@ pub enum Stop {
 ///   GitHub records that you approved what you saw, and so is one of that head that was
 ///   dismissed, which the plan says. When GitHub doesn't let you approve someone else's pull
 ///   request, it does nothing.
-/// - [`Plan::likely`] is what [`after_approving`] would return if GitHub reported what rozed
+/// - [`Plan::likely`] is what [`after_approving`] would return if GitHub reported what Lo
 ///   expects once you've approved. It's only a prediction, for the confirmation's wording.
 pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
     match snapshot.state {
@@ -310,11 +310,11 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
 /// - It does nothing more when auto-merge is on.
 /// - It merges with the preferred method, or joins the queue on a branch that requires one, only
 ///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, or
-///   `BEHIND` on a queue branch) and nothing rozed sees blocks it. In those states GitHub's rules
+///   `BEHIND` on a queue branch) and nothing Lo sees blocks it. In those states GitHub's rules
 ///   are met, so approve and ship never merges past a rule, even for an admin GitHub would let
 ///   bypass one.
 /// - Otherwise only things waiting will fix block it, and it turns on auto-merge, or merge when
-///   ready on a queue branch. When rozed's explanation of a `BLOCKED` is only partial, auto-merge
+///   ready on a queue branch. When Lo's explanation of a `BLOCKED` is only partial, auto-merge
 ///   waits for what it can't see too.
 pub fn after_approving(snapshot: &MergeSnapshot, plan: &Plan) -> Ship {
     if snapshot.head.is_empty() {
@@ -346,7 +346,7 @@ pub enum AfterPush {
 /// GitHub keeps auto-merge on when someone with write access pushes. Unless the base branch's
 /// rules want a new approval after a push ([`ReviewRules::push_needs_new_approval`]), the new head
 /// then merges with the approvals already given, yours included. So when GitHub's head isn't the
-/// one you approved, and auto-merge is still on, rozed turns it off and says so. It leaves it on
+/// one you approved, and auto-merge is still on, Lo turns it off and says so. It leaves it on
 /// when you approved nothing (your own pull request), when someone else has turned it on since,
 /// and once the pull request is merged or closed.
 ///
@@ -376,7 +376,7 @@ fn same_commit(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// What to do once approved, from the snapshot as GitHub reports it, or as rozed expects it to.
+/// What to do once approved, from the snapshot as GitHub reports it, or as Lo expects it to.
 fn ship(snapshot: &MergeSnapshot) -> Ship {
     if snapshot.queue.in_queue {
         return Ship::AlreadyQueued;
@@ -436,15 +436,15 @@ fn github_lets_it_merge(snapshot: &MergeSnapshot) -> bool {
     }
 }
 
-/// The snapshot as rozed expects GitHub to report it after you approve the head on screen. It's
+/// The snapshot as Lo expects GitHub to report it after you approve the head on screen. It's
 /// only for [`Plan::likely`].
 ///
 /// - Your approval replaces your latest review, and GitHub drops the request for your review.
 /// - It covers the code-owner requests for you and for your teams, when it counts.
 /// - GitHub's review decision stands unless your approval is provably what changes it. Approved
 ///   stays approved, and no decision stays none. Changes requested stays, unless you were the only
-///   one rozed sees requesting them. Then, as from review required, it's review required while
-///   approvals are missing, or while GitHub required a review rozed couldn't attribute, which rozed
+///   one Lo sees requesting them. Then, as from review required, it's review required while
+///   approvals are missing, or while GitHub required a review Lo couldn't attribute, which Lo
 ///   assumes your approval doesn't give; else approved.
 /// - A `BLOCKED` merge state that the snapshot explained becomes `CLEAN`, so what still blocks the
 ///   merge comes from the other fields. One it didn't explain stays.
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn changes_requested_by_someone_lo_cannot_name_are_expected_to_stay() {
-        // Carol's request counts for GitHub, but rozed reads her as without write access: she
+        // Carol's request counts for GitHub, but Lo reads her as without write access: she
         // lost it after reviewing, or her review is past the page fetched.
         let snapshot = MergeSnapshot {
             review_decision: Some(ReviewDecision::ChangesRequested),
@@ -1078,7 +1078,7 @@ mod tests {
     #[test]
     fn github_approving_is_expected_to_stand_after_your_approval() {
         // Erin and Grace own the same files. Erin approved, which covers them, but GitHub keeps
-        // Grace's request, so rozed alone would read her approval as missing.
+        // Grace's request, so Lo alone would read her approval as missing.
         let snapshot = MergeSnapshot {
             merge_state: MergeStateStatus::Clean,
             review_decision: Some(ReviewDecision::Approved),
@@ -1841,7 +1841,7 @@ mod tests {
 
     #[test]
     fn a_read_after_github_refuses_auto_merge_on_a_clean_pull_request_merges() {
-        // rozed read UNKNOWN just before GitHub finished working out mergeability, so it turned on
+        // Lo read UNKNOWN just before GitHub finished working out mergeability, so it turned on
         // auto-merge, and GitHub refused with "clean status". The read after that refusal merges.
         let plan = the_plan(&reviewing());
         let stale = MergeSnapshot {

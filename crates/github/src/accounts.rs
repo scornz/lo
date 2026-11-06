@@ -21,7 +21,7 @@ use crate::poll::RequestQueue;
 use crate::token::Token;
 use crate::user::AuthenticatedUser;
 
-/// Every account rozed is signed in to, as a GPUI model. Views observe it to redraw when an
+/// Every account Lo is signed in to, as a GPUI model. Views observe it to redraw when an
 /// account is added, removed or signed out.
 ///
 /// Its clients handle a `401` themselves: GitHub refusing a token signs the account out, after
@@ -72,7 +72,7 @@ pub enum AccountChoice {
     Ask(Vec<String>),
     /// The account remembered for the repo, its own or its owner's, can't check the repo just
     /// now: it's signed out, its token can't be read, or GitHub didn't answer yes or "not
-    /// found". The problems say why. rozed doesn't fall back to another account, which would
+    /// found". The problems say why. Lo doesn't fall back to another account, which would
     /// review as someone else.
     Unavailable(String),
     /// No signed-in account can see it, as far as GitHub said.
@@ -155,7 +155,7 @@ fn no_answer(mut unanswered: Vec<(String, GithubError)>, checked: usize) -> anyh
         error
     } else {
         error.context(format!(
-            "{login}'s check got no answer, so rozed can't tell yet which account to use"
+            "{login}'s check got no answer, so Lo can't tell yet which account to use"
         ))
     }
 }
@@ -324,7 +324,7 @@ impl Accounts {
                     .await
                     .context("storing the token")?;
                 if let Err(error) = db.save_account(account.clone()).await {
-                    // A login rozed already had keeps its row, which the new token still fits.
+                    // A login Lo already had keeps its row, which the new token still fits.
                     if existing.is_none()
                         && let Err(delete_error) = store.delete_credentials(&server, cx).await
                     {
@@ -363,7 +363,7 @@ impl Accounts {
         cx.background_spawn(async move {
             result
                 .await
-                .unwrap_or_else(|_| Err(anyhow!("rozed quit while adding the account")))
+                .unwrap_or_else(|_| Err(anyhow!("Lo quit while adding the account")))
         })
     }
 
@@ -453,7 +453,7 @@ impl Accounts {
                     None => executor
                         .spawn(async { gh_import::find_gh() })
                         .await
-                        .context("rozed couldn't find gh")?,
+                        .context("Lo couldn't find gh")?,
                 };
                 let (user, new_token) =
                     gh_import::import_account(http, gh, login.clone(), executor).await?;
@@ -614,7 +614,7 @@ impl Accounts {
                     && !problems.iter().any(|(problem, _)| is_chosen(problem))
                 {
                     let message = format!(
-                        "{login} is signed out; sign in again from Accounts… in the rozed menu"
+                        "{login} is signed out; sign in again from Accounts… in the Lo menu"
                     );
                     problems.push((login.clone(), GithubError::Unauthorized { message }));
                 }
@@ -1507,7 +1507,7 @@ esac
             "https://github.com/orgs/acme/sso?authorization_request=X"
         );
 
-        // When the owner's account is the one that can't check, rozed doesn't quietly open the
+        // When the owner's account is the one that can't check, Lo doesn't quietly open the
         // repo with another.
         accounts
             .update(cx, |accounts, cx| {

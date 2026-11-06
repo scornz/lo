@@ -1,4 +1,4 @@
-//! rozed's GraphQL queries, typed from GitHub's schema.
+//! Lo's GraphQL queries, typed from GitHub's schema.
 //!
 //! Each query is a `.graphql` file in `crates/github/graphql/`, and `graphql_client` generates a
 //! module of Rust types for it from `graphql/schema.graphql`. Generated fields GitHub deprecates
@@ -21,7 +21,7 @@ type GitObjectID = String;
 
 /// How many items a page asks for: GitHub's maximum.
 pub const PAGE_SIZE: i64 = 100;
-/// The most open pull requests rozed reads from one repository.
+/// The most open pull requests Lo reads from one repository.
 pub const MAX_OPEN_PULL_REQUESTS: usize = 1000;
 /// How many times a pull request's files are read again from the start when its head moves
 /// while they're paged through.
@@ -176,7 +176,7 @@ impl Pager {
 }
 
 /// A viewed-mark mutation's answer: GitHub names the pull request it changed. Without errors, a
-/// missing one is an answer rozed doesn't understand, so it isn't taken as done.
+/// missing one is an answer Lo doesn't understand, so it isn't taken as done.
 fn marked<T>(pull_request: Option<T>) -> Result<(), GithubError> {
     pull_request.map(|_| ()).ok_or_else(|| {
         GithubError::Decode("GitHub didn't say which pull request it changed".into())

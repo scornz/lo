@@ -1,4 +1,4 @@
-; rozed's additions to tree-sitter-rust's tags query, for what it leaves out. The grammar's own
+; Lo's additions to tree-sitter-rust's tags query, for what it leaves out. The grammar's own
 ; patterns come first, so they win when both tag the same name.
 
 ; Trait methods without a body.

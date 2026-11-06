@@ -1,4 +1,4 @@
-//! Viewed marks as the tab shows them: GitHub's, with the marks rozed is setting on top until
+//! Viewed marks as the tab shows them: GitHub's, with the marks Lo is setting on top until
 //! GitHub has answered (design §6 "Viewed marks").
 //!
 //! `e` marks the current file viewed, or clears the mark of a file that's viewed. The new mark
@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use github::GithubError;
 use review::revisions::{FileComparison, Revisions, ViewedState, viewed_file_comparison};
 
-/// GitHub's viewed marks, and the ones rozed is setting.
+/// GitHub's viewed marks, and the ones Lo is setting.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ViewedMarks {
     /// GitHub's marks for the account acting, by path, as last read.
@@ -18,7 +18,7 @@ pub struct ViewedMarks {
     /// Every path GitHub lists for the pull request, when it listed them all. GitHub caps a pull
     /// request's files, and leaves out what it can't show.
     listed: Option<HashSet<String>>,
-    /// Marks set in rozed whose write hasn't finished, by path.
+    /// Marks set in Lo whose write hasn't finished, by path.
     pending: HashMap<String, Pending>,
     /// Counts the toggles, so a write that finishes after a later toggle of the same file doesn't
     /// undo it.
@@ -54,7 +54,7 @@ impl Toggle {
 }
 
 impl ViewedMarks {
-    /// The mark `path` shows: the one rozed is setting, or GitHub's. `None` when GitHub hasn't
+    /// The mark `path` shows: the one Lo is setting, or GitHub's. `None` when GitHub hasn't
     /// said.
     pub fn state(&self, path: &str) -> Option<ViewedState> {
         match self.pending.get(path) {
@@ -79,7 +79,7 @@ impl ViewedMarks {
         shown
     }
 
-    /// Takes GitHub's marks. Marks rozed is setting still show over them. Returns whether
+    /// Takes GitHub's marks. Marks Lo is setting still show over them. Returns whether
     /// GitHub's marks changed.
     pub fn set_github(&mut self, marks: HashMap<String, ViewedState>) -> bool {
         if marks == self.github {
@@ -187,13 +187,13 @@ pub fn write_failed(toggle: &Toggle, login: &str, error: &GithubError) -> String
         format!("clear the viewed mark on {}", toggle.path)
     };
     let why = match error {
-        GithubError::Network(_) => "rozed can't reach GitHub".to_string(),
+        GithubError::Network(_) => "Lo can't reach GitHub".to_string(),
         GithubError::RateLimited {
             secondary: false, ..
         } => format!("{login} has used up GitHub's rate limit"),
         GithubError::RateLimited {
             secondary: true, ..
-        } => "GitHub asked rozed to slow down".to_string(),
+        } => "GitHub asked Lo to slow down".to_string(),
         GithubError::Unauthorized { .. } => format!("{login} is signed out"),
         GithubError::TokenUnavailable(_) => format!("{login}'s token couldn't be read"),
         GithubError::NotFound { .. } => format!("{login} can't see this pull request"),
@@ -257,7 +257,7 @@ pub fn changed_since_viewed(
         FileComparison::Full => "Changed since it was viewed.".to_string(),
     };
     Some(format!(
-        "{since} rozed can't show only what changed since then yet, so this is the file's whole \
+        "{since} Lo can't show only what changed since then yet, so this is the file's whole \
          diff."
     ))
 }
@@ -412,7 +412,7 @@ mod tests {
         viewed.set_listed(listed(&["a", "old", "unknown-state"]));
 
         assert_eq!(viewed.github_path("a", None).as_deref(), Some("a"));
-        // GitHub may list a state rozed doesn't know.
+        // GitHub may list a state Lo doesn't know.
         assert_eq!(
             viewed.github_path("unknown-state", None).as_deref(),
             Some("unknown-state")
@@ -470,13 +470,13 @@ mod tests {
             (
                 &marking,
                 GithubError::Network(anyhow::anyhow!("offline")),
-                "Couldn't mark src/main.rs viewed: rozed can't reach GitHub. It shows GitHub's \
+                "Couldn't mark src/main.rs viewed: Lo can't reach GitHub. It shows GitHub's \
                  mark again.",
             ),
             (
                 &clearing,
                 GithubError::Network(anyhow::anyhow!("offline")),
-                "Couldn't clear the viewed mark on src/main.rs: rozed can't reach GitHub. It \
+                "Couldn't clear the viewed mark on src/main.rs: Lo can't reach GitHub. It \
                  shows GitHub's mark again.",
             ),
             (
@@ -488,7 +488,7 @@ mod tests {
             (
                 &marking,
                 rate_limited(true),
-                "Couldn't mark src/main.rs viewed: GitHub asked rozed to slow down. It shows \
+                "Couldn't mark src/main.rs viewed: GitHub asked Lo to slow down. It shows \
                  GitHub's mark again.",
             ),
             (
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(
             changed_since_viewed(&revisions(), Some(Dismissed), Some("a1")).as_deref(),
             Some(
-                "Changed since you viewed it in r1. rozed can't show only what changed since \
+                "Changed since you viewed it in r1. Lo can't show only what changed since \
                  then yet, so this is the file's whole diff."
             )
         );
@@ -562,7 +562,7 @@ mod tests {
             assert_eq!(
                 changed_since_viewed(&revisions(), Some(Dismissed), viewed_at).as_deref(),
                 Some(
-                    "Changed since it was viewed. rozed can't show only what changed since then \
+                    "Changed since it was viewed. Lo can't show only what changed since then \
                      yet, so this is the file's whole diff."
                 ),
                 "{viewed_at:?}"
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(
             changed_since_viewed(&revisions, Some(Dismissed), Some("a2")).as_deref(),
             Some(
-                "Changed since you viewed it in r2. rozed can't show only what changed since \
+                "Changed since you viewed it in r2. Lo can't show only what changed since \
                  then yet, so this is the file's whole diff."
             )
         );

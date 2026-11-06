@@ -2,13 +2,13 @@
 
 use std::fmt;
 
-/// A value a GitHub enum doesn't have, such as one GitHub added after rozed was built.
+/// A value a GitHub enum doesn't have, such as one GitHub added after Lo was built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownValue(pub String);
 
 impl fmt::Display for UnknownValue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "GitHub value `{}` isn't one rozed knows", self.0)
+        write!(formatter, "GitHub value `{}` isn't one Lo knows", self.0)
     }
 }
 

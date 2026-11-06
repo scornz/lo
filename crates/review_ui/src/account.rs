@@ -33,9 +33,9 @@ pub enum AccountDecision {
     Refuse(Refusal),
 }
 
-/// Why rozed won't open a pull request with any account: the account remembered for its
+/// Why Lo won't open a pull request with any account: the account remembered for its
 /// repository, or for its owner, can't check the repository, or no account could and GitHub said
-/// why. rozed doesn't fall back
+/// why. Lo doesn't fall back
 /// to another account, which would review as someone else, nor open it without signing in,
 /// which would hide what's wrong. GitHub's links say how to fix it, such as authorizing single
 /// sign-on (design §3 "Blocked by an org", §11 "Single sign-on").
@@ -44,7 +44,7 @@ pub struct Refusal {
     pub message: String,
     pub links: Vec<HelpLink>,
     /// Whether waiting may fix every problem behind it, such as a server error or a rate limit,
-    /// so rozed tries again by itself.
+    /// so Lo tries again by itself.
     pub waitable: bool,
 }
 
@@ -56,7 +56,7 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Decides from what [`Accounts::account_for_repo`] found, or `None` when rozed has no accounts
+/// Decides from what [`Accounts::account_for_repo`] found, or `None` when Lo has no accounts
 /// database. A pull request opens with the account that can see its repository, and without
 /// signing in when none can and none ran into anything else, which works for public
 /// repositories. Messages name the repository as GitHub does now.
@@ -87,7 +87,7 @@ pub fn decide(found: Option<&RepoAccount>) -> AccountDecision {
                 .collect();
             AccountDecision::Refuse(Refusal {
                 message: format!(
-                    "No account rozed is signed in to could check {owner}/{repo}, so it didn't \
+                    "No account Lo is signed in to could check {owner}/{repo}, so it didn't \
                      open without signing in. {}",
                     said.join("; ")
                 ),
@@ -117,7 +117,7 @@ pub fn decide(found: Option<&RepoAccount>) -> AccountDecision {
             };
             AccountDecision::Refuse(Refusal {
                 message: format!(
-                    "{login}, the account rozed uses for {uses_for}, couldn't check \
+                    "{login}, the account Lo uses for {uses_for}, couldn't check \
                      {owner}/{repo}: {why}"
                 ),
                 links: problem
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(
             decide(Some(&found)),
             AccountDecision::Refuse(Refusal {
-                message: "Work, the account rozed uses for org, couldn't check org/repo: GitHub \
+                message: "Work, the account Lo uses for org, couldn't check org/repo: GitHub \
                           answered 500: Server Error"
                     .into(),
                 links: Vec::new(),
@@ -225,7 +225,7 @@ mod tests {
         found.remembered.owner = Some("work".into());
         assert_eq!(
             refusal(decide(Some(&found))).message,
-            "personal, the account rozed uses for org/repo, couldn't check org/repo: GitHub \
+            "personal, the account Lo uses for org/repo, couldn't check org/repo: GitHub \
              answered 500: Server Error"
         );
     }
@@ -241,7 +241,7 @@ mod tests {
         assert!(
             refusal(decide(Some(&found)))
                 .message
-                .starts_with("work, the account rozed uses for bigorg, couldn't check bigorg/tool")
+                .starts_with("work, the account Lo uses for bigorg, couldn't check bigorg/tool")
         );
     }
 
@@ -278,7 +278,7 @@ mod tests {
         let refusal = refusal(decide(Some(&found)));
         assert_eq!(
             refusal.message,
-            "work, the account rozed uses for org, couldn't check org/repo: Resource protected by \
+            "work, the account Lo uses for org, couldn't check org/repo: Resource protected by \
              organization SAML enforcement. (https://github.com/orgs/org/sso?authorization_request=abc)"
         );
         let links: Vec<_> = refusal.links.iter().map(HelpLink::url).collect();
@@ -286,7 +286,7 @@ mod tests {
             links,
             ["https://github.com/orgs/org/sso?authorization_request=abc"]
         );
-        // Only authorizing fixes it, so rozed doesn't keep trying.
+        // Only authorizing fixes it, so Lo doesn't keep trying.
         assert!(!refusal.waitable);
     }
 
@@ -330,7 +330,7 @@ mod tests {
         let refusal = refusal(decide(Some(&found)));
         assert_eq!(
             refusal.message,
-            "No account rozed is signed in to could check org/repo, so it didn't open without \
+            "No account Lo is signed in to could check org/repo, so it didn't open without \
              signing in. home: GitHub's rate limit was hit: API rate limit exceeded; work: \
              Resource protected by organization SAML enforcement. \
              (https://github.com/orgs/org/sso?authorization_request=abc)"

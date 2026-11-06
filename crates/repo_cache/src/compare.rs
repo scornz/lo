@@ -34,7 +34,7 @@ pub struct Revision {
 /// files merged into it exist only in the clone. Each is pinned at
 /// `refs/lo/replays/<tree>/<process ID>` the first time this process makes it, and stays
 /// pinned while the process has the clone open: the next [`RepoCache::open`] of the clone with no
-/// rozed having it open removes the pins. So keep a [`Repo`] of the clone open while showing a
+/// Lo having it open removes the pins. So keep a [`Repo`] of the clone open while showing a
 /// comparison. A comparison holds none, and dropping one runs nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Comparison {
@@ -245,7 +245,7 @@ impl Repo {
     /// Runs `replay` and pins the tree it writes, the first time this process makes it.
     ///
     /// The tree is checked once pinned, since it can be gone by then: merge-tree only refreshes a
-    /// tree it finds packed, and with git older than 2.52 another rozed's full repack, which
+    /// tree it finds packed, and with git older than 2.52 another Lo's full repack, which
     /// listed what's reachable before the pin, can delete the pack. Replaying again writes it
     /// anew, so a tree that's gone is replayed once more.
     fn replay_pinned(
@@ -349,8 +349,8 @@ fn read_replay(display: String, finished: &Finished) -> Result<Replayed, Error> 
 }
 
 impl RepoCache {
-    /// Removes every replay pin from the clone at `git_dir`. Only for a clone no rozed has open,
-    /// where every pin is one a rozed left when it quit or crashed: a rozed pins a tree for as
+    /// Removes every replay pin from the clone at `git_dir`. Only for a clone no Lo has open,
+    /// where every pin is one a Lo left when it quit or crashed: a Lo pins a tree for as
     /// long as it has the clone open, and quitting runs no destructors anyway.
     pub(crate) fn remove_left_replay_pins(&self, git_dir: &Path) -> Result<(), Error> {
         let deletes = self
@@ -509,9 +509,9 @@ mod tests {
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "rozed test")
+            .env("GIT_AUTHOR_NAME", "Lo test")
             .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
-            .env("GIT_COMMITTER_NAME", "rozed test")
+            .env("GIT_COMMITTER_NAME", "Lo test")
             .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(clone.packs(), packs);
     }
 
-    /// A tree another rozed's full repack deleted between the replay and its pin is replayed
+    /// A tree another Lo's full repack deleted between the replay and its pin is replayed
     /// again, which writes it anew. Here the first replay names a tree that's nowhere, as one
     /// made in the clone and deleted from it is.
     #[test]
@@ -804,7 +804,7 @@ mod tests {
             "not a tree\0".into(),
             format!("{TREE}\0a.txt"),
             format!("{TREE}\0\0a.txt\0"),
-            // What `merge-tree` prints with its messages, which rozed turns off.
+            // What `merge-tree` prints with its messages, which Lo turns off.
             format!("{TREE}\0a.txt\0\x001\0a.txt\0Auto-merging\0Auto-merging a.txt\n\0"),
         ] {
             assert_eq!(parse_merge_tree(output.as_bytes()), None, "{output:?}");

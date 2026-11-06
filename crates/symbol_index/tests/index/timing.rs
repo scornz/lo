@@ -1,4 +1,4 @@
-//! Indexing stays fast on thousands of real files: rozed's own Rust and Zed's, from the
+//! Indexing stays fast on thousands of real files: Lo's own Rust and Zed's, from the
 //! `third_party/zed` submodule the workspace builds against.
 
 use std::{

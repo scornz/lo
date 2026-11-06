@@ -109,14 +109,14 @@ fn first() {
 
 #[test]
 fn a_changed_json_value() {
-    let old = "{\n  \"name\": \"rozed\",\n  \"version\": 1\n}\n";
-    let new = "{\n  \"name\": \"rozed\",\n  \"version\": 2\n}\n";
+    let old = "{\n  \"name\": \"lo\",\n  \"version\": 1\n}\n";
+    let new = "{\n  \"name\": \"lo\",\n  \"version\": 2\n}\n";
 
     assert_eq!(
         rows("json", old, new),
         [
             "1 { | 1 {",
-            "2   \"name\": \"rozed\", | 2   \"name\": \"rozed\",",
+            "2   \"name\": \"lo\", | 2   \"name\": \"lo\",",
             "3   \"version\": [1] | 3   \"version\": [2]",
             "4 } | 4 }",
         ]

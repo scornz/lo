@@ -228,7 +228,7 @@ impl Polling {
         self.executor.run_until_parked();
     }
 
-    /// Replaces the accounts and the poller, as when rozed starts again: no token has been read.
+    /// Replaces the accounts and the poller, as when Lo starts again: no token has been read.
     fn restart_lo(&mut self) {
         let (db, store, http) = (self.db.clone(), self.store.clone(), self.http.clone());
         self.accounts = self
@@ -1701,7 +1701,7 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
 #[gpui::test]
 async fn a_token_that_cant_be_read_is_tried_again(cx: &mut TestAppContext) {
     let mut t = Polling::new("token_unreadable", recorded(), cx).await;
-    // The Keychain is locked when rozed starts, or its prompt was dismissed.
+    // The Keychain is locked when Lo starts, or its prompt was dismissed.
     t.store.state.lock().fail_reads = true;
     t.restart_lo();
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));

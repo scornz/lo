@@ -1,8 +1,8 @@
-//! The signed-in user, and the scopes rozed needs.
+//! The signed-in user, and the scopes Lo needs.
 
 use serde::Deserialize;
 
-/// The scopes rozed asks for (design §3): `repo` to read, review and merge private repos,
+/// The scopes Lo asks for (design §3): `repo` to read, review and merge private repos,
 /// `read:org` for team review requests and code owners, and `workflow` because GitHub refuses to
 /// merge a PR that changes `.github/workflows` without it.
 pub const SCOPES: &[&str] = &["repo", "read:org", "workflow"];
@@ -26,7 +26,7 @@ pub struct AuthenticatedUser {
 }
 
 impl AuthenticatedUser {
-    /// The scopes rozed needs that the token lacks.
+    /// The scopes Lo needs that the token lacks.
     pub fn missing_scopes(&self) -> Vec<&'static str> {
         missing_scopes(&self.scopes)
     }

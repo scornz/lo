@@ -1,7 +1,7 @@
 # e2e fixtures
 
 `fixtures.sh` sets up the pull requests in [`rozed-dev/e2e`](https://github.com/rozed-dev/e2e) that
-rozed's revisions (milestone 6) and stacks (milestone 7) are checked against. It runs as
+Lo's revisions (milestone 6) and stacks (milestone 7) are checked against. It runs as
 `rozed-bot` and builds nothing.
 
 ```sh

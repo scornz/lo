@@ -1,4 +1,4 @@
-; rozed's additions to tree-sitter-python's tags query, for what it leaves out. The grammar's own
+; Lo's additions to tree-sitter-python's tags query, for what it leaves out. The grammar's own
 ; patterns come first, so they win when both tag the same name.
 
 ; Base classes: `class Circle(shapes.Shape)`.

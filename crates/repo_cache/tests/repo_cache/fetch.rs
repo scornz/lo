@@ -220,7 +220,7 @@ fn fetches_a_pull_requests_head_and_base_and_pins_them() {
         Some(pr.base.clone())
     );
 
-    // Only rozed's refs: no branches, tags or FETCH_HEAD.
+    // Only Lo's refs: no branches, tags or FETCH_HEAD.
     let git_dir = repo.git_dir();
     let refs = git(git_dir, &["for-each-ref", "--format=%(refname)"]);
     assert!(
@@ -279,7 +279,7 @@ fn a_force_pushed_revision_stays_readable() {
     pr.remote.publish("refs/pull/1/head");
     assert_eq!(fetch(&repo, 1).head, r2);
 
-    // refs/pull/1/head moved on; rozed kept both.
+    // refs/pull/1/head moved on; Lo kept both.
     assert_eq!(rev_parse(&repo, "refs/lo/pull/1/head"), r2.as_str());
     let mut revisions = repo.pull_revisions(1).unwrap();
     revisions.sort();
@@ -538,7 +538,7 @@ fn refuses_base_branches_that_arent_branch_names() {
 fn fetches_a_commit_by_id_and_pins_it() {
     let server = Server::new();
     let pr = pull_request(&server);
-    // A commit on no ref rozed fetches.
+    // A commit on no ref Lo fetches.
     pr.remote
         .switch("elsewhere")
         .write("elsewhere.txt", "elsewhere\n");

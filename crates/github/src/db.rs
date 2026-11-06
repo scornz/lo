@@ -1,4 +1,4 @@
-//! rozed's own SQLite database, `lo.sqlite`, through Zed's `sqlez`.
+//! Lo's own SQLite database, `lo.sqlite`, through Zed's `sqlez`.
 //!
 //! It's a separate file from Zed's `db.sqlite`, and unlike Zed's it never falls back to an
 //! in-memory database: it holds durable state, such as which account to use for each owner, and
@@ -14,13 +14,13 @@ use sqlez::statement::Statement;
 use sqlez::thread_safe_connection::ThreadSafeConnection;
 use sqlez_macros::sql;
 
-/// rozed's database connection. Reads run on the calling thread; writes are queued to one
+/// Lo's database connection. Reads run on the calling thread; writes are queued to one
 /// background thread.
 #[derive(Clone)]
 pub struct LoDb(ThreadSafeConnection);
 
 impl Domain for LoDb {
-    const NAME: &str = "rozed";
+    const NAME: &str = "lo"; // sqlez keys the migrations by it: a code name, not text.
     const MIGRATIONS: &[&str] = &[
         sql!(
             // One row per signed-in account. Tokens aren't here: they're in the token store.
@@ -50,7 +50,7 @@ impl Domain for LoDb {
         ),
         sql!(
             // GitHub's answers, cached per account: a reopened PR shows at once, its first poll can
-            // still be a free 304, and offline rozed shows what it last saw. The only table that's
+            // still be a free 304, and offline Lo shows what it last saw. The only table that's
             // ever cleared; removing an account removes its rows.
             CREATE TABLE pr_cache(
                 host TEXT NOT NULL,
@@ -87,7 +87,7 @@ impl Domain for LoDb {
             ) STRICT;
         ),
         sql!(
-            // Where each file was marked viewed on this Mac: the head on screen when rozed marked
+            // Where each file was marked viewed on this Mac: the head on screen when Lo marked
             // it, per account. Not cached data, so clearing the cache keeps it; removing the
             // account removes its rows.
             CREATE TABLE viewed_files(
@@ -132,7 +132,7 @@ const CONNECTION_INITIALIZE_QUERY: &str = sql!(
     PRAGMA foreign_keys=TRUE;
 );
 
-/// Where rozed's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
+/// Where Lo's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
 /// release builds, so a debug build's accounts never mix with a release build's. Their tokens are
 /// kept apart the same way ([`crate::credentials::server_for`]).
 pub fn default_path() -> PathBuf {
@@ -299,7 +299,7 @@ impl LoDb {
 /// How an account was added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountSource {
-    /// rozed's own sign-in, GitHub's device flow.
+    /// Lo's own sign-in, GitHub's device flow.
     DeviceFlow,
     /// Imported from the `gh` CLI.
     Gh,
@@ -541,7 +541,7 @@ mod tests {
         ) STRICT;
     );
 
-    /// rozed's database as it was before the cache.
+    /// Lo's database as it was before the cache.
     struct BeforeTheCache;
 
     impl Domain for BeforeTheCache {
@@ -602,7 +602,7 @@ mod tests {
         });
     }
 
-    /// rozed's database as it was before viewed files were recorded: the accounts and the cache.
+    /// Lo's database as it was before viewed files were recorded: the accounts and the cache.
     struct BeforeViewedFiles;
 
     impl Domain for BeforeViewedFiles {
@@ -651,7 +651,7 @@ mod tests {
         });
     }
 
-    /// rozed's database as it was before accounts per repository: with viewed files recorded.
+    /// Lo's database as it was before accounts per repository: with viewed files recorded.
     struct BeforeRepoAccounts;
 
     impl Domain for BeforeRepoAccounts {
@@ -730,7 +730,7 @@ mod tests {
         let Err(error) = futures::executor::block_on(LoDb::open(&path)) else {
             panic!("opened a folder as a database");
         };
-        // sqlez fell back to memory, and rozed's own check refused that.
+        // sqlez fell back to memory, and Lo's own check refused that.
         let message = format!("{error:#}");
         assert!(
             message.starts_with(&format!("couldn't open {}", path.display())),

@@ -1,12 +1,12 @@
-//! Which folders rozed trusts to run language servers in.
+//! Which folders Lo trusts to run language servers in.
 //!
-//! rozed never runs a repository's code unless the user trusts the repository (design §1). Until
-//! milestone 10's trust prompt, trusting is the `--trust` flag. Without it rozed makes no checkout,
-//! so a language server has nowhere to run. With it, rozed trusts the pull request's checkout and
+//! Lo never runs a repository's code unless the user trusts the repository (design §1). Until
+//! milestone 10's trust prompt, trusting is the `--trust` flag. Without it Lo makes no checkout,
+//! so a language server has nowhere to run. With it, Lo trusts the pull request's checkout and
 //! nothing else, and Zed's worktree trust enforces that: Zed's project starts no language server
 //! in a worktree until the worktree is trusted.
 //!
-//! Trust never carries over between runs: rozed starts Zed's trust store empty and empties the
+//! Trust never carries over between runs: Lo starts Zed's trust store empty and empties the
 //! table where Zed's workspace saves trusted paths. Trust starts language servers and nothing else:
 //! a repository's own Zed settings never apply, trusted or not (see [`crate::local_project`]).
 
@@ -27,8 +27,8 @@ pub fn init(cx: &mut App) {
     trusted_worktrees::init(Default::default(), cx);
 }
 
-/// Empties the `trusted_worktrees` table in rozed's database. Zed's workspace saves every path
-/// trusted in a run there, and Zed reads it back at startup. rozed never reads it, and empties it
+/// Empties the `trusted_worktrees` table in Lo's database. Zed's workspace saves every path
+/// trusted in a run there, and Zed reads it back at startup. Lo never reads it, and empties it
 /// so no later run, or later code, can inherit a pull request's trust.
 fn forget_saved_trust(cx: &mut App) {
     let cleared = cx
@@ -42,7 +42,7 @@ fn forget_saved_trust(cx: &mut App) {
 /// Trusts the folder `checkout`, and every folder under it, in `project`, so language servers
 /// start there.
 ///
-/// Zed also trusts every single-file worktree once a folder is trusted. rozed never opens one
+/// Zed also trusts every single-file worktree once a folder is trusted. Lo never opens one
 /// itself, so from here on it restricts any visible single-file worktree the project gets, such as
 /// a file dropped on the window.
 pub fn trust_checkout(
@@ -64,7 +64,7 @@ pub fn trust_checkout(
                 return;
             }
             log::warn!(
-                "not trusting {}: rozed trusts only the pull request's checkout",
+                "not trusting {}: Lo trusts only the pull request's checkout",
                 worktree.abs_path().display()
             );
             let restricted = [PathTrust::Worktree(worktree.id())].into_iter().collect();
@@ -199,7 +199,7 @@ pub(crate) mod tests {
         assert!(!is_trusted(&project, Path::new(CHECKOUTS), cx));
     }
 
-    /// Why rozed restricts single-file worktrees: Zed itself trusts every one once a folder is
+    /// Why Lo restricts single-file worktrees: Zed itself trusts every one once a folder is
     /// trusted, even a file nowhere near it.
     #[gpui::test]
     async fn zed_trusts_any_single_file_once_a_folder_is_trusted(cx: &mut TestAppContext) {

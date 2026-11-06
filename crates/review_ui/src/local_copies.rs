@@ -1,6 +1,6 @@
-//! rozed's local copies of repositories (`repo_cache`), set up once at launch.
+//! Lo's local copies of repositories (`repo_cache`), set up once at launch.
 //!
-//! At launch rozed finds git and checks it's new enough, then removes clones nobody used for 30
+//! At launch Lo finds git and checks it's new enough, then removes clones nobody used for 30
 //! days and checkouts nobody used for 14 (design §3, "Cleanup"), on a background thread. Opening
 //! a pull request waits for that and gets the same cache, or the same error, which says how to
 //! install git. Then clones with too many packs are repacked, one at a time.
@@ -23,7 +23,7 @@ struct LocalCopies {
 impl Global for LocalCopies {}
 
 /// Where the clones and checkouts live: `~/Library/Caches/Lo`. Zed's `paths` crate calls
-/// rozed's cache folder its "temp dir".
+/// Lo's cache folder its "temp dir".
 pub fn cache_dir() -> PathBuf {
     paths::temp_dir().clone()
 }
@@ -63,14 +63,14 @@ pub fn init(cx: &mut App) {
     cx.set_global(LocalCopies { ready });
 }
 
-/// The cache, once [`init`]'s check is done, or why rozed can't use git.
+/// The cache, once [`init`]'s check is done, or why Lo can't use git.
 pub fn cache(cx: &App) -> impl Future<Output = anyhow::Result<Arc<RepoCache>>> + use<> {
     let ready = cx
         .try_global::<LocalCopies>()
         .map(|copies| copies.ready.clone());
     async move {
         let Some(ready) = ready else {
-            anyhow::bail!("rozed's local copies aren't set up");
+            anyhow::bail!("Lo's local copies aren't set up");
         };
         ready.await.map_err(|error| anyhow::anyhow!("{error}"))
     }

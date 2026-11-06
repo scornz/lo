@@ -1,4 +1,4 @@
-//! What rozed's real HTTP client reports when GitHub can't be reached, and which of those count as
+//! What Lo's real HTTP client reports when GitHub can't be reached, and which of those count as
 //! offline: run against local sockets, so a change in reqwest's or hyper's errors shows here.
 
 use std::io::{Read as _, Write as _};
@@ -11,7 +11,7 @@ use github::GithubError;
 use http_client::{AsyncBody, HttpClient, HttpRequestExt as _, Request, Url};
 use reqwest_client::ReqwestClient;
 
-/// What `client` gets for `GET url`, as rozed's GitHub client reports it.
+/// What `client` gets for `GET url`, as Lo's GitHub client reports it.
 fn get(client: &Arc<ReqwestClient>, url: &str, timeout: Duration) -> GithubError {
     let request = Request::get(url)
         .timeout(timeout)

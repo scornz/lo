@@ -274,7 +274,7 @@ mod tests {
             "1.5",
             " 1",
             "99999999999999999999999",
-            // Above what GitHub's API, and rozed's database, can hold.
+            // Above what GitHub's API, and Lo's database, can hold.
             "9223372036854775808",
         ] {
             rejects(
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_repos() {
-        // Owner and repo name a folder in rozed's cache, so `.`, `..` and anything outside
+        // Owner and repo name a folder in Lo's cache, so `.`, `..` and anything outside
         // GitHub's characters must never get through.
         for repo in [
             ".",

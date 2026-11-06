@@ -83,7 +83,7 @@ pub struct Offline {
     pub error: String,
 }
 
-/// A pull request's details as rozed has them.
+/// A pull request's details as Lo has them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PullRequestAnswer {
     pub details: Arc<PullRequestData>,
@@ -98,7 +98,7 @@ pub struct PullRequestAnswer {
 #[derive(Default)]
 struct Schedule {
     last_polled: Option<Instant>,
-    /// How many times it was asked to be polled at once: opened, rozed came to the foreground, or
+    /// How many times it was asked to be polled at once: opened, Lo came to the foreground, or
     /// a write changed it.
     forced: u64,
     /// `forced` as it was when the last poll to finish was chosen. A poll asked for while another
@@ -192,7 +192,7 @@ enum Outcome {
 }
 
 /// A conditional GET of a pull request, asking about changes since GitHub last updated the
-/// summary rozed has (not its ETag, which a push to any branch in the repository changes).
+/// summary Lo has (not its ETag, which a push to any branch in the repository changes).
 async fn get_summary(
     client: &GithubClient,
     pull: &PullRef,
@@ -204,7 +204,7 @@ async fn get_summary(
         .await
 }
 
-/// Whether GitHub's answer holds a summary other than the one rozed has. A `200` can bring the
+/// Whether GitHub's answer holds a summary other than the one Lo has. A `200` can bring the
 /// same one back.
 fn summary_changed(answer: &Conditional<PullSummary>, known: Option<&PullSummary>) -> bool {
     match answer {
@@ -217,7 +217,7 @@ fn summary_changed(answer: &Conditional<PullSummary>, known: Option<&PullSummary
 const MAX_LISTED_PAGES: usize = MAX_OPEN_PULL_REQUESTS / PAGE_SIZE as usize;
 
 /// Conditional GETs of a repository's open PRs, a page at a time while pages are full, each with
-/// the ETag rozed has for it.
+/// the ETag Lo has for it.
 async fn get_listed(
     client: &GithubClient,
     repo: &RepoRef,
@@ -237,7 +237,7 @@ async fn get_listed(
             Conditional::NotModified => known.cloned().ok_or_else(|| {
                 GithubError::Inconsistent(format!(
                     "GitHub said page {number} of {repo}'s open pull requests hadn't changed, \
-                     but rozed never read it"
+                     but Lo never read it"
                 ))
             })?,
         };
@@ -322,11 +322,11 @@ type CacheWrite = BoxFuture<'static, Result<()>>;
 
 /// Polls GitHub for one account (research §7 "Recommended scheme"): the open PR every 20 s,
 /// other watched PRs and their repositories' open PRs every 2 minutes, and everything every
-/// 5 minutes while rozed is in the background. Each poll asks first whether anything changed,
+/// 5 minutes while Lo is in the background. Each poll asks first whether anything changed,
 /// with requests that are free when nothing did, and fetches details only when something did.
 /// Requests run one at a time, slowed or paused by the rate limit and backed off while offline.
 ///
-/// The app tells it whether rozed is in the foreground ([`Poller::set_foreground`]), which PRs
+/// The app tells it whether Lo is in the foreground ([`Poller::set_foreground`]), which PRs
 /// are in tabs ([`Poller::watch`]) and which tab is active ([`Poller::set_open`]). What changed
 /// arrives as [`PollEvent`]s; [`Poller::status`] is for banners and is observable.
 pub struct Poller {
@@ -424,7 +424,7 @@ impl Poller {
         self.foreground
     }
 
-    /// Whether rozed is in the foreground. Coming back polls the open PR at once.
+    /// Whether Lo is in the foreground. Coming back polls the open PR at once.
     pub fn set_foreground(&mut self, foreground: bool, cx: &mut Context<Self>) {
         if self.foreground == foreground {
             return;
@@ -560,7 +560,7 @@ impl Poller {
     /// account's client, in the account's queue: after any poll in flight, ahead of waiting
     /// polls, and at least a second after the previous write.
     ///
-    /// Afterwards what rozed knows about `target` is out of date, whether or not the write
+    /// Afterwards what Lo knows about `target` is out of date, whether or not the write
     /// succeeded (a failed one may still have reached GitHub): a pull request's details are
     /// fetched in full again, a repository's open PRs are listed again, and either is polled at
     /// once if it's watched. A rate limit the write runs into pauses polling as a poll's would.
@@ -632,7 +632,7 @@ impl Poller {
         cx.foreground_executor().spawn(async move {
             result.await.unwrap_or_else(|_| {
                 Err(GithubError::Network(anyhow::anyhow!(
-                    "rozed stopped before the write finished"
+                    "Lo stopped before the write finished"
                 )))
             })
         })
@@ -1147,7 +1147,7 @@ impl Poller {
     }
 
     /// Takes in GitHub's answer about a pull request, returning its summary when it changed. A
-    /// `304`, or a `200` with the same summary, only confirms the one rozed has.
+    /// `304`, or a `200` with the same summary, only confirms the one Lo has.
     fn take_summary(
         state: &mut PullState,
         answer: Conditional<PullSummary>,

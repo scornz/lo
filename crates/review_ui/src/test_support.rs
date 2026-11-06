@@ -1,5 +1,5 @@
 //! A fake GitHub for the tab's tests: its REST API, answering per token, and its git server, real
-//! bare repositories served over `file://`. With them, tests open pull requests the way rozed
+//! bare repositories served over `file://`. With them, tests open pull requests the way Lo
 //! does, through the GitHub layer, the local copy and the diff.
 
 use std::collections::HashMap;
@@ -24,8 +24,8 @@ use repo_cache::{Git, RepoCache};
 use tempfile::TempDir;
 use workspace::{MultiWorkspace, Workspace};
 
-/// Sets the app up as rozed does: the command palette, the editor, Zed's keymap with the tab's
-/// keys over it, and rozed's changes to every workspace.
+/// Sets the app up as Lo does: the command palette, the editor, Zed's keymap with the tab's
+/// keys over it, and Lo's changes to every workspace.
 pub fn init(cx: &mut TestAppContext) {
     crate::trust::tests::init_test(cx);
     cx.update(|cx| {
@@ -35,12 +35,12 @@ pub fn init(cx: &mut TestAppContext) {
     });
 }
 
-/// A window like rozed's: a workspace in a `MultiWorkspace`, which renders the workspace's
+/// A window like Lo's: a workspace in a `MultiWorkspace`, which renders the workspace's
 /// actions.
 pub async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
     init(cx);
     let fs = FakeFs::new(cx.executor());
-    // A repository elsewhere on disk, which nothing in rozed should open.
+    // A repository elsewhere on disk, which nothing in Lo should open.
     fs.insert_tree(
         "/elsewhere",
         serde_json::json!({
@@ -459,7 +459,7 @@ impl HttpClient for FakeGithub {
     }
 }
 
-/// rozed's GitHub layer over `github`, with `accounts` (login, token) signed in, in that order,
+/// Lo's GitHub layer over `github`, with `accounts` (login, token) signed in, in that order,
 /// and `github` as the app's HTTP client for reading without signing in.
 pub async fn sign_in(
     github: &FakeGithub,
@@ -759,9 +759,9 @@ fn git(dir: &Path, args: &[&str], stdin: Option<&[u8]>, index: Option<&Path>) ->
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "rozed test")
+        .env("GIT_AUTHOR_NAME", "Lo test")
         .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
-        .env("GIT_COMMITTER_NAME", "rozed test")
+        .env("GIT_COMMITTER_NAME", "Lo test")
         .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

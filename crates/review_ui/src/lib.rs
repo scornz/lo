@@ -1,4 +1,4 @@
-//! The PR tab: a pull request's header, its files and its diff, in one tab of rozed's window
+//! The PR tab: a pull request's header, its files and its diff, in one tab of Lo's window
 //! (design §5, §10 "Window").
 
 pub mod account;
@@ -42,7 +42,7 @@ pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, PrTabEvent, open};
 
 /// Sets up the PR tab: Zed's keys and its own, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
-/// their database, or `None` without one), and rozed's changes to every workspace.
+/// their database, or `None` without one), and Lo's changes to every workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
     init_workspaces(cx);
@@ -51,7 +51,7 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
 /// [`init`] without the GitHub layer, for tests: pull requests open without signing in. Call it
 /// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
-    // Of two bindings for a key in the same place, the later one wins: rozed's.
+    // Of two bindings for a key in the same place, the later one wins: Lo's.
     keymap::load(cx);
     pr_tab::bind_keys(cx);
     account_picker::bind_keys(cx);
@@ -84,7 +84,7 @@ pub fn init_workspaces(cx: &mut App) {
     .detach();
 }
 
-/// Keeps the window's tabs, panes and title as rozed has them when the workspace changes.
+/// Keeps the window's tabs, panes and title as Lo has them when the workspace changes.
 fn workspace_event(
     workspace: &mut Workspace,
     _: &Entity<Workspace>,

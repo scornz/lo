@@ -11,11 +11,11 @@ use crate::lock::RepoLock;
 use crate::repo::{Access, Repo};
 use crate::{Error, Oid, checkout};
 
-/// rozed's local copies of repositories, in one folder (`~/Library/Caches/Lo`):
+/// Lo's local copies of repositories, in one folder (`~/Library/Caches/Lo`):
 ///
 /// - `repos/github.com/<owner>/<repo>.git`: a bare partial clone (`--filter=blob:none`) of each
 ///   repository, so file contents download only when something reads them. Everything fetched
-///   goes under rozed's own refs, `refs/lo/...`.
+///   goes under Lo's own refs, `refs/lo/...`.
 /// - `checkouts/github.com/<owner>/<repo>/pull-<n>/<head>`: a checkout of a pull request's head,
 ///   one per head, for language servers.
 /// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone, and
@@ -60,10 +60,10 @@ impl GitEnv {
     }
 }
 
-/// The only host rozed fetches from, for now.
+/// The only host Lo fetches from, for now.
 const HOST: &str = "github.com";
 
-/// The file in a clone that records when rozed last opened it.
+/// The file in a clone that records when Lo last opened it.
 pub(crate) const LAST_USED_FILE: &str = "lo-last-used";
 
 impl RepoCache {
@@ -155,9 +155,9 @@ impl RepoCache {
     /// Pass the repository's canonical name, GitHub's `full_name` for it, not a name from a link:
     /// a renamed or transferred repository then keeps one clone.
     ///
-    /// Opening a clone no rozed has open removes the pins of replayed trees (see
-    /// [`crate::Comparison`]) that rozeds which have since quit or crashed left in it. A clone
-    /// some rozed always has open keeps them, as many as the comparisons it was shown.
+    /// Opening a clone no Lo process has open removes the pins of replayed trees (see
+    /// [`crate::Comparison`]) that Lo processes which have since quit or crashed left in it. A
+    /// clone some Lo process always has open keeps them, as many as the comparisons it was shown.
     pub fn open(&self, owner: &str, repo: &str, token: Option<Token>) -> Result<Repo, Error> {
         check_name("repository owner", owner)?;
         check_name("repository name", repo)?;
@@ -170,7 +170,7 @@ impl RepoCache {
             if git_dir.join("HEAD").is_file() {
                 self.update_remote(&git_dir, &url)?;
                 // With the clone open nowhere, no comparison shows a replayed tree, so every pin
-                // is one a rozed left when it quit or crashed.
+                // is one a Lo left when it quit or crashed.
                 if let Some(_alone) = RepoLock::try_acquire(&in_use_path)?
                     && let Err(error) = self.remove_left_replay_pins(&git_dir)
                 {
@@ -206,7 +206,7 @@ impl RepoCache {
     }
 
     /// The clone of `owner/repo` to read offline, or `None` when there's none. It never makes a
-    /// clone, writes to one, or waits for the lock another rozed holds while fetching, and its
+    /// clone, writes to one, or waits for the lock another Lo holds while fetching, and its
     /// git never downloads what the clone lacks: with git 2.44 or later a missing object is an
     /// error, and on older git [`Repo::has_diff_contents`] says what's there first. Fetching or
     /// checking out with it fails with [`Error::ReadOnly`].
@@ -218,7 +218,7 @@ impl RepoCache {
             return Ok(None);
         }
         // Held as any open clone holds it, so cleanup leaves the clone alone; it waits only while
-        // cleanup is removing it, and then the clone is gone. Every clone rozed opened has the
+        // cleanup is removing it, and then the clone is gone. Every clone Lo opened has the
         // lock's file, so without it there's nothing to read.
         let Some(in_use) = RepoLock::acquire_shared_existing(&self.in_use_path(owner, repo))?
         else {
@@ -265,7 +265,7 @@ impl RepoCache {
                 .map_err(Error::io(format!("creating {}", parent.display())))?;
             match fs::rename(&temporary, git_dir) {
                 Ok(()) => Ok(()),
-                // Another rozed created it meanwhile.
+                // Another Lo created it meanwhile.
                 Err(_) if git_dir.join("HEAD").is_file() => Ok(()),
                 Err(error) => Err(Error::io(format!("creating {}", git_dir.display()))(error)),
             }
@@ -309,9 +309,9 @@ impl RepoCache {
     }
 
     /// Removes every clone and checkout, for "clear cache" in settings. `repos/` and
-    /// `checkouts/` are each moved aside in one rename and then deleted, so another rozed finds a
+    /// `checkouts/` are each moved aside in one rename and then deleted, so another Lo finds a
     /// clone whole or not at all; a fetch it has in progress fails, and opening the repository
-    /// again makes a new clone. Clones another rozed is still making, in `tmp/`, are left alone.
+    /// again makes a new clone. Clones another Lo is still making, in `tmp/`, are left alone.
     pub fn clear(&self) -> Result<(), Error> {
         let trash = temporary_path(&self.root, "trash")?;
         fs::create_dir(&trash).map_err(Error::io(format!("creating {}", trash.display())))?;
@@ -333,7 +333,7 @@ impl RepoCache {
     /// Removes the clones nobody opened, fetched into or checked out from for `max_age`,
     /// [`RepoCache::UNUSED_FOR`] at launch, with their checkouts, and checkouts left without a
     /// clone. Of the clones kept, it removes checkouts unused for
-    /// [`RepoCache::CHECKOUTS_UNUSED_FOR`]. A clone being written to, or open in any rozed, is
+    /// [`RepoCache::CHECKOUTS_UNUSED_FOR`]. A clone being written to, or open in any Lo, is
     /// skipped. Returns the `owner/repo` of each clone removed.
     pub fn remove_unused(&self, max_age: Duration) -> Result<Vec<String>, Error> {
         let now = SystemTime::now();
@@ -391,7 +391,7 @@ impl RepoCache {
     pub const CHECKOUTS_UNUSED_FOR: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
     /// Removes the checkouts of `owner/repo` nobody used for [`RepoCache::CHECKOUTS_UNUSED_FOR`],
-    /// unless the clone is being written to or is open in any rozed.
+    /// unless the clone is being written to or is open in any Lo.
     fn remove_unused_checkouts(
         &self,
         owner: &str,
@@ -472,7 +472,7 @@ impl RepoCache {
     }
 
     /// Removes a clone and its checkouts. The caller holds its lock. Each is moved aside before
-    /// it's deleted, so another rozed sees the whole clone or none of it.
+    /// it's deleted, so another Lo sees the whole clone or none of it.
     fn remove_clone(&self, owner: &str, repo: &str) -> Result<(), Error> {
         self.env.trash(&self.repo_checkouts_dir(owner, repo))?;
         self.env.trash(&self.repo_dir(owner, repo))?;

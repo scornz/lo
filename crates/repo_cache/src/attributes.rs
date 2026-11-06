@@ -1,6 +1,6 @@
 //! What a commit's `.gitattributes` files say about its paths.
 //!
-//! rozed applies no attributes when it diffs or checks out (see [`crate::Git`]), but some of a
+//! Lo applies no attributes when it diffs or checks out (see [`crate::Git`]), but some of a
 //! repository's attributes are worth reading: `linguist-generated` says a file is generated, so
 //! its diff starts collapsed, as on GitHub.
 
@@ -12,7 +12,7 @@ use crate::git::{EMPTY_TREE, GitVersion, failure_message};
 use crate::repo::NO_LAZY_FETCH_VAR;
 use crate::{Error, Oid, Repo};
 
-/// The most `.gitattributes` files rozed reads for one question: each is a download in a partial
+/// The most `.gitattributes` files Lo reads for one question: each is a download in a partial
 /// clone.
 pub const MAX_ATTRIBUTE_FILES: usize = 200;
 

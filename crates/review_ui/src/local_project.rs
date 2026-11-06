@@ -1,17 +1,17 @@
-//! The Zed project rozed shows a pull request in, set up so a repository can't configure rozed or
+//! The Zed project Lo shows a pull request in, set up so a repository can't configure Lo or
 //! run anything on its own:
 //!
 //! - **No repository settings.** Zed applies a trusted worktree's `.zed/settings.json` over every
-//!   global settings layer, including the one rozed forces, so a repository could pick its own
-//!   language server binary. rozed's project never applies a worktree's own settings, tasks or
+//!   global settings layer, including the one Lo forces, so a repository could pick its own
+//!   language server binary. Lo's project never applies a worktree's own settings, tasks or
 //!   debug scenarios (`.zed/`, `.vscode/tasks.json`, `.vscode/launch.json`), trusted or not.
 //!   `.editorconfig` files still apply: they set only indentation, line endings and line length.
 //! - **No login shell in the checkout.** Without an environment of its own, Zed's project learns
 //!   each worktree's by running the user's login shell, interactively, `cd`'d into the worktree,
 //!   so the shell's directory hooks (direnv, mise, nvm and the like) run on the pull request's
-//!   files. rozed hands it rozed's own environment instead, and Zed then captures none.
+//!   files. Lo hands it Lo's own environment instead, and Zed then captures none.
 //! - **No Recent Items.** Zed adds every visible worktree to macOS's Recent Items, and a cached
-//!   checkout doesn't belong there. On some desktops the update also kept rozed from quitting.
+//!   checkout doesn't belong there. On some desktops the update also kept Lo from quitting.
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ use gpui::{App, Entity};
 use project::{LocalProjectFlags, Project};
 use workspace::AppState;
 
-/// A new local project for rozed's window, set up with [`configure`].
+/// A new local project for Lo's window, set up with [`configure`].
 pub fn new(app_state: &AppState, cx: &mut App) -> Entity<Project> {
     let project = Project::local(
         app_state.client.clone(),
@@ -29,7 +29,7 @@ pub fn new(app_state: &AppState, cx: &mut App) -> Entity<Project> {
         app_state.fs.clone(),
         Some(environment().into_iter().collect()),
         LocalProjectFlags {
-            // Zed's worktree trust: no language server until rozed trusts the worktree (see
+            // Zed's worktree trust: no language server until Lo trusts the worktree (see
             // `crate::trust`).
             init_worktree_trust: true,
             watch_global_configs: true,
@@ -40,7 +40,7 @@ pub fn new(app_state: &AppState, cx: &mut App) -> Entity<Project> {
     project
 }
 
-/// rozed's own environment, for the project's language servers and git. Variables that aren't
+/// Lo's own environment, for the project's language servers and git. Variables that aren't
 /// UTF-8 are left out.
 fn environment() -> HashMap<String, String> {
     std::env::vars_os()
@@ -112,7 +112,7 @@ mod tests {
         applied: Vec<String>,
     }
 
-    /// Opens `/checkout` in a new project, configured as rozed's when `configure_project` is set,
+    /// Opens `/checkout` in a new project, configured as Lo's when `configure_project` is set,
     /// and trusts it.
     async fn open_trusted(configure_project: bool, cx: &mut TestAppContext) -> Opened {
         trust::tests::init_test(cx);
@@ -131,7 +131,7 @@ mod tests {
                     SettingsObserverEvent::LocalSettingsUpdated(_) => "settings",
                     SettingsObserverEvent::LocalTasksUpdated(_) => "tasks",
                     SettingsObserverEvent::LocalDebugScenariosUpdated(_) => "debug",
-                    // rozed's own tasks.json and debug.json, not the repository's.
+                    // Lo's own tasks.json and debug.json, not the repository's.
                     SettingsObserverEvent::GlobalTasksUpdated(_)
                     | SettingsObserverEvent::GlobalDebugScenariosUpdated(_) => return,
                 };
@@ -174,7 +174,7 @@ mod tests {
         }
     }
 
-    /// Why rozed configures its project: Zed applies a trusted repository's own settings.
+    /// Why Lo configures its project: Zed applies a trusted repository's own settings.
     #[gpui::test]
     async fn zed_applies_a_trusted_repositorys_own_settings(cx: &mut TestAppContext) {
         let opened = open_trusted(false, cx).await;

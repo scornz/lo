@@ -7,7 +7,7 @@
 //! cargo test -p github --test record_fixtures -- --ignored [cassette_name]
 //! ```
 //!
-//! They use rozed's own OAuth token for the test bot, read from `LO_FIXTURE_TOKEN_FILE`
+//! They use Lo's own OAuth token for the test bot, read from `LO_FIXTURE_TOKEN_FILE`
 //! (default `~/.config/rozed-dev/oauth-token`), the same kind of token users have. Don't run a
 //! device flow per recording: GitHub keeps 10 tokens per user, app and scope set, and revokes the
 //! oldest beyond that. The recorder refuses to write the token or anything shaped like a GitHub
@@ -126,7 +126,7 @@ fn rest_pull_files() {
 fn user() {
     record(
         "user",
-        "GET /user as rozed-bot, with the scopes of rozed's OAuth token",
+        "GET /user as rozed-bot, with the scopes of Lo's OAuth token",
         |client| async move {
             client.user().await.unwrap();
         },

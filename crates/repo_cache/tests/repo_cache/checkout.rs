@@ -246,7 +246,7 @@ fn checkouts_at_once_all_succeed() {
     f.push_r2();
     let cache = Arc::new(f.cache);
 
-    // Two rozed windows on one pull request, one still on r1, check it out at once.
+    // Two Lo windows on one pull request, one still on r1, check it out at once.
     let threads: Vec<_> = (0..8)
         .map(|i| {
             let cache = cache.clone();

@@ -8,8 +8,8 @@
 //!
 //! Debug builds use a file because macOS asks for Keychain access again after every unsigned
 //! rebuild. Zed's own development file isn't private (`std::fs::write` leaves it at 0644), so
-//! rozed has its own: mode 600 in a mode 700 folder, written atomically through a new temporary
-//! file, under a lock that other rozed processes respect too.
+//! Lo has its own: mode 600 in a mode 700 folder, written atomically through a new temporary
+//! file, under a lock that other Lo processes respect too.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,7 +28,7 @@ use gpui::AsyncApp;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-/// The host rozed signs in to. GitHub Enterprise hosts would get their own server strings.
+/// The host Lo signs in to. GitHub Enterprise hosts would get their own server strings.
 pub const HOST: &str = "github.com";
 
 /// Which kind of build is running. Debug and release builds keep separate accounts: separate
@@ -50,15 +50,15 @@ impl Build {
 }
 
 /// The server string an account's token is stored under in this build. Logins are lowercased:
-/// GitHub's ignore case, and so does rozed's database, so a case-only rename keeps one item.
+/// GitHub's ignore case, and so does Lo's database, so a case-only rename keeps one item.
 pub fn server_for(login: &str) -> String {
     server(Build::current(), &login.to_ascii_lowercase())
 }
 
 fn server(build: Build, login: &str) -> String {
     let scheme = match build {
-        Build::Debug => "rozed-dev",
-        Build::Release => "rozed",
+        Build::Debug => "lo-dev",
+        Build::Release => "lo", // The URL scheme: a code name, not text.
     };
     format!("{scheme}://{HOST}/{login}")
 }
@@ -140,7 +140,7 @@ impl fmt::Debug for StoredCredential {
 
 /// Why the token file couldn't be loaded.
 enum LoadError {
-    /// It isn't the JSON rozed writes.
+    /// It isn't the JSON Lo writes.
     Corrupt,
     Other(anyhow::Error),
 }
@@ -170,7 +170,7 @@ impl FileCredentialsProvider {
             .unwrap_or_default()
     }
 
-    /// Creates the private folder, and takes the lock that every rozed process takes before
+    /// Creates the private folder, and takes the lock that every Lo process takes before
     /// changing the file. It's released when the returned file is dropped.
     fn lock_between_processes(&self) -> Result<File> {
         let dir = self.dir()?;
@@ -230,7 +230,7 @@ impl FileCredentialsProvider {
     }
 
     /// Loads the tokens to change them. A file that isn't valid JSON can't be fixed by hand
-    /// from rozed, and would block every change, so it's moved aside, still private, and rozed
+    /// from Lo, and would block every change, so it's moved aside, still private, and Lo
     /// starts again from no tokens.
     fn load_for_change(&self) -> Result<BTreeMap<String, StoredCredential>> {
         match self.try_load() {
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn two_stores_on_one_file_keep_each_others_tokens() {
-        // As two rozed processes would: each has its own store, with its own in-process lock.
+        // As two Lo processes would: each has its own store, with its own in-process lock.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials.json");
         let writers: Vec<_> = ["a", "b"]

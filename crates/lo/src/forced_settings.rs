@@ -1,9 +1,9 @@
-//! Zed settings rozed forces, whatever the user's settings say.
+//! Zed settings Lo forces, whatever the user's settings say.
 //!
 //! They sit in Zed's top settings layer (the "server" layer, merged after the user's), so a
 //! user's `settings.json` can't override them, and a repository's `.zed/settings.json` never
 //! applies at all ([`review_ui::local_project`]). They keep Zed's account, telemetry, update and AI
-//! code from starting, point every Zed service URL at a placeholder that rozed's HTTP client
+//! code from starting, point every Zed service URL at a placeholder that Lo's HTTP client
 //! refuses ([`crate::http`]), let only rust-analyzer start, and only with `--trust`, keep Prettier
 //! off, and narrow what rust-analyzer does.
 //!
@@ -28,23 +28,23 @@ pub const FORCED_SETTINGS: &str = r#"{
   "auto_update": false,
   // No AI features. This also keeps the multi-workspace sidebar off.
   "disable_ai": true,
-  // Zed's defaults have its extension host install the HTML extension from Zed's servers. rozed
+  // Zed's defaults have its extension host install the HTML extension from Zed's servers. Lo
   // doesn't start the extension host; if it ever does, this turns off that one default. Entries
   // in the user's settings still apply.
   "auto_install_extensions": { "html": false },
-  // Only rozed decides which worktrees are trusted to run language servers (`review_ui::trust`).
+  // Only Lo decides which worktrees are trusted to run language servers (`review_ui::trust`).
   "session": { "trust_all_worktrees": false },
-  // rozed titles its window after the active pull request (`review_ui::window_title`). Zed's
-  // title names the project's folders, "empty project" in rozed; this one never changes, so Zed
-  // never sets it again over rozed's.
-  "window_title_format": "rozed",
-  // No inline git blame. In rozed's partial clone, blaming a file downloads each earlier version
+  // Lo titles its window after the active pull request (`review_ui::window_title`). Zed's
+  // title names the project's folders, "empty project" in Lo; this one never changes, so Zed
+  // never sets it again over Lo's.
+  "window_title_format": "Lo",
+  // No inline git blame. In Lo's partial clone, blaming a file downloads each earlier version
   // of it, one request at a time: about 900 for sharkdp/fd#2212.
   "git": { "inline_blame": { "enabled": false } },
   // Only rust-analyzer can start, and only for Rust; no other language gets a language server.
-  // Without `--trust`, rozed turns Rust's off too. Prettier never runs: rozed never formats, and
+  // Without `--trust`, Lo turns Rust's off too. Prettier never runs: Lo never formats, and
   // Prettier loads a repository's plugins. A language's own entry wins over these defaults, so
-  // rozed adds them for every language it knows. Later milestones add servers one at a time.
+  // Lo adds them for every language it knows. Later milestones add servers one at a time.
   "language_servers": [],
   "prettier": { "allowed": false },
   "languages": {
@@ -53,13 +53,13 @@ pub const FORCED_SETTINGS: &str = r#"{
   "lsp": {
     "rust-analyzer": {
       "binary": {
-        // Use the rust-analyzer rozed downloads from its GitHub releases, never one found on
+        // Use the rust-analyzer Lo downloads from its GitHub releases, never one found on
         // PATH. With rustup, that one is a proxy that runs, and may first install, whatever
         // toolchain the repository's rust-toolchain.toml names.
         "ignore_system_version": true,
         // The environment of rust-analyzer and the cargo and rustc it runs. No rustc wrapper,
-        // whether the repository's .cargo/config.toml or rozed's environment names one, and
-        // rustup never installs a toolchain. rozed adds RUSTUP_TOOLCHAIN when it finds a
+        // whether the repository's .cargo/config.toml or Lo's environment names one, and
+        // rustup never installs a toolchain. Lo adds RUSTUP_TOOLCHAIN when it finds a
         // toolchain (`crate::rust_toolchain`); rustup prefers it to a rust-toolchain.toml.
         "env": {
           "RUSTC_WRAPPER": "",
@@ -81,9 +81,9 @@ pub const FORCED_SETTINGS: &str = r#"{
 /// Which language servers can start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Servers<'a> {
-    /// None, for any language: rozed wasn't asked to trust a pull request.
+    /// None, for any language: Lo wasn't asked to trust a pull request.
     None,
-    /// rust-analyzer, for Rust, with rustup pinned to `toolchain` when rozed found one
+    /// rust-analyzer, for Rust, with rustup pinned to `toolchain` when Lo found one
     /// ([`crate::rust_toolchain`]). Only the trusted pull request's checkout runs it.
     RustAnalyzer { toolchain: Option<&'a str> },
 }
@@ -92,7 +92,7 @@ pub enum Servers<'a> {
 /// what `servers` allows for Rust.
 pub fn forced_settings(languages: &[LanguageName], servers: Servers) -> String {
     let mut settings: serde_json::Value = settings::parse_json_with_comments(FORCED_SETTINGS)
-        .expect("rozed's forced settings are valid");
+        .expect("Lo's forced settings are valid");
     let forced_languages = settings["languages"]
         .as_object_mut()
         .expect("the forced settings have a languages object");
@@ -123,7 +123,7 @@ pub fn apply(languages: &[LanguageName], servers: Servers, cx: &mut App) {
     SettingsStore::update_global(cx, |store, cx| {
         store
             .set_server_settings(&settings, cx)
-            .expect("rozed's forced settings are valid");
+            .expect("Lo's forced settings are valid");
     });
 }
 
@@ -165,10 +165,7 @@ mod tests {
             Some(&false)
         );
         assert_eq!(content.session.unwrap().trust_all_worktrees, Some(false));
-        assert_eq!(
-            content.workspace.window_title_format.as_deref(),
-            Some("rozed")
-        );
+        assert_eq!(content.workspace.window_title_format.as_deref(), Some("Lo"));
     }
 
     /// User settings that ask for everything the forced settings turn off.
@@ -243,7 +240,7 @@ mod tests {
 
     #[gpui::test]
     fn forced_settings_win_over_later_user_settings(cx: &mut gpui::TestAppContext) {
-        // rozed applies them at startup, before reading the user's settings file.
+        // Lo applies them at startup, before reading the user's settings file.
         cx.update(|cx| {
             settings::init(cx);
             apply(&[], TRUSTED, cx);
@@ -264,7 +261,7 @@ mod tests {
         }
     }
 
-    /// The language servers each of the languages rozed knows would start under `servers`, and
+    /// The language servers each of the languages Lo knows would start under `servers`, and
     /// whether any would run Prettier.
     fn started_servers(
         servers: Servers,
@@ -376,7 +373,7 @@ mod tests {
         fake_servers.try_recv().is_ok()
     }
 
-    /// Why rozed turns every language server off without `--trust`: Zed trusts the worktree a
+    /// Why Lo turns every language server off without `--trust`: Zed trusts the worktree a
     /// dropped file opens in, so rust-analyzer would start there.
     #[gpui::test]
     async fn trusted_rust_analyzer_starts_for_a_file_zed_trusts(cx: &mut gpui::TestAppContext) {

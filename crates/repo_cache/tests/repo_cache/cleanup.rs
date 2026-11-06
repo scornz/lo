@@ -133,7 +133,7 @@ fn clear_leaves_a_clone_another_lo_is_making_alone() {
     let server = server();
     let (dir, cache) = server.cache();
     use_repo(&cache, "old");
-    // Another rozed is making a clone, in a temporary folder of its own.
+    // Another Lo is making a clone, in a temporary folder of its own.
     let making = dir.path().join("tmp/99999-0.git");
     fs::create_dir_all(&making).unwrap();
     fs::write(making.join("HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -189,7 +189,7 @@ fn a_clone_being_written_to_is_kept() {
     let (dir, cache) = server.cache();
     let old = use_repo(&cache, "old");
     last_opened_days_ago(&old, 31);
-    // Another rozed holds the clone's lock.
+    // Another Lo holds the clone's lock.
     let lock = File::create(dir.path().join("locks/github.com/owner/old.lock")).unwrap();
     lock.lock().unwrap();
 
@@ -303,7 +303,7 @@ fn a_clone_still_open_is_kept() {
     let open = open_and_check_out(&cache, "old");
     last_opened_days_ago(open.git_dir(), 31);
 
-    // Another rozed's launch, while this one still shows a pull request from the clone.
+    // Another Lo's launch, while this one still shows a pull request from the clone.
     assert_eq!(
         cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
         Vec::<String>::new()

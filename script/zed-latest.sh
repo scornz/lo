@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Builds rozed against a newer Zed release and reports what breaks, so a Zed bump starts with a list.
+# Builds Lo against a newer Zed release and reports what breaks, so a Zed bump starts with a list.
 # The weekly workflow (.github/workflows/weekly-zed.yml) runs it against Zed's latest release.
 #
 # Usage: script/zed-latest.sh [--tag <Zed tag>] [--skip-pinned] [--dir <folder>]
 #
 #   --tag          the Zed release, such as v1.28.0 or v1.28.0-pre. Defaults to Zed's latest
 #                  release, found with `gh`.
-#   --skip-pinned  if the release is the one rozed pins, build nothing and say so: CI already builds
+#   --skip-pinned  if the release is the one Lo pins, build nothing and say so: CI already builds
 #                  it. On when --tag isn't given.
 #   --dir          a new or empty folder to work in. Defaults to a new temporary folder.
 #
-# It checks rozed's HEAD out into a git worktree, <folder>/rozed, and puts a scratch Zed repository
-# in its third_party/zed: the release's tag with rozed's patches cherry-picked on top. The patches
-# are the commits between the Zed tag rozed pins and the commit it pins (CLAUDE.md, "Zed
+# It checks Lo's HEAD out into a git worktree, <folder>/lo, and puts a scratch Zed repository
+# in its third_party/zed: the release's tag with Lo's patches cherry-picked on top. The patches
+# are the commits between the Zed tag Lo pins and the commit it pins (CLAUDE.md, "Zed
 # submodule"). In the worktree it runs `cargo xtask sync-zed --seed-lock`, `rustup toolchain
 # install` and `cargo fetch`, then `cargo fmt --check`, `cargo build`, `cargo clippy` and `cargo
 # test`, building into the worktree's own target/.
@@ -27,7 +27,7 @@
 # (about 1.5 GB, not removed). It pushes nothing.
 #
 # Run it under `mise exec --`, so cargo finds mise's cmake. A build needs about 6 GB in <folder>;
-# remove it with `git worktree remove --force <folder>/rozed && rm -rf <folder>`.
+# remove it with `git worktree remove --force <folder>/lo && rm -rf <folder>`.
 set -Eeuo pipefail
 # Anything that fails outside the steps below is the script's own failure, not Zed's.
 trap 'exit 2' ERR
@@ -75,7 +75,7 @@ else
   [[ -z $(ls -A "$dir") ]] || die "$dir isn't empty"
 fi
 dir=$(cd "$dir" && pwd -P)
-wt=$dir/rozed
+wt=$dir/lo
 zed=$wt/third_party/zed
 logs=$dir/logs
 report=$dir/report.md
@@ -100,13 +100,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# What HEAD pins: a patch branch such as rozed/v1.27.0 (or rozed/v1.27.0-2, a rewrite of the
-# patches on the same release), and a commit on it.
+# What HEAD pins: a patch branch such as lo/v1.28.0 (or lo/v1.28.0-2, a rewrite of the patches
+# on the same release; the first branch, rozed/v1.27.0, predates the name), and a commit on it.
 branch=$(git config --blob HEAD:.gitmodules submodule.third_party/zed.branch) ||
   die "HEAD's .gitmodules names no branch for third_party/zed"
 fork=$(git config --blob HEAD:.gitmodules submodule.third_party/zed.url)
 pinned=$(git rev-parse HEAD:third_party/zed)
-base=${branch#rozed/}
+base=${branch#*/}
 base=${base%-[0-9]*}
 upstream=https://github.com/zed-industries/zed.git
 
@@ -123,9 +123,9 @@ tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-pre)?$'
 lo_short=$(git rev-parse --short HEAD)
 if [[ $skip_pinned -eq 1 && $tag == "$base" ]]; then
   {
-    echo "## rozed against Zed $tag"
+    echo "## Lo against Zed $tag"
     echo
-    echo "rozed already builds against Zed $tag, the release it pins, at rozed \`$lo_short\`." \
+    echo "Lo already builds against Zed $tag, the release it pins, at Lo \`$lo_short\`." \
       "CI checks that build on every pull request, so there's nothing newer to try."
   } >"$report"
   cat "$report"
@@ -133,7 +133,7 @@ if [[ $skip_pinned -eq 1 && $tag == "$base" ]]; then
 fi
 
 mkdir "$logs"
-echo "zed-latest: building rozed $lo_short against Zed $tag in $dir"
+echo "zed-latest: building Lo $lo_short against Zed $tag in $dir"
 git worktree add --quiet --detach "$wt" HEAD
 added=1
 
@@ -214,12 +214,12 @@ for sha in $merges; do
   patch_list+=" be a line of single commits."$'\n'
 done
 if [[ $failed -eq 0 ]]; then
-  row "Replay rozed's $total patches" passes
+  row "Replay Lo's $total patches" passes
 elif [[ $failed -eq 1 ]]; then
-  row "Replay rozed's $total patches" "**fails**: 1 doesn't apply"
+  row "Replay Lo's $total patches" "**fails**: 1 doesn't apply"
   broken=1
 else
-  row "Replay rozed's $total patches" "**fails**: $failed don't apply"
+  row "Replay Lo's $total patches" "**fails**: $failed don't apply"
   broken=1
 fi
 
@@ -311,7 +311,7 @@ outside_failure() {
   esac
   line=$(plain "$logs/$name.log" | LC_ALL=C grep -vE '^ *[0-9]* *\||^warning: ' |
     LC_ALL=C grep -m 1 -E "$pattern" || true)
-  [[ -z $line ]] || die "$label failed outside Zed and rozed: $line (see $logs/$name.log)"
+  [[ -z $line ]] || die "$label failed outside Zed and Lo: $line (see $logs/$name.log)"
 }
 
 # step <name> <command...>: runs the command and adds a row for it to the report. Returns the
@@ -354,7 +354,7 @@ else
   fi
   host=$(cd "$wt" && rustc -vV | sed -n 's/^host: //p')
   run fetch cargo fetch --locked --target "$host" ||
-    die "couldn't download rozed's dependencies; see $logs/fetch.log"
+    die "couldn't download Lo's dependencies; see $logs/fetch.log"
 
   step fmt "${fmt[@]}" || true
   # A build first, so compile errors are reported once rather than by both clippy and the tests.
@@ -367,16 +367,16 @@ else
 fi
 
 {
-  echo "## rozed against Zed $tag"
+  echo "## Lo against Zed $tag"
   echo
   if [[ $broken -eq 0 ]]; then
-    echo "rozed builds and passes its checks against Zed $tag."
+    echo "Lo builds and passes its checks against Zed $tag."
   else
-    echo "**Zed $tag breaks rozed.**"
+    echo "**Zed $tag breaks Lo.**"
   fi
   echo
-  echo "Zed [$tag](https://github.com/zed-industries/zed/releases/tag/$tag) with rozed's patches" \
-    "from \`$branch\` (\`$pinned_short\`), at rozed \`$lo_short\`."
+  echo "Zed [$tag](https://github.com/zed-industries/zed/releases/tag/$tag) with Lo's patches" \
+    "from \`$branch\` (\`$pinned_short\`), at Lo \`$lo_short\`."
   if [[ -n $rust_zed && $rust_zed != "$rust_lo" ]]; then
     echo "Zed $tag moves Rust from $rust_lo to $rust_zed."
   fi

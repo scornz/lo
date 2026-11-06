@@ -1,6 +1,6 @@
-//! rozed, a read-only GitHub pull request reviewer for macOS, built on Zed's crates.
+//! Lo, a read-only GitHub pull request reviewer for macOS, built on Zed's crates.
 //!
-//! Startup follows Zed's own (`third_party/zed/crates/zed/src/main.rs`) without the parts rozed
+//! Startup follows Zed's own (`third_party/zed/crates/zed/src/main.rs`) without the parts Lo
 //! leaves out: no Zed account, telemetry, auto-update, extensions, AI or collaboration.
 
 mod accounts_ui;
@@ -40,7 +40,7 @@ use review_ui::{Trust, local_copies, local_project, trust};
 use crate::forced_settings::Servers;
 use crate::http::{ZED_SERVICES_PLACEHOLDER, ZedHostGuard};
 
-/// Set while rozed runs, so a rozed started by its own shell-environment capture can tell.
+/// Set while Lo runs, so a Lo started by its own shell-environment capture can tell.
 const SHELL_ENV_GUARD: &str = "LO_PARENT_PID";
 
 const USAGE: &str = "usage: lo [--trust] [<pull request link>]
@@ -48,19 +48,19 @@ example: lo https://github.com/sharkdp/fd/pull/2212
 
   --trust  Check the pull request out and run rust-analyzer on it. rust-analyzer runs cargo
            and rustc there, which the repository can point at its own programs, so only trust
-           a pull request whose code you'd run. Without it, rozed shows the diff from git, with
+           a pull request whose code you'd run. Without it, Lo shows the diff from git, with
            no checkout and no language server.";
 
 fn main() {
     let launched = Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        // A pull request's images are decoded by rozed run as a helper process, which reads one
+        // A pull request's images are decoded by Lo run as a helper process, which reads one
         // image on stdin, writes its preview on stdout and exits. It's matched first: the helper
-        // runs inside rozed, and must never start the app or capture an environment.
+        // runs inside Lo, and must never start the app or capture an environment.
         Some(flag) if flag == review_ui::PREVIEW_HELPER_FLAG => review_ui::serve_preview_helper(),
         Some("--version") => {
-            println!("rozed {}", version());
+            println!("Lo {}", version());
             return;
         }
         // Zed's crates learn a shell's environment by running this executable with `--printenv`
@@ -71,7 +71,7 @@ fn main() {
         }
         // Zed's askpass crate makes this executable the program git and ssh run to ask for a
         // password, through a script that runs `lo --askpass=<socket>` with the prompt on
-        // stdin. rozed passes the prompt to the running rozed over the socket and prints the
+        // stdin. Lo passes the prompt to the running Lo over the socket and prints the
         // answer, as Zed does.
         Some(flag) if flag == "--askpass" || flag.starts_with("--askpass=") => {
             let socket = flag
@@ -79,7 +79,7 @@ fn main() {
                 .or(args.get(1).map(String::as_str))
                 .filter(|socket| !socket.is_empty());
             let Some(socket) = socket else {
-                eprintln!("rozed: --askpass needs a socket: --askpass=<socket>");
+                eprintln!("lo: --askpass needs a socket: --askpass=<socket>");
                 std::process::exit(2);
             };
             askpass::main(socket);
@@ -90,15 +90,15 @@ fn main() {
     let options = match parse_args(&args) {
         Ok(options) => options,
         Err(error) => {
-            eprintln!("rozed: {error}\n\n{USAGE}");
+            eprintln!("lo: {error}\n\n{USAGE}");
             std::process::exit(2);
         }
     };
-    // If `--printenv` ever stops being handled above, every capture would start another rozed,
-    // which would capture again. Refuse to start inside a running rozed instead.
+    // If `--printenv` ever stops being handled above, every capture would start another Lo,
+    // which would capture again. Refuse to start inside a running Lo instead.
     if let Some(parent) = std::env::var_os(SHELL_ENV_GUARD) {
         eprintln!(
-            "rozed: not starting, because rozed (pid {}) started this process",
+            "lo: not starting, because Lo (pid {}) started this process",
             parent.to_string_lossy()
         );
         std::process::exit(1);
@@ -110,16 +110,16 @@ fn main() {
         // Debug builds of Zed's crates turn on every staff-only feature flag unless this is set.
         // Set it so debug builds behave like release ones.
         std::env::set_var("ZED_DISABLE_STAFF", "1");
-        // Zed's client prefers this to the `server_url` setting, which rozed forces.
+        // Zed's client prefers this to the `server_url` setting, which Lo forces.
         std::env::remove_var("ZED_SERVER_URL");
     }
 
     if let Err(error) = create_dirs() {
-        eprintln!("rozed: {error:#}");
+        eprintln!("lo: {error:#}");
         std::process::exit(1);
     }
     init_logging();
-    log::info!("starting rozed {}", version());
+    log::info!("starting Lo {}", version());
     util::increase_open_file_limit().log_err();
 
     let app = gpui_platform::application().with_assets(Assets);
@@ -130,7 +130,7 @@ fn main() {
     ));
     let fs = RealFs::new(None, app.background_executor());
     // Started from Finder rather than a shell: load the login shell's environment, run in the home
-    // folder, so git and language servers are on PATH. The project copies rozed's environment
+    // folder, so git and language servers are on PATH. The project copies Lo's environment
     // when it's made, so the window waits for this.
     let login_shell_environment: Option<Task<()>> = (!std::io::stdout().is_terminal()).then(|| {
         app.background_executor().spawn(async {
@@ -159,7 +159,7 @@ fn main() {
         cx.set_http_client(http.clone());
         <dyn fs::Fs>::set_global(fs.clone(), cx);
 
-        // rozed never signs in to Zed, so this client never connects. It's here because Zed's
+        // Lo never signs in to Zed, so this client never connects. It's here because Zed's
         // workspace and project take one.
         let client = Client::new(
             Arc::new(clock::RealSystemClock),
@@ -176,7 +176,7 @@ fn main() {
         let languages = Arc::new(languages);
         let node_runtime = NodeRuntime::unavailable();
         languages::init(languages.clone(), fs.clone(), node_runtime.clone(), cx);
-        // rust-analyzer runs only on a trusted pull request, with the toolchain rozed finds.
+        // rust-analyzer runs only on a trusted pull request, with the toolchain Lo finds.
         let rust_toolchain = options.trust.then(rust_toolchain::find).flatten();
         if options.trust {
             match &rust_toolchain {
@@ -214,9 +214,7 @@ fn main() {
         AppState::set_global(app_state.clone(), cx);
 
         theme_settings::init(theme::LoadThemes::All(Box::new(Assets)), cx);
-        Assets
-            .load_fonts(cx)
-            .expect("loading rozed's embedded fonts");
+        Assets.load_fonts(cx).expect("loading Lo's embedded fonts");
         app_state.languages.set_theme(cx.theme().clone());
         cx.observe_global::<theme::GlobalTheme>({
             let languages = app_state.languages.clone();
@@ -231,11 +229,11 @@ fn main() {
         review_ui::init(accounts, cx);
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
-        cx.set_menus([Menu::new("rozed").items([
+        cx.set_menus([Menu::new("Lo").items([
             MenuItem::action("Open Pull Request…", review_ui::OpenPullRequest),
             MenuItem::action("Accounts…", accounts_ui::OpenAccounts),
             MenuItem::separator(),
-            MenuItem::action("Quit rozed", zed_actions::Quit),
+            MenuItem::action("Quit Lo", zed_actions::Quit),
         ])]);
         // Closing the last window quits.
         cx.on_window_closed(|cx, _| {
@@ -261,7 +259,7 @@ fn main() {
     });
 }
 
-/// rozed's version, from its Cargo manifest.
+/// Lo's version, from its Cargo manifest.
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -307,7 +305,7 @@ fn parse_args(args: &[String]) -> anyhow::Result<Options> {
     })
 }
 
-/// Creates rozed's folders. Zed's `paths` crate, patched to use the name rozed, puts them in
+/// Creates Lo's folders. Zed's `paths` crate, patched to use the name Lo, puts them in
 /// `~/.config/lo`, `~/Library/Application Support/Lo`, `~/Library/Caches/Lo` and
 /// `~/Library/Logs/Lo`.
 fn create_dirs() -> anyhow::Result<()> {
@@ -329,7 +327,7 @@ fn create_dirs() -> anyhow::Result<()> {
 fn init_logging() {
     zlog::init();
     if let Err(error) = zlog::init_output_file(paths::log_file(), Some(paths::old_log_file())) {
-        eprintln!("rozed: can't open {}: {error}", paths::log_file().display());
+        eprintln!("lo: can't open {}: {error}", paths::log_file().display());
         zlog::init_output_stderr();
     }
     if std::io::stdout().is_terminal() {
@@ -367,7 +365,7 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
     );
     WindowOptions {
         titlebar: Some(TitlebarOptions {
-            title: Some("rozed".into()),
+            title: Some("Lo".into()),
             ..Default::default()
         }),
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -379,7 +377,7 @@ fn window_options(_display: Option<uuid::Uuid>, cx: &mut App) -> WindowOptions {
     }
 }
 
-/// Opens rozed's window, with the pull request in a tab, or without one the pull requests opened
+/// Opens Lo's window, with the pull request in a tab, or without one the pull requests opened
 /// recently.
 fn open_window(
     app_state: Arc<AppState>,
@@ -407,7 +405,7 @@ fn open_window(
             // for one.
             cx.new(|cx| MultiWorkspace::new(workspace, window, cx))
         })
-        .context("opening rozed's window")?;
+        .context("opening Lo's window")?;
     log::info!("window open {:?} after launch", launched.elapsed());
     window.update(cx, |multi_workspace, window, cx| {
         let workspace = multi_workspace.workspace().clone();
@@ -437,7 +435,7 @@ fn open_window(
 mod tests {
     use super::*;
 
-    /// Whether `version` parses the way Zed's `release_channel` parses rozed's at startup.
+    /// Whether `version` parses the way Zed's `release_channel` parses Lo's at startup.
     fn is_semver(version: &str) -> bool {
         semver::Version::parse(version).is_ok()
     }

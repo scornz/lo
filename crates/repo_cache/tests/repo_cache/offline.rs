@@ -1,5 +1,5 @@
 //! Reading a clone offline: only what's there, without the server, without downloading anything,
-//! and without waiting for another rozed's fetch.
+//! and without waiting for another Lo's fetch.
 
 use std::fs::File;
 use std::sync::{Arc, mpsc};
@@ -121,7 +121,7 @@ fn opening_offline_doesnt_wait_for_another_los_fetch() {
     let repo = cache.open("owner", "repo", None).unwrap();
     fetch(&repo, 1);
     drop(repo);
-    // Another rozed holds the clone's lock, as it does while fetching.
+    // Another Lo holds the clone's lock, as it does while fetching.
     let lock = File::options()
         .write(true)
         .open(cache.root().join("locks/github.com/owner/repo.lock"))

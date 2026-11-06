@@ -1,4 +1,4 @@
-//! Importing accounts from a fake `gh`: a shell script that answers the two commands rozed runs
+//! Importing accounts from a fake `gh`: a shell script that answers the two commands Lo runs
 //! and fails if its environment would let a token override its accounts.
 
 use std::os::unix::fs::PermissionsExt as _;
@@ -62,7 +62,7 @@ fn lists_ghs_accounts() {
 }
 
 /// The fake gh fails when `GH_TOKEN` or `GITHUB_TOKEN` reach it. They're only in its
-/// environment if rozed's own has them, so [`gh_never_sees_tokens_from_los_environment`] runs
+/// environment if Lo's own has them, so [`gh_never_sees_tokens_from_los_environment`] runs
 /// this in a copy of this test binary with both set.
 #[test]
 #[ignore = "run by gh_never_sees_tokens_from_los_environment, with tokens in the environment"]

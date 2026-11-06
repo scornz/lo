@@ -36,7 +36,7 @@ const ADDED: &str = "stack-b.md";
 /// The file pull request #1 adds, which #2's diff, from its merge base with `stack-a`, leaves out.
 const BELOW: &str = "stack-a.md";
 
-/// The variable rozed's credential helper reads the token from.
+/// The variable Lo's credential helper reads the token from.
 const TOKEN_VAR: &str = "LO_GIT_TOKEN";
 
 const JSON: &str = "application/vnd.github+json";
@@ -237,7 +237,7 @@ fn fetches_a_private_repository_through_the_credential_helper() {
     let anonymous = anonymous_git.summary();
     println!("with the token: {signed_in}");
     println!("without a token: {anonymous}");
-    // With the token, git asked rozed's helper for credentials, which read it from the variable
+    // With the token, git asked Lo's helper for credentials, which read it from the variable
     // set on that git.
     assert!(signed_in.helper_gets > 0, "{signed_in:?}");
     assert!(signed_in.with_token_var > 0, "{signed_in:?}");
@@ -383,7 +383,7 @@ struct TracedGit {
 /// What a [`TracedGit`] saw.
 #[derive(Debug)]
 struct Summary {
-    /// Times rozed ran git.
+    /// Times Lo ran git.
     runs: usize,
     /// Of those, the runs with the credential helper's variable set.
     with_token_var: usize,
@@ -391,7 +391,7 @@ struct Summary {
     git_processes: usize,
     /// Programs git started.
     children: usize,
-    /// Times git asked rozed's credential helper for credentials.
+    /// Times git asked Lo's credential helper for credentials.
     helper_gets: usize,
     /// Programs git started that ask for credentials: any credential helper or askpass.
     credential_programs: usize,
@@ -401,8 +401,8 @@ impl std::fmt::Display for Summary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "rozed ran git {} times, {} with the helper's variable set; {} git processes; \
-             git started {} programs, asked rozed's helper for credentials {} times, and ran {} \
+            "Lo ran git {} times, {} with the helper's variable set; {} git processes; \
+             git started {} programs, asked Lo's helper for credentials {} times, and ran {} \
              other credential helpers or askpass",
             self.runs,
             self.with_token_var,

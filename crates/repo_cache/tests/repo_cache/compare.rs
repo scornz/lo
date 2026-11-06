@@ -60,12 +60,12 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     /// Publishes the working copy's commit as pull request `number`'s head, with `base_branch` as
-    /// it is, and fetches both, as rozed does after each push. Returns the head.
+    /// it is, and fetches both, as Lo does after each push. Returns the head.
     fn push(&self, number: u64, base_branch: &str) -> Oid {
         self.push_revision(number, base_branch).head
     }
 
-    /// [`Self::push`], returning the revision with its base as rozed works it out: the merge
+    /// [`Self::push`], returning the revision with its base as Lo works it out: the merge
     /// base of its head with the base branch as it is now, when it was pushed.
     fn push_revision(&self, number: u64, base_branch: &str) -> Revision {
         self.remote.publish(&format!("refs/pull/{number}/head"));
@@ -1367,7 +1367,7 @@ fn a_comparison_keeps_no_repo_or_progress_callback() {
 }
 
 /// What `git` in `git_dir` does to drop what no ref reaches, with the server gone: repack at
-/// launch, as rozed's maintenance does, then fully, as it does with git older than 2.52, then
+/// launch, as Lo's maintenance does, then fully, as it does with git older than 2.52, then
 /// prune, as `git gc` would.
 fn repack_and_prune(f: &Fixture) {
     // A child process another test thread starts as a fetch lets go of the clone's lock can
@@ -1572,7 +1572,7 @@ fn a_replay_that_cant_download_is_a_fetch_error() {
     assert_eq!(paths(&comparison.files), ["c.txt"]);
 }
 
-/// A commit GitHub has but the clone never fetched, as when rozed learns of a revision from the
+/// A commit GitHub has but the clone never fetched, as when Lo learns of a revision from the
 /// timeline. git would download it, with its history, behind the caller's back.
 #[test]
 fn a_commit_the_clone_lacks_is_an_error_and_never_downloaded() {
@@ -1629,8 +1629,8 @@ fn a_commit_the_clone_lacks_is_an_error_and_never_downloaded() {
     assert_eq!(f.replay_pins(), []);
 }
 
-/// Pins outlive the process that made them: a rozed that quits runs no destructors, and one that
-/// crashes can't. Opening the clone with no rozed having it open removes them all.
+/// Pins outlive the process that made them: a Lo that quits runs no destructors, and one that
+/// crashes can't. Opening the clone with no Lo having it open removes them all.
 #[test]
 fn pins_go_once_the_clone_is_opened_with_no_lo_having_it_open() {
     let Rebased { f, m1, m2, r1, r2 } = rebased();
@@ -1643,7 +1643,7 @@ fn pins_go_once_the_clone_is_opened_with_no_lo_having_it_open() {
         .unwrap();
     let tree = comparison.old.to_string();
     let own = format!("refs/lo/replays/{tree}/{}", std::process::id());
-    // What another rozed that showed the comparison left when it quit.
+    // What another Lo that showed the comparison left when it quit.
     let left = format!("refs/lo/replays/{tree}/99999");
     git(f.repo.git_dir(), &["update-ref", &left, &tree]);
     let mut pins = vec![(tree.clone(), own), (tree.clone(), left)];

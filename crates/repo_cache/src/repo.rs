@@ -24,7 +24,7 @@ use crate::{Error, FetchFailure};
 /// call them from a background task, one step at a time: fetch, list the changed files, read
 /// them, and check out only for a trusted repository.
 ///
-/// Everything rozed fetches goes under its own refs, keyed by pull request so that no two branch
+/// Everything Lo fetches goes under its own refs, keyed by pull request so that no two branch
 /// names can collide, and nothing fetched is ever lost to a force-push:
 ///
 /// - `refs/lo/pull/<n>/head` and `refs/lo/pull/<n>/base`: pull request `n`'s head and its
@@ -75,7 +75,7 @@ pub(crate) enum Access {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequestRefs {
     pub number: u64,
-    /// `head.sha`: the head GitHub showed, which rozed checks the fetched head against.
+    /// `head.sha`: the head GitHub showed, which Lo checks the fetched head against.
     pub head: Option<Oid>,
     /// `base.ref`: the branch it merges into.
     pub base_branch: String,
@@ -189,7 +189,7 @@ impl Repo {
     /// Fetches a pull request's head and its base branch's tip in one fetch, and pins both.
     ///
     /// The head comes from `refs/pull/<n>/head`, which holds the head of a pull request from a
-    /// fork too. When GitHub's API reported another head, rozed fetches that one by ID and uses it,
+    /// fork too. When GitHub's API reported another head, Lo fetches that one by ID and uses it,
     /// since it's what GitHub shows; [`FetchedPull::head_source`] says which it used. When the
     /// base branch is gone, the API's base commit stands in for its tip.
     pub fn fetch_pull(&self, pull: &PullRequestRefs) -> Result<FetchedPull, Error> {
@@ -364,7 +364,7 @@ impl Repo {
     }
 
     /// Makes sure commit `oid` is in the clone, fetching it by ID if it isn't, and pins it at
-    /// `refs/lo/commits/<oid>`. For a revision rozed knows from GitHub's API but never fetched.
+    /// `refs/lo/commits/<oid>`. For a revision Lo knows from GitHub's API but never fetched.
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.
     pub fn fetch_commit(&self, oid: &Oid) -> Result<(), Error> {
         let _lock = self.lock()?;
@@ -803,9 +803,9 @@ mod tests {
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "rozed test")
+            .env("GIT_AUTHOR_NAME", "Lo test")
             .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
-            .env("GIT_COMMITTER_NAME", "rozed test")
+            .env("GIT_COMMITTER_NAME", "Lo test")
             .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();

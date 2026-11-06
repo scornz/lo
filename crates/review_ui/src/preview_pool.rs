@@ -4,7 +4,7 @@
 //! At most [`HELPERS`] run at once, from a queue. Each gets [`Limits::deadline`] of wall-clock
 //! time and [`Limits::max_resident`] of memory, polled while it runs, and is killed past either.
 //! Dropping a request takes it off the queue, or kills its helper. Whatever goes wrong, the image
-//! shows why it couldn't be previewed; rozed itself never decodes a pull request's image.
+//! shows why it couldn't be previewed; Lo itself never decodes a pull request's image.
 
 use std::future::Future;
 use std::io::{Read as _, Write as _};
@@ -215,7 +215,7 @@ fn helper_command() -> std::io::Result<Command> {
     Ok(command)
 }
 
-/// In tests, the test binary stands in for rozed: its `helper_process` test serves the request
+/// In tests, the test binary stands in for Lo: its `helper_process` test serves the request
 /// when it's told to.
 #[cfg(test)]
 fn helper_command() -> std::io::Result<Command> {
@@ -267,7 +267,7 @@ fn run_watched(
         return Err("it's too large to read".to_string());
     }
     let header = image_preview::request_header(job.format, job.fit)
-        .ok_or("rozed doesn't preview this format")?;
+        .ok_or("Lo doesn't preview this format")?;
     let mut command = helper_command().map_err(|error| format!("no helper: {error}"))?;
     command
         .env_remove("LO_PARENT_PID")
@@ -630,7 +630,7 @@ pub(crate) mod tests {
             ));
         }
         report.push_str(&format!(
-            "rozed's own memory grew at most {} MiB\n",
+            "Lo's own memory grew at most {} MiB\n",
             parent / MIB
         ));
         eprintln!("{report}");

@@ -1,4 +1,4 @@
-//! Revisions and comparisons for whole pull requests, from push records as GitHub's APIs and rozed's
+//! Revisions and comparisons for whole pull requests, from push records as GitHub's APIs and Lo's
 //! poller report them, modeled on real pull requests. SHAs are shortened to 8 characters.
 
 use std::time::{Duration, SystemTime};
@@ -361,7 +361,7 @@ fn a_review_on_a_commit_since_force_pushed_away() {
         None
     );
 
-    // GitHub no longer has r3, and rozed never fetched it.
+    // GitHub no longer has r3, and Lo never fetched it.
     assert!(revisions.mark_unavailable(R3));
     assert_eq!(heads(&revisions), [R1, R2, R3, R4, R5]);
     assert_eq!(
@@ -396,7 +396,7 @@ fn pushes_before_the_pull_request_opened() {
 
 // A review submitted after a force-push, on a head that push replaced, on a fork pull request
 // with no activity log and no check suites. The author pushed X and then Y, both unseen, then
-// force-pushed Z over Y; rozed first saw the pull request at Z. A review started on X was
+// force-pushed Z over Y; Lo first saw the pull request at Z. A review started on X was
 // submitted after that.
 
 const X: &str = "5e4d3c2b";
@@ -468,7 +468,7 @@ fn a_rebase() {
 }
 
 // Pushes only the poller saw: a fork pull request whose fork was deleted and that has no CI and no
-// reviews yet, open in rozed throughout.
+// reviews yet, open in Lo throughout.
 
 const POLLED_OPENED: &str = "2026-09-08T08:00:00Z";
 

@@ -1,4 +1,4 @@
-# rozed design
+# Lo design
 
 Approved on 2026-11-05.
 
@@ -20,7 +20,7 @@ Approved on 2026-11-05.
 
 ## 1. Overview and scope
 
-rozed ("read-only Zed") is a native macOS app for reviewing GitHub pull requests. It's for people
+Lo (as in "lo and behold") is a native macOS app for reviewing GitHub pull requests. It's for people
 who read far more code than they write, such as someone reviewing the PRs their coding agents open.
 It talks to GitHub directly and has no backend of its own.
 
@@ -38,11 +38,11 @@ It talks to GitHub directly and has no backend of its own.
 
 ### Principles
 
-- **Read-only.** rozed never edits files or pushes commits. It writes to GitHub only to review and
+- **Read-only.** Lo never edits files or pushes commits. It writes to GitHub only to review and
   merge: comments and their attachments, reviews, viewed marks, merges, queue and auto-merge
   changes, and changing a PR's base branch to form a stack.
 - **No AI.** No AI features, and none of Zed's AI crates.
-- **No backend, no telemetry.** rozed talks only to GitHub and to language servers' official
+- **No backend, no telemetry.** Lo talks only to GitHub and to language servers' official
   download sources. Updates come from GitHub Releases.
 - **Never runs a repo's code.** No dependency installs or build steps, and language servers run
   only on repos you trust.
@@ -54,24 +54,24 @@ It talks to GitHub directly and has no backend of its own.
   reviews, and the full conversation timeline.
 - **Later:** a cross-repo inbox, reactions, @-mention autocomplete, a browser extension, dependency
   types, GitHub Enterprise, and Linux and Windows. v1 is macOS only.
-- **Never:** editing code, applying suggestions (that's a commit), AI features, a rozed backend.
+- **Never:** editing code, applying suggestions (that's a commit), AI features, a Lo backend.
 
 ### Distribution
 
-Open source under GPL-3.0, which building on Zed's crates requires. rozed ships as a signed,
+Open source under GPL-3.0, which building on Zed's crates requires. Lo ships as a signed,
 notarized download and a Homebrew cask. It skips the Mac App Store, whose rules forbid
 downloading and running code, which language servers need.
 
 ## 2. Architecture
 
-rozed is a Rust app built on Zed's crates, which it uses as libraries.
+Lo is a Rust app built on Zed's crates, which it uses as libraries.
 
 ### Pinning Zed
 
 Zed sits in the repo as a git submodule at `third_party/zed`. The submodule points at a fork of Zed
-holding rozed's patch branch: a Zed release tag plus a short list of patches, one commit each.
-rozed's crates depend on Zed's by path. To update, rebase the patch branch onto a newer Zed release
-and fix whatever breaks in rozed. Cargo ignores a dependency's `[patch]` section, so rozed copies
+holding Lo's patch branch: a Zed release tag plus a short list of patches, one commit each.
+Lo's crates depend on Zed's by path. To update, rebase the patch branch onto a newer Zed release
+and fix whatever breaks in Lo. Cargo ignores a dependency's `[patch]` section, so Lo copies
 Zed's into its own workspace.
 
 ### Zed crates
@@ -82,9 +82,9 @@ Zed's into its own workspace.
 - **Left out:** Zed's agent and model crates, edit prediction providers, collaboration and calls,
   the terminal, the debugger, the extension store and Zed's auto-updater.
 - **Comes along unused:** some account, telemetry and AI-settings code that `editor` and
-  `workspace` depend on. rozed never starts it and configures no Zed endpoint.
+  `workspace` depend on. Lo never starts it and configures no Zed endpoint.
 
-### rozed's crates
+### Lo's crates
 
 | Crate | Does |
 |---|---|
@@ -101,10 +101,10 @@ Zed's into its own workspace.
 - **Built in:** the languages in Zed's `languages` crate, including TypeScript, JavaScript, Python,
   Rust and Go.
 - **Bundled extensions:** Swift, Kotlin and Terraform, plus other popular languages such as Ruby,
-  Java, C#, PHP and Elixir, run through Zed's extension runtime. The set is fixed when rozed is
+  Java, C#, PHP and Elixir, run through Zed's extension runtime. The set is fixed when Lo is
   built. There's no extension store, and nothing comes from Zed's servers.
 - **Language servers:** downloaded on first use from each one's official source, and only for
-  trusted repos. rozed uses an installed copy when it finds one.
+  trusted repos. Lo uses an installed copy when it finds one.
 
 ### Runtime
 
@@ -115,22 +115,22 @@ background executor.
 
 The first build is a bare app that opens a PR in Zed's side-by-side diff with a language server
 running. It proves the approach before anything else is built: it lists which Zed code is compiled
-in and confirms that nothing contacts Zed's servers. It also checks whether GitHub accepts rozed's
+in and confirms that nothing contacts Zed's servers. It also checks whether GitHub accepts Lo's
 sign-in for attachment uploads.
 
 ## 3. GitHub, git and accounts
 
 ### Sign-in
 
-- **Accounts.** Each account signs in through GitHub's device flow: rozed shows a code and opens
-  GitHub's sign-in page. rozed can also import accounts from the `gh` CLI. Tokens are stored in
+- **Accounts.** Each account signs in through GitHub's device flow: Lo shows a code and opens
+  GitHub's sign-in page. Lo can also import accounts from the `gh` CLI. Tokens are stored in
   the Keychain, one per account.
-- **Scopes.** rozed asks for `repo` (read and review private repos, and merge), `read:org` (team
+- **Scopes.** Lo asks for `repo` (read and review private repos, and merge), `read:org` (team
   review requests and code owner teams) and `workflow` (GitHub refuses to merge a PR that changes
   `.github/workflows` without it).
-- **Which account.** A PR opens with the account that can see its repo. If several can, rozed asks
+- **Which account.** A PR opens with the account that can see its repo. If several can, Lo asks
   once per owner and remembers the answer.
-- **Blocked by an org.** If an organization blocks third-party apps, rozed shows GitHub's link to
+- **Blocked by an org.** If an organization blocks third-party apps, Lo shows GitHub's link to
   request approval.
 
 ### GitHub API
@@ -139,10 +139,10 @@ sign-in for attachment uploads.
   the merge queue.
 - **REST** covers the Stacks API, async merges, a branch's rules and commit comparisons.
 - **Polling.** The open PR and its queue are checked every 15–30 seconds, everything else less
-  often, and everything slows to every 5 minutes while rozed is in the background. Each poll asks
+  often, and everything slows to every 5 minutes while Lo is in the background. Each poll asks
   first whether anything changed, and only then fetches the details. REST calls use ETags, so
   unchanged answers don't count against the rate limit.
-- **Rate limit.** rozed tracks how much of the limit is left, slows polling when it runs low and
+- **Rate limit.** Lo tracks how much of the limit is left, slows polling when it runs low and
   tells you when it does.
 
 ### Local data
@@ -150,7 +150,7 @@ sign-in for attachment uploads.
 - **Database.** A SQLite file in Application Support stores cached PR data for instant reopening,
   "last seen" revisions, which account to use per owner, trusted repos and recent PRs. Only the
   cached PR data can be thrown away safely.
-- **Repo copies.** Each repo gets a bare partial clone in `~/Library/Caches/Lo`. rozed fetches
+- **Repo copies.** Each repo gets a bare partial clone in `~/Library/Caches/Lo`. Lo fetches
   PR heads (`refs/pull/<n>/head`, including PRs from forks) and base branches as it needs them. It
   keeps every revision it has fetched under its own refs, so force-pushed commits survive. Git
   signs in with the account's token through `GIT_ASKPASS`, and your git config is never touched.
@@ -175,7 +175,7 @@ several children, so a stack is a tree, with children in the order they were ope
 
 ### Finding stacks
 
-When you open a PR, rozed loads its repo's open PRs, with their branches and recent commits, in a
+When you open a PR, Lo loads its repo's open PRs, with their branches and recent commits, in a
 few GraphQL pages. It builds the stack graph from that and refreshes it as it polls.
 
 ### Layer diffs
@@ -200,9 +200,9 @@ the whole stack in one tab, at that layer.
 
 1. Any PR found through shared commits gets its base branch pointed at the head branch of the PR
    below it.
-2. rozed creates the stack through the Stacks API, from the bottom PR to the top.
+2. Lo creates the stack through the Stacks API, from the bottom PR to the top.
 
-GitHub stacks can't branch, so for a tree rozed converts the path through the layer you're on. The
+GitHub stacks can't branch, so for a tree Lo converts the path through the layer you're on. The
 option isn't offered when a PR comes from a fork, when the repo doesn't have stacks turned on, or
 when a PR is already in a merge queue.
 
@@ -210,7 +210,7 @@ when a PR is already in a merge queue.
 
 ### The diff view
 
-rozed uses Zed's side-by-side diff, which keeps both sides aligned.
+Lo uses Zed's side-by-side diff, which keeps both sides aligned.
 
 - **Layout.** Side-by-side by default. `Tab` switches sides, and one key switches to inline.
 - **Changes.** Changed words are highlighted within changed lines.
@@ -233,9 +233,9 @@ to each other ("moved from `api/user.ts:40`"), and only edits inside the block a
 ### Syntax-aware view
 
 An optional view for each file, switched with one key. It uses Zed's tree-sitter grammars with
-difftastic's algorithm, whose MIT license lets rozed use it. Each column shows real lines with
+difftastic's algorithm, whose MIT license lets Lo use it. Each column shows real lines with
 real line numbers, so a comment lands on the line you pick. If GitHub won't take a comment on that
-line, rozed offers a file-level comment instead. Files with no grammar, or too large for the
+line, Lo offers a file-level comment instead. Files with no grammar, or too large for the
 algorithm, stay in the normal diff.
 
 ### File order
@@ -256,7 +256,7 @@ branch.
 - **Picker.** Compare any two revisions. Two markers show where you left off: "your last review"
   (the commit your latest review was made on) and "last seen here" (the newest revision on screen
   when you last left the PR, saved on this Mac only).
-- **Default.** rozed compares the more recent of those two markers with the latest revision. With
+- **Default.** Lo compares the more recent of those two markers with the latest revision. With
   neither marker, it shows the full diff. If nothing changed since the marker, it shows the full
   diff with a note: "Nothing new since r4."
 - **File list.** When comparing two revisions, the file list shows only files that changed between
@@ -264,18 +264,18 @@ branch.
 
 ### Rebase-aware comparison
 
-When the base moved between two revisions, rozed replays the older revision's changes onto the
+When the base moved between two revisions, Lo replays the older revision's changes onto the
 newer base in its local copy (`git merge-tree`). It then compares the result with the newer
-revision, so only the author's changes show. If the replay conflicts, rozed falls back to a plain
+revision, so only the author's changes show. If the replay conflicts, Lo falls back to a plain
 comparison and says so. The same applies to a stacked layer when the layer below it gets a new
 push.
 
 ### Viewed marks
 
-- **GitHub's marks.** rozed reads and sets GitHub's own per-file viewed marks, so they match the
+- **GitHub's marks.** Lo reads and sets GitHub's own per-file viewed marks, so they match the
   web UI and other Macs. Each PR in a stack has its own marks.
 - **Changed since viewed.** When a push changes a viewed file, GitHub resets it to "changed since
-  viewed." rozed remembers, on this Mac, the revision at which you marked each file viewed, and
+  viewed." Lo remembers, on this Mac, the revision at which you marked each file viewed, and
   opens the file to what changed since then. For a file marked viewed elsewhere, it shows what
   changed since your last review instead.
 - **Keys.** `e` marks a file viewed and moves to the next unviewed file. Pressing it again on a
@@ -288,10 +288,10 @@ push.
 Highlighting, a file outline, and go-to-definition and find-references by name across the whole
 repo. The right side of a diff navigates the new commit, and the left side the old one.
 
-- **Index.** rozed builds a symbol index from tree-sitter tag queries, reading files from its local
+- **Index.** Lo builds a symbol index from tree-sitter tag queries, reading files from its local
   copy. The first index of a repo downloads its files at that commit, and later commits reuse most
   of them.
-- **How the editor uses it.** The index runs as a built-in language server: rozed starts a copy of
+- **How the editor uses it.** The index runs as a built-in language server: Lo starts a copy of
   itself in a server mode. Zed's editor talks to it like any other language server, so this needs
   no changes to Zed.
 - **Name collisions.** When a name matches several definitions, the peek lists them all: same file
@@ -321,7 +321,7 @@ from a fork is someone else's code, even in a repo you trust.
 
 - **Peek.** `gd` opens the definition in a peek under the line. One key opens the full file, read
   only, in the same tab, and `⌃o` brings you back to the diff.
-- **Into the diff.** If the definition is in a file the PR changes, rozed jumps to that spot in the
+- **Into the diff.** If the definition is in a file the PR changes, Lo jumps to that spot in the
   diff instead of the plain file.
 - **Other keys.** `gr` lists references in a panel. `K` shows the type hover. `⌃o` and `⌃i` go back
   and forward.
@@ -343,17 +343,17 @@ from a fork is someone else's code, even in a repo you trust.
 - **Outdated threads.** A thread whose line has since changed appears where it was written when you
   view that revision, and is labeled outdated elsewhere.
 - **Attachments.** Drag, paste or pick a file (PNG, JPEG, GIF, WebP, SVG, MP4, MOV or WebM) into
-  any comment box, including review comments and the review summary. rozed uploads it the way
+  any comment box, including review comments and the review summary. Lo uploads it the way
   `gh --attach` does and inserts the Markdown. Images and GIFs can be up to 10 MB, and videos 10 MB
   on free plans or 100 MB on paid ones. Uploading needs write access to the repo. Where you don't
-  have it, rozed says so, and you can still paste or drop a GIF's web address, which goes in as an
-  image. If GitHub won't take rozed's sign-in for uploads, rozed uses an imported `gh` sign-in, and
+  have it, Lo says so, and you can still paste or drop a GIF's web address, which goes in as an
+  image. If GitHub won't take Lo's sign-in for uploads, Lo uses an imported `gh` sign-in, and
   without one it accepts web addresses only. There's no built-in GIF search.
 
 ### Reviews
 
 - **Pending review.** Comments collect into a pending review by default. It's stored on GitHub, so
-  it survives quitting rozed and shows as pending on the web. `C` posts one comment right away
+  it survives quitting Lo and shows as pending on the web. `C` posts one comment right away
   instead.
 - **Submitting.** `⌘⏎` opens the submit dialog. It has a summary box, a choice of Comment, Approve
   or Request changes, the number of pending comments, and the account you're acting as. On your own
@@ -371,7 +371,7 @@ The PR's full GitHub timeline: the description, comments, reviews, pushes and fo
 results, labels, assignments, review requests, cross-references, merges, queue events and
 deployments. Markdown is rendered, GIFs play, and images load with the account's token so images in
 private repos show. A comment box at the bottom posts a comment on the PR itself. The PR's title,
-description, labels, reviewers and draft status are read-only in rozed.
+description, labels, reviewers and draft status are read-only in Lo.
 
 ## 9. Merging and the merge queue
 
@@ -380,42 +380,42 @@ description, labels, reviewers and draft status are read-only in rozed.
 Every PR tab shows a one-line merge status in its header, and `m` opens the merge panel. When a PR
 can't merge, the panel lists why: missing approvals (including which code owners), required checks
 that failed, are running or haven't reported (each linked to its run), unresolved conversations,
-conflicts, an out-of-date branch, draft status, and other rules on the branch. rozed pieces this
-together from several API calls. If GitHub reports a block rozed can't explain, it says so and
+conflicts, an out-of-date branch, draft status, and other rules on the branch. Lo pieces this
+together from several API calls. If GitHub reports a block Lo can't explain, it says so and
 links to the PR on GitHub.
 
 ### Merging
 
-- **Method.** Only the methods the repo allows are offered. rozed remembers the last one you used
+- **Method.** Only the methods the repo allows are offered. Lo remembers the last one you used
   in each repo. A squash commit's title and message start from the repo's setting and can be edited.
 - **Queue.** If the base branch requires a merge queue, the button becomes "Add to merge queue,"
   and the queue's own settings decide the method and message.
 - **Confirmation.** Every merge asks first. The confirmation names the account, the method, the
   target branch and, for a stack, every layer that will merge.
-- **Branches.** rozed never deletes branches. The repo's own auto-delete setting applies.
-- **Out-of-date branches.** rozed shows that a branch is out of date but doesn't offer GitHub's
+- **Branches.** Lo never deletes branches. The repo's own auto-delete setting applies.
+- **Out-of-date branches.** Lo shows that a branch is out of date but doesn't offer GitHub's
   "Update branch," because that adds a commit to the PR. The author or agent updates it.
 
 ### Approve and ship
 
 `⌘⇧⏎` approves (skipped on your own PRs), then merges or joins the queue if nothing blocks it. If
-it's only waiting on checks or other approvals, rozed turns on auto-merge so the PR goes in once
+it's only waiting on checks or other approvals, Lo turns on auto-merge so the PR goes in once
 ready. If something waiting won't fix blocks it (conflicts, failed checks, changes requested), it
 stops after approving and shows why. One confirmation lists exactly what will happen.
 
 ### Stacks
 
 Merging a layer of a GitHub stack merges every layer below it, as one unit: they merge, join the
-queue or don't merge at all. rozed submits it through the async merge API and shows progress until
+queue or don't merge at all. Lo submits it through the async merge API and shows progress until
 it's done. Other chains are offered "Make this a GitHub stack" first (section 4). When that isn't
-possible, rozed merges one layer at a time: it merges the bottom PR, points the next one at the
+possible, Lo merges one layer at a time: it merges the bottom PR, points the next one at the
 root branch and marks it "needs rebase."
 
 ### The merge queue
 
 - **Queue view.** For each base branch: every entry with its position, state, time in the queue and
   estimated time to merge, which entries are being tested together, and your PRs highlighted.
-- **Removals.** When a PR leaves the queue, rozed says why (failed checks, a conflict, a timeout or
+- **Removals.** When a PR leaves the queue, Lo says why (failed checks, a conflict, a timeout or
   someone removed it) and links to the failing check.
 - **Controls.** Remove a PR from the queue, jump it to the front if you're allowed, and turn
   auto-merge on or off.
@@ -450,15 +450,15 @@ already open switches to its tab, at that layer.
 - **Middle.** The diff. One key switches it to the timeline and back.
 - **Right.** The threads panel.
 
-Each panel opens and closes with a key. With no PR open, rozed shows the PRs you opened recently,
+Each panel opens and closes with a key. With no PR open, Lo shows the PRs you opened recently,
 across all accounts.
 
 ### Opening links
 
 - **`⌘O`** opens a box that's already filled in when the clipboard holds a PR link.
-- **Link routers.** rozed registers as an app that can open web links, without becoming the
-  default browser, so Finicky, Velja or Choosy can send PR links to it. rozed's docs include
-  ready-made rules. Any link rozed can't show goes back to the default browser.
+- **Link routers.** Lo registers as an app that can open web links, without becoming the
+  default browser, so Finicky, Velja or Choosy can send PR links to it. Lo's docs include
+  ready-made rules. Any link Lo can't show goes back to the default browser.
 - **`lo://` and the CLI.** `lo://github.com/<owner>/<repo>/pull/<n>` opens a PR. "Install
   command-line tool" in the app menu adds `lo <url>`.
 - **What counts as a PR link.** `github.com/<owner>/<repo>/pull/<n>`, plus its `/files`,
@@ -472,7 +472,7 @@ across all accounts.
 - **Reviews** are recorded against the commit you were looking at, so GitHub shows exactly what you
   approved.
 - **Merges** also carry the commit you were looking at. If someone pushed after it, GitHub refuses
-  the merge, and rozed shows the new revision with the changes since the one you saw.
+  the merge, and Lo shows the new revision with the changes since the one you saw.
 - **Approve and ship** checks for a newer push before it does anything, and if there is one it
   stops before approving.
 
@@ -485,27 +485,27 @@ across all accounts.
 - **Rate limit used up.** A banner shows when it resets. Polling pauses until then.
 - **Signed out.** If an account's token is revoked, that account's tabs ask you to sign in again.
   Other accounts keep working.
-- **Single sign-on.** If an org requires SSO approval for the token, rozed shows GitHub's link to
+- **Single sign-on.** If an org requires SSO approval for the token, Lo shows GitHub's link to
   grant it.
-- **PR state changes.** When a PR is closed, merged or reopened while it's open in rozed, the tab
+- **PR state changes.** When a PR is closed, merged or reopened while it's open in Lo, the tab
   updates and the actions change to match.
 
 ### The local copy
 
 - **First open.** The diff appears straight away from GitHub's API. Whole-file context, navigation
   and rebase-aware comparison turn on when the local copy is ready, with progress shown.
-- **Fetch fails.** Those features stay off, a banner explains why, and rozed retries.
+- **Fetch fails.** Those features stay off, a banner explains why, and Lo retries.
 - **Disk full.** A banner offers to clear the cache.
-- **Missing revisions.** A force-pushed revision that GitHub no longer has, and that rozed never
+- **Missing revisions.** A force-pushed revision that GitHub no longer has, and that Lo never
   fetched, is shown as "no longer available."
 
 ### Stacks
 
 - **Busy repos.** Stacks are found among the 1,000 most recently updated open PRs. A note says so
   when a repo has more.
-- **Conversion fails partway.** rozed lists what it changed and offers to put the base branches back.
+- **Conversion fails partway.** Lo lists what it changed and offers to put the base branches back.
 - **Async merge fails.** Branch rules are checked when the merge runs, so a failure can arrive
-  late. rozed shows GitHub's reason.
+  late. Lo shows GitHub's reason.
 
 ### Language servers
 
@@ -547,10 +547,10 @@ maps to an action, and that `?` lists them all.
 
 ### End to end
 
-A public repo in a GitHub org made for rozed, driven by a bot account, holds scripted scenarios:
+A public repo in a GitHub org made for Lo, driven by a bot account, holds scripted scenarios:
 stacks, a merge queue, force-pushes and fork PRs. Merge queues need an org-owned repo, which is why
 it lives in an org. These tests run nightly and on demand, not on every PR. While they run, a proxy
-records every host rozed contacts, and the run fails if anything other than GitHub and the
+records every host Lo contacts, and the run fails if anything other than GitHub and the
 language-server download sources shows up.
 
 ### CI and Zed updates
@@ -569,16 +569,16 @@ after the first milestone, once there are real numbers.
 | Decision | Rejected | Why | Cost we accept |
 |---|---|---|---|
 | Build on Zed's crates as libraries | A new GPUI app; copying Zed crates; a full fork | The GPUI app's code view and language features would trail Zed's for a long time. Copied crates fall behind. A fork carries all of Zed and endless merges into code we deleted. | GPL-3.0, breakages on each monthly Zed update, unused Zed code compiled in |
-| OAuth app | GitHub App | A GitHub App can't comment, approve or merge where it isn't installed, which rules out most open-source repos | Broad `repo` scope, and orgs that restrict apps must approve rozed |
+| OAuth app | GitHub App | A GitHub App can't comment, approve or merge where it isn't installed, which rules out most open-source repos | Broad `repo` scope, and orgs that restrict apps must approve Lo |
 | No backend, polling | A server receiving webhooks | Nothing to run, pay for or trust | Up to 15–30 seconds of lag, and a rate limit to budget |
 | A local partial clone | GitHub's API alone | Whole-file context, navigation, rebase-aware comparison and language servers all need one | git is required, and repos take disk space |
 | Three stack rules, including shared commits | Base-branch chains only | Catches agents branching off another branch but targeting `main`, and stacks from forks | More data per repo, and the nearest-parent rule can guess wrong |
 | Convert chains to GitHub stacks to merge them | Merging one layer at a time | Stacks merge as one unit, including through the queue | It changes PR base branches for everyone, on a feature in preview |
 | Language servers only for trusted repos and same-repo PRs | Language servers everywhere | Some language servers run code from the repo | One click per repo, and PRs from forks get syntax-based navigation only |
-| No dependency types | Installing dependencies | Every repo installs differently, and rozed never runs a repo's code | Symbols from dependencies show their import only |
-| Language extensions bundled at build time | Zed's extension store | The store contacts Zed's servers | A larger app, and new languages arrive only with rozed releases |
+| No dependency types | Installing dependencies | Every repo installs differently, and Lo never runs a repo's code | Symbols from dependencies show their import only |
+| Language extensions bundled at build time | Zed's extension store | The store contacts Zed's servers | A larger app, and new languages arrive only with Lo releases |
 | Attachments uploaded the way `gh --attach` does | No attachments | You want GIFs in reviews | The upload endpoint is undocumented and needs write access |
 | Comments collect into a pending review | Posting each one right away | Agents act on each comment as it lands | One extra key to post a single comment |
-| Read-only: no "Update branch," applying suggestions, PR edits or branch deletion | Matching GitHub's web UI | rozed changes nothing but reviews, comments and merges | Those actions stay on GitHub |
+| Read-only: no "Update branch," applying suggestions, PR edits or branch deletion | Matching GitHub's web UI | Lo changes nothing but reviews, comments and merges | Those actions stay on GitHub |
 | Several accounts in v1 | One account | You work across several GitHub accounts | Choosing an account for each owner, plus account names shown everywhere |
 | Signed download and Homebrew | Mac App Store | App Store rules forbid downloading and running code | No App Store discovery or updates |

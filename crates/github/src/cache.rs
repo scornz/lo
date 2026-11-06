@@ -1,5 +1,5 @@
-//! GitHub's answers, cached per account in rozed's database (design §3 "Local data"): a reopened
-//! PR shows at once, its first poll can still be a free `304`, and an offline rozed shows what it
+//! GitHub's answers, cached per account in Lo's database (design §3 "Local data"): a reopened
+//! PR shows at once, its first poll can still be a free `304`, and an offline Lo shows what it
 //! last saw with how old it is (design §11 "Offline").
 //!
 //! Each row is one answer about one pull request, or about a repository as a whole, fetched with
@@ -30,7 +30,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     /// The name its rows are stored under.
     const NAME: &'static str;
 
-    /// Everything the shape of its stored JSON depends on: the JSON schema of a type rozed
+    /// Everything the shape of its stored JSON depends on: the JSON schema of a type Lo
     /// defines ([`schema_shape`]), the text of the GraphQL query a generated type comes from, and
     /// anything else that changes what a stored answer means.
     fn shape() -> String;
@@ -44,7 +44,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     }
 }
 
-/// The shape of a type rozed defines: its JSON schema, with keys sorted, and without
+/// The shape of a type Lo defines: its JSON schema, with keys sorted, and without
 /// documentation or type names, which change nothing that's stored.
 pub fn schema_shape<T: JsonSchema>() -> String {
     let mut schema = schemars::schema_for!(T).to_value();
@@ -192,7 +192,7 @@ pub struct Row {
     etag: Option<String>,
 }
 
-/// The cache, over rozed's database. Clones share the connection.
+/// The cache, over Lo's database. Clones share the connection.
 #[derive(Clone)]
 pub struct PrCache {
     db: LoDb,
@@ -719,7 +719,7 @@ mod tests {
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
-                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+                ("OpenPullRequests", "a228c23b9720c0a4".to_string()),
             ]
         );
     }

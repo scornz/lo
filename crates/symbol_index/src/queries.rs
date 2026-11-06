@@ -1,10 +1,10 @@
-//! Tags queries for the languages rozed indexes, to pass to [`Grammar::new`](crate::Grammar::new)
+//! Tags queries for the languages Lo indexes, to pass to [`Grammar::new`](crate::Grammar::new)
 //! with the matching tree-sitter grammar.
 //!
 //! Each starts with its grammar's own `queries/tags.scm`, vendored unchanged at the grammar
 //! version Zed uses (`THIRD_PARTY_NOTICES.md` names each source and its license). Those are thin
 //! in places, such as Rust's, which has no constants, trait methods or type references, so each
-//! is followed by rozed's own patterns for what it leaves out (`queries/<language>/lo.scm`).
+//! is followed by Lo's own patterns for what it leaves out (`queries/<language>/lo.scm`).
 //! A name tagged by both keeps the grammar's tag, because the earlier pattern wins.
 
 /// Rust, from `tree-sitter-rust` 0.24.2.

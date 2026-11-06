@@ -82,7 +82,7 @@ impl Collapsed {
                 "This file is collapsed: {why}. {load_key} opens GitHub's patch of it; the local \
                  copy's diff loads it in full once it's ready."
             ),
-            Self::TooLarge { why } => format!("rozed doesn't show this file: {why}."),
+            Self::TooLarge { why } => format!("Lo doesn't show this file: {why}."),
             Self::WhitespaceOnly => {
                 "Every change to this file is to whitespace, and whitespace changes are hidden."
                     .to_string()
@@ -110,7 +110,7 @@ fn generated_label(generated: Generated) -> &'static str {
 /// Why a file starts collapsed, or `None` when it starts expanded, from
 /// `review::files::initial_state`: generated files and lockfiles, and files too large to load
 /// at once. Both diffs, GitHub's and the local copy's, decide with this. `loads` says whether
-/// rozed would load anything for the file: a binary file that isn't an image shows only that it
+/// Lo would load anything for the file: a binary file that isn't an image shows only that it
 /// changed, so its size doesn't matter.
 pub(crate) fn initial_collapse(file: &ChangedFile, loads: bool) -> Option<Collapsed> {
     let state = initial_state(file);
@@ -123,10 +123,10 @@ pub(crate) fn initial_collapse(file: &ChangedFile, loads: bool) -> Option<Collap
     state.generated.map(Collapsed::Generated)
 }
 
-/// The most a file rozed shows can hold, on either side, even loaded on request.
+/// The most a file Lo shows can hold, on either side, even loaded on request.
 pub(crate) const MAX_SHOWN_BYTES: u64 = 50 * 1024 * 1024;
 
-/// The longest line a file rozed shows can have: a minified bundle on one line is as slow to lay
+/// The longest line a file Lo shows can have: a minified bundle on one line is as slow to lay
 /// out as it is large.
 pub(crate) const MAX_LINE_BYTES: usize = 1024 * 1024;
 
@@ -135,7 +135,7 @@ pub(crate) const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub(crate) fn too_large_to_show(size: Option<u64>, sides: &[&[u8]]) -> Option<String> {
     if let Some(size) = size.filter(|size| *size > MAX_SHOWN_BYTES) {
         return Some(format!(
-            "{}, more than the 50 MiB rozed shows",
+            "{}, more than the 50 MiB Lo shows",
             size_text(size)
         ));
     }
@@ -156,11 +156,11 @@ fn large_why(file: &ChangedFile) -> String {
     if file.changed_lines() > LARGE_FILE_LINES {
         format!(
             "{additions} lines added and {deletions} deleted, more than the {LARGE_FILE_LINES} \
-             rozed loads at once"
+             Lo loads at once"
         )
     } else {
         format!(
-            "{}, more than the 1 MiB rozed loads at once",
+            "{}, more than the 1 MiB Lo loads at once",
             size_text(file.size.unwrap_or_default())
         )
     }
@@ -219,7 +219,7 @@ impl fmt::Debug for ImageSide {
 }
 
 impl ImageSide {
-    /// `bytes` as an image, when `path` names one of the formats rozed shows (PNG, JPEG, GIF,
+    /// `bytes` as an image, when `path` names one of the formats Lo shows (PNG, JPEG, GIF,
     /// WebP and SVG) and the bytes are one of them. `None` otherwise, such as for a Git LFS
     /// pointer, which is text. Reads only the image's header.
     pub(crate) fn new(path: &str, bytes: Vec<u8>) -> Option<Self> {
@@ -354,7 +354,7 @@ pub(crate) mod tests {
         assert_eq!(too_large_to_show(Some(MAX_SHOWN_BYTES), &[]), None);
         assert_eq!(
             too_large_to_show(Some(MAX_SHOWN_BYTES + 1024 * 1024), &[]).as_deref(),
-            Some("51.0 MiB, more than the 50 MiB rozed shows")
+            Some("51.0 MiB, more than the 50 MiB Lo shows")
         );
         let line = vec![b'x'; MAX_LINE_BYTES];
         assert_eq!(too_large_to_show(None, &[&line, b"short\n"]), None);
@@ -399,7 +399,7 @@ pub(crate) mod tests {
         assert_eq!(large.label("⌥A"), "large: load with ⌥A");
         assert_eq!(
             large.detail("⌥A"),
-            "This file isn't loaded: 9000 lines added and 0 deleted, more than the 5000 rozed \
+            "This file isn't loaded: 9000 lines added and 0 deleted, more than the 5000 Lo \
              loads at once. ⌥A loads it."
         );
 
@@ -411,7 +411,7 @@ pub(crate) mod tests {
             heavy,
             Some(Collapsed::Large {
                 generated: None,
-                why: "2.0 MiB, more than the 1 MiB rozed loads at once".into()
+                why: "2.0 MiB, more than the 1 MiB Lo loads at once".into()
             })
         );
     }

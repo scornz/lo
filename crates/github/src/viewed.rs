@@ -1,7 +1,7 @@
 //! Where each file was marked viewed on this Mac (design §6 "Viewed marks").
 //!
 //! GitHub keeps one viewed mark per file and user, and resets it to "changed since viewed" when a
-//! push changes the file, without saying since when. rozed notes the head on screen when it marked
+//! push changes the file, without saying since when. Lo notes the head on screen when it marked
 //! each file viewed, so a file that changed since can open to what changed after that revision
 //! (`review::revisions::viewed_file_comparison`). These records aren't cached answers: clearing
 //! the cache keeps them, and removing the account removes them.
@@ -16,7 +16,7 @@ use crate::credentials::HOST;
 use crate::db::LoDb;
 use crate::pulls::PullRef;
 
-/// The heads at which an account marked a pull request's files viewed with rozed, in rozed's
+/// The heads at which an account marked a pull request's files viewed with Lo, in Lo's
 /// database.
 #[derive(Clone)]
 pub struct ViewedRecords {

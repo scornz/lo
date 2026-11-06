@@ -1,4 +1,4 @@
-//! The Accounts modal: the GitHub accounts rozed is signed in to, signing in with GitHub's device
+//! The Accounts modal: the GitHub accounts Lo is signed in to, signing in with GitHub's device
 //! flow, and importing accounts from the `gh` CLI.
 //!
 //! Opened from the command palette (`accounts: open accounts`, `accounts: sign in`,
@@ -29,7 +29,7 @@ use workspace::{ModalView, MultiWorkspace, Workspace};
 actions!(
     accounts,
     [
-        /// Shows the GitHub accounts rozed is signed in to.
+        /// Shows the GitHub accounts Lo is signed in to.
         OpenAccounts,
         /// Signs in to GitHub with a code entered on github.com.
         SignIn,
@@ -44,12 +44,12 @@ actions!(
 
 const KEY_CONTEXT: &str = "AccountsModal";
 
-/// Set when rozed's database couldn't be opened, so the modal can say why accounts are missing.
+/// Set when Lo's database couldn't be opened, so the modal can say why accounts are missing.
 struct AccountsUnavailable(SharedString);
 
 impl Global for AccountsUnavailable {}
 
-/// Opens rozed's database, loads the accounts and registers the modal's actions. Call it after
+/// Opens Lo's database, loads the accounts and registers the modal's actions. Call it after
 /// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
 /// to `None` when the database couldn't be opened.
 pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
@@ -97,7 +97,7 @@ pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
     })
 }
 
-/// Opens the modal in the active rozed window, or the first one.
+/// Opens the modal in the active Lo window, or the first one.
 fn open_in_any_window(start: Start, cx: &mut App) {
     let window = cx
         .active_window()
@@ -108,7 +108,7 @@ fn open_in_any_window(start: Start, cx: &mut App) {
                 .find_map(|window| window.downcast::<MultiWorkspace>())
         });
     let Some(window) = window else {
-        log::info!("no rozed window to show accounts in");
+        log::info!("no Lo window to show accounts in");
         return;
     };
     window
@@ -144,7 +144,7 @@ enum SignInStep {
     WaitingForUser {
         user_code: SharedString,
         expires_at: Instant,
-        /// Whether rozed put the code on the clipboard. The modal never reads the clipboard to
+        /// Whether Lo put the code on the clipboard. The modal never reads the clipboard to
         /// find out, since it may hold something else the user copied, such as a password.
         copied: bool,
     },
@@ -179,7 +179,7 @@ impl Notice {
     }
 
     /// An error, with GitHub's link for fixing it when it has one: authorizing single sign-on,
-    /// or asking an organization to approve rozed.
+    /// or asking an organization to approve Lo.
     pub fn error(error: &anyhow::Error) -> Self {
         let github = error.downcast_ref::<GithubError>().or_else(|| {
             match error.downcast_ref::<DeviceFlowError>() {
@@ -189,10 +189,10 @@ impl Notice {
         });
         let message = match github {
             Some(GithubError::OAuthAppRestricted { org: Some(org), .. }) => {
-                format!("{org} hasn't approved rozed. Request approval on GitHub.")
+                format!("{org} hasn't approved Lo. Request approval on GitHub.")
             }
             Some(GithubError::SsoRequired { .. }) => {
-                "This organization requires single sign-on. Authorize rozed's token on GitHub."
+                "This organization requires single sign-on. Authorize Lo's token on GitHub."
                     .to_string()
             }
             _ => format!("{error:#}"),
@@ -334,7 +334,7 @@ impl AccountsModal {
             let reason = self
                 .unavailable
                 .clone()
-                .unwrap_or_else(|| "rozed's database isn't open yet".into());
+                .unwrap_or_else(|| "Lo's database isn't open yet".into());
             self.finish(
                 Notice {
                     message: format!("Accounts are unavailable: {reason}").into(),
@@ -407,7 +407,7 @@ impl AccountsModal {
         }
     }
 
-    /// The copy button's label: "Copied" once rozed has put the code on the clipboard.
+    /// The copy button's label: "Copied" once Lo has put the code on the clipboard.
     pub fn copy_label(&self) -> &'static str {
         match &self.mode {
             Mode::SignIn(SignInStep::WaitingForUser { copied: true, .. }) => "Copied",
@@ -438,7 +438,7 @@ impl AccountsModal {
             let listed = cx
                 .background_spawn(async move {
                     let gh = gh_override.or_else(gh_import::find_gh).ok_or_else(|| {
-                        anyhow!("rozed couldn't find gh. Install it, or set GH_PATH to its path.")
+                        anyhow!("Lo couldn't find gh. Install it, or set GH_PATH to its path.")
                     })?;
                     let accounts = gh_import::list_accounts(&gh)?;
                     anyhow::Ok((gh, accounts))
@@ -452,7 +452,7 @@ impl AccountsModal {
                     );
                 }
                 Ok((gh, gh_accounts)) => {
-                    // Pick the usable accounts rozed doesn't have yet.
+                    // Pick the usable accounts Lo doesn't have yet.
                     let known = accounts.read(cx);
                     let chosen = gh_accounts
                         .iter()
@@ -700,8 +700,8 @@ impl AccountsModal {
 /// Where the user revokes an OAuth app's access to their account.
 const AUTHORIZED_APPS_URL: &str = "https://github.com/settings/applications";
 
-/// What removing an account did and didn't do. Removing deletes rozed's copy of the token, but
-/// rozed has no client secret, so only GitHub's settings can revoke the grant behind it. An
+/// What removing an account did and didn't do. Removing deletes Lo's copy of the token, but
+/// Lo has no client secret, so only GitHub's settings can revoke the grant behind it. An
 /// imported token is gh's, and revoking it would sign gh out too.
 fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
     match source {
@@ -710,7 +710,7 @@ fn removed_notice(login: &str, source: Option<AccountSource>) -> Notice {
         )),
         _ => Notice {
             message: format!(
-                "Removed {login}. rozed stays authorized on GitHub until you revoke it there.",
+                "Removed {login}. Lo stays authorized on GitHub until you revoke it there.",
             )
             .into(),
             is_error: false,
@@ -766,7 +766,7 @@ fn gh_account_notes(account: &GhAccount, already_in_lo: bool) -> Vec<String> {
         }
     }
     if already_in_lo {
-        notes.push("already in rozed; importing replaces its token".to_string());
+        notes.push("already in Lo; importing replaces its token".to_string());
     }
     notes
 }
@@ -798,7 +798,7 @@ impl AccountsModal {
             .as_deref()
             .is_some_and(|asked| asked.eq_ignore_ascii_case(&account.login));
         let warning = if confirming {
-            Some("Press ⌘⌫ or Remove again to remove it from rozed.".to_string())
+            Some("Press ⌘⌫ or Remove again to remove it from Lo.".to_string())
         } else {
             account_warning(signed_out, &account.scopes)
         };
@@ -1137,7 +1137,7 @@ mod tests {
 
     #[gpui::test]
     async fn signing_in_shows_the_code_then_adds_the_account(cx: &mut TestAppContext) {
-        // Whatever page GitHub's answer names, rozed opens GitHub's own.
+        // Whatever page GitHub's answer names, Lo opens GitHub's own.
         let http = sign_in_naming("file:///Applications/Calculator.app");
         let accounts = accounts("ui_sign_in", http.clone(), cx).await;
         let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
@@ -1158,7 +1158,7 @@ mod tests {
             cx.opened_url().as_deref(),
             Some("https://github.com/login/device")
         );
-        // "Copied" comes from what rozed did, not from reading the clipboard, which may hold
+        // "Copied" comes from what Lo did, not from reading the clipboard, which may hold
         // something the user copied since, such as a password.
         modal.read_with(cx, |modal, _| assert_eq!(modal.copy_label(), "Copied"));
         cx.write_to_clipboard(ClipboardItem::new_string("hunter2".into()));
@@ -1283,7 +1283,7 @@ esac
         }
         let modal = cx.new(|cx| AccountsModal::new(Some(accounts.clone()), None, http, cx));
 
-        // rozed has no client secret, so it can't revoke its own grant: GitHub's settings can.
+        // Lo has no client secret, so it can't revoke its own grant: GitHub's settings can.
         modal.update(cx, |modal, cx| modal.remove("signed-in", cx));
         cx.run_until_parked();
         modal.read_with(cx, |modal, _| {
@@ -1291,7 +1291,7 @@ esac
             assert!(!notice.is_error);
             assert_eq!(
                 notice.message.as_ref(),
-                "Removed signed-in. rozed stays authorized on GitHub until you revoke it there."
+                "Removed signed-in. Lo stays authorized on GitHub until you revoke it there."
             );
             assert_eq!(
                 notice.link.as_ref().map(HelpLink::url),
@@ -1390,7 +1390,7 @@ esac
         let notice = Notice::error(&restricted.context("importing someone"));
         assert_eq!(
             notice.message.as_ref(),
-            "acme hasn't approved rozed. Request approval on GitHub."
+            "acme hasn't approved Lo. Request approval on GitHub."
         );
         assert_eq!(
             notice.link.unwrap().url(),

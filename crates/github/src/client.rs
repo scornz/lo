@@ -25,7 +25,7 @@ pub const API_URL: &str = "https://api.github.com";
 /// responses name in full URLs. Anything else found in a response, such as an image or a check's
 /// details page, is fetched without the token by whatever shows it.
 const API_HOSTS: &[&str] = &["api.github.com", "uploads.github.com"];
-/// The REST API version rozed is written against. Responses echo it in
+/// The REST API version Lo is written against. Responses echo it in
 /// `x-github-api-version-selected`.
 pub const API_VERSION: &str = "2022-11-28";
 /// GitHub gives up on a request after 10 s; this leaves room for a slow network.
@@ -33,7 +33,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// The REST API answers a renamed repository with a redirect to the same host.
 const MAX_REDIRECTS: u32 = 3;
 
-/// The `User-Agent` rozed sends. GitHub requires one.
+/// The `User-Agent` Lo sends. GitHub requires one.
 pub fn user_agent() -> String {
     format!("lo/{}", env!("CARGO_PKG_VERSION"))
 }
@@ -460,7 +460,7 @@ impl GithubClient {
     }
 
     /// Runs a GraphQL query. Any error in the response fails it, typed where GitHub's error is
-    /// one rozed handles (not found, SSO, an org's OAuth restriction, the rate limit).
+    /// one Lo handles (not found, SSO, an org's OAuth restriction, the rate limit).
     pub async fn graphql<Q: GraphQLQuery>(
         &self,
         variables: Q::Variables,

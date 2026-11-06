@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A repository on github.com. Owners and names match ignoring (ASCII) case, as on GitHub and
-/// in rozed's database, and show as written.
+/// in Lo's database, and show as written.
 #[derive(Clone, Debug)]
 pub struct RepoRef {
     pub owner: String,
@@ -233,7 +233,7 @@ pub struct ListedPage {
     pub pulls: Vec<ListedPull>,
 }
 
-/// The pages of a repository's open pull requests rozed reads, newest first: as many as hold
+/// The pages of a repository's open pull requests Lo reads, newest first: as many as hold
 /// the pull requests the open PR list does. Each page is asked about with its own ETag, so an
 /// older pull request that's pushed to or closed is noticed too.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -268,10 +268,7 @@ mod tests {
         // As written, for showing.
         assert_eq!(shouted.to_string(), "Rozed-Dev/PLAYGROUND#1");
         assert_ne!(written, PullRef::new("rozed-dev", "playground", 2));
-        assert_ne!(
-            RepoRef::new("rozed-dev", "playground"),
-            RepoRef::new("rozed", "dev-playground")
-        );
+        assert_ne!(RepoRef::new("a-b", "c"), RepoRef::new("a", "b-c"));
         assert!(RepoRef::new("A", "b") < RepoRef::new("a", "C"));
     }
 }

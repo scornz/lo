@@ -5088,6 +5088,8 @@ dependencies = [
  "tempfile",
  "theme",
  "theme_settings",
+ "tree-sitter",
+ "tree-sitter-rust",
  "ui",
  "util",
  "uuid",

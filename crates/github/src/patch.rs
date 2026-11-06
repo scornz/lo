@@ -64,7 +64,7 @@ pub struct PatchError {
 }
 
 /// Reads a patch: hunks that each start with a header such as `@@ -12,7 +12,8 @@ fn main()`.
-/// Lines may end in `\r\n`, which reads as `\n`, as rozed's buffers have them.
+/// Lines may end in `\r\n`, which reads as `\n`, as Lo's buffers have them.
 pub fn parse_patch(patch: &str) -> Result<Patch, PatchError> {
     let mut parsed = Patch::default();
     // The lines each side still expects in the current hunk.

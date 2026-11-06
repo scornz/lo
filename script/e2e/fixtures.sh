@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up the GitHub fixtures in rozed-dev/e2e that rozed's revisions and stacks features are
+# Sets up the GitHub fixtures in rozed-dev/e2e that Lo's revisions and stacks features are
 # checked against, as rozed-bot. README.md beside this script has the fixture map.
 #
 # Usage: script/e2e/fixtures.sh <setup | status [--json] | push-r4 | rebase-r5 | push-r6 | reset-e1>
@@ -31,6 +31,7 @@ readonly BOT=rozed-bot
 readonly BOT_EMAIL=353226052+rozed-bot@users.noreply.github.com
 GH=${LO_E2E_GH:-/opt/homebrew/bin/gh}
 
+# setup and status find the bot's review by this text, so it keeps the project's first name.
 readonly E1_REVIEW="rozed-bot's review of r2. Fixture E1 checks that rozed marks this revision as your last review."
 readonly E2_LAYERS="a b c e d s1 s2"
 # Maps a compare response's commits to {"r1": sha, …} by E1's commit subjects.
@@ -178,7 +179,7 @@ open_pr() {
   done
   CHANGED=$((CHANGED + 1))
   say "opened #$PR: $1 -> $2"
-  # rozed orders a layer's children by createdAt, which has one-second resolution.
+  # Lo orders a layer's children by createdAt, which has one-second resolution.
   sleep 1
 }
 

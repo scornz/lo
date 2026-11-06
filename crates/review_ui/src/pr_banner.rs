@@ -28,7 +28,7 @@ pub enum BannerKind {
     GithubDiffCut,
     /// The pull request moved on while it loaded, so its two diffs show different heads.
     MovedOn,
-    /// The header shows what rozed saved about the pull request, not what GitHub says now.
+    /// The header shows what Lo saved about the pull request, not what GitHub says now.
     Saved,
     /// A large file couldn't be loaded on its key.
     LoadFileFailed,

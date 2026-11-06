@@ -1,9 +1,9 @@
-//! rozed's key bindings: Zed's default macOS keymap, minus every binding that would open, create
+//! Lo's key bindings: Zed's default macOS keymap, minus every binding that would open, create
 //! or write files.
 //!
-//! rozed is read-only (design §1). Its buffers are read-only too, but Zed's open, new and save
+//! Lo is read-only (design §1). Its buffers are read-only too, but Zed's open, new and save
 //! actions work on the workspace, not a buffer: cmd-O opens any file on disk, cmd-N creates one,
-//! and Save As on a read-only buffer writes a copy. So rozed never binds them
+//! and Save As on a read-only buffer writes a copy. So Lo never binds them
 //! ([`FileActions`]).
 
 use gpui::{App, KeyBinding};
@@ -17,7 +17,7 @@ pub fn load(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
-/// Zed's default macOS keymap, without [`FileActions`]. Bindings for actions from Zed crates rozed
+/// Zed's default macOS keymap, without [`FileActions`]. Bindings for actions from Zed crates Lo
 /// doesn't include (the agent, terminal, debugger and so on) are skipped.
 fn default_bindings(cx: &App) -> Vec<KeyBinding> {
     let mut all = Vec::new();
@@ -33,7 +33,7 @@ fn default_bindings(cx: &App) -> Vec<KeyBinding> {
                 error_message,
             } => {
                 log::debug!(
-                    "skipped bindings in {path} for actions rozed doesn't have: {error_message}"
+                    "skipped bindings in {path} for actions Lo doesn't have: {error_message}"
                 );
                 key_bindings
             }

@@ -16,7 +16,7 @@ pub enum MergeStatus {
     Ready,
     /// Only things waiting will fix block it. With `auto_merge`, auto-merge is on, so it merges,
     /// or joins the queue, once they clear, while it stays on: GitHub turns it off when someone
-    /// without write access pushes. With `partial`, rozed may not see every rule behind
+    /// without write access pushes. With `partial`, Lo may not see every rule behind
     /// GitHub's block ([`may_not_see_every_rule`]), so these may be only part of why.
     Waiting {
         blockers: Vec<Blocker>,
