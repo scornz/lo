@@ -10,12 +10,23 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **The overseer's docs (`status.md`, `plan.md`, `decisions.md`) live on branch `docs/status`,** in
   the worktree `~/src/rozed-worktrees/docs`, and land through one open docs PR that a subagent
   updates. Nobody commits to `main`, and the overseer doesn't commit.
+- **Merging resumed on 2026-11-06:** the user explicitly allowed the overseer to `gh pr merge` in
+  `scornz/rozed`. The stack lands bottom first (see `status.md`).
 - **PRs are stacked while merging is blocked.** The auto-mode classifier refuses `gh pr merge` from
   the overseer ("Merge Without Review"), so merging waits for the user. Each new PR branches from
   the PR below it and targets that PR's branch, so every PR's diff shows only its own change and
   work keeps moving. Parallel tasks merge the new base into their branch (never rebase or
   force-push) before retargeting. Getting around the classifier, by merging through a subagent or
   the REST API, was rejected.
+- **Each line of PRs lands as a GitHub-native stack** (the user's suggestion): one async merge of the
+  top layer lands every layer below as its own squash commit, and GitHub retargets the rest. Layers
+  with merge commits merged fine. `gh pr merge` refuses stacked PRs; the async merge API is the way.
+- **Landing the stack:** after each squash-merge GitHub retargets the PRs above to `main`. Before the
+  next merge, its branch merges `origin/main`. Where the branch already contains everything `main`
+  gained (its own lower layers), conflicts resolve to the branch's side and the merged tree must equal
+  the branch's tree; where a sibling landed first, conflicts are resolved by hand (the integration
+  branch's merges hold the same resolutions) and the diff against the branch's old tree may only touch
+  the sibling's files.
 
 - **PR descriptions say what the PR implements,** its code, behaviour and goal, and leave out how
   the work is run (sessions, agents, why PRs stack). The user asked for this; the repo is public.
@@ -180,6 +191,16 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **A revision's base is the merge-base of its head with the base branch as it was then,** computed
   locally; for stacked or retargeted PRs, the base tip comes from base-branch force-push events,
   the base branch's activity log and rozed's pinned refs.
+- **A replayed tree is pinned once per process and never unpinned while it runs;** pins are cleared on
+  the next open with no other rozed using the clone. No `Drop` runs git.
+- **Rebase-aware comparison checks its inputs:** each base must be an ancestor of its head, and all
+  four commits must already be in the copy (a missing one is its own error, never a silent download).
+  A retargeted base, or an unchanged head on a moved base, is flagged rather than attributed to the
+  author.
+- **When the replay conflicts, the plain comparison still shows (design §6), plus every conflicted
+  file,** marked "resolved a conflict", with the diff from the conflicted replay to the new head
+  available for it, so an author's resolution (including dropping a base change) is never hidden.
+  Directory renames on the base are followed (`merge.directoryRenames=true`).
 - **Rebase-aware comparison is skipped when both revisions share a base;** a `merge-tree` exit of 1
   (conflict) falls back to the plain diff with a note, and any other failure is an error.
 
@@ -342,7 +363,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **`integration/pr-tab` merges `feat/revisions-logic`, not `feat/merge-logic`;** the merge logic
   joins it when milestone 9 needs it.
 - **`⌘O` arrives with 5a** (without clipboard prefill until milestone 12), since a second PR in the
-  same window needs a way in; launching without a link opens it.
+  same window needs a way in. (Since 5e, launching without a link shows the recent list instead.)
 - **Every editor the workspace opens is read-only,** which closes "Open File" and any other path into
   an ordinary editor tab.
 - **Default panel keys:** `⌘B` file list, `⌘⌥B` threads, `alt-o` review/path order. Milestone 12's
@@ -366,6 +387,14 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **GitHub's diff shows hunks only, at their real line numbers, with expanding blocked** until the
   local copy's diff replaces it at the same file and line; if the local copy is ready first, GitHub's
   never shows. A retryable copy failure retries after 5 s, doubling to 5 minutes, with a banner.
+- **GitHub's diff never shows a hunk somewhere GitHub didn't put it.** Rows between hunks are filled
+  with a marker unique to each row and identical on both sides, so Zed's re-diff can't pair them with
+  changes, and after the diff is built every hunk is checked against GitHub's rows; a file that fails
+  the check shows GitHub's raw patch text instead. GitHub's diff is tied to the head it was read at,
+  and the switch to the local copy says so when the heads differ.
+- **Anonymous opens read at most a few pages of GitHub's file list** through one app-wide anonymous
+  client, so two big public PRs can't use up the 60-requests-an-hour limit; anonymity is explicit
+  (`Option<Token>`), never inferred from an empty token.
 - **The PR tab owns and draws its banners** under its header (checking out, checkout failed, head
   mismatch, retrying), since its diff editor is created and replaced while the tab is open.
 
@@ -374,6 +403,76 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   account and PR); clearing the cache keeps it, removing the account removes it.
 - **`e` moves to the next unviewed file in review order, wrapping;** `]f`/`[f` and `]c`/`[c` stop at
   the ends and always follow the diff's (review) order. On a failed write only the mark reverts.
+
+- **A file is marked viewed only when GitHub's head is the head on screen** (`markFileAsViewed`
+  takes no commit). When the PR moved on, `e` refuses to mark, says there's a newer push, and offers to
+  load it; clearing a mark always works. A push that lands inside the poll interval can still slip
+  through; that's accepted.
+- **`e` acts on the file the diff shows:** the cursor's file when it's in view, else the file at the
+  top of the viewport, and never a file that hasn't loaded or that GitHub doesn't list.
+- **rozed's diff keys win over vim's inside the PR diff** (milestone 12 binds them in a context deeper
+  than vim's), and comment boxes never receive rozed's single-key bindings.
+
+- **A token GitHub refuses signs that account out,** and then it counts as not signed in; it doesn't
+  by itself block opening a public PR anonymously.
+- **Drops are stopped at the window** (GPUI's `on_drag_move` plus `stop_active_drag` on the workspace
+  root), so no Zed patch was needed for empty panes.
+- **Offline, a PR whose head is already in the local copy shows its diff from the copy;** without a
+  copy, the tab shows the saved details only (5e).
+
+- **With no PR open, the window shows a "Recent pull requests" tab** across all accounts; launching
+  without a link opens it, and closing the last PR brings it back.
+- **The account picker answers once per owner;** dismissing it opens nothing, and reopening the link
+  asks again. The window title is `owner/repo#n — title`, or "rozed" (Zed's `window_title_format` is
+  forced so its workspace never overwrites it).
+- **Offline, the diff comes from the copy only if the copy fetched the saved head,** compared from
+  where that head left the last-fetched base, untrusted and without fetching; reopening the link
+  retries online.
+
+- **An owner's account choice is about the repository's current owner** (from GitHub's `full_name`,
+  so transferred repos follow), and a picker's answer applies only to tabs whose candidate accounts
+  include it. When the remembered account can't see one repo, rozed asks for that repo alone and
+  remembers it per repository, leaving the owner's choice alone. Pickers queue per owner; another
+  dialog or click never cancels a waiting tab.
+- **Offline means rozed reads only what the copy already holds:** the saved head and saved base when
+  both are pinned (else the details-only view), with lazy downloads off (`GIT_NO_LAZY_FETCH=1` on git
+  2.44+, a missing-object check before reading on older git) and no write lock. An offline tab keeps
+  checking and switches back online by itself; only connection failures count as offline, not slow
+  answers or one account's failing check.
+
+- **While the poller knows GitHub is unreachable or the account is signed out, `e` marks nothing;**
+  a failed write reverts only the mark, never the selection. "Load the newer push" reopens the tab at
+  the new head in the same place.
+- **The file list follows the diff:** the cursor's file while it's in view, otherwise the file at the
+  top of the view; `e` acts on that file.
+- **Local viewed records follow marks set elsewhere,** recorded at the poll's head, and are forgotten
+  when GitHub says the file is unviewed.
+- **The tab's single-key bindings are scoped so text boxes in the tab type them** (`e`, `]f`, `[c`,
+  `alt-o` and the rest); milestone 12 sorts out vim's own contexts.
+
+- **Zed patch 4 keeps a split diff's expand buttons hidden when Zed rebuilds the split**
+  (`SplittableEditor::disable_expand_excerpt_buttons`).
+- **Signed out, GitHub's diff reads at most 3 pages and none while 10 or fewer requests remain;**
+  GitHub's diff retries (5 s doubling to 5 minutes, or until the rate limit resets) until the local
+  copy's diff replaces it. Unknown copy failures stop after 5 tries with a Retry button; network and
+  rate-limit failures keep retrying. Hunks past line 50,000 show as GitHub's raw patch.
+
+- **`linguist-generated` comes from `git check-attr --source=<head>` in the bare clone,** not a
+  `.gitattributes` parser; a failed lazy download is an error, not "unspecified".
+- **Diff view keys:** `tab` switches side, `alt-v` toggles inline/side-by-side (kept per tab), `alt-w`
+  hides whitespace-only changes, `alt-a` opens a folded file, loads a large one, or switches between
+  its changes and the whole file. Files whose text didn't change fold with "no changes". Milestone 12
+  revisits keys with vim.
+- **PR images are decoded by rozed, never by gpui's loaders.** SVGs are parsed with rozed's own
+  `usvg::Options` that resolve no file or remote hrefs (gpui's defaults read any local path), and
+  rasterized with `resvg`. Every image is capped from its header (8192 px a side, 40 MP), decoded
+  with explicit `image::Limits`, GIFs to frame 0 only, and kept downscaled to the panel's size.
+  Milestone 8's comment images must go through the same safe path.
+- **Hiding whitespace ignores only space, tab, CR and LF,** as `git diff -w` and GitHub do; other
+  Unicode whitespace (U+2028, NBSP) can change meaning and stays visible.
+- **Images are read from git only (never the trusted checkout), decoded in the background,** and shown
+  level side by side; other binary files say "binary file changed" with both sizes and never fold for
+  size. In GitHub's diff, `alt-a` on a large file only opens it.
 
 ## Syntax-aware diff (PR #14)
 
@@ -390,8 +489,23 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 ## Code features
 
 - **The syntax index is its own crate (`symbol_index`),** beside the seven in design §2's table: it
-  depends only on tree-sitter, so it's tested without compiling Zed, and both the app and rozed's
-  language-server mode use it.
+  depends only on tree-sitter, so it's tested without compiling Zed.
+- **Departure from design §7's mechanism (behaviour kept): the index answers inside the app, not as a
+  built-in language server.** Zed attaches language servers only to buffers backed by files on disk,
+  and neither side of rozed's diff is one (the right side is read from git on untrusted repos; the
+  left side is the diff's base text with no file). So rozed sets its own `SemanticsProvider` (a public
+  Zed trait, no patch) on both diff editors and on the peek and file views: it answers from
+  `symbol_index`, and on a trusted repo's right side wraps the project's language-server provider so
+  the server's answers win once it's ready. Everything §7 asks for stays: syntax navigation on every
+  repo and both sides, server answers winning, syntax filling in while a server starts, peek, the
+  read-only file view and `⌃o` back, jumping into the diff, no changes to Zed. Only "rozed starts a
+  copy of itself in a server mode" goes. (Research: `research/code-navigation.md`.)
+- **When a ready language server finds nothing,** rozed shows the import if the name is imported
+  (design §7 "Dependencies"), otherwise the syntax answer, labelled "syntax". On untrusted repos `K`
+  shows the definition's line from the index, labelled the same way.
+- **Cmd-click opens the peek,** like `gd`, rather than Zed's new tab (one window, a tab per PR); a small
+  Zed patch is fine if no hook exists. rozed re-applies its provider when the split rebuilds by
+  observing the diff editor, with a patch only if that proves unreliable.
 
 - **The index uses each grammar's own `tags.scm`, plus small rozed additions appended after it**
   (consts, fields, type references, components and the like), since the vendored queries miss
@@ -432,3 +546,86 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   fix (a stale failed check), approve and ship stops rather than merges.
 - **"rozed may not see every rule" shows on any partly explained block** until the GitHub layer
   confirms it read the branch's rules (milestone 9 wires `sees_every_rule`).
+
+## Comments and reviews (PR #21)
+
+- **Comments go only on lines of the PR's diff** (checked live: GitHub refuses lines outside hunks,
+  and `addPullRequestReviewThread` refuses by returning a null thread with no error, which rozed treats
+  as a refusal). A range's two ends must each be a diff line but may sit in different hunks, and may
+  run from a removed line to an added one. Suggestions only on the head's side. GitHub's web UI has
+  allowed comments outside hunks since 2025-09, but the API doesn't, so rozed offers a file-level
+  comment instead. (Live checks: `research/review-api-checks.md`.)
+- **New threads land on the PR's current head,** whatever revision a pending review was started on
+  (checked live). So a line comment on an older revision is possible only by starting a new review at
+  that revision (`addPullRequestReview` with its `commitOID`); with a review already pending, line
+  comments are offered only when the right column shows the current head, and otherwise the UI offers
+  to submit the pending review or switch to the latest revision. Replies join from any revision.
+- **A current thread's `line` is on its first comment's commit** until GitHub recomputes it on the
+  next push, so placement keys `line` to that commit, not to the latest head.
+- **`C` while a review is pending adds to that review and says so,** because GitHub allows one pending
+  review per user per PR.
+- **New comments always go on the right column's revision;** between revisions and on a replayed
+  comparison the left column takes no line comments.
+- **Each thread shows once:** the right column wins over the left, and the latest head wins over where
+  it was written. A current thread on an older revision it wasn't written on shows only in the panel.
+- **Drafts are kept per account, PR and place** until posted; blank text deletes a draft.
+- **Approve and Request changes are refused while the pending review sits on a revision other than
+  the one on screen** (design §11: a review records the commit you looked at); Comment is allowed.
+- **The left column takes line comments only in a revision's whole diff,** where it shows the base:
+  design §8 says "either side", but GitHub only places LEFT comments against the PR's base, so between
+  revisions and on replayed comparisons only the right column takes them.
+- **File-level comments never go through `addPullRequestReview`'s threads** (its draft thread input
+  has no subject type): a pending review is started empty, then `addPullRequestReviewThread` with
+  `subjectType: FILE`; `C` on a file uses REST's file comment. A reply as the first pending comment is
+  two calls too, so a failure can't lose it.
+- **Commentable lines come from local git (`-U3`, the user's config ignored) when GitHub omits a
+  file's `patch`,** which it does for some ordinary text files, and a file outside the PR's diff takes
+  no comment at all.
+- **A review started empty (for a file-level comment or a first reply) starts on the latest head,**
+  so replying from an older revision never blocks approving the latest. File-level comments, like
+  replies, join a pending review from any revision; GitHub places them on the head.
+- **`Replay::Retargeted` is advisory:** `compare_revisions` flags any base that didn't move forward,
+  which includes a correctly restacked layer whose lower layer was amended. The UI words the label from
+  what it knows (the PR's base branch changed, or the layer below was force-pushed); the file lists
+  are the same either way.
+
+## Project
+
+- **The name stays "rozed":** the user checked Zed's trademark terms (2026-11-06).
+- **End-to-end fixtures live in the public `rozed-dev/e2e`** (merge queues need a public org repo);
+  the private `rozed-dev/playground` stays for quick live checks.
+- **Rozed writes only to `rozed-dev` repos while testing.** `sharkdp/fd#2212` and other third-party
+  PRs are read-only: no comments, reviews, approvals or merges. Fixture PRs in `rozed-dev/e2e` may
+  be merged and its rulesets set, as `rozed-bot`, to test rozed.
+- **Fixtures never force-push.** A rebased revision comes from GitHub's server-side rebase
+  (`updatePullRequestBranch(updateMethod: REBASE)`); a conflicted rebase is checked read-only on a
+  public PR and in GPUI tests.
+
+## Milestones 6–9 (planning)
+
+- **Builds run in two reused lane worktrees** (`lane-1`, `lane-2`). Zed's crates are path
+  dependencies, so a shared `CARGO_TARGET_DIR` across worktrees at different paths rebuilds them
+  anyway.
+- **Migration slots are fixed in `plan.md`** (2 `viewed_files`, 3 `repo_accounts`, 4 revision marks,
+  5 drafts, 6 merge methods), so parallel PRs never take the same index.
+- **PRs opened without signing in** keep milestone 5's read-only view; revisions, stacks, threads
+  and merging say "Sign in to see …", since GraphQL needs a token.
+- **Multi-layer stack diffs are read-only:** each PR keeps its own threads and viewed marks.
+- **The PR tab is split into per-feature files first (6a),** with header slots, one `bind_keys` per
+  feature and a test that fails on duplicate key bindings, so parallel UI PRs don't collide.
+
+## Weekly Zed build (PR #27)
+
+- **The weekly run stays green when Zed breaks rozed.** It reports through one `zed-update` issue
+  (opened, updated or closed) and fails only when its script can't run, so nobody is told twice.
+- **Two jobs:** the macOS build job runs Zed's and crates.io's build scripts with `contents: read`
+  only; a separate ubuntu job holds `issues: write`.
+- **The patches replayed are the ones `main` pins** (`<tag>..<gitlink>`), not the fork branch's head.
+- **No cache at all in the weekly job** (`cache: false` on mise-action too): it's the first workflow
+  that builds a new Zed release on `main`, and cache entries written there are ones every PR job
+  restores. Unused caches are evicted within a week anyway.
+- **The issue body is data:** fenced with a fence longer than any backtick run, `@` mentions
+  defused, lines and the body capped under GitHub's limit.
+- **Seen on `v1.28.0-pre`:** the worktree-settings patch conflicts in one context-only hunk
+  (`project_settings.rs`), and a new crate, `github_releases` (language-server and debug-adapter
+  downloads), is compiled in. The bump must review it and update `docs/spike.md`.

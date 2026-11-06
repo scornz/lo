@@ -8,75 +8,69 @@ Kept current by the overseer session. A fresh session should be able to resume f
 
 ## Current milestone
 
-**2. Spike:** done (#3, #4). **3. GitHub layer:** done (#5, #10 reviewed, fixed, verified). **4. Local
-copy:** #13 review fixes in progress. **5. The PR tab:** 5a in progress on `integration/pr-tab`.
+- **Done and on `main`:** 1 Bootstrap, 2 Spike, 3 GitHub layer, 4 Local copy.
+- **5. The PR tab:** all five PRs written and reviewed. #15 (5a), #17 (5b) and #18 (5c) are fixed
+  and green, and are being brought up to date as the bottom of one stack. #23 (5e) is in its second
+  round of fixes, and #25 (5d) is in fixes after review.
+- **Planned:** milestones 6–9 in detail (`plan.md`). The e2e fixtures script (E1–E3) is in progress.
+- **Logic built ahead of its milestone, on `main`:** review order (#6), revisions (#8), merge
+  logic (#12), threads and the pending review (#21), rebase-aware comparison (#20), stacks (#7, #11),
+  moved code (#9), syntax-aware diff (#14), symbol index (#16).
+- **Landing in progress:** the merge steward brings each line up to date and creates a GitHub stack;
+  the overseer merges the top layer through the async merge API.
 
-- PR #3 (2a, `build/zed-workspace`): submodule, Cargo sync, first window. Green (CI ~10 min per
-  run). Window verified on screen. The independent review found real gaps (Zed's open/save keys and
-  untrusted language servers, redirects past the HTTP guard, lockfile pins, xtask bootstrapping,
-  untested forced settings); fixes are in progress on the same branch.
-- PR #4 (2b, `feat/spike`): the spike's acceptance criteria are met (diff, rust-analyzer, network
-  check, crate list with a CI check, numbers in `docs/spike.md`). The review's trust and diff
-  findings are being fixed on the branch; its git findings went to milestone 4.
-- PR #13 (milestone 4, `feat/repo-cache`): `repo_cache` crate. Reviewed, fixed, verified (private repo on screen; a live credential-helper test is being added).
-- PR #15 (5a, `feat/pr-tab`, on `integration/pr-tab`): the PR tab. Under review.
-- PR #17 (5b, `feat/api-diff`) and PR #18 (5c, `feat/viewed-marks`): under review.
-- 5d (`feat/diff-display`, on `feat/api-diff`): in progress. 5e waits for #15's fixes.
-- PR #5 (3a, `feat/github-client`): `github` crate, typed GraphQL, accounts, device flow, `gh`
-  import, Accounts modal. Reviewed, fixed, verified.
-- PR #10 (3b, `feat/github-polling`): polling scheduler and cache. Reviewed, fixed.
-- Early logic, no Zed compile: `feat/stacks-logic` (Task 7.1) and `feat/review-order` (Task 5.1),
-  both on `build/zed-workspace`.
-- Research for milestone 6 (push boundaries, markers, viewed marks, `git merge-tree`) running;
-  report goes to `docs/research/revisions.md`.
-- Agents share the desktop through `mkdir ~/src/rozed-worktrees/.desktop.lock`.
+## The open PRs
 
-## The PR stack
+Every PR is reviewed by an independent agent and its findings fixed before it lands.
 
-Merging is blocked on the user (see below), so PRs stack: each targets the branch of the PR below
-it. Merge them bottom to top.
-
-| PR | Branch | Base | State |
+| PR | What | Base | State |
 |---|---|---|---|
-| [#1](https://github.com/scornz/rozed/pull/1) `chore: bootstrap the repository` | `chore/bootstrap` | `main` | Reviewed and verified. Ready. |
-| [#2](https://github.com/scornz/rozed/pull/2) `docs: plan the spike…` | `docs/status` | `chore/bootstrap` | The project docs; keeps getting commits. Merge any time after #1. |
-| [#3](https://github.com/scornz/rozed/pull/3) `build: build rozed on Zed's crates` | `build/zed-workspace` | `chore/bootstrap` | Reviewed; review fixes in (16 commits); verified on screen; green. Ready after #1. |
-| [#4](https://github.com/scornz/rozed/pull/4) `feat: open a pull request in Zed's side-by-side diff` | `feat/spike` | `build/zed-workspace` | Reviewed; fixes in (opt-in `--trust`, right side from git, Zed patches to ignore `.zed` settings and Recent Items, server allowlist, no login shell, blame and Prettier off); verified on screen; network GitHub-only; green. Ready after #3. |
-| [#5](https://github.com/scornz/rozed/pull/5) `feat(github): sign in to GitHub and call its API` | `feat/github-client` | `build/zed-workspace` | Security-reviewed; 18 fix commits (removal always works, only not-found means not visible, token only to GitHub API hosts, newest PRs first, device-flow hardening, safe token file); verified on screen; green. Ready after #3. |
-| [#6](https://github.com/scornz/rozed/pull/6) `feat(review): order files for review…` | `feat/review-order` | `build/zed-workspace` | Reviewed; 60 tests; green. Ready after #3. |
-| [#8](https://github.com/scornz/rozed/pull/8) `feat(review): build revisions and choose what to compare` | `feat/revisions-logic` | `feat/review-order` | Reviewed; fixes in (head is always latest, revisions start at PR open, O(n log n)); 148 tests incl. 20,000 random histories; green. Ready after #6. |
-| [#9](https://github.com/scornz/rozed/pull/9) `feat(diff_extras): detect moved blocks of code` | `feat/moved-code` | `build/zed-workspace` | Reviewed; 56 tests; 1.6 ms on a 21,000-line diff; green. Ready after #3. |
-| [#10](https://github.com/scornz/rozed/pull/10) `feat(github): poll pull requests and cache them` | `feat/github-polling` | `feat/github-client` | Reviewed; 24 fix commits (If-Modified-Since polling, FIFO queue spawned inside the lock, writes invalidate, sleep-safe waits, extended check); 35 polling tests ×30 seeds; green. Ready after #5. |
-| [#11](https://github.com/scornz/rozed/pull/11) `feat(stacks): plan turning a chain into a GitHub stack` | `feat/stack-conversion` | `feat/stacks-logic` | Reviewed; 42 new tests; green. Ready after #7. |
-| [#13](https://github.com/scornz/rozed/pull/13) `feat(repo_cache): keep a partial clone of each repository` | `feat/repo-cache` | `feat/spike` | Reviewed; 18 fix commits (URL-scoped credential helper, `--git-dir` everywhere, byte paths, per-head checkouts, diff before checkout, maintenance); green. Private `playground#2` verified on screen through the new credential helper. Ready after #4. |
-| [#14](https://github.com/scornz/rozed/pull/14) `feat(diff_extras): compare files by syntax` | `feat/syntax-diff` | `feat/moved-code` | Reviewed; difftastic port with its tests; 10,000 lines in ~160 ms (release); green. Ready after #9. |
-| [#12](https://github.com/scornz/rozed/pull/12) `feat(review): explain merge blocks and plan approve and ship` | `feat/merge-logic` | `feat/revisions-logic` | Reviewed; redesigned and fixed (two-step approve and ship acting on GitHub's verdict, never bypassing, stale-approval warning, auto-merge off after an unseen push); 268+ tests; green. Ready after #8. |
-| [#15](https://github.com/scornz/rozed/pull/15) `feat(review_ui): open pull requests in tabs` | `feat/pr-tab` | `integration/pr-tab` | Review found a dropped file starts rust-analyzer without trust, plus account fallbacks, no offline open, palette writes; fixes in progress. |
-| [#17](https://github.com/scornz/rozed/pull/17) `feat(review_ui): show GitHub's diff while the local copy loads` | `feat/api-diff` | `feat/pr-tab` | Green; GitHub's diff in 3.5–6.6 s on a 56-file rust-lang PR, switch-over keeps the line; verified on screen. Independent review running. |
-| [#18](https://github.com/scornz/rozed/pull/18) `feat(review_ui): mark files viewed` | `feat/viewed-marks` | `feat/pr-tab` | Green; `e`, `]f`/`[f`, `]c`/`[c` verified on screen, GitHub shows the marks. Independent review running. |
-| [#16](https://github.com/scornz/rozed/pull/16) `feat(symbol_index): index definitions and references by name` | `feat/symbol-index` | `feat/syntax-diff` | Reviewed; 76 tests; VS Code's 11,500 files in 1.2 s, re-index 1.8 ms (release); green. Ready after #14. |
-| [#7](https://github.com/scornz/rozed/pull/7) `feat(stacks): find stacks…` | `feat/stacks-logic` | `build/zed-workspace` | Reviewed; review fixes in (trunks, live base tip, squash-merged matching, `retarget_to`); 82 tests; green. Ready after #3. |
+| #15 | PR tab (5a) | `integration/pr-tab` | Ready; lands once its base's branches are on `main`. |
+| #17 | GitHub's diff first (5b) | `feat/pr-tab` | Ready. |
+| #18 | Viewed marks (5c) | `feat/pr-tab` | Ready; combine with #17 using the two edits in Notes. |
+| #23 | Recent PRs, account picker, window title, offline diff (5e) | `feat/pr-tab` | All 11 findings fixed; the re-review found 8 more (an offline reload can drop the local diff, a sticky account, offline classification, picker focus). Round-two fixes in progress. Its migration becomes step 3 when it lands above #18. |
+| #25 | Collapse, images, renames, view keys (5d) | `feat/api-diff` | Reviewed: 13 findings (SVG local-file reads, image bombs, `alt-w` unfolding, Unicode whitespace). Fixes in progress. |
+| #19 | Dependabot: `jdx/mise-action` 5.2.6 | `main` | Being brought up to date; lands next. |
+| #27 | Weekly build against Zed's latest release (13.1) | `main` | Reviewed (no blockers; two medium: infrastructure failures read as "Zed breaks rozed", relative `--dir`). Fixes in progress. |
+| #2 | The docs (`docs/status`) | `main` | Land last; its branch keeps moving. |
 
-#4–#7 all sit on #3 and don't depend on each other, except where noted when they land. Whichever
-merges second resolves `Cargo.lock` and `crates/rozed` conflicts by merging `origin/main`.
+### How a line lands
 
-### How to merge the stack
-
-1. Squash-merge the bottom PR. GitHub deletes its branch and retargets the next PR to `main`.
-2. In the next PR's branch, merge `origin/main` and push (the ruleset wants branches up to date).
-   The squash commit and the branch's own copy of the lower PR's commits can conflict where the
-   upper PR changed lines the lower one added; the upper branch's side is always right there,
-   because it already contains everything below it.
-3. Wait for checks, squash-merge, repeat.
+1. The steward merges `origin/main` into the line's bottom branch (chain case: the tree must equal the
+   branch's; sibling case: three-way against the last shared commit, proving both sides are kept),
+   then merges each layer's updated base into the layer above, and waits for green and `CLEAN`.
+2. The steward creates the stack (`POST /repos/scornz/rozed/stacks`, bottom to top).
+3. The overseer merges the top layer: `PUT /repos/scornz/rozed/pulls/<top>/merge-async` with
+   `merge_method=squash` and the expected head `sha`, then polls the returned UUID until `merged`.
+   Each layer lands as its own squash commit. `gh pr merge` refuses stacked PRs.
+4. Check `main`'s tree equals the top layer's old head, and delete the merged worktrees' `target/`.
 
 ## Merged
 
-Nothing yet.
+- #1 `chore: bootstrap the repository` → `main` at `1e6b090` (2026-11-06).
+- #3 `build: build rozed on Zed's crates` → `main` at `988ce2c` (2026-11-06).
+- #4 `feat: open a pull request in Zed's side-by-side diff` → `e0ae578`, and #13 `feat(repo_cache): keep a partial clone of each repository` → `59b68a6`, together as GitHub stack #22 through the async merge API (2026-11-06).
+- #5 `feat(github): sign in to GitHub and call its API` → `68da4db`, and #10 `feat(github): poll pull requests and cache them` → `080d041`, as stack #24 (2026-11-06). Milestone 3 (GitHub layer) and milestone 4 (local copy) are on `main`.
+- #6 → `5390600`, #8 → `a36e23c`, #12 → `6aa6be3`, #21 → `17bee1c` (the review model), as stack #26 (2026-11-06).
+- #20 `feat(repo_cache): compare revisions across a rebase` → `dfd4f92` (2026-11-06).
+- #7 `feat(stacks): find stacks among a repository's pull requests` → `4b484ad`, and #11 `feat(stacks): plan turning a chain into a GitHub stack` → `0ead135`, as stack #28 (2026-11-06).
+- #9 `feat(diff_extras): detect moved blocks of code` → `7b6c53a`, #14 `feat(diff_extras): compare files by syntax` → `7d27f64`, #16 `feat(symbol_index): index definitions and references by name` → `6da6849`, as stack #30 (2026-11-06). All logic built ahead of its milestone is on `main`.
 
 ## Next
 
-- **2. Spike:** detailed tasks go into `plan.md` from the Zed research, then one implementer on
-  branch `feat/spike` stacked on `chore/bootstrap`.
+1. Land #19 and #27, then milestone 5 as one stack, **#15 → #17 → #18 → #23 →
+   #25**, then #2. Building the stack:
+   - #18 merges `feat/api-diff` in, with the two edits in Notes;
+   - #23 merges `feat/viewed-marks` in and moves `repo_accounts` to migration index 3;
+   - #25 merges `feat/recent-prs` in.
+   This order lets #18 and #23 be combined while #25's fixes are still running.
+2. After milestone 5, the UI milestones wire in the logic already built: 6 revisions (picker,
+   rebase-aware view), 7 stacks (tree sidebar, `]s`/`[s`, layer diffs), 8 comments and reviews
+   (threads in the diff, comment box, submit dialog, timeline, attachments), 9 merging (status
+   line, `m` panel, approve and ship, queue), 10 code features (`symbol_index` as a built-in
+   language server, trust gate, peek), 11 moved code and the syntax-aware view, 12 links, keys
+   (vim) and settings, 13 end-to-end and release. Each gets detailed tasks in `plan.md` when it
+   starts.
 
 ## Findings so far (folded into `docs/spike.md` by the spike PR)
 
@@ -92,20 +86,38 @@ Nothing yet.
 
 ## Waiting on the user
 
-- **Merging PRs.** The auto-mode permission classifier refuses `gh pr merge` from the overseer
-  ("Merge Without Review"). Either merge the stack yourself (bottom to top, see above) or add a
-  permission rule that allows `gh pr merge` for `scornz/rozed`, and a session can merge the reviewed
-  stack.
-- **A public end-to-end repo.** The classifier refuses creating a public repo ("Create Public
-  Surface"). Merge queues need a public org repo (design §12), so milestone 13 needs the user to
-  create `rozed-dev/e2e` (public) or allow it. Until then checks use the private
-  `rozed-dev/playground`.
-- **Apple Developer account,** for signed releases. Release secrets: `MACOS_CERT_P12`,
-  `MACOS_CERT_PASSWORD`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`. Builds stay unsigned
-  until then.
-- **Zed's trademark terms,** checked before the name goes public in a release.
+- **Apple Developer account:** the user will set it up later; until then builds stay unsigned. Release
+  secrets when it exists: `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`, `NOTARY_KEY_ID`,
+  `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`.
+
+## Resolved with the user
+
+- **Merging:** the user allowed the overseer to merge in `scornz/rozed` (2026-11-06).
+- **Bot credentials:** the user allowed using `rozed-bot`'s tokens with rozed's credential helper to
+  test rozed (2026-11-06).
+- **Public end-to-end repo:** the user allowed creating it in `rozed-dev` with the bot's token
+  (2026-11-06): `rozed-dev/e2e`.
+- **Zed's trademark terms:** checked by the user; the name "rozed" is fine for now (2026-11-06).
 
 ## Notes
+
+- **Milestone 10 mechanism decided** (see decisions "Code features"): the syntax index answers
+  through a rozed `SemanticsProvider` inside the app, since no language server can serve rozed's
+  diff buffers. This departs from design §7's wording but keeps its behaviour; the user may override.
+
+- **Combining `feat/viewed-marks` (#18) with `feat/api-diff` (#17):** in `show_github_diff`, call
+  `self.set_head(head)` with the head GitHub listed the files at; make api-diff's `list()` call
+  `set_viewed(&self.marks.shown())` instead of `&self.viewed`. A tested scratch merge is the local
+  commit `8f206a7` on `scratch/viewed-marks-with-api-diff-2` (worktree of `feat-viewed-marks`).
+
+- **The `gh` on PATH (`~/.local/bin/gh`) is a Coder wrapper that injects the user's own token over
+  `GH_TOKEN`.** For anything as `rozed-bot`, call `/opt/homebrew/bin/gh` and check `GET /user` says
+  `rozed-bot` first.
+- `rozed-dev/playground` also has branches `review-checks` and `review-checks-base` and a closed PR #4
+  from the live review-API checks; harmless.
+
+- **Disk:** each worktree's `target/` holds 30–90 GB of Zed builds. Delete a worktree's `target/`
+  once its PR merges; keep an eye on free space (`df -h ~`).
 
 - **Classifier blocks seen so far, worked around legitimately:** merging PRs ("Merge Without
   Review", waiting on the user), creating a public repo ("Create Public Surface"), force-pushing a
@@ -119,6 +131,8 @@ Nothing yet.
 - **Runaway processes:** Zed captures the shell environment by running the current executable with
   `--printenv`. rozed must handle that flag, and refuses to start under a rozed parent
   (`ROZED_PARENT_PID`). Never remove either.
+- **Launch rozed at normal priority:** zsh renices background jobs (`BG_NICE`), and a niced rozed
+  never repaints. Use `setopt NO_BG_NICE` or `nice -n 0`.
 - **Frozen-looking window on this desktop:** GPUI stops repainting after the first frame until the
   window is re-activated (virtual display). Click the wallpaper twice, then rozed's title bar.
 - **Builds need mise** (`mise exec -- cargo ...`) for the pinned cmake.

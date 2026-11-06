@@ -785,7 +785,8 @@ Five PRs, in order (5c and 5d can run in parallel once 5b is open):
 - When several accounts can see a repo, ask once per owner which to use and remember it (design §3
   "Which account"); 5a takes the first account.
 - The window title names the open PR (it reads "empty project" after 5a).
-- The command palette lists none of Zed's file actions (new, open, save), matching the keymap filter.
+- Offline, a PR whose head the local copy already has shows its diff from the copy (design §11);
+  5a's fixes show only the saved details offline.
 
 **Milestone done when:** all five PRs are green, every key above works on screen, and both test PRs
 open from a clean state.
@@ -857,3 +858,524 @@ stacked on `feat/merge-logic`. Design §8.
 - Tests for placement across revisions (written on r1, viewed at r3 with and without the line
   changing), multi-line threads, commentable lines, the pending review's lifecycle, suggestions and
   own-PR choices.
+
+### Task 13.1: The weekly build against Zed's latest release
+
+PR: `ci: build weekly against Zed's latest release` — branch `ci/weekly-zed`, on `main`. Design §12
+"CI and Zed updates".
+
+- A scheduled workflow (weekly, plus `workflow_dispatch`) on macOS: find Zed's latest stable release
+  tag (`gh api repos/zed-industries/zed/releases/latest`), check out rozed, move the submodule to that
+  tag with rozed's patches replayed on top (cherry-pick the patch commits listed in `CLAUDE.md`'s Zed
+  section from `rozed/v<current>`; a patch that no longer applies is itself a breakage to report), run
+  `cargo xtask sync-zed --seed-lock`, then fmt, clippy and tests.
+- On failure, open or update one issue (label `zed-update`) naming the Zed release, the failing step
+  and the first errors; on success, close it. Never pushes branches or changes the repo.
+- `script/zed-latest.sh` holds the steps so they run locally too.
+- `ci-ok` is unaffected (the weekly job isn't a PR check).
+- **Verify:** run `script/zed-latest.sh` locally against the current latest Zed release and report what
+  breaks (that list is the start of the next Zed bump); run the workflow once via `workflow_dispatch`
+  on the PR branch if GitHub allows dispatching from a branch, else show it with `act`-style dry
+  reasoning and actionlint.
+
+
+---
+
+## Milestones 6–9: how they run
+
+These milestones wire the logic already on `main` into the PR tab. They start once milestone 5 has
+landed, from `main`.
+
+- **Lanes.** Builds run in two lane worktrees, `~/src/rozed-worktrees/lane-1` and `lane-2`. Each
+  PR in a lane starts a new branch in that worktree from its dependency, so Zed's crates build
+  once per lane, not once per branch. A shared `CARGO_TARGET_DIR` wouldn't help: Zed's crates are
+  path dependencies, and a different path is a different build. Fixes to a PR under review check
+  out its branch in its lane, and only rozed's crates rebuild.
+- **Migration slots** in `github::db::RozedDb::MIGRATIONS` are fixed ahead, so parallel PRs never
+  take the same index:
+  - 2: `viewed_files` (5c)
+  - 3: `repo_accounts` (5e)
+  - 4: `seen_heads` and `last_seen` (6c)
+  - 5: `drafts` (8b)
+  - 6: `merge_methods` (9a)
+
+  A slot changes only through this plan, and changing one means deleting the debug database
+  (`0-dev`).
+- **Writes go only to `rozed-dev` repos.** `sharkdp/fd#2212` is a real third-party PR: it gets no
+  comments, reviews, approvals or merges, ever. Milestones 6–9 are checked on it signed in as
+  `rozed-bot`, read-only.
+- **PRs opened without signing in** keep milestone 5's behaviour. GraphQL needs a token, so
+  revisions, stacks, threads and merging say "Sign in to see …".
+- **Waves.** Two lanes; the data-layer PRs (6c, 7a, 8a, 8b, 9a, 9b) compile `gpui` but not
+  `editor`, so they're quick.
+
+  | Wave | Lane 1 | Lane 2 | Milestone done |
+  |---|---|---|---|
+  | 1 | 6a | 6c, then F | |
+  | 2 | 6b | 8c | |
+  | 3 | 6d | 7a, then 8a | |
+  | 4 | 6e | 7b | 6 |
+  | 5 | 8d | 7c | |
+  | 6 | 8b, then 8e | 7d | 7 |
+  | 7 | 8f | 9a, then 9b | |
+  | 8 | 8g | 9c | |
+  | 9 | 8h | 9d | 8 |
+  | 10 | 9f | 9e | 9 |
+
+- **Branching.** Each PR stacks on its last dependency. A PR with two open dependencies branches
+  from one and merges the other; it never rebases.
+- **Conflict hot spots,** and what keeps PRs apart:
+  - `pr_tab.rs` is split by 6a. Each feature becomes an entity in its own file, and adds one field
+    and one render call to `PrTab`.
+  - The header has one fixed slot per feature.
+  - Keys: one `bind_keys` per module, plus a GPUI test that fails on duplicate bindings (6a). The
+    `PrDiff` context is settled early (8c).
+  - `ShownComparison` and `DiffDecorations` (6b) mean later PRs never edit `show_local_copy` or
+    the file-header badges directly.
+  - `github`'s `queries.rs` becomes `queries/`, with one generic `Poller::read_cached` (6c).
+  - `test_support.rs` is split into per-feature request handlers (6a).
+  - `CLAUDE.md` gets a "Keys" table, one row per key (6a).
+
+### Fixtures: `test: script the review fixtures on rozed-dev/e2e` — branch `test/e2e-fixtures`
+
+An idempotent script under `script/e2e/`, run as `rozed-bot` through `/opt/homebrew/bin/gh` (check
+that `GET /user` returns `rozed-bot` first). It builds nothing.
+
+- **E1 (revisions):** a PR with three normal pushes and the bot's own COMMENT review on r2; the
+  script pushes r4 on demand. A rebased revision (r5) comes from GitHub's own server-side rebase
+  (GraphQL `updatePullRequestBranch(updateMethod: REBASE)` after `main` moves), so nothing is
+  force-pushed. A rebase that resolved a conflict can't be made that way. It's checked read-only
+  on a public PR that has one (`cli/cli#14745` was force-pushed and retargeted), and with GPUI
+  tests.
+- **E2 (stack tree):**
+  - a base-branch chain: `a` → `main`, `b` → `a`, `c` → `b`;
+  - a sibling `e` → `b`;
+  - `d` targeting `main` while containing `c`'s head;
+  - a separate two-layer native stack.
+- **E3 (needs rebase):** `x` → `main` and `y` → `x`, then `x` squash-merged.
+- **E4 (merge states):**
+  - two bases: `main` (direct merges, a required `ci` check, one approval, CODEOWNERS) and `queued`
+    (a merge-queue ruleset);
+  - a `ci` workflow whose result comes from a file: pass, fail or slow;
+  - PRs for a conflict, a draft, and an unresolved thread under required conversation resolution.
+- **E5 (PRs the bot can approve):** opened by `github-actions[bot]` through a `workflow_dispatch`
+  workflow.
+
+Merging fixture PRs and setting e2e's rulesets happen only in `rozed-dev/e2e`, as `rozed-bot`, to
+test rozed.
+
+## Milestone 6: Revisions
+
+Design §6, §11 "Missing revisions". This milestone wires `review::revisions` (`build_revisions`,
+`default_comparison`, `viewed_file_comparison`, `Revisions::mark_unavailable`) and
+`repo_cache::Repo::compare_revisions` into the tab. It replaces 5a's stand-in in `PrTab::copied`.
+6a and 6b are groundwork that milestones 7–9 also use.
+
+### 6a `refactor(review_ui): give each part of the PR tab its own file` — branch `refactor/pr-tab-parts`
+
+- **Starts only when no other `review_ui` branch is open.**
+- **The split:**
+  - `pr_tab.rs` becomes `pr_tab/{mod.rs, header.rs, left.rs, middle.rs, right.rs, keys.rs}`.
+  - The tests move to `pr_tab/tests/…`.
+  - `test_support.rs` becomes `test_support/{github,git}.rs`, with a list of request handlers.
+- **Extension points:**
+  - the header's ordered slots: stack, revision picker, pending review, merge status;
+  - a left slot above the file list, for the stack tree;
+  - a middle switch between the diff and the timeline;
+  - a right panel host, for threads.
+- **Keys:** `keys.rs` holds the context names and calls each feature's `bind_keys`. A GPUI test
+  fails when two bindings share a keystroke and a context. CLAUDE.md gets a "Keys" table.
+- **Verify on screen:** the test count is unchanged, and `git diff -M --color-moved` shows only
+  moves outside the new code. `fd#2212` and `playground#2` behave as in milestone 5, checked with
+  every milestone 5 key.
+
+### 6b `refactor(review_ui): show any comparison in the diff and let features decorate it` — branch `refactor/shown-comparison`
+
+- **`ShownPull`** groups the per-PR state. `PrTabEvent` gains `PullChanged`, `HeadChanged` and
+  `ComparisonChanged`.
+- **`ShownComparison`** (`old` commit or replayed tree, `new`, files, kind `Full` / `Between` /
+  `Layer`) replaces `LocalPullRequest`'s fixed `base..head`.
+- **`DiffDecorations`:** decorators re-run after each file is added, after a split rebuild
+  (`alt-v`), after `alt-w`, and when the local copy replaces GitHub's diff. File headers get a list
+  of badges.
+- **Verify on screen:** as 6a. `alt-v` and `alt-w` keep the file headers.
+
+### 6c `feat(github): read a pull request's push history` — branch `feat/push-history`
+
+- **Reads:**
+  - REST `GET /repos/{head_owner}/{head_repo}/activity?ref=refs/heads/{ref}`, for the head and base
+    branches, paged with ETags.
+  - GraphQL `PullRequestRevisions`:
+    - `createdAt`, `merged`, `mergeCommit { oid parents }`;
+    - force-push, base-change and retarget timeline items;
+    - submitted reviews with `commit`;
+    - your last review;
+    - `CheckSuite.push { previousSha nextSha }`.
+- **Mapping:** reads map into `review::revisions::PushRecord`. `github` depends on `review`.
+- **Storage:** tables `seen_heads` and `last_seen` (slot 4), in `github::revision_marks`.
+- **`Poller::read_cached(pull, name, request)`:** refreshes when named fields of the open PR's
+  check change, and on the 5-minute refresh. 7a, 8a and 9a reuse it. `queries.rs` becomes
+  `queries/`.
+- **`repo_cache`:**
+  - `Repo::pull_commits(base, head)` (`rev-list --topo-order --reverse`);
+  - `Repo::fetch_commits(&[Oid])`, one fetch that pins under `refs/rozed/pull/<n>/revs/`, and treats
+    "not our ref" as unavailable.
+- **`review::revisions::base_tip_at`** (pure): the base branch's tip when a revision was pushed.
+  For a PR merged with a merge commit, it's the first parent.
+- **Verify:** recorded fixtures (E1, and `fd#2212` as `rozed-bot`, read from the fork).
+
+### 6d `feat(review_ui): pick the revisions to compare` — branch `feat/revision-picker`
+
+- **Revisions:** `PrTab::copied` builds real revisions, fetches every head and marks the missing ones
+  unavailable.
+- **The picker** goes in the header slot. Rows show:
+  - each rN with its time, a forced badge and its sources;
+  - "your last review" and "last seen here";
+  - disabled "no longer available" rows;
+  - a "Whole pull request" row.
+- **Opening:**
+  - The tab opens at `default_comparison`.
+  - `Full { nothing_new_since }` shows "Nothing new since rN".
+  - `Between` runs through `ShownComparison` with `compare_revisions`.
+  - `e` refuses unless the right side is the latest head.
+- **"Last seen here"** is written when the tab deactivates or closes. Before the local copy is
+  ready, the picker says comparisons wait for it.
+- **Keys:** `alt-r` opens the picker. In it: `j`/`k`, `space` sets the left side, `enter` sets the
+  right side and applies, and `escape` closes.
+- **Verify on screen:**
+  - `fd#2212`: r1 (`15635d6`, seen through the maintainer's review) and r2; r1→r2 shows only the
+    second commit.
+  - E1:
+    - it opens r2→r3 with "your last review" on r2;
+    - reopening shows "Nothing new since r3";
+    - after r4 it opens r3→r4 ("last seen here").
+
+### 6e `feat(review_ui): compare across rebases and open changed files where you left them` — branch `feat/rebase-aware-view`
+
+- **Bases:** each revision's base is the base as it was (`base_tip_at`).
+- **How `Replay` shows:**
+  - `Clean`: a banner says the comparison spans a rebase and shows only the author's changes.
+  - `Retargeted`: worded as decisions says.
+  - `Conflicted`: the plain comparison with a banner, and conflicted files badged "resolved a
+    conflict". `alt-a` there switches to the replay → head diff.
+- **Changed since viewed:** each dismissed file opens at `viewed_file_comparison`, replacing 5c's
+  stand-in note with "Changed since you viewed it in rN" or "since your last review in rN".
+- **Merged PRs:** the base is the merge commit's first parent.
+- **Verify on screen:**
+  - E1: mark `a.txt` viewed at r3, then push r4 touching `a.txt` and `b.txt`. `a.txt` shows r3→r4
+    with the note.
+  - E1's server-side rebase r5: r4→r5 shows only the new change, with the rebase banner.
+  - The conflicted case on the public fallback.
+
+**Milestone 6 is done when** 6a–6e are green and the checks above pass on screen.
+
+## Milestone 7: Stacks
+
+Design §4. This milestone wires in `stacks::Stacks::find` and its layers, rules, `needs_rebase` and
+`next`/`previous`.
+
+### 7a `feat(github): read what finding stacks needs` — branch `feat/stack-data`
+
+- **`OpenPullRequests` gains:**
+  - `id`, `createdAt`, `author`, and `baseRef { target { oid } }`;
+  - `commits(last: 20)`;
+  - `reviewDecision`, `statusCheckRollup`, `isInMergeQueue` and `mergeQueueEntry`.
+- **`MergedPullRequests($headRefName)`** for the branches `branches_to_look_up` returns.
+- **Trunks:** from `defaultBranchRef`, branch protection patterns and ruleset `refName` conditions
+  (`~DEFAULT_BRANCH`, `~ALL`, fnmatch).
+- **`StackLayers(ids)`** reads each layer's review, checks, queue and "n of m viewed" state, and
+  refreshes with the open PR.
+- **Mapping** into `stacks::PullRequest`, including `State::Merged { head_in_base }`.
+- **Verify:** fixtures recorded from playground stack #3 and E2.
+
+### 7b `feat(review_ui): show a pull request's stack as a tree` — branch `feat/stack-tree`
+
+- **The tree** (`StackTree`) goes in the left slot, indented by depth, with children in the order they
+  were opened. Each row shows:
+  - the title, number and author;
+  - review, checks and queue state;
+  - "needs rebase";
+  - "n of m viewed".
+- **Around the rows:**
+  - The linking rule shows in a tooltip, and cycles are listed.
+  - A note appears when the open list is truncated.
+  - The tree is hidden outside a stack.
+- **Keys:** `alt-s` shows, hides and focuses the tree. In it: `j`/`k` and `enter`, which for now
+  opens a new tab.
+- **Verify on screen:** playground#1 (two rows, a native stack), E2 (branches in order), and
+  `fd#2212` (no tree).
+
+### 7c `feat(review_ui): keep a whole stack in one tab, walked with ]s and [s` — branch `feat/stack-tab`
+
+- **`TabKey` holds the stack's layers:** a link to any layer switches to that tab at that layer.
+- **Switching layers:**
+  - It swaps `ShownPull`, keeping each layer's scroll and built diff.
+  - The poller follows the shown layer.
+  - The header shows the root and "layer k of n", and the titles name the stack.
+- **Keys:** `]s`/`[s` walk the stack depth-first. In the tree, `enter` switches layers in place.
+- **Verify on screen:**
+  - open playground#1, then #2's link: the same tab switches;
+  - `]s`/`[s` walk E2 depth-first;
+  - a middle layer's link opens the stack at that layer.
+
+### 7d `feat(review_ui): compare each layer with the one below, or several at once` — branch `feat/layer-diffs`
+
+- **A layer's diff** starts from:
+  - the lower layer's head that this layer contains;
+  - `NeedsRebase::compare_against` when the lower layer was squash-merged;
+  - for a bottom layer, the merge-base with its root.
+- **GitHub's diff** is skipped (or labelled) first for layers not linked by `BaseBranch`.
+- **"Needs rebase"** shows as a banner. A force-pushed lower layer uses `compare_revisions` with its
+  old and new heads.
+- **Multi-layer diffs** run from a run's bottom base to its top head, along one path. They're
+  read-only: no comments and no `e`.
+- **Keys:** in the tree, `shift-j`/`shift-k` extend a range and `enter` shows it. `alt-shift-s` shows
+  the stack from the bottom up to this layer.
+- **Verify on screen:**
+  - playground#2 shows only `stack-b`;
+  - E2's shared-commits layer `d` shows only its own change;
+  - a multi-layer `a..c` diff;
+  - E3's "needs rebase".
+
+**Milestone 7 is done when** 7a–7d are green and the checks above pass on screen.
+
+## Milestone 8: Comments and reviews
+
+Design §8, §11 "Unsent text". This milestone wires in `review::threads`, `review::pending` and
+`review::drafts`.
+
+### 8a `feat(github): read review threads, your pending review and the timeline` — branch `feat/threads-data`
+
+- **`ReviewThreads`** (paged) maps into `Thread`, adding the `viewer_can_*` fields and comment URLs.
+- **`PendingReview($login)`.**
+- **`Timeline`** pages the item types design §8 names; other types are read by `__typename` only.
+- **Refreshes** go through `read_cached`.
+- **`repo_cache::Repo::patch(base, head, path)`** (myers, user config ignored) gives commentable
+  lines when GitHub leaves out a patch, and for older revisions.
+- **Verify:** recorded fixtures from `fd#2212` and the playground.
+
+### 8b `feat(github): send comments, replies and reviews` — branch `feat/review-writes`
+
+- **An executor for every `review::pending::Mutation`.** `thread: null` counts as a refusal, and
+  `UNPROCESSABLE` maps to readable messages.
+- **Other writes:** resolve, unresolve, edit and delete comments, plus `addComment`, all through
+  `Poller::write`.
+- **A `drafts` table** (slot 5).
+- **Verify:** fixtures recorded on the playground as the bot.
+
+### 8c `feat(review_ui): turn on vim, with rozed's keys above it` — branch `feat/vim-keys`
+
+- **Vim:**
+  - Adds the `vim` crate (with `search`) and updates `script/zed-crates.txt`.
+  - Calls `vim::init`.
+  - `vim_mode: true` is a default the user can change.
+- **A `PrDiff` key context** on the diff editors, through an `Addon`. Reading keys bind at editor
+  depth with `Editor && PrDiff && !(Editor && mode != full)`, loaded after vim's keymap.
+- **Removed bindings:** `editor::NewlineBelow` and `NewlineAbove`, which would take `cmd-enter`.
+- **Comment editors** turn on modal editing when created.
+- **Verify on screen:**
+  - GPUI tests: every milestone 5 key reaches rozed with vim on.
+  - On `fd#2212`: `j`, `k`, `w`, `b`, `gg` and `G` move; `e` marks viewed; `v` starts visual mode.
+
+### 8d `feat(review_ui): show review threads in the diff and the threads panel` — branch `feat/threads-view`
+
+- **Spike first:** at the start, try editors in blocks under removed lines in the inline layout,
+  and blocks surviving a split rebuild.
+- **In the diff:**
+  - `place(thread, &screen)` follows the comparison on screen. `Placement::Lines` puts a block under
+    the line, on the right editor or the left one; `Placement::File` puts it on the file header.
+  - Resolved threads start collapsed.
+  - Bodies are Markdown through Zed's `markdown` crate.
+- **The panel** lists `panel(threads, filter, viewer)` with Unresolved, All and Yours, including
+  outdated threads and those not on screen. The file list shows counts.
+- **Keys:**
+  - `]t`/`[t` move between threads.
+  - In the panel: `j`/`k`, `enter`, and `u`/`a`/`y` for the filters.
+  - `alt-enter` opens or collapses a thread.
+- **Verify on screen:**
+  - `fd#2212`: threads under their lines, outdated labels, filters, `]t`;
+  - a playground PR with a resolved thread: it starts collapsed.
+
+### 8e `feat(review_ui): write comments and suggestions under the line` — branch `feat/comment-box`
+
+- **The comment box** (`CommentBox`): an auto-height editor with Markdown, vim and a preview.
+- **Where comments go:**
+  - `c` on a line;
+  - `v` … `c` on a range (with `RangeError` explained);
+  - `alt-c` for the file;
+  - `s` for a suggestion.
+- **Posting:**
+  - `C` posts at once, or joins the pending review and says so.
+  - `cmd-enter` in the box sends.
+  - `NotLatest` offers to submit, or to switch to the latest revision.
+  - A line GitHub won't take offers a file comment.
+- **Hunks** come from GitHub's patch, kept after the swap, or from `Repo::patch`.
+- **Drafts** save on every change; drafts stranded on older revisions are listed.
+- **Keys** in the box: `cmd-enter`, `alt-p` for the preview, and `escape`, which keeps the draft.
+- **Verify on screen** on an E4 PR:
+  - a line comment;
+  - ranges across hunks, and from a removed line to an added one;
+  - a suggestion and a file comment;
+  - pending shown on GitHub;
+  - a half-written box survives a relaunch.
+
+### 8f `feat(review_ui): reply, resolve and submit your review` — branch `feat/submit-review`
+
+- **Threads:** reply, edit and delete in thread blocks, and resolve or unresolve. The header's
+  pending-review slot shows the count.
+- **The submit dialog** comes from `YourReview::submit_dialog`, with the summary as a draft. It
+  explains `OtherRevision`, `NothingToSubmit` and `OwnPullRequest`.
+- **Keys:**
+  - `cmd-enter` opens and submits the dialog.
+  - In a thread: `r` replies, `shift-r` resolves or unresolves, `alt-e` edits, and
+    `alt-backspace` deletes after a confirmation.
+- **Verify on screen:**
+  - On E5 PRs: Request changes, then Approve.
+  - On the bot's own PR: Comment only.
+  - With a pending review on r1, then a push: Approve is refused.
+
+### 8g `feat(review_ui): show the timeline` — branch `feat/timeline`
+
+- **The timeline** is a virtualized list of the item types. Markdown images load through rozed's own
+  loader:
+  - the token goes only to `https://github.com/user-attachments/assets/*`;
+  - the redirect is followed to S3 without it;
+  - other hosts are fetched anonymously.
+- **Media:** GIFs play; videos show as links. SVGs and other images go through 5d's safe decoder
+  (no file or remote hrefs, pixel caps), never gpui's default `SvgRenderer`.
+- **A conversation comment box** sits at the bottom.
+- **Keys:** `alt-t` switches between the diff and the timeline.
+- **Verify on screen:** `fd#2212`'s timeline; a private playground image loads; a comment posted on
+  E4.
+
+### 8h `feat(review_ui): attach images and videos to comments` — branch `feat/attachments`
+
+- **Adding a file:** drop, paste or pick into any comment box. Drops are allowed onto comment boxes
+  only, reading only the file's bytes; they stay stopped everywhere else.
+- **Checks:** type and size (images 10 MB; videos 10 or 100 MB), and `viewerPermission` WRITE or
+  above.
+- **Upload:** to `uploads.github.com/user-attachments/assets`, inserting the Markdown.
+- **Keys:** `alt-shift-a` picks a file.
+- **Verify on screen:**
+  - The playground (private): a PNG, a GIF and an MP4, in a line comment, the summary and the
+    conversation.
+  - `fd#2212`: it says write access is needed, and nothing is posted.
+
+**Milestone 8 is done when** 8a–8h are green and the checks above pass on screen.
+
+## Milestone 9: Merging
+
+Design §9, §11. This milestone wires in `review::merge` (`blockers`, `status`, `merge_action`,
+`approve_and_ship`, `after_approving`, `after_push`) and `stacks::convert` / `stacks::merge`. Every
+merge goes through `merge-async` with `sha` set to the head on screen.
+
+### 9a `feat(github): read what decides a merge` — branch `feat/merge-data`
+
+- **Reads:**
+  - a `MergeSnapshot` GraphQL query;
+  - REST `rules/branches/{branch}`;
+  - `mergeQueue(branch:)`, both its configuration and its entries.
+- **Mapping** into `review::merge::MergeSnapshot`:
+  - `out_of_date` comes from the local copy under strict status checks;
+  - `merge_methods` table (slot 6).
+- **A gap to close in `review`:** GitHub refuses a second review while yours is pending, so
+  `approve_and_ship` gains `Approval::SubmitPending` when the pending review is on the head on
+  screen, and a refusal when it's on another revision.
+- **Verify:** recorded fixtures for the E4/E5 states.
+
+### 9b `feat(github): merge, queue and change stacks through GitHub's API` — branch `feat/merge-writes`
+
+- **Async merges:**
+  - Submit, then poll the UUID, handling 202 and 200, a 409 that carries the existing UUID, 400 and
+    404.
+  - The statuses are `pending`, `merged`, `enqueued` and `failed`.
+- **Queue and auto-merge:** enqueue (with `expectedHeadOid` and `jump`), dequeue, and enable or
+  disable auto-merge.
+- **Stacks API:** list (a 404 means the API is off), create, add and unstack, and change a PR's base.
+- **`MergeJobs`:** a global model that backs off from 1 s to 10 s and survives the tab closing.
+- **Verify:** fixtures recorded on e2e.
+
+### 9c `feat(review_ui): show where a merge stands and why` — branch `feat/merge-panel`
+
+- **Header:** the status line.
+- **The panel (`m`):**
+  - Blockers, grouped by who they wait on, with links.
+  - A note when the account may not see every rule.
+  - A method choice (remembered per repository) or "Add to merge queue".
+  - An editable squash title and message.
+  - "Out of date" with no Update branch button.
+- **Merging:**
+  - A confirmation names the account, method and target.
+  - If the head moved, the tab reopens at the new revision, compared from the one seen.
+  - Merging is off offline.
+- **Keys** in the panel: `j`/`k`, `tab` cycles methods, `enter` merges after the confirmation, and
+  `escape` closes.
+- **Verify on screen:**
+  - E4's states;
+  - a squash merge, then the same method preselected next time;
+  - `fd#2212`, read-only.
+
+### 9d `feat(review_ui): approve and ship with one key` — branch `feat/approve-and-ship`
+
+- **The flow on `cmd-shift-enter`:**
+  1. A fresh snapshot, then `approve_and_ship`.
+  2. A confirmation, with the wording and the stale-approval warning.
+  3. Approve, or submit the pending review as an approval.
+  4. `after_approving`.
+- **After that:** a "clean status" auto-merge refusal reads again and re-runs; after a push,
+  `after_push` turns auto-merge off and says so.
+- **Tests:** GPUI tests drive every outcome against `FakeGithub`.
+- **Verify on screen** on E5:
+  - merges;
+  - auto-merge, then merges;
+  - joins the queue;
+  - stops after approving on a failed check;
+  - skips approving its own PR;
+  - stops before approving when a push lands while the confirmation is open;
+  - a pending review is submitted as the approval.
+
+### 9e `feat(review_ui): merge stacks and make chains GitHub stacks` — branch `feat/stack-merges`
+
+- **Merging a layer of a native stack** merges everything below it. The confirmation lists each
+  layer, and progress shows per layer. A `failed` result reads the stack again. Bypassing rules is
+  allowed for the bottom layer only.
+- **"Make this a GitHub stack":** `plan_conversion`, with every `Reason` listed when it's not
+  offered. The steps are listed first. It stops at the first failure and offers `rollback`,
+  explaining what `Kept` leaves in place.
+- **Merging one layer at a time** when conversion isn't offered: `MergeBottom`'s retargets around
+  each merge.
+- **Keys:** `enter` in the merge panel on a stack; `alt-shift-g` converts.
+- **Verify on screen:**
+  - an E2-style chain becomes a native stack;
+  - merging the top of a three-layer stack lands every layer;
+  - rollback is checked in GPUI tests.
+
+### 9f `feat(review_ui): show the merge queue and act on it` — branch `feat/merge-queue`
+
+- **The queue view, per base branch:**
+  - entries with position, state and estimate, yours highlighted;
+  - what's tested together;
+  - removal reasons with the failing check's link.
+- **Controls:** remove, jump (when allowed), and auto-merge on or off.
+- **Admin override:** you type the PR's number, then it merges with `bypass_rules: true`.
+- **Polling:** the poller polls the queue every 15–30 s while the view is open.
+- **Keys:** `alt-q`; in the view `j`/`k`, `d`, `J` and `a`. In the merge panel, `alt-enter` is the
+  admin override.
+- **Verify on screen** on e2e's `queued` base:
+  - three PRs queued;
+  - remove one;
+  - a failed `ci` shows its reason;
+  - jump one;
+  - the admin override on `main`.
+
+**Milestone 9 is done when** 9a–9f are green and the checks above pass on screen.
+
+### Risks noted while planning
+
+- **Editors in blocks under removed lines, in the inline layout,** and blocks surviving `alt-v`.
+  8d starts with a spike.
+- **Vim's normal-mode keys** (`c`, `C`, `e`, `v`, `s`, `m`) sit at editor depth and beat tab-level
+  keys, hence 8c. Vim's `]` sequences need a test of GPUI's pending timeout.
+- **Async stack merges** can land partway. `enqueued` is final before the PR merges.
+- **Zed's `markdown`** isn't fully GitHub-flavoured, so the timeline is approximate. The timeline
+  union has about 80 types; select only those listed.
