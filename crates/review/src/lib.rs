@@ -4,4 +4,5 @@
 //! here.
 
 pub mod files;
+pub mod merge;
 pub mod revisions;
