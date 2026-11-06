@@ -16,6 +16,7 @@ publish = false
 assets = { path = "third_party/zed/crates/assets" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
+command_palette = { path = "third_party/zed/crates/command_palette" }
 credentials_provider = { path = "third_party/zed/crates/credentials_provider" }
 db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
@@ -29,6 +30,7 @@ http_client = { path = "third_party/zed/crates/http_client" }
 language = { path = "third_party/zed/crates/language" }
 # load-grammars compiles in the tree-sitter grammars; without it nothing is highlighted.
 languages = { path = "third_party/zed/crates/languages", features = ["load-grammars"] }
+menu = { path = "third_party/zed/crates/menu" }
 node_runtime = { path = "third_party/zed/crates/node_runtime" }
 paths = { path = "third_party/zed/crates/paths" }
 project = { path = "third_party/zed/crates/project" }
@@ -40,6 +42,7 @@ sqlez = { path = "third_party/zed/crates/sqlez" }
 sqlez_macros = { path = "third_party/zed/crates/sqlez_macros" }
 theme = { path = "third_party/zed/crates/theme" }
 theme_settings = { path = "third_party/zed/crates/theme_settings" }
+ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
 # under rozed's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
@@ -130,6 +133,8 @@ serde_json = { opt-level = 3 }
 assets = { codegen-units = 1 }
 breadcrumbs = { codegen-units = 1 }
 collections = { codegen-units = 1 }
+command_palette = { codegen-units = 1 }
+command_palette_hooks = { codegen-units = 1 }
 feature_flags = { codegen-units = 1 }
 file_content = { codegen-units = 1 }
 file_icons = { codegen-units = 1 }

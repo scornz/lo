@@ -1413,6 +1413,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "command_palette"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "client",
+ "command_palette_hooks",
+ "db",
+ "fuzzy_nucleo",
+ "gpui",
+ "log",
+ "menu",
+ "picker",
+ "postage",
+ "serde",
+ "settings",
+ "telemetry",
+ "theme",
+ "time",
+ "ui",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
+name = "command_palette_hooks"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "derive_more",
+ "gpui",
+ "workspace",
+]
+
+[[package]]
 name = "component"
 version = "0.1.0"
 dependencies = [
@@ -7040,6 +7075,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "picker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "db",
+ "gpui",
+ "language",
+ "menu",
+ "project",
+ "schemars",
+ "serde",
+ "serde_json",
+ "settings",
+ "theme",
+ "theme_settings",
+ "ui",
+ "ui_input",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
 name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8222,11 +8280,14 @@ dependencies = [
  "assets",
  "client",
  "clock",
+ "command_palette",
+ "credentials_provider",
  "db",
  "editor",
  "feature_flags",
  "fs",
  "futures",
+ "github",
  "gpui",
  "gpui_platform",
  "gpui_tokio",
@@ -8234,6 +8295,7 @@ dependencies = [
  "language",
  "languages",
  "log",
+ "menu",
  "node_runtime",
  "paths",
  "project",
@@ -8241,8 +8303,10 @@ dependencies = [
  "reqwest_client",
  "session",
  "settings",
+ "tempfile",
  "theme",
  "theme_settings",
+ "ui",
  "util",
  "uuid",
  "workspace",
