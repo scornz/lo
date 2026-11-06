@@ -4,6 +4,65 @@
 //! The GitHub layer fills a [`MergeSnapshot`] from GraphQL and REST. Where GitHub reports a
 //! decision (`mergeable`, `mergeStateStatus`, `reviewDecision`), the decision wins, and the rest
 //! of the snapshot says why.
+//!
+//! - [`blockers`] lists every reason it can't merge, for the merge panel, each saying whether
+//!   waiting will clear it.
+//! - [`status`] sums them up for the one-line status in the pull request's header.
+//! - [`merge_action`] is what the merge button does: merge with a method, add to the merge queue,
+//!   or neither.
+//! - [`approve_and_ship`] is the plan `⌘⇧⏎` confirms: approve, then merge, join the queue, turn on
+//!   auto-merge, or stop and say why.
+//!
+//! ```
+//! use review::merge::{
+//!     AllowedMethods, Approval, ApproveAndShip, Blocker, CheckState, MergeMethod, MergeSnapshot,
+//!     MergeStatus, MissingApprovals, Plan, RequiredCheck, ReviewRules, Ship, Viewer,
+//!     approve_and_ship, blockers, status,
+//! };
+//!
+//! // Someone else's pull request: one approval required, and its tests still running.
+//! let snapshot = MergeSnapshot {
+//!     mergeable: "MERGEABLE".parse().unwrap(),
+//!     merge_state: "BLOCKED".parse().unwrap(),
+//!     review_decision: "REVIEW_REQUIRED".parse().ok(),
+//!     rules: ReviewRules { required_approvals: 1, ..Default::default() },
+//!     required_checks: vec![RequiredCheck {
+//!         name: "test".into(),
+//!         state: CheckState::of_check_run("IN_PROGRESS".parse().unwrap(), None),
+//!         url: Some("https://github.com/rozed-dev/playground/actions/runs/1".into()),
+//!     }],
+//!     methods: AllowedMethods { merge: false, squash: true, rebase: true },
+//!     viewer: Viewer {
+//!         login: "alice".into(),
+//!         can_approve: true,
+//!         approval_counts: true,
+//!         can_merge: true,
+//!         can_enable_auto_merge: true,
+//!         ..Default::default()
+//!     },
+//!     head: "c0ffee1".into(),
+//!     head_on_screen: "c0ffee1".into(),
+//!     ..Default::default()
+//! };
+//!
+//! let blockers = blockers(&snapshot);
+//! assert!(matches!(
+//!     blockers[0],
+//!     Blocker::Approvals(MissingApprovals { more: 1, .. }),
+//! ));
+//! assert!(blockers.iter().all(Blocker::waiting));
+//! assert!(matches!(status(&snapshot), MergeStatus::Waiting { auto_merge: false, .. }));
+//!
+//! // Your approval is the one missing, and the tests will finish: approve, then auto-merge.
+//! assert_eq!(
+//!     approve_and_ship(&snapshot),
+//!     ApproveAndShip::Plan(Plan {
+//!         head: "c0ffee1".into(),
+//!         approval: Approval::Approve,
+//!         then: Ship::AutoMerge(MergeMethod::Squash),
+//!     }),
+//! );
+//! ```
 
 mod action;
 mod blockers;

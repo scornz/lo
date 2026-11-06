@@ -65,7 +65,8 @@ impl Blocker {
 /// when GitHub's rules let it; whether you may is [`merge_action`](super::merge_action)'s concern.
 ///
 /// Blockers waiting won't fix come first, then those it will ([`Blocker::waiting`]), each kind in
-/// the order of [`Blocker`]'s variants and checks in the snapshot's order.
+/// the order of [`Blocker`]'s variants. Checks keep the snapshot's order, with running checks
+/// before those that haven't reported.
 ///
 /// - A merged or closed pull request has only [`Blocker::Merged`] or [`Blocker::Closed`].
 /// - A draft is `isDraft`, or `mergeStateStatus` `DRAFT`, which REST still reports.
