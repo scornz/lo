@@ -203,8 +203,12 @@ impl RepoCache {
             return Ok(None);
         }
         // Held as any open clone holds it, so cleanup leaves the clone alone; it waits only while
-        // cleanup is removing it, and then the clone is gone.
-        let in_use = RepoLock::acquire_shared(&self.in_use_path(owner, repo))?;
+        // cleanup is removing it, and then the clone is gone. Every clone rozed opened has the
+        // lock's file, so without it there's nothing to read.
+        let Some(in_use) = RepoLock::acquire_shared_existing(&self.in_use_path(owner, repo))?
+        else {
+            return Ok(None);
+        };
         if !git_dir.join("HEAD").is_file() {
             return Ok(None);
         }

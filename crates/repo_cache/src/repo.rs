@@ -714,14 +714,25 @@ fn branch_base_ref(number: u64, branch: &str) -> String {
 /// The variable that stops git downloading what a partial clone lacks.
 const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
 
-/// The blobs on either side of `git diff --raw -z` output, without submodules' commits or the
-/// all-zero ID of a side that isn't there.
+/// The blobs on either side of `git diff --raw -z --no-renames` output, without submodules'
+/// commits or the all-zero ID of a side that isn't there. Each entry is its metadata, then its
+/// path, so a path that starts with `:` is never taken for an entry.
 fn raw_diff_blobs(output: &[u8]) -> Result<Vec<Oid>, Error> {
     let mut blobs = Vec::new();
-    for field in output.split(|byte| *byte == 0) {
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    while let Some(field) = fields.next() {
         // ":<old mode> <new mode> <old oid> <new oid> <status>", then the path.
+        let _path = fields.next();
         let Some(entry) = field.strip_prefix(b":") else {
-            continue;
+            return Err(Error::Git {
+                command: "git diff --raw".into(),
+                message: format!(
+                    "printed an unexpected entry {:?}",
+                    String::from_utf8_lossy(field)
+                ),
+            });
         };
         let entry = String::from_utf8_lossy(entry);
         let parts: Vec<&str> = entry.split(' ').collect();
@@ -866,8 +877,9 @@ mod tests {
         let b = "b".repeat(40);
         let c = "c".repeat(40);
         let zero = "0".repeat(40);
+        // The second path starts with a colon, as a file's name can.
         let output = format!(
-            ":100644 100644 {a} {b} M\0x.rs\0:000000 100644 {zero} {c} A\0y.rs\0\
+            ":100644 100644 {a} {b} M\0x.rs\0:000000 100644 {zero} {c} A\0:y.rs\0\
              :160000 160000 {a} {b} M\0sub\0"
         );
         let blobs: Vec<String> = raw_diff_blobs(output.as_bytes())
