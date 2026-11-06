@@ -78,7 +78,10 @@ fn numbered(
 /// The moves among a PR's changes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Moves {
+    /// By where they land.
     moves: Vec<Move>,
+    /// Indices into `moves`, by where they came from.
+    by_from: Vec<usize>,
 }
 
 /// A block of lines deleted in one place and added in another.
@@ -88,8 +91,8 @@ pub struct Move {
     pub from: Place,
     /// Where the block was added, in new line numbers.
     pub to: Place,
-    /// The lines edited on the way, as pairs of an old line and the new line it became. Every other
-    /// line of the block that isn't blank moved unchanged, apart from its indentation.
+    /// The lines edited on the way, as pairs of an old line and the new line it became, in order.
+    /// Every other line of the block that isn't blank moved unchanged, apart from its indentation.
     pub edits: Vec<EditedLine>,
 }
 
@@ -128,13 +131,65 @@ impl Moves {
             .iter()
             .map(|candidate| finder.to_move(candidate, files))
             .collect();
-        moves.sort_by_key(|moved| (moved.to.file, *moved.to.lines.start()));
-        Self { moves }
+        moves.sort_by_key(|moved| moved.to.key());
+        let mut by_from: Vec<usize> = (0..moves.len()).collect();
+        by_from.sort_by_key(|&index| moves[index].from.key());
+        Self { moves, by_from }
     }
 
     /// Every move, ordered by where it lands: by file, then by line.
     pub fn all(&self) -> &[Move] {
         &self.moves
+    }
+
+    /// The move that deleted line `line`, by its old number, of the file at index `file` belongs
+    /// to.
+    pub fn of_deleted(&self, file: usize, line: u32) -> Option<&Move> {
+        let after = self
+            .by_from
+            .partition_point(|&index| self.moves[index].from.key() <= (file, line));
+        let moved = &self.moves[*self.by_from.get(after.checked_sub(1)?)?];
+        moved.from.contains(file, line).then_some(moved)
+    }
+
+    /// The move that added line `line`, by its new number, of the file at index `file` belongs
+    /// to.
+    pub fn of_added(&self, file: usize, line: u32) -> Option<&Move> {
+        let after = self
+            .moves
+            .partition_point(|moved| moved.to.key() <= (file, line));
+        let moved = self.moves.get(after.checked_sub(1)?)?;
+        moved.to.contains(file, line).then_some(moved)
+    }
+}
+
+impl Move {
+    /// The edit of old line `line`, if it's in the block and was edited on the way.
+    pub fn edit_of_old(&self, line: u32) -> Option<EditedLine> {
+        let index = self
+            .edits
+            .binary_search_by_key(&line, |edit| edit.old)
+            .ok()?;
+        Some(self.edits[index])
+    }
+
+    /// The edit that made new line `line`, if it's in the block and was edited on the way.
+    pub fn edit_of_new(&self, line: u32) -> Option<EditedLine> {
+        let index = self
+            .edits
+            .binary_search_by_key(&line, |edit| edit.new)
+            .ok()?;
+        Some(self.edits[index])
+    }
+}
+
+impl Place {
+    fn key(&self) -> (usize, u32) {
+        (self.file, *self.lines.start())
+    }
+
+    fn contains(&self, file: usize, line: u32) -> bool {
+        self.file == file && self.lines.contains(&line)
     }
 }
 
