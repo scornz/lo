@@ -341,7 +341,8 @@ impl Candidate {
     }
 
     /// Longer blocks first, then the one with more matching lines of punctuation, then the one
-    /// with fewer edits, then the one that lands first, then the one that came from first.
+    /// with fewer edits, then the one that lands first, then the one that came from first. The end
+    /// only makes the order total, so it agrees with `Eq`.
     fn rank(&self) -> impl Ord {
         (
             self.length,
@@ -349,6 +350,7 @@ impl Candidate {
             Reverse(self.edited),
             Reverse(self.new.start),
             Reverse(self.old().start),
+            Reverse(self.new.end),
         )
     }
 }
