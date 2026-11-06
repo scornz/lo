@@ -4,6 +4,42 @@
 //! A GitHub stack is a straight chain, so in a tree the plan converts one path: from the stack's
 //! bottom layer up through the layer you're on, then on up while each layer has exactly one layer
 //! on it. A fork in the tree ends the path.
+//!
+//! ```
+//! use std::time::SystemTime;
+//! use stacks::convert::{Facts, Step, plan_conversion, rollback};
+//! use stacks::{PullRequest, Retarget, Stacks, State};
+//!
+//! // Both PRs target main, and #2 was cut from #1's branch.
+//! let pr = |number: u64, head: &str, commits: &[&str]| PullRequest {
+//!     number,
+//!     state: State::Open,
+//!     base_ref: "main".into(),
+//!     base_tip: Some("main-tip".into()),
+//!     head_ref: head.into(),
+//!     head_in_base_repo: true,
+//!     head_oid: commits.last().unwrap().to_string(),
+//!     commits: commits.iter().map(|oid| oid.to_string()).collect(),
+//!     created_at: SystemTime::UNIX_EPOCH,
+//!     native_stack: None,
+//! };
+//! let stacks = Stacks::find(&[pr(1, "a", &["a1"]), pr(2, "b", &["a1", "b1"])], &["main"]);
+//! let facts = Facts { stacks_api: true, queued: &[] };
+//!
+//! let plan = plan_conversion(&stacks, 2, &facts).unwrap();
+//! assert_eq!(plan.root, "main");
+//! assert_eq!(plan.path, [1, 2]);
+//! let retarget = Retarget { pr: 2, from: "main".into(), to: "a".into() };
+//! assert_eq!(
+//!     plan.steps,
+//!     [Step::Retarget(retarget), Step::CreateStack { prs: vec![1, 2] }],
+//! );
+//!
+//! // Creating the stack failed after #2's base branch changed, so it goes back.
+//! let undo = rollback(&plan, 1);
+//! assert_eq!(undo.steps, [Retarget { pr: 2, from: "a".into(), to: "main".into() }]);
+//! assert_eq!(undo.kept, None);
+//! ```
 
 use crate::{Parent, Retarget, Stacks};
 
