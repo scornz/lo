@@ -21,13 +21,19 @@ impl RepoRef {
         }
     }
 
-    /// The REST path of the repository's open pull requests, a page of 100 in GitHub's default
-    /// order. Keeping the order and parameters fixed keeps its ETag stable.
-    pub fn open_pulls_path(&self) -> String {
-        format!(
+    /// The REST path of a page (from 1) of the repository's open pull requests, 100 a page in
+    /// GitHub's default order, newest first. Keeping the order and parameters fixed keeps each
+    /// page's ETag stable.
+    pub fn open_pulls_path(&self, page: usize) -> String {
+        let path = format!(
             "/repos/{}/{}/pulls?state=open&per_page=100",
             self.owner, self.name
-        )
+        );
+        if page > 1 {
+            format!("{path}&page={page}")
+        } else {
+            path
+        }
     }
 }
 
@@ -125,6 +131,18 @@ impl PullSummary {
     pub fn is_merged(&self) -> bool {
         self.merged_at.is_some()
     }
+
+    /// When GitHub last updated the pull request, as an HTTP date for `If-Modified-Since`.
+    /// GitHub's `Last-Modified` for a pull request is its `updated_at`, which a push to another
+    /// branch or a star doesn't move, unlike its ETag.
+    pub fn last_modified(&self) -> Option<String> {
+        let time = chrono::DateTime::parse_from_rfc3339(&self.updated_at).ok()?;
+        Some(
+            time.with_timezone(&chrono::Utc)
+                .format("%a, %d %b %Y %H:%M:%S GMT")
+                .to_string(),
+        )
+    }
 }
 
 /// One side of a pull request.
@@ -133,4 +151,64 @@ pub struct PullBranch {
     #[serde(rename = "ref")]
     pub name: String,
     pub sha: String,
+}
+
+/// A pull request as GitHub's REST list of a repository's open pull requests shows it: what the
+/// open PR list ([`crate::queries::OpenPullRequestList`]) holds about it. Comparing these, not the
+/// list's ETag, tells whether the list changed: the ETag also covers each pull request's embedded
+/// repositories, which change with any push to the repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListedPull {
+    pub number: i64,
+    pub title: String,
+    #[serde(default)]
+    pub draft: bool,
+    pub updated_at: String,
+    pub head: PullBranch,
+    pub base: PullBranch,
+    /// The GitHub stack it's in.
+    #[serde(default)]
+    pub stack: Option<ListedStack>,
+}
+
+/// A listed pull request's place in a GitHub stack.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListedStack {
+    pub number: i64,
+    pub position: i64,
+    pub size: i64,
+    pub base: StackBase,
+}
+
+/// The branch a GitHub stack merges into.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StackBase {
+    #[serde(rename = "ref")]
+    pub name: String,
+}
+
+/// One page of a repository's open pull requests from GitHub's REST list, with its ETag.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListedPage {
+    pub etag: Option<String>,
+    pub pulls: Vec<ListedPull>,
+}
+
+/// The pages of a repository's open pull requests rozed reads, newest first: as many as hold
+/// the pull requests the open PR list does. Each page is asked about with its own ETag, so an
+/// older pull request that's pushed to or closed is noticed too.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListedPulls {
+    pub pages: Vec<ListedPage>,
+}
+
+impl ListedPulls {
+    pub fn pulls(&self) -> impl Iterator<Item = &ListedPull> {
+        self.pages.iter().flat_map(|page| &page.pulls)
+    }
+
+    /// Whether both list the same pull requests, the same way, whatever their ETags.
+    pub fn lists_the_same(&self, other: &Self) -> bool {
+        self.pulls().eq(other.pulls())
+    }
 }

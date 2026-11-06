@@ -57,16 +57,28 @@ struct Logged {
     delay: Option<Duration>,
 }
 
-/// `GET /pulls/1 (etag)` for a conditional REST request, or a GraphQL operation's name.
-fn describe(method: &str, url: &Url, if_none_match: bool, body: &[u8]) -> String {
+/// `GET /pulls?state=open&per_page=100 (etag)` for a request that sent an ETag, `GET /pulls/1
+/// (since)` for one that asked about changes since a time, or a GraphQL operation's name.
+fn describe(
+    method: &str,
+    url: &Url,
+    headers: &http_client::http::HeaderMap,
+    body: &[u8],
+) -> String {
     if url.path() == "/graphql" {
         let body: serde_json::Value = serde_json::from_slice(body).unwrap();
         return body["operationName"].as_str().unwrap().to_string();
     }
     let path = url.path().trim_start_matches("/repos/rozed-dev/playground");
     let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
-    let etag = if if_none_match { " (etag)" } else { "" };
-    format!("{method} {path}{query}{etag}")
+    let condition = if headers.contains_key("if-none-match") {
+        " (etag)"
+    } else if headers.contains_key("if-modified-since") {
+        " (since)"
+    } else {
+        ""
+    };
+    format!("{method} {path}{query}{condition}")
 }
 
 impl HttpClient for Logged {
@@ -87,12 +99,11 @@ impl HttpClient for Logged {
         let offline = self.offline.load(Ordering::SeqCst);
         let (replay, executor, delay) = (self.replay.clone(), self.executor.clone(), self.delay);
         let url = Url::parse(&parts.uri.to_string()).unwrap();
-        let if_none_match = parts.headers.contains_key("if-none-match");
         let mut bytes = Vec::new();
         futures::executor::block_on(body.read_to_end(&mut bytes)).unwrap();
         self.log.lock().push((
             sent,
-            describe(parts.method.as_str(), &url, if_none_match, &bytes),
+            describe(parts.method.as_str(), &url, &parts.headers, &bytes),
         ));
         Box::pin(async move {
             if let Some(delay) = delay {
@@ -330,6 +341,34 @@ fn etag(interaction: &Interaction) -> String {
     interaction.response.headers["etag"].clone()
 }
 
+/// The answer to a GET of a pull request that asked about changes since `since`.
+fn asked_since(mut interaction: Interaction, since: &str) -> Interaction {
+    interaction.request.if_none_match = None;
+    interaction.request.if_modified_since = Some(since.into());
+    interaction
+}
+
+/// When GitHub last updated a pull request, from its answer.
+fn last_modified(interaction: &Interaction) -> String {
+    interaction.response.headers["last-modified"].clone()
+}
+
+/// The time a pull request edited by [`updated`] was updated at, and its HTTP date.
+const NOON: (&str, &str) = ("2026-11-06T12:00:00Z", "Fri, 06 Nov 2026 12:00:00 GMT");
+
+/// A pull request's answer, updated at [`NOON`] with `edit`.
+fn updated(interaction: Interaction, edit: impl FnOnce(&mut serde_json::Value)) -> Interaction {
+    let mut interaction = with_body(interaction, |body| {
+        body["updated_at"] = NOON.0.into();
+        edit(body);
+    });
+    interaction
+        .response
+        .headers
+        .insert("last-modified".into(), NOON.1.into());
+    interaction
+}
+
 fn with_body(
     mut interaction: Interaction,
     edit: impl FnOnce(&mut serde_json::Value),
@@ -406,18 +445,18 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
     t.run_until(120);
     let mut expected = Vec::new();
     for secs in [20, 40, 60, 80, 100, 120] {
-        expected.push((secs, "GET /pulls/1 (etag)"));
+        expected.push((secs, "GET /pulls/1 (since)"));
         expected.push((secs, "PullRequestCheck"));
     }
-    expected.push((120, "GET /pulls/2 (etag)"));
+    expected.push((120, "GET /pulls/2 (since)"));
     expected.push((120, "GET /pulls?state=open&per_page=100 (etag)"));
     assert_eq!(t.requests(), log(&expected));
     assert_eq!(t.events(), Vec::<String>::new());
 
-    // The ETag sent is the one GitHub gave.
+    // The open PR is asked about changes since GitHub last updated it.
     let seen = t.http.replay.seen();
-    let etag = recorded()[0].response.headers["etag"].clone();
-    assert_eq!(seen[6].header("if-none-match"), Some(etag.as_str()));
+    let since = last_modified(&recorded()[0]);
+    assert_eq!(seen[6].header("if-modified-since"), Some(since.as_str()));
     assert_eq!(t.status(), PollStatus::default());
 
     let answer = t.read(|poller| poller.pull_request(&pr(1))).unwrap();
@@ -438,21 +477,20 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
 #[gpui::test]
 async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppContext) {
     let r = recorded();
-    let changed_rest = with_body(
-        answering(r[0].clone(), &etag(&r[0]), "\"changed\""),
-        |body| body["title"] = "retitled again".into(),
-    );
+    let changed_rest = updated(asked_since(r[0].clone(), &last_modified(&r[0])), |body| {
+        body["title"] = "retitled again".into()
+    });
     let moved_timeline = with_body(r[1].clone(), |body| {
         body["data"]["repository"]["pullRequest"]["timelineItems"]["updatedAt"] =
             "2026-11-06T12:00:00Z".into();
     });
     let mut interactions = vec![
-        // GET /pulls/1: 200, two 304s, a 200 for a retitle, then 304s for its new ETag.
+        // GET /pulls/1: 200, two 304s, a 200 for a retitle, then 304s since it.
         r[0].clone(),
         r[6].clone(),
         r[6].clone(),
         changed_rest,
-        answering(r[6].clone(), "\"changed\"", "\"changed\""),
+        asked_since(r[6].clone(), NOON.1),
         // The check: the same twice, then the timeline moves.
         r[1].clone(),
         r[1].clone(),
@@ -478,17 +516,17 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
             (0, "PullRequestCheck"),
             (0, "PullRequest"),
             // Nothing changed.
-            (20, "GET /pulls/1 (etag)"),
+            (20, "GET /pulls/1 (since)"),
             (20, "PullRequestCheck"),
             // The check changed.
-            (40, "GET /pulls/1 (etag)"),
+            (40, "GET /pulls/1 (since)"),
             (40, "PullRequestCheck"),
             (40, "PullRequest"),
             // The REST answer changed.
-            (60, "GET /pulls/1 (etag)"),
+            (60, "GET /pulls/1 (since)"),
             (60, "PullRequestCheck"),
             (60, "PullRequest"),
-            (80, "GET /pulls/1 (etag)"),
+            (80, "GET /pulls/1 (since)"),
             (80, "PullRequestCheck"),
         ])
     );
@@ -503,27 +541,26 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
             "details #1: retitled again",
         ]
     );
-    // The new ETag is the one sent next.
+    // The next poll asks about changes since the retitle.
     let last = t.http.replay.seen().into_iter().rev().nth(1).unwrap();
-    assert_eq!(last.header("if-none-match"), Some("\"changed\""));
+    assert_eq!(last.header("if-modified-since"), Some(NOON.1));
 }
 
 #[gpui::test]
 async fn a_watched_pr_that_changed_is_fetched_in_full_when_opened_again(cx: &mut TestAppContext) {
     let r = recorded();
-    let pushed = with_body(
-        answering(r[3].clone(), &etag(&r[3]), "\"pushed\""),
-        |body| body["head"]["sha"] = "0123456789abcdef0123456789abcdef01234567".into(),
-    );
+    let pushed = updated(asked_since(r[3].clone(), &last_modified(&r[3])), |body| {
+        body["head"]["sha"] = "0123456789abcdef0123456789abcdef01234567".into()
+    });
     let mut interactions = vec![
         r[0].clone(),
         r[1].clone(),
         r[2].clone(),
         r[6].clone(),
-        // GET /pulls/2: 200, then a push, then 304s for its new ETag.
+        // GET /pulls/2: 200, then a push, then 304s since it.
         r[3].clone(),
         pushed,
-        answering(r[8].clone(), "\"pushed\"", "\"pushed\""),
+        asked_since(r[8].clone(), NOON.1),
         // PR #2's check never changes; its details do.
         for_pull(&r[1], 2),
         for_pull(&details_titled(&r, "layer B"), 2),
@@ -549,13 +586,190 @@ async fn a_watched_pr_that_changed_is_fetched_in_full_when_opened_again(cx: &mut
     assert_eq!(
         t.requests(),
         log(&[
-            (130, "GET /pulls/2 (etag)"),
+            (130, "GET /pulls/2 (since)"),
             (130, "PullRequestCheck"),
             // The check is the same, but the push means the details are stale.
             (130, "PullRequest"),
         ])
     );
     assert_eq!(t.events(), ["details #2: layer B, pushed"]);
+}
+
+/// GitHub's REST view of a pull request, as it would answer after a push to another branch in the
+/// repository: only the embedded repositories changed.
+fn after_a_push_elsewhere(interaction: Interaction) -> Interaction {
+    with_body(interaction, |body| {
+        let pushed_at = "2026-11-06T12:49:58Z";
+        if let Some(pulls) = body.as_array_mut() {
+            for pull in pulls {
+                pull["base"]["repo"]["pushed_at"] = pushed_at.into();
+                pull["head"]["repo"]["pushed_at"] = pushed_at.into();
+            }
+        } else {
+            body["base"]["repo"]["pushed_at"] = pushed_at.into();
+            body["head"]["repo"]["pushed_at"] = pushed_at.into();
+        }
+    })
+}
+
+#[gpui::test]
+async fn a_pull_request_that_answers_200_unchanged_isnt_fetched_again(cx: &mut TestAppContext) {
+    let r = recorded();
+    let since = last_modified(&r[0]);
+    let mut interactions = vec![
+        r[0].clone(),
+        // GitHub answers 200 although the pull request is the same.
+        after_a_push_elsewhere(asked_since(r[0].clone(), &since)),
+        asked_since(r[6].clone(), &since),
+        r[1].clone(),
+        r[2].clone(),
+        // PR #2, watched: the same.
+        r[3].clone(),
+        after_a_push_elsewhere(asked_since(r[3].clone(), &last_modified(&r[3]))),
+        asked_since(r[8].clone(), &last_modified(&r[3])),
+        for_pull(&r[1], 2),
+        for_pull(&details_titled(&r, "layer B"), 2),
+    ];
+    interactions.extend(repo_answers(&r));
+    let mut t = Polling::new("unchanged_200", interactions, cx).await;
+    t.update(|poller, cx| {
+        poller.watch(pr(2), cx);
+        poller.set_open(Some(pr(1)), cx)
+    });
+    t.run_until(5);
+    t.requests();
+    t.events();
+    t.run_until(130);
+    let pulls: Vec<_> = t
+        .requests()
+        .into_iter()
+        .filter(|(_, what)| !what.contains("/pulls?"))
+        .take(4)
+        .collect();
+    assert_eq!(
+        pulls,
+        log(&[
+            // A 200, but the same pull request: no details.
+            (20, "GET /pulls/1 (since)"),
+            (20, "PullRequestCheck"),
+            (40, "GET /pulls/1 (since)"),
+            (40, "PullRequestCheck"),
+        ])
+    );
+    assert_eq!(t.events(), Vec::<String>::new());
+
+    // PR #2 answered 200 unchanged at 120 s: its check stands, so opening it fetches its
+    // details only because they were never fetched, and sends no summary.
+    t.update(|poller, cx| poller.set_open(Some(pr(2)), cx));
+    assert_eq!(t.events(), ["details #2: layer B"]);
+}
+
+#[gpui::test]
+async fn a_list_that_answers_200_unchanged_isnt_fetched_again(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut moved = after_a_push_elsewhere(answering(r[4].clone(), &etag(&r[4]), "\"moved\""));
+    moved.response.status = 200;
+    let interactions = vec![
+        r[4].clone(),
+        r[5].clone(),
+        moved,
+        answering(r[9].clone(), "\"moved\"", "\"moved\""),
+        r[3].clone(),
+        r[8].clone(),
+    ];
+    let mut t = Polling::new("unchanged_list", interactions, cx).await;
+    t.update(|poller, cx| poller.watch(pr(2), cx));
+    t.run_until(5);
+    t.requests();
+    t.events();
+    t.run_until(250);
+    assert_eq!(
+        t.requests()
+            .into_iter()
+            .filter(|(_, what)| !what.contains("/pulls/2"))
+            .collect::<Vec<_>>(),
+        log(&[
+            // A new ETag, but the same open PRs: no OpenPullRequests.
+            (120, "GET /pulls?state=open&per_page=100 (etag)"),
+            (240, "GET /pulls?state=open&per_page=100 (etag)"),
+        ])
+    );
+    assert_eq!(t.events(), Vec::<String>::new());
+    // The new ETag is the one sent next.
+    let seen = t.http.replay.seen();
+    let last = seen
+        .iter()
+        .rev()
+        .find(|s| s.url.contains("/pulls?"))
+        .unwrap();
+    assert_eq!(last.header("if-none-match"), Some("\"moved\""));
+}
+
+/// A page of the playground's open PRs: copies of the recorded first one, numbered `numbers`.
+fn page_of(
+    r: &[Interaction],
+    page: usize,
+    numbers: std::ops::Range<i64>,
+    etag: &str,
+) -> Interaction {
+    let mut interaction = r[4].clone();
+    if page > 1 {
+        interaction.request.url = format!("{}&page={page}", interaction.request.url);
+    }
+    let first = interaction.response.body.as_ref().unwrap()[0].clone();
+    let pulls: Vec<serde_json::Value> = numbers
+        .rev()
+        .map(|number| {
+            let mut pull = first.clone();
+            pull["number"] = number.into();
+            pull
+        })
+        .collect();
+    interaction.response.body = Some(pulls.into());
+    interaction
+        .response
+        .headers
+        .insert("etag".into(), etag.into());
+    interaction
+}
+
+#[gpui::test]
+async fn every_page_of_open_prs_is_watched(cx: &mut TestAppContext) {
+    let r = recorded();
+    let page_two = page_of(&r, 2, 1..3, "\"two\"");
+    let mut closed = page_of(&r, 2, 1..2, "\"two, one closed\"");
+    closed.request.if_none_match = Some("\"two\"".into());
+    let mut unchanged_one = r[9].clone();
+    unchanged_one.request.if_none_match = Some("\"one\"".into());
+    let interactions = vec![
+        page_of(&r, 1, 3..103, "\"one\""),
+        page_two,
+        r[5].clone(),
+        unchanged_one,
+        closed,
+        r[3].clone(),
+        r[8].clone(),
+    ];
+    let mut t = Polling::new("pages", interactions, cx).await;
+    t.update(|poller, cx| poller.watch(pr(2), cx));
+    t.run_until(130);
+    let repo: Vec<_> = t
+        .requests()
+        .into_iter()
+        .filter(|(_, what)| !what.contains("/pulls/2"))
+        .collect();
+    assert_eq!(
+        repo,
+        log(&[
+            (0, "GET /pulls?state=open&per_page=100"),
+            (0, "GET /pulls?state=open&per_page=100&page=2"),
+            (0, "OpenPullRequests"),
+            // The first page is the same, but an older PR on the second closed.
+            (120, "GET /pulls?state=open&per_page=100 (etag)"),
+            (120, "GET /pulls?state=open&per_page=100&page=2 (etag)"),
+            (120, "OpenPullRequests"),
+        ])
+    );
 }
 
 #[gpui::test]
@@ -569,9 +783,9 @@ async fn in_the_background_everything_polls_every_five_minutes(cx: &mut TestAppC
     t.run_until(610);
     let all = |secs| {
         [
-            (secs, "GET /pulls/1 (etag)"),
+            (secs, "GET /pulls/1 (since)"),
             (secs, "PullRequestCheck"),
-            (secs, "GET /pulls/2 (etag)"),
+            (secs, "GET /pulls/2 (since)"),
             (secs, "GET /pulls?state=open&per_page=100 (etag)"),
         ]
     };
@@ -583,9 +797,9 @@ async fn in_the_background_everything_polls_every_five_minutes(cx: &mut TestAppC
     assert_eq!(
         t.requests(),
         log(&[
-            (610, "GET /pulls/1 (etag)"),
+            (610, "GET /pulls/1 (since)"),
             (610, "PullRequestCheck"),
-            (630, "GET /pulls/1 (etag)"),
+            (630, "GET /pulls/1 (since)"),
             (630, "PullRequestCheck"),
         ])
     );
@@ -620,17 +834,17 @@ async fn a_low_rate_limit_doubles_every_interval(cx: &mut TestAppContext) {
     assert_eq!(
         t.requests(),
         log(&[
-            (60, "GET /pulls/1 (etag)"),
+            (60, "GET /pulls/1 (since)"),
             (60, "PullRequestCheck"),
-            (100, "GET /pulls/1 (etag)"),
+            (100, "GET /pulls/1 (since)"),
             (100, "PullRequestCheck"),
-            (140, "GET /pulls/1 (etag)"),
+            (140, "GET /pulls/1 (since)"),
             (140, "PullRequestCheck"),
-            (180, "GET /pulls/1 (etag)"),
+            (180, "GET /pulls/1 (since)"),
             (180, "PullRequestCheck"),
-            (220, "GET /pulls/1 (etag)"),
+            (220, "GET /pulls/1 (since)"),
             (220, "PullRequestCheck"),
-            (240, "GET /pulls/2 (etag)"),
+            (240, "GET /pulls/2 (since)"),
             (240, "GET /pulls?state=open&per_page=100 (etag)"),
         ])
     );
@@ -651,7 +865,7 @@ async fn a_very_low_rate_limit_polls_only_the_open_pr(cx: &mut TestAppContext) {
     t.run_until(600);
     let mut expected = Vec::new();
     for secs in [140, 260, 380, 500] {
-        expected.push((secs, "GET /pulls/1 (etag)"));
+        expected.push((secs, "GET /pulls/1 (since)"));
         expected.push((secs, "PullRequestCheck"));
     }
     assert_eq!(t.requests(), log(&expected));
@@ -686,11 +900,11 @@ async fn a_used_up_rate_limit_pauses_polling_until_the_reset(cx: &mut TestAppCon
     assert_eq!(
         t.requests(),
         log(&[
-            (600, "GET /pulls/1 (etag)"),
+            (600, "GET /pulls/1 (since)"),
             (600, "PullRequestCheck"),
-            (600, "GET /pulls/2 (etag)"),
+            (600, "GET /pulls/2 (since)"),
             (600, "GET /pulls?state=open&per_page=100 (etag)"),
-            (620, "GET /pulls/1 (etag)"),
+            (620, "GET /pulls/1 (since)"),
             (620, "PullRequestCheck"),
         ])
     );
@@ -731,12 +945,12 @@ async fn a_secondary_limit_waits_as_long_as_github_asks_then_backs_off(cx: &mut 
         pull_one,
         log(&[
             // retry-after: 90.
-            (110, "GET /pulls/1 (etag)"),
+            (110, "GET /pulls/1 (since)"),
             // No retry-after: a minute, doubling.
-            (230, "GET /pulls/1 (etag)"),
-            (470, "GET /pulls/1 (etag)"),
+            (230, "GET /pulls/1 (since)"),
+            (470, "GET /pulls/1 (since)"),
             (470, "PullRequestCheck"),
-            (490, "GET /pulls/1 (etag)"),
+            (490, "GET /pulls/1 (since)"),
             (490, "PullRequestCheck"),
         ])
     );
@@ -887,7 +1101,7 @@ async fn reopening_shows_the_cache_at_once_and_its_first_poll_is_free(cx: &mut T
     assert_eq!(
         t.requests(),
         log(&[
-            (5, "GET /pulls/1 (etag)"),
+            (5, "GET /pulls/1 (since)"),
             (5, "PullRequestCheck"),
             (5, "GET /pulls?state=open&per_page=100 (etag)"),
         ])
@@ -1076,7 +1290,7 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
     assert_eq!(
         t.requests(),
         log(&[
-            (300, "GET /pulls/1 (etag)"),
+            (300, "GET /pulls/1 (since)"),
             (300, "PullRequestCheck"),
             (300, "GET /pulls?state=open&per_page=100 (etag)"),
         ])
@@ -1126,11 +1340,11 @@ async fn a_refused_gh_token_is_read_from_gh_again_and_polling_goes_on(cx: &mut T
         t.requests(),
         log(&[
             // Refused, read from gh again and checked, then sent again with gh's token.
-            (20, "GET /pulls/1 (etag)"),
+            (20, "GET /pulls/1 (since)"),
             (20, "GET /user"),
-            (20, "GET /pulls/1 (etag)"),
+            (20, "GET /pulls/1 (since)"),
             (20, "PullRequestCheck"),
-            (40, "GET /pulls/1 (etag)"),
+            (40, "GET /pulls/1 (since)"),
             (40, "PullRequestCheck"),
         ])
     );

@@ -13,7 +13,6 @@ use futures::future::{BoxFuture, FutureExt as _};
 use gpui::{
     AppContext as _, AsyncApp, Context, Entity, EventEmitter, Subscription, Task, WeakEntity,
 };
-use serde::de::IgnoredAny;
 
 use super::governor::{
     Cooldown, PauseReason, PollConfig, RateLimitState, Tier, backoff, interval, rate_limit_state,
@@ -23,8 +22,10 @@ use crate::accounts::Accounts;
 use crate::cache::{CacheEntry, Cached, PrCache, RecentPr};
 use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
-use crate::pulls::{PullRef, PullSummary, RepoRef, Target};
-use crate::queries::{OpenPullRequestList, PullRequestCheckData, PullRequestData};
+use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
+use crate::queries::{
+    MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
+};
 use crate::rate_limit::RateLimits;
 
 /// What a poll found.
@@ -100,6 +101,9 @@ struct PullState {
 #[derive(Default)]
 struct RepoState {
     last_polled: Option<Instant>,
+    /// GitHub's REST list of the open PRs, page by page with their ETags: what tells whether
+    /// `list` changed.
+    listed: Option<Cached<Arc<ListedPulls>>>,
     list: Option<Cached<Arc<OpenPullRequestList>>>,
 }
 
@@ -116,17 +120,20 @@ enum Job {
     /// says something changed.
     Open {
         pull: PullRef,
-        etag: Option<String>,
+        summary: Option<Arc<PullSummary>>,
         check: Option<PullRequestCheckData>,
         have_details: bool,
     },
     /// Another watched PR: the conditional GET alone.
-    Watched { pull: PullRef, etag: Option<String> },
-    /// A watched repository: a conditional GET of its open PRs, then the full list when it
-    /// changed.
+    Watched {
+        pull: PullRef,
+        summary: Option<Arc<PullSummary>>,
+    },
+    /// A watched repository: conditional GETs of its open PRs, a page at a time, then the full
+    /// list when they changed.
     Repo {
         repo: RepoRef,
-        etag: Option<String>,
+        listed: Option<Arc<ListedPulls>>,
         have_list: bool,
     },
 }
@@ -137,9 +144,68 @@ enum Outcome {
         summary: Conditional<PullSummary>,
     },
     Repo {
-        etag: Option<String>,
+        listed: ListedPulls,
         list: Option<OpenPullRequestList>,
     },
+}
+
+/// A conditional GET of a pull request, asking about changes since GitHub last updated the
+/// summary rozed has (not its ETag, which a push to any branch in the repository changes).
+async fn get_summary(
+    client: &GithubClient,
+    pull: &PullRef,
+    known: Option<&PullSummary>,
+) -> Result<Conditional<PullSummary>, GithubError> {
+    let since = known.and_then(PullSummary::last_modified);
+    client
+        .get_modified_since(&pull.rest_path(), since.as_deref())
+        .await
+}
+
+/// Whether GitHub's answer holds a summary other than the one rozed has. A `200` can bring the
+/// same one back.
+fn summary_changed(answer: &Conditional<PullSummary>, known: Option<&PullSummary>) -> bool {
+    match answer {
+        Conditional::NotModified => false,
+        Conditional::Modified { value, .. } => known != Some(value),
+    }
+}
+
+/// The most pages of open PRs read, as many as the open PR list holds.
+const MAX_LISTED_PAGES: usize = MAX_OPEN_PULL_REQUESTS / PAGE_SIZE as usize;
+
+/// Conditional GETs of a repository's open PRs, a page at a time while pages are full, each with
+/// the ETag rozed has for it.
+async fn get_listed(
+    client: &GithubClient,
+    repo: &RepoRef,
+    known: Option<&ListedPulls>,
+) -> Result<ListedPulls, GithubError> {
+    let mut listed = ListedPulls::default();
+    for number in 1..=MAX_LISTED_PAGES {
+        let known = known.and_then(|known| known.pages.get(number - 1));
+        let answer = client
+            .get_conditional::<Vec<ListedPull>>(
+                &repo.open_pulls_path(number),
+                known.and_then(|page| page.etag.as_deref()),
+            )
+            .await?;
+        let page = match answer {
+            Conditional::Modified { value, etag } => ListedPage { etag, pulls: value },
+            Conditional::NotModified => known.cloned().ok_or_else(|| {
+                GithubError::Inconsistent(format!(
+                    "GitHub said page {number} of {repo}'s open pull requests hadn't changed, \
+                     but rozed never read it"
+                ))
+            })?,
+        };
+        let full = page.pulls.len() >= PAGE_SIZE as usize;
+        listed.pages.push(page);
+        if !full {
+            break;
+        }
+    }
+    Ok(listed)
 }
 
 struct OpenOutcome {
@@ -160,17 +226,15 @@ impl Job {
         match self {
             Self::Open {
                 pull,
-                etag,
+                summary: known,
                 check,
                 have_details,
             } => {
-                let summary = client
-                    .get_conditional::<PullSummary>(&pull.rest_path(), etag.as_deref())
-                    .await?;
+                let summary = get_summary(&client, &pull, known.as_deref()).await?;
                 let (owner, name) = (&pull.repo.owner, &pull.repo.name);
                 let new_check = client.pull_request_check(owner, name, pull.number).await?;
                 let changed = !have_details
-                    || matches!(summary, Conditional::Modified { .. })
+                    || summary_changed(&summary, known.as_deref())
                     || check.as_ref() != Some(&new_check);
                 let details = if changed {
                     Some(client.pull_request(owner, name, pull.number).await?)
@@ -183,29 +247,22 @@ impl Job {
                     details,
                 })))
             }
-            Self::Watched { pull, etag } => Ok(Outcome::Watched {
-                summary: client
-                    .get_conditional(&pull.rest_path(), etag.as_deref())
-                    .await?,
+            Self::Watched { pull, summary } => Ok(Outcome::Watched {
+                summary: get_summary(&client, &pull, summary.as_deref()).await?,
             }),
             Self::Repo {
                 repo,
-                etag,
+                listed: known,
                 have_list,
             } => {
-                let answer = client
-                    .get_conditional::<Vec<IgnoredAny>>(&repo.open_pulls_path(), etag.as_deref())
-                    .await?;
-                let (changed, etag) = match answer {
-                    Conditional::NotModified => (false, etag),
-                    Conditional::Modified { etag, .. } => (true, etag),
-                };
+                let listed = get_listed(&client, &repo, known.as_deref()).await?;
+                let changed = known.is_none_or(|known| !known.lists_the_same(&listed));
                 let list = if changed || !have_list {
                     Some(client.open_pull_requests(&repo.owner, &repo.name).await?)
                 } else {
                     None
                 };
-                Ok(Outcome::Repo { etag, list })
+                Ok(Outcome::Repo { listed, list })
             }
         }
     }
@@ -349,16 +406,14 @@ impl Poller {
         };
         if !self.repos.contains_key(&pull.repo) {
             let repo = Target::Repo(pull.repo.clone());
-            let list = self
-                .cached::<OpenPullRequestList>(&repo)
-                .map(|c| c.map(Arc::new));
-            self.repos.insert(
-                pull.repo.clone(),
-                RepoState {
-                    last_polled: None,
-                    list,
-                },
-            );
+            let state = RepoState {
+                last_polled: None,
+                listed: self.cached::<ListedPulls>(&repo).map(|c| c.map(Arc::new)),
+                list: self
+                    .cached::<OpenPullRequestList>(&repo)
+                    .map(|c| c.map(Arc::new)),
+            };
+            self.repos.insert(pull.repo.clone(), state);
         }
         self.pulls.insert(pull, state);
         self.wake();
@@ -560,7 +615,7 @@ impl Poller {
             consider(due(state.last_polled, state.force, Tier::Open), &|| {
                 Job::Open {
                     pull: open.clone(),
-                    etag: state.summary.as_ref().and_then(|s| s.etag.clone()),
+                    summary: state.summary.as_ref().map(|s| s.value.clone()),
                     check: state.check.clone(),
                     have_details: state.details.is_some(),
                 }
@@ -573,7 +628,7 @@ impl Poller {
             consider(due(state.last_polled, false, Tier::Watched), &|| {
                 Job::Watched {
                     pull: pull.clone(),
-                    etag: state.summary.as_ref().and_then(|s| s.etag.clone()),
+                    summary: state.summary.as_ref().map(|s| s.value.clone()),
                 }
             });
         }
@@ -581,7 +636,7 @@ impl Poller {
             consider(due(state.last_polled, false, Tier::Watched), &|| {
                 Job::Repo {
                     repo: repo.clone(),
-                    etag: state.list.as_ref().and_then(|l| l.etag.clone()),
+                    listed: state.listed.as_ref().map(|l| l.value.clone()),
                     have_list: state.list.is_some(),
                 }
             });
@@ -756,20 +811,19 @@ impl Poller {
             writes.push(
                 async move {
                     match write {
-                        Put::Summary(value, etag) => {
-                            cache
-                                .put(&login, &target, &*value, etag.as_deref(), wall)
-                                .await
+                        Put::Summary(value) => {
+                            cache.put(&login, &target, &*value, None, wall).await
+                        }
+                        Put::TouchSummary => {
+                            cache.touch::<PullSummary>(&login, &target, wall).await
                         }
                         Put::Check(value) => cache.put(&login, &target, &value, None, wall).await,
                         Put::Details(value) => {
                             cache.put(&login, &target, &*value, None, wall).await
                         }
-                        Put::List(value, etag) => {
-                            cache
-                                .put(&login, &target, &*value, etag.as_deref(), wall)
-                                .await
-                        }
+                        Put::Listed(value) => cache.put(&login, &target, &*value, None, wall).await,
+                        Put::TouchListed => cache.touch::<ListedPulls>(&login, &target, wall).await,
+                        Put::List(value) => cache.put(&login, &target, &*value, None, wall).await,
                         Put::TouchDetails => {
                             cache.touch::<PullRequestData>(&login, &target, wall).await
                         }
@@ -824,17 +878,15 @@ impl Poller {
                         None
                     }
                 };
-                if let Some((summary, etag)) = summary {
-                    put(
-                        &mut writes,
-                        &cache,
-                        &login,
-                        Put::Summary(summary.clone(), etag),
-                    );
-                    cx.emit(PollEvent::Summary {
-                        pull: pull.clone(),
-                        summary,
-                    });
+                match summary {
+                    Some(summary) => {
+                        put(&mut writes, &cache, &login, Put::Summary(summary.clone()));
+                        cx.emit(PollEvent::Summary {
+                            pull: pull.clone(),
+                            summary,
+                        });
+                    }
+                    None => put(&mut writes, &cache, &login, Put::TouchSummary),
                 }
                 if let Some(details) = changed_details {
                     if self.open.as_ref() == Some(pull) {
@@ -850,37 +902,54 @@ impl Poller {
                 let Some(state) = self.pulls.get_mut(pull) else {
                     return writes;
                 };
-                if let Some((summary, etag)) = Self::take_summary(state, summary, wall) {
-                    // The details need fetching again when it's opened, even if the check
-                    // doesn't show what changed.
-                    state.check = None;
-                    put(&mut writes, &cache, &login, Put::ForgetCheck);
-                    put(
-                        &mut writes,
-                        &cache,
-                        &login,
-                        Put::Summary(summary.clone(), etag),
-                    );
-                    cx.emit(PollEvent::Summary {
-                        pull: pull.clone(),
-                        summary,
-                    });
+                match Self::take_summary(state, summary, wall) {
+                    Some(summary) => {
+                        // The details need fetching again when it's opened, even if the check
+                        // doesn't show what changed.
+                        state.check = None;
+                        put(&mut writes, &cache, &login, Put::ForgetCheck);
+                        put(&mut writes, &cache, &login, Put::Summary(summary.clone()));
+                        cx.emit(PollEvent::Summary {
+                            pull: pull.clone(),
+                            summary,
+                        });
+                    }
+                    None => put(&mut writes, &cache, &login, Put::TouchSummary),
                 }
             }
-            (Outcome::Repo { etag, list }, Target::Repo(repo)) => {
+            (Outcome::Repo { listed, list }, Target::Repo(repo)) => {
                 let Some(state) = self.repos.get_mut(repo) else {
                     return writes;
                 };
+                if state
+                    .listed
+                    .as_ref()
+                    .is_some_and(|known| *known.value == listed)
+                {
+                    if let Some(known) = &mut state.listed {
+                        known.fetched_at = wall;
+                    }
+                    put(&mut writes, &cache, &login, Put::TouchListed);
+                } else {
+                    // New ETags, if nothing else.
+                    let listed = Arc::new(listed);
+                    state.listed = Some(Cached {
+                        value: listed.clone(),
+                        etag: None,
+                        fetched_at: wall,
+                    });
+                    put(&mut writes, &cache, &login, Put::Listed(listed));
+                }
                 match list {
                     Some(list) => {
                         let changed = state.list.as_ref().is_none_or(|known| *known.value != list);
                         let list = Arc::new(list);
                         state.list = Some(Cached {
                             value: list.clone(),
-                            etag: etag.clone(),
+                            etag: None,
                             fetched_at: wall,
                         });
-                        put(&mut writes, &cache, &login, Put::List(list.clone(), etag));
+                        put(&mut writes, &cache, &login, Put::List(list.clone()));
                         if changed {
                             cx.emit(PollEvent::OpenPullRequests {
                                 repo: repo.clone(),
@@ -901,22 +970,30 @@ impl Poller {
         writes
     }
 
-    /// Stores a REST answer that changed, returning it and its ETag.
+    /// Takes in GitHub's answer about a pull request, returning its summary when it changed. A
+    /// `304`, or a `200` with the same summary, only confirms the one rozed has.
     fn take_summary(
         state: &mut PullState,
-        summary: Conditional<PullSummary>,
+        answer: Conditional<PullSummary>,
         wall: SystemTime,
-    ) -> Option<(Arc<PullSummary>, Option<String>)> {
-        let Conditional::Modified { value, etag } = summary else {
+    ) -> Option<Arc<PullSummary>> {
+        let known = state.summary.as_ref().map(|known| &*known.value);
+        if !summary_changed(&answer, known) {
+            if let Some(known) = &mut state.summary {
+                known.fetched_at = wall;
+            }
+            return None;
+        }
+        let Conditional::Modified { value, .. } = answer else {
             return None;
         };
         let value = Arc::new(value);
         state.summary = Some(Cached {
             value: value.clone(),
-            etag: etag.clone(),
+            etag: None,
             fetched_at: wall,
         });
-        Some((value, etag))
+        Some(value)
     }
 
     fn lost_client(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
@@ -938,10 +1015,13 @@ fn jitter_sample() -> f64 {
 
 /// A cache write.
 enum Put {
-    Summary(Arc<PullSummary>, Option<String>),
+    Summary(Arc<PullSummary>),
+    TouchSummary,
     Check(PullRequestCheckData),
     Details(Arc<PullRequestData>),
-    List(Arc<OpenPullRequestList>, Option<String>),
+    Listed(Arc<ListedPulls>),
+    TouchListed,
+    List(Arc<OpenPullRequestList>),
     TouchDetails,
     TouchList,
     ForgetCheck,

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
 use github::record::RecordingHttpClient;
-use github::{Conditional, GithubClient, PullRef, PullSummary, RepoRef, Token};
+use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
 
 const REPO: &str = "rozed-dev/playground";
@@ -248,45 +248,54 @@ fn modified<T: std::fmt::Debug>(answer: Conditional<T>) -> Option<String> {
     }
 }
 
+/// What a conditional GET returned, after checking it was a `200`.
+fn modified_value<T: std::fmt::Debug>(answer: Conditional<T>) -> (T, Option<String>) {
+    match answer {
+        Conditional::Modified { value, etag } => (value, etag),
+        Conditional::NotModified => panic!("expected a 200, got a 304"),
+    }
+}
+
 #[test]
 #[ignore = "records from GitHub; run by hand"]
 fn poll_playground() {
     record_graphql(
         "poll_playground",
-        "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (conditional \
-         GET, PullRequestCheck, then PullRequest the first time), PR #2 as a watched one \
-         (conditional GET), and the playground's open PRs (conditional GET of the list, then \
-         OpenPullRequests the first time)",
+        "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (GET, \
+         PullRequestCheck, then PullRequest the first time), PR #2 as a watched one (GET), and \
+         the playground's open PRs (GET of the list, then OpenPullRequests the first time). The \
+         second poll asks about each PR since its last update, and about the list with its ETag",
         |client| async move {
             let open = PullRef::new("rozed-dev", "playground", 1);
             let watched = PullRef::new("rozed-dev", "playground", 2);
             let repo = RepoRef::new("rozed-dev", "playground");
             let (owner, name) = (repo.owner.as_str(), repo.name.as_str());
 
-            let open_etag = modified(
+            let (open_summary, _) = modified_value(
                 client
-                    .get_conditional::<PullSummary>(&open.rest_path(), None)
+                    .get_modified_since::<PullSummary>(&open.rest_path(), None)
                     .await
                     .unwrap(),
             );
             let check = client.pull_request_check(owner, name, 1).await.unwrap();
             client.pull_request(owner, name, 1).await.unwrap();
-            let watched_etag = modified(
+            let (watched_summary, _) = modified_value(
                 client
-                    .get_conditional::<PullSummary>(&watched.rest_path(), None)
+                    .get_modified_since::<PullSummary>(&watched.rest_path(), None)
                     .await
                     .unwrap(),
             );
-            let list_etag = modified(
+            let (_, list_etag) = modified_value(
                 client
-                    .get_conditional::<Vec<IgnoredAny>>(&repo.open_pulls_path(), None)
+                    .get_conditional::<Vec<ListedPull>>(&repo.open_pulls_path(1), None)
                     .await
                     .unwrap(),
             );
             client.open_pull_requests(owner, name).await.unwrap();
 
+            let since = open_summary.last_modified();
             let unchanged = client
-                .get_conditional::<PullSummary>(&open.rest_path(), open_etag.as_deref())
+                .get_modified_since::<PullSummary>(&open.rest_path(), since.as_deref())
                 .await
                 .unwrap();
             assert_eq!(unchanged, Conditional::NotModified);
@@ -294,13 +303,14 @@ fn poll_playground() {
                 client.pull_request_check(owner, name, 1).await.unwrap(),
                 check
             );
+            let since = watched_summary.last_modified();
             let unchanged = client
-                .get_conditional::<PullSummary>(&watched.rest_path(), watched_etag.as_deref())
+                .get_modified_since::<PullSummary>(&watched.rest_path(), since.as_deref())
                 .await
                 .unwrap();
             assert_eq!(unchanged, Conditional::NotModified);
             let unchanged = client
-                .get_conditional::<Vec<IgnoredAny>>(&repo.open_pulls_path(), list_etag.as_deref())
+                .get_conditional::<Vec<ListedPull>>(&repo.open_pulls_path(1), list_etag.as_deref())
                 .await
                 .unwrap();
             assert_eq!(unchanged, Conditional::NotModified);

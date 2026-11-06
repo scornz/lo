@@ -19,7 +19,7 @@ use sqlez_macros::sql;
 use crate::client::API_VERSION;
 use crate::credentials::HOST;
 use crate::db::RozedDb;
-use crate::pulls::{PullRef, PullSummary, Target};
+use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
     open_pull_requests, pull_request, pull_request_check,
@@ -104,6 +104,17 @@ impl CacheEntry for PullSummary {
 
     fn shape() -> String {
         format!("REST {API_VERSION}\n{}", schema_shape::<Self>())
+    }
+}
+
+impl CacheEntry for ListedPulls {
+    const NAME: &'static str = "pulls";
+
+    fn shape() -> String {
+        format!(
+            "REST {API_VERSION}, {PAGE_SIZE} a page\n{}",
+            schema_shape::<Self>()
+        )
     }
 }
 
@@ -618,12 +629,14 @@ mod tests {
         assert_eq!(
             [
                 (PullSummary::NAME, PullSummary::version()),
+                (ListedPulls::NAME, ListedPulls::version()),
                 (PullRequestData::NAME, PullRequestData::version()),
                 (PullRequestCheckData::NAME, PullRequestCheckData::version()),
                 (OpenPullRequestList::NAME, OpenPullRequestList::version()),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
+                ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "b900ef4fb7098d20".to_string()),
                 ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),

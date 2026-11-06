@@ -19,10 +19,10 @@
       "x-accepted-oauth-scopes": "repo",
       "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4993",
-      "x-ratelimit-reset": "1793969325",
+      "x-ratelimit-remaining": "4998",
+      "x-ratelimit-reset": "1793973996",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "7"
+      "x-ratelimit-used": "2"
     },
     "body": {
       "data": {

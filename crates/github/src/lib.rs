@@ -32,7 +32,10 @@ pub use client::{
 };
 pub use error::{CLIENT_ID, GithubError, HelpLink, SsoHeader, approval_url};
 pub use graphql::{GraphQlError, GraphQlResponse};
-pub use pulls::{PullBranch, PullRef, PullSummary, RepoRef, Target};
+pub use pulls::{
+    ListedPage, ListedPull, ListedPulls, ListedStack, PullBranch, PullRef, PullSummary, RepoRef,
+    StackBase, Target,
+};
 pub use rate_limit::{GraphQlRateLimit, RateLimit, RateLimits};
 pub use token::{Token, TokenKind};
 pub use user::{AuthenticatedUser, SCOPES, User, missing_scopes, parse_scopes};
