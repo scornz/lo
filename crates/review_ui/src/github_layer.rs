@@ -106,6 +106,18 @@ impl GithubLayer {
             .unwrap_or_default()
     }
 
+    /// Forgets that `pull` was opened under a name its repository no longer has, so it's listed
+    /// once, by its name now.
+    pub fn forget_recent(&self, pull: PullRef, cx: &App) {
+        let cache = self.cache.clone();
+        cx.background_spawn(async move {
+            if let Err(error) = cache.forget_recent(&pull).await {
+                log::warn!("forgetting {pull} as opened: {error:#}");
+            }
+        })
+        .detach();
+    }
+
     /// What rozed saved about `pull` most recently, whichever account fetched it, so the newest
     /// head shows. The viewed marks in it are that account's. It's read from rozed's database,
     /// so it's there at once, online or not.

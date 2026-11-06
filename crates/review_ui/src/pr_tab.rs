@@ -88,6 +88,29 @@ pub fn open(
     open_with(workspace, link, trust, window, cx, PrTab::load)
 }
 
+/// [`open`] with `login`'s account, if it's still signed in, rather than the account chosen for
+/// the repository: for a pull request listed as opened with it.
+pub fn open_as(
+    workspace: &mut Workspace,
+    link: PrLink,
+    trust: Trust,
+    login: String,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) -> Entity<PrTab> {
+    open_with(
+        workspace,
+        link,
+        trust,
+        window,
+        cx,
+        move |tab, window, cx| {
+            tab.preferred = Some(login);
+            tab.load(window, cx);
+        },
+    )
+}
+
 /// [`open`], with `start` run on a new tab, or on a tab that failed, instead of loading it.
 pub fn open_with(
     workspace: &mut Workspace,
@@ -182,6 +205,9 @@ pub struct PrTab {
     file_list_focus: FocusHandle,
     file_list_scroll: UniformListScrollHandle,
     acting: Option<Acting>,
+    /// The account to open the pull request with while it's signed in, whatever account the
+    /// repository's choice is.
+    preferred: Option<String>,
     header: Header,
     created_at: Option<SystemTime>,
     files: FileList,
@@ -245,6 +271,7 @@ impl PrTab {
             file_list_focus: cx.focus_handle(),
             file_list_scroll: UniformListScrollHandle::new(),
             acting: None,
+            preferred: None,
             header: Header::default(),
             created_at: None,
             files: FileList::default(),
@@ -1196,24 +1223,35 @@ async fn load(
         this.update(cx, |this, cx| this.show_saved(saved, cx))?;
     }
 
-    // The account that can see the repository, or none for a public one.
-    let found = match &layer {
-        Some(layer) => Some(
+    // The account it was asked to open with, while it's signed in.
+    let preferred = this.read_with(cx, |this, _| this.preferred.clone())?;
+    let preferred = match (&layer, preferred) {
+        (Some(layer), Some(login)) => cx.update(|_, cx| {
+            let accounts = layer.read(cx).accounts().read(cx);
+            (accounts.account(&login).is_some() && !accounts.is_signed_out(&login)).then_some(login)
+        })?,
+        _ => None,
+    };
+
+    // Else the account that can see the repository, or none for a public one.
+    let found = match (&layer, &preferred) {
+        (_, Some(_)) | (None, _) => None,
+        (Some(layer), None) => Some(
             layer
                 .update(cx, |layer, cx| {
                     layer.account_for_repo(&link.owner, &link.repo, cx)
                 })
                 .await?,
         ),
-        None => None,
     };
-    let acting = match (account::decide(found.as_ref()), &found) {
-        (AccountDecision::Open(acting), _) => acting,
-        (AccountDecision::Ask(logins), Some(found)) => {
+    let acting = match (preferred, account::decide(found.as_ref()), &found) {
+        (Some(login), _, _) => Acting::Account(login),
+        (None, AccountDecision::Open(acting), _) => acting,
+        (None, AccountDecision::Ask(logins), Some(found)) => {
             Acting::Account(ask_for_account(&this, &link, found, logins, cx).await?)
         }
-        (AccountDecision::Ask(_), None) => Acting::Anonymous,
-        (AccountDecision::Refuse(refusal), _) => return Err(refusal.into()),
+        (None, AccountDecision::Ask(_), None) => Acting::Anonymous,
+        (None, AccountDecision::Refuse(refusal), _) => return Err(refusal.into()),
     };
     log::info!(
         "{link}: opening {}",
@@ -1254,6 +1292,16 @@ async fn load(
         }
     };
     this.update(cx, |this, cx| this.set_pull_request(&pull_request, cx))?;
+    // Opened by a name the repository no longer has, it's listed once, by its name now.
+    if let Some(layer) = &layer {
+        let other_names = this.read_with(cx, |this, _| this.key.other_names())?;
+        cx.update(|_, cx| {
+            for (owner, name) in other_names {
+                let old = PullRef::new(owner, name, pull.number);
+                layer.read(cx).forget_recent(old, cx);
+            }
+        })?;
+    }
 
     // A tab opened by another of the repository's names may show it already.
     let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;

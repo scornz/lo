@@ -61,6 +61,26 @@ impl TabKey {
         }
     }
 
+    /// The names the pull request was opened by that aren't its repository's name now, once
+    /// GitHub gave that.
+    pub fn other_names(&self) -> Vec<(String, String)> {
+        let Some((owner, repo)) = &self.canonical else {
+            return Vec::new();
+        };
+        let mut others: Vec<(String, String)> = Vec::new();
+        for (other_owner, other_repo) in self.names() {
+            let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+            let is_canonical = same(other_owner, owner) && same(other_repo, repo);
+            let known = others
+                .iter()
+                .any(|(o, r)| same(o, other_owner) && same(r, other_repo));
+            if !is_canonical && !known {
+                others.push((other_owner.to_string(), other_repo.to_string()));
+            }
+        }
+        others
+    }
+
     /// Every `owner/name` the pull request is known by.
     fn names(&self) -> impl Iterator<Item = (&str, &str)> {
         std::iter::once((self.opened_as.owner.as_str(), self.opened_as.repo.as_str())).chain(
@@ -172,5 +192,21 @@ mod tests {
         assert!(tab.shows(&link("github.com/old-owner/old-name/pull/7")));
         assert!(tab.shows(&link("github.com/New-Owner/new-name/pull/7")));
         assert!(!tab.shows(&link("github.com/new-owner/new-name/pull/8")));
+    }
+
+    #[test]
+    fn the_names_besides_the_repositorys_name_now() {
+        let mut key = TabKey::new(link("github.com/rozed-dev/playground/pull/2"));
+        assert_eq!(key.other_names(), Vec::<(String, String)>::new());
+        key.canonical = Some(("rozed-dev".into(), "renamed".into()));
+        key.merge(TabKey::new(link("github.com/Rozed-Dev/Renamed/pull/2")));
+        key.merge(TabKey::new(link("github.com/old-owner/playground/pull/2")));
+        assert_eq!(
+            key.other_names(),
+            [
+                ("rozed-dev".to_string(), "playground".to_string()),
+                ("old-owner".to_string(), "playground".to_string())
+            ]
+        );
     }
 }

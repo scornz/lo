@@ -2,12 +2,15 @@
 //! account, newest first (design §10 "Window"). Enter opens the selected one.
 //!
 //! The list is a tab of its own that shows exactly while no pull request is open: opening one
-//! closes it, and closing the last one brings it back.
+//! closes it, and closing the last one brings it back. It's read again when an account is added,
+//! removed or signed out, and says how long ago each was opened, minute by minute.
 
 use std::ops::Range;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use github::accounts::Accounts;
 use github::cache::RecentPr;
+use github::poll::WallClock;
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, Render,
     SharedString, Task, UniformListScrollHandle, WeakEntity, Window, uniform_list,
@@ -85,6 +88,9 @@ pub(crate) fn tab_closed(
     }
 }
 
+/// How often the rows say again how long ago each was opened.
+const AGES_EVERY: Duration = Duration::from_secs(60);
+
 /// What a row of the list says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -94,19 +100,31 @@ pub struct Row {
     pub title: Option<String>,
     /// The account it was opened with.
     pub account: String,
+    /// Whether that account is signed out, so opening it uses whichever account can see it.
+    pub signed_out: bool,
     /// When it was last opened, in words.
     pub opened: String,
 }
 
 impl Row {
-    pub fn new(recent: &RecentPr, now: SystemTime) -> Self {
+    pub fn new(recent: &RecentPr, signed_out: bool, now: SystemTime) -> Self {
         Self {
             pull: recent.pull.to_string(),
             title: recent.title.clone(),
             account: recent.account.clone(),
+            signed_out,
             opened: poll_state::ago(recent.opened_at, now),
         }
     }
+}
+
+/// Whether the list was read yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Loaded {
+    Not,
+    Yes,
+    /// rozed's database couldn't be opened, so there's nothing to read.
+    NoDatabase,
 }
 
 /// The pull requests opened recently, as a tab.
@@ -115,10 +133,14 @@ pub struct RecentPrs {
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     recent: Vec<RecentPr>,
+    rows: Vec<Row>,
     selected: usize,
-    /// Whether the list was read from rozed's database yet.
-    loaded: bool,
+    loaded: Loaded,
+    accounts: Option<Entity<Accounts>>,
+    /// What says how long ago each was opened.
+    clock: WallClock,
     _load: Task<()>,
+    _ages: Task<()>,
 }
 
 impl EventEmitter<()> for RecentPrs {}
@@ -129,33 +151,97 @@ impl RecentPrs {
             let Ok(ready) = cx.update(|_, cx| github_layer::ready(cx)) else {
                 return;
             };
-            // Without rozed's database, nothing was recorded.
-            let recent = match ready.await {
-                Some(layer) => layer.read_with(cx, |layer, _| layer.recent()),
-                None => Vec::new(),
-            };
+            let layer = ready.await;
             this.update(cx, |this, cx| {
-                this.recent = recent;
-                this.selected = 0;
-                this.loaded = true;
-                cx.notify();
+                let Some(layer) = layer else {
+                    // Without rozed's database, nothing was recorded.
+                    this.loaded = Loaded::NoDatabase;
+                    cx.notify();
+                    return;
+                };
+                // Accounts added, removed or signed out change what's listed and how.
+                let accounts = layer.read(cx).accounts().clone();
+                cx.observe(&accounts, |this, _, cx| this.reload(cx))
+                    .detach();
+                this.accounts = Some(accounts);
+                this.loaded = Loaded::Yes;
+                this.reload(cx);
             })
             .ok();
+        });
+        let ages = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(AGES_EVERY).await;
+                if this.update(cx, |this, cx| this.refresh_rows(cx)).is_err() {
+                    return;
+                }
+            }
         });
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             recent: Vec::new(),
+            rows: Vec::new(),
             selected: 0,
-            loaded: false,
+            loaded: Loaded::Not,
+            accounts: None,
+            clock: WallClock::system(),
             _load: load,
+            _ages: ages,
         }
+    }
+
+    /// Reads the list again from rozed's database, keeping the selected pull request selected.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let Some(layer) = github_layer::loaded(cx) else {
+            return;
+        };
+        let selected = self.selected().map(|recent| recent.pull.clone());
+        self.recent = layer.read(cx).recent();
+        self.selected = selected
+            .and_then(|selected| {
+                self.recent
+                    .iter()
+                    .position(|recent| recent.pull == selected)
+            })
+            .unwrap_or(0);
+        self.refresh_rows(cx);
+    }
+
+    /// Says again what each row says, with how long ago it was opened as of now.
+    fn refresh_rows(&mut self, cx: &mut Context<Self>) {
+        let now = self.clock.now();
+        let accounts = self.accounts.as_ref().map(|accounts| accounts.read(cx));
+        self.rows = self
+            .recent
+            .iter()
+            .map(|recent| {
+                let signed_out = accounts.is_some_and(|accounts| {
+                    accounts.account(&recent.account).is_none()
+                        || accounts.is_signed_out(&recent.account)
+                });
+                Row::new(recent, signed_out, now)
+            })
+            .collect();
+        cx.notify();
+    }
+
+    /// Tells the time by `clock`, for tests.
+    #[cfg(test)]
+    pub(crate) fn set_clock(&mut self, clock: WallClock, cx: &mut Context<Self>) {
+        self.clock = clock;
+        self.refresh_rows(cx);
     }
 
     /// The pull requests listed, newest first.
     pub fn recent(&self) -> &[RecentPr] {
         &self.recent
+    }
+
+    /// What each row says, as shown.
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
     }
 
     pub fn selected(&self) -> Option<&RecentPr> {
@@ -194,11 +280,17 @@ impl RecentPrs {
         self.select(self.recent.len().saturating_sub(1), cx);
     }
 
-    /// Opens the selected pull request in a tab.
+    /// Opens the selected pull request in a tab, with the account it was opened with while
+    /// that's signed in, else with whichever account can see it.
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
         let Some(recent) = self.selected() else {
             return;
         };
+        let signed_out = self
+            .rows
+            .get(self.selected)
+            .is_none_or(|row| row.signed_out);
+        let login = (!signed_out).then(|| recent.account.clone());
         let Ok(number) = u64::try_from(recent.pull.number) else {
             return;
         };
@@ -211,15 +303,25 @@ impl RecentPrs {
         // Opening it closes this list, so after this update.
         window.defer(cx, move |window, cx| {
             workspace
-                .update(cx, |workspace, cx| {
-                    pr_tab::open(workspace, link, Trust::Untrusted, window, cx);
+                .update(cx, |workspace, cx| match login {
+                    Some(login) => {
+                        pr_tab::open_as(workspace, link, Trust::Untrusted, login, window, cx);
+                    }
+                    None => {
+                        pr_tab::open(workspace, link, Trust::Untrusted, window, cx);
+                    }
                 })
                 .ok();
         });
     }
 
-    fn render_row(&self, index: usize, now: SystemTime, cx: &mut Context<Self>) -> AnyElement {
-        let row = Row::new(&self.recent[index], now);
+    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let row = self.rows[index].clone();
+        let account_color = if row.signed_out {
+            Color::Muted
+        } else {
+            Color::Default
+        };
         let title = match row.title {
             Some(title) => Label::new(title).truncate(),
             None => Label::new("No title yet").color(Color::Muted),
@@ -246,7 +348,18 @@ impl RecentPrs {
             .end_slot(
                 h_flex()
                     .gap_1p5()
-                    .child(Label::new(row.account).size(LabelSize::Small))
+                    .child(
+                        Label::new(row.account)
+                            .size(LabelSize::Small)
+                            .color(account_color),
+                    )
+                    .when(row.signed_out, |this| {
+                        this.child(
+                            Label::new("signed out")
+                                .size(LabelSize::Small)
+                                .color(Color::Warning),
+                        )
+                    })
                     .child(Label::new("·").size(LabelSize::Small).color(Color::Muted))
                     .child(
                         Label::new(row.opened)
@@ -262,10 +375,13 @@ impl RecentPrs {
     }
 
     fn render_empty(&self) -> AnyElement {
-        let text = if self.loaded {
-            "No pull requests opened yet. Open one from its link."
-        } else {
-            "Loading…"
+        let text = match self.loaded {
+            Loaded::Not => "Loading…",
+            Loaded::Yes => "No pull requests opened yet. Open one from its link.",
+            Loaded::NoDatabase => {
+                "rozed couldn't open its database, so it can't list the pull requests opened \
+                 before. Open one from its link."
+            }
         };
         div()
             .px_2()
@@ -300,16 +416,15 @@ impl Focusable for RecentPrs {
 impl Render for RecentPrs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let list = if self.recent.is_empty() {
+        let list = if self.rows.is_empty() {
             self.render_empty()
         } else {
             uniform_list(
                 "recent-prs",
-                self.recent.len(),
+                self.rows.len(),
                 cx.processor(|this, range: Range<usize>, _window, cx| {
-                    let now = SystemTime::now();
                     range
-                        .map(|index| this.render_row(index, now, cx))
+                        .map(|index| this.render_row(index, cx))
                         .collect::<Vec<_>>()
                 }),
             )
@@ -416,6 +531,8 @@ mod tests {
     use github::cache::PrCache;
     use gpui::{TestAppContext, VisualTestContext};
 
+    use crate::account::Acting;
+    use crate::account_picker::AccountPicker;
     use crate::test_support::{FakeGithub, GitServer, sign_in, workspace};
 
     fn recent(pull: (&str, &str, i64), title: Option<&str>, account: &str, ago: u64) -> RecentPr {
@@ -438,11 +555,12 @@ mod tests {
         );
         opened.opened_at = now - Duration::from_secs(2 * 3_600 + 5);
         assert_eq!(
-            Row::new(&opened, now),
+            Row::new(&opened, false, now),
             Row {
                 pull: "rozed-dev/playground#2".into(),
                 title: Some("Add b".into()),
                 account: "rozed-bot".into(),
+                signed_out: false,
                 opened: "2 hours ago".into(),
             }
         );
@@ -664,6 +782,209 @@ mod tests {
         assert_eq!(
             workspace.read_with(cx, |workspace, cx| workspace.items(cx).count()),
             1
+        );
+    }
+
+    /// What the list's rows say: each pull request, its account, whether that's signed out, and
+    /// how long ago it was opened.
+    fn rows(
+        list: &Entity<RecentPrs>,
+        cx: &mut VisualTestContext,
+    ) -> Vec<(String, String, bool, String)> {
+        list.read_with(cx, |list, _| {
+            list.rows()
+                .iter()
+                .map(|row| {
+                    (
+                        row.pull.clone(),
+                        row.account.clone(),
+                        row.signed_out,
+                        row.opened.clone(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    fn row(
+        pull: &str,
+        account: &str,
+        signed_out: bool,
+        opened: &str,
+    ) -> (String, String, bool, String) {
+        (pull.into(), account.into(), signed_out, opened.into())
+    }
+
+    #[gpui::test]
+    async fn the_list_follows_the_accounts_and_the_time(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        opened_before(&github, &git, cx).await;
+        workspace.update_in(cx, show);
+        cx.run_until_parked();
+        let list = list(&workspace, cx).unwrap();
+        let clock = WallClock::following(cx.executor(), SystemTime::now());
+        list.update(cx, |list, cx| list.set_clock(clock, cx));
+        assert_eq!(
+            rows(&list, cx),
+            [
+                row("acme/app#1", "home", false, "10 minutes ago"),
+                row("rozed-dev/playground#2", "rozed-bot", false, "3 hours ago"),
+                row("rozed-dev/playground#3", "rozed-bot", false, "a day ago"),
+            ]
+        );
+
+        // Minutes later, it says so by itself.
+        cx.executor().advance_clock(Duration::from_secs(5 * 60));
+        cx.run_until_parked();
+        assert_eq!(rows(&list, cx)[0].3, "15 minutes ago");
+
+        // A signed-out account's rows say so.
+        let accounts = cx.update(|_, cx| {
+            let layer = github_layer::loaded(cx).unwrap();
+            layer.read(cx).accounts().clone()
+        });
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("home", github::accounts::SignedOut::Refused, cx)
+        });
+        cx.run_until_parked();
+        assert!(rows(&list, cx)[0].2);
+
+        // A removed account's go.
+        accounts
+            .update(cx, |accounts, cx| accounts.remove("rozed-bot", cx))
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            rows(&list, cx),
+            [row("acme/app#1", "home", true, "15 minutes ago")]
+        );
+    }
+
+    #[gpui::test]
+    async fn a_row_opens_with_its_account_while_its_signed_in(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let pull = git.pull_request("acme/app", 1, &[], &[("a.rs", "a\n")]);
+        github.add_pull(pull);
+        for token in ["gho_HOME", "gho_WORK"] {
+            github.let_see(token, "acme/app");
+        }
+        let (accounts, cache) =
+            sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+        accounts
+            .update(cx, |accounts, cx| {
+                accounts.remember_account_for_owner("acme", "work", cx)
+            })
+            .await
+            .unwrap();
+        cache
+            .record_recent(recent(("acme", "app", 1), Some("Change 1"), "home", 600))
+            .await
+            .unwrap();
+        workspace.update_in(cx, show);
+        cx.run_until_parked();
+
+        // It was opened as home, which is still signed in, though acme's account is work.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let tab = tabs(&workspace, cx).pop().unwrap();
+        assert!(workspace.read_with(cx, |workspace, cx| {
+            workspace.active_modal::<AccountPicker>(cx).is_none()
+        }));
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.acting().cloned()),
+            Some(Acting::Account("home".into()))
+        );
+
+        // Once home is signed out, the row opens with acme's account.
+        let pane = workspace
+            .read_with(cx, |workspace, _| workspace.pane_for(&tab))
+            .unwrap();
+        let id = tab.entity_id();
+        drop(tab);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.close_item_by_id(id, workspace::SaveIntent::Skip, window, cx)
+        })
+        .detach();
+        cx.run_until_parked();
+        accounts.update(cx, |accounts, cx| {
+            accounts.mark_signed_out("home", github::accounts::SignedOut::Refused, cx)
+        });
+        cx.run_until_parked();
+        let list = list(&workspace, cx).unwrap();
+        assert!(rows(&list, cx)[0].2);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let tab = tabs(&workspace, cx).pop().unwrap();
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.acting().cloned()),
+            Some(Acting::Account("work".into()))
+        );
+    }
+
+    #[gpui::test]
+    async fn a_renamed_repository_is_listed_once_by_its_name_now(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        let github = FakeGithub::default();
+        let git = GitServer::start(cx);
+        let mut pull = git.pull_request("rozed-dev/renamed", 2, &[], &[("a.rs", "a\n")]);
+        pull.old_names = vec!["rozed-dev/playground".into()];
+        github.add_pull(pull);
+        github.let_see("gho_BOT", "rozed-dev/renamed");
+        let (_, cache) = sign_in(&github, &[("rozed-bot", "gho_BOT")], cx).await;
+        cache
+            .record_recent(recent(
+                ("rozed-dev", "playground", 2),
+                None,
+                "rozed-bot",
+                3_600,
+            ))
+            .await
+            .unwrap();
+        workspace.update_in(cx, show);
+        cx.run_until_parked();
+        assert_eq!(
+            listed(&list(&workspace, cx).unwrap(), cx),
+            ["rozed-dev/playground#2"]
+        );
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let tab = tabs(&workspace, cx).pop().unwrap();
+        assert_eq!(
+            tab.read_with(cx, |tab, _| tab.status().clone()),
+            pr_tab::Status::Ready
+        );
+        let pane = workspace
+            .read_with(cx, |workspace, _| workspace.pane_for(&tab))
+            .unwrap();
+        let id = tab.entity_id();
+        drop(tab);
+        pane.update_in(cx, |pane, window, cx| {
+            pane.close_item_by_id(id, workspace::SaveIntent::Skip, window, cx)
+        })
+        .detach();
+        cx.run_until_parked();
+
+        assert_eq!(
+            listed(&list(&workspace, cx).unwrap(), cx),
+            ["rozed-dev/renamed#2"]
+        );
+    }
+
+    #[gpui::test]
+    async fn without_rozeds_database_the_list_says_so(cx: &mut TestAppContext) {
+        let (workspace, cx) = workspace(cx).await;
+        workspace.update_in(cx, show);
+        cx.run_until_parked();
+        let list = list(&workspace, cx).unwrap();
+        assert_eq!(
+            list.read_with(cx, |list, _| list.loaded),
+            Loaded::NoDatabase
         );
     }
 }
