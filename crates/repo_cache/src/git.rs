@@ -11,8 +11,12 @@
 //! - `HOME` is a folder of rozed's, so git and its HTTP library read none of the user's files there
 //!   (`~/.gitconfig`, `~/.config/git/attributes`, `~/.netrc`).
 //! - No system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`), no
-//!   credential helper, and no prompts (`GIT_TERMINAL_PROMPT=0`). The only credential git gets is
-//!   the token rozed hands it through `GIT_ASKPASS` (see [`crate::askpass`]).
+//!   credential helper but rozed's, and no prompts (`GIT_TERMINAL_PROMPT=0`, no askpass). The
+//!   only credential git gets is the token, from a helper scoped to the remote's own URL
+//!   (`https://github.com`), which reads it from a variable set only on that git. A proxy that
+//!   asks for a password, or a host a request is redirected to, matches no helper, and git fails
+//!   rather than prompting. Redirects are off anyway: rozed always fetches a repository by its
+//!   canonical name.
 //! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
 //!   a repository's own `.gitattributes`), no replace refs, and literal pathspecs.
 //! - HTTPS only. [`crate::RepoCache::with_remote_base`] allows another protocol for tests.
@@ -86,6 +90,12 @@ impl Token {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// Whether git can be given the token: not empty, and nothing that would split the
+    /// credential helper's answer into more lines. GitHub's tokens are letters, digits and `_`.
+    pub(crate) fn is_usable(&self) -> bool {
+        !self.0.is_empty() && !self.0.chars().any(|c| c.is_control() || c.is_whitespace())
+    }
 }
 
 impl fmt::Debug for Token {
@@ -127,9 +137,14 @@ const INHERITED_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-/// The variable the askpass helper reads the token from. It's set only on git children that
+/// The variable the credential helper reads the token from. It's set only on git children that
 /// sign in.
 pub(crate) const TOKEN_VAR: &str = "ROZED_GIT_TOKEN";
+
+/// The credential helper, a shell function git runs with the action (`get`, `store` or `erase`)
+/// as its argument. It answers `get` with the token in [`TOKEN_VAR`], and nothing else.
+const CREDENTIAL_HELPER: &str = "!f() { test \"$1\" = get || exit 0; \
+     printf 'username=x-access-token\\npassword=%s\\n' \"$ROZED_GIT_TOKEN\"; }; f";
 
 impl Git {
     /// Finds git, `/usr/bin/git` first and then each `git` on `PATH`, and checks that it's new
@@ -164,7 +179,10 @@ impl Git {
     }
 
     /// The git at `program`, as if rozed's environment were `env`.
-    fn with_env(program: PathBuf, env: Vec<(OsString, OsString)>) -> Result<Self, Error> {
+    pub(crate) fn with_env(
+        program: PathBuf,
+        env: Vec<(OsString, OsString)>,
+    ) -> Result<Self, Error> {
         let inherited = inherited_env(env);
         let output = Command::new(&program)
             .arg("--version")
@@ -217,8 +235,8 @@ impl Git {
     }
 
     /// A git command with rozed's environment (see the module docs), running in `dir`. `home` is
-    /// the empty folder git gets as its `HOME`. With `auth`, git signs in with its token when a
-    /// server asks.
+    /// the empty folder git gets as its `HOME`. With `auth`, git signs in with its token when the
+    /// remote asks, and only then.
     ///
     /// `config` is extra `name=value` config, which wins over rozed's own: tests allow `file://`.
     pub(crate) fn command(
@@ -241,15 +259,25 @@ impl Git {
             .env("LC_ALL", "C")
             .current_dir(dir)
             .stdin(Stdio::null());
-        if let Some(auth) = auth {
-            command
-                .env("GIT_ASKPASS", auth.askpass)
-                .env(TOKEN_VAR, auth.token.expose());
-        }
         command.args([
-            // No credential helper, so the token from askpass is the only credential.
+            // No credential helper, prompt or redirect: only rozed's helper, added below for the
+            // remote's URL, gives git a credential.
             "-c",
             "credential.helper=",
+            "-c",
+            "core.askPass=",
+            "-c",
+            "http.followRedirects=false",
+        ]);
+        if let Some(auth) = auth
+            && auth.token.is_usable()
+        {
+            command.env(TOKEN_VAR, auth.token.expose()).args([
+                "-c".to_string(),
+                format!("credential.{}.helper={CREDENTIAL_HELPER}", auth.remote),
+            ]);
+        }
+        command.args([
             // Symlinks in a checkout become plain files holding their target, so nothing in a
             // checkout points outside it.
             "-c",
@@ -294,10 +322,12 @@ impl Git {
     }
 }
 
-/// How git signs in: the askpass helper, and the token it answers with.
+/// How git signs in: with `token`, for `remote` alone.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Auth<'a> {
-    pub askpass: &'a Path,
+    /// The remote's URL without a path, such as `https://github.com`: the only place the token
+    /// goes.
+    pub remote: &'a str,
     pub token: &'a Token,
 }
 
@@ -413,12 +443,6 @@ pub(crate) fn failure_message(finished: &Finished) -> String {
     } else {
         stderr.to_string()
     }
-}
-
-/// Writes the askpass helper into `dir`, for this crate's tests.
-#[cfg(test)]
-pub(crate) fn test_askpass(dir: &Path) -> PathBuf {
-    crate::askpass::install(dir).unwrap()
 }
 
 #[cfg(test)]
@@ -843,74 +867,107 @@ mod tests {
         assert_eq!(String::from_utf8(subject).unwrap(), "first\n");
     }
 
-    #[test]
-    fn askpass_answers_both_prompts() {
-        let dir = TempDir::new().unwrap();
-        let askpass = test_askpass(dir.path());
-        let ask = |prompt: &str| {
-            let output = Command::new(&askpass)
-                .arg(prompt)
-                .env_clear()
-                .env(TOKEN_VAR, "gho_secret")
-                .output()
-                .unwrap();
-            (
-                output.status.success(),
-                String::from_utf8(output.stdout).unwrap(),
-            )
-        };
-        assert_eq!(
-            ask("Username for 'https://github.com': "),
-            (true, "x-access-token\n".into())
-        );
-        assert_eq!(
-            ask("Password for 'https://x-access-token@github.com': "),
-            (true, "gho_secret\n".into())
-        );
-        assert!(!ask("Are you sure you want to continue connecting (yes/no)? ").0);
-
-        // The helper holds no token itself.
-        assert!(!fs::read_to_string(&askpass).unwrap().contains("gho_secret"));
-        let mode = fs::metadata(&askpass).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700);
-    }
-
-    /// Asks git for github.com's credentials, as it does when a server answers 401.
-    fn credential_fill(git: &Git, auth: Option<Auth<'_>>, home: &Path) -> Result<Vec<u8>, Error> {
-        git.command(home, home, auth, &[])
+    /// Asks git for credentials for `url`, as it does when a server or proxy answers 401 or 407.
+    fn credential_fill(
+        git: &Git,
+        auth: Option<Auth<'_>>,
+        home: &Path,
+        url: &str,
+    ) -> Result<String, Error> {
+        let output = git
+            .command(home, home, auth, &[])
             .args(["credential", "fill"])
-            .run_with_input(Some(b"protocol=https\nhost=github.com\n\n"))
+            .run_with_input(Some(format!("url={url}\n\n").as_bytes()))?;
+        Ok(String::from_utf8(output).unwrap())
     }
 
+    const GITHUB: &str = "https://github.com";
+
     #[test]
-    fn git_signs_in_with_the_token_from_askpass() {
+    fn git_signs_in_to_the_remote_with_the_token() {
         let dir = TempDir::new().unwrap();
-        let askpass = test_askpass(dir.path());
         let token = Token::new("gho_secret\n");
         let auth = Auth {
-            askpass: &askpass,
+            remote: GITHUB,
             token: &token,
         };
-
         let git = Git::find().unwrap();
-        let command = git
-            .command(dir.path(), dir.path(), Some(auth), &[])
-            .args(["credential", "fill"]);
-        assert!(!command.display().contains("gho_secret"));
-        let (command, _) = command.into_command();
-        assert!(
-            command
-                .get_args()
-                .all(|arg| !arg.to_string_lossy().contains("gho_secret"))
-        );
 
         let credentials =
-            String::from_utf8(credential_fill(&git, Some(auth), dir.path()).unwrap()).unwrap();
+            credential_fill(&git, Some(auth), dir.path(), "https://github.com/a/b.git").unwrap();
+
         assert!(
             credentials.contains("username=x-access-token\n"),
             "{credentials}"
         );
         assert!(credentials.contains("password=gho_secret\n"));
+        // The token is in no argument, only in the variable the helper reads.
+        let (command, display) = git
+            .command(dir.path(), dir.path(), Some(auth), &[])
+            .args(["credential", "fill"])
+            .into_command();
+        assert!(!display.contains("gho_secret"));
+        assert!(
+            command
+                .get_args()
+                .all(|arg| !arg.to_string_lossy().contains("gho_secret"))
+        );
+        assert!(CREDENTIAL_HELPER.contains(&format!("${TOKEN_VAR}")));
+    }
+
+    #[test]
+    fn the_token_goes_to_no_other_host_or_proxy() {
+        let hostile = Hostile::new();
+        let git = Git::with_env(Git::find().unwrap().program, hostile.env.clone()).unwrap();
+        let token = Token::new("gho_secret");
+        let auth = Auth {
+            remote: GITHUB,
+            token: &token,
+        };
+
+        for url in [
+            // A proxy whose URL names a user and no password.
+            "http://alice@proxy.example:3128",
+            "https://alice@proxy.example:3128",
+            // Another host, such as one a request was redirected to.
+            "https://example.com/a/b.git",
+            "https://github.com.example.com/a/b.git",
+            "https://gist.github.com/a.git",
+            // github.com, but not over HTTPS.
+            "http://github.com/a/b.git",
+            "https://github.com:8443/a/b.git",
+        ] {
+            let error = credential_fill(&git, Some(auth), &hostile.home, url).unwrap_err();
+            assert!(
+                error.to_string().contains("terminal prompts disabled"),
+                "{url}: {error}"
+            );
+        }
+        // Nor does any askpass the environment names run.
+        assert_eq!(hostile.programs_run(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_token_that_would_split_the_helpers_answer_isnt_used() {
+        let dir = TempDir::new().unwrap();
+        let token = Token::new("gho_secret\nhost=example.com");
+        let auth = Auth {
+            remote: GITHUB,
+            token: &token,
+        };
+
+        let error = credential_fill(
+            &Git::find().unwrap(),
+            Some(auth),
+            dir.path(),
+            "https://github.com/a/b.git",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("terminal prompts disabled"));
+        assert!(Token::new(" gho_ok\n").is_usable());
+        assert!(!Token::new("").is_usable());
+        assert!(!Token::new("a b").is_usable());
     }
 
     #[test]
@@ -918,7 +975,8 @@ mod tests {
         let hostile = Hostile::new();
         let git = Git::with_env(Git::find().unwrap().program, hostile.env.clone()).unwrap();
 
-        let error = credential_fill(&git, None, &hostile.home).unwrap_err();
+        let error =
+            credential_fill(&git, None, &hostile.home, "https://github.com/a/b.git").unwrap_err();
 
         assert!(
             error.to_string().contains("terminal prompts disabled"),

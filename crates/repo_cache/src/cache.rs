@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::Error;
-use crate::askpass;
 use crate::git::{Auth, Git, GitCommand, Token};
 use crate::lock::RepoLock;
 use crate::repo::Repo;
@@ -21,14 +20,12 @@ use crate::repo::Repo;
 ///   language servers.
 /// - `locks/github.com/<owner>/<repo>.lock`: the lock held while writing to a clone (see
 ///   [`crate::lock`]).
-/// - `git-env/`: the askpass helper and the empty `HOME` git runs with.
+/// - `git-env/home`: the empty `HOME` git runs with.
 ///
 /// Folder names are lowercase, since GitHub's owner and repository names aren't case-sensitive.
 pub struct RepoCache {
     root: PathBuf,
     env: Arc<GitEnv>,
-    /// Where repositories are fetched from: `<remote_base>/<owner>/<repo>.git`.
-    remote_base: String,
 }
 
 /// Everything a git command needs besides its arguments.
@@ -36,16 +33,18 @@ pub struct RepoCache {
 pub(crate) struct GitEnv {
     pub git: Git,
     pub home: PathBuf,
-    pub askpass: PathBuf,
+    /// Where repositories are fetched from: `<remote_base>/<owner>/<repo>.git`. The token goes
+    /// to this URL and nowhere else.
+    pub remote_base: String,
     /// Extra `name=value` config for every git, from [`RepoCache::with_remote_base`].
     pub config: Vec<String>,
 }
 
 impl GitEnv {
-    /// A git command in `dir`, signing in with `token` if there is one.
+    /// A git command in `dir`, signing in to the remote with `token` if there is one.
     pub fn command(&self, dir: &Path, token: Option<&Token>) -> GitCommand {
         let auth = token.map(|token| Auth {
-            askpass: &self.askpass,
+            remote: &self.remote_base,
             token,
         });
         self.git.command(dir, &self.home, auth, &self.config)
@@ -59,37 +58,42 @@ const HOST: &str = "github.com";
 pub(crate) const LAST_USED_FILE: &str = "rozed-last-used";
 
 impl RepoCache {
-    /// The cache in `root`, using `git`. Creates the folder and writes the askpass helper if
-    /// they're missing.
+    /// The cache in `root`, using `git`. Creates the folder if it's missing.
     pub fn new(root: impl Into<PathBuf>, git: Git) -> Result<Self, Error> {
         let root = root.into();
         let env_dir = root.join("git-env");
         let home = env_dir.join("home");
         fs::create_dir_all(&home).map_err(Error::io(format!("creating {}", home.display())))?;
-        let askpass = askpass::install(&env_dir)?;
+        // The askpass helper earlier versions wrote, which nothing uses now.
+        let _ = fs::remove_file(env_dir.join("askpass.sh"));
         Ok(Self {
             root,
             env: Arc::new(GitEnv {
                 git,
                 home,
-                askpass,
+                remote_base: format!("https://{HOST}"),
                 config: Vec::new(),
             }),
-            remote_base: format!("https://{HOST}"),
         })
     }
 
     /// Fetches from `<url>/<owner>/<repo>.git` instead of GitHub, and allows git that URL's
     /// protocol: for tests, which serve repositories from `file://` folders.
     pub fn with_remote_base(mut self, url: impl Into<String>) -> Self {
-        self.remote_base = url.into().trim_end_matches('/').to_string();
-        if let Some((scheme, _)) = self.remote_base.split_once("://")
+        let env = Arc::make_mut(&mut self.env);
+        env.remote_base = url.into().trim_end_matches('/').to_string();
+        if let Some((scheme, _)) = env.remote_base.split_once("://")
             && scheme != "https"
         {
-            Arc::make_mut(&mut self.env)
-                .config
-                .push(format!("protocol.{scheme}.allow=always"));
+            env.config.push(format!("protocol.{scheme}.allow=always"));
         }
+        self
+    }
+
+    /// Adds `name=value` config to every git, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_config(mut self, config: &str) -> Self {
+        Arc::make_mut(&mut self.env).config.push(config.to_string());
         self
     }
 
@@ -135,7 +139,7 @@ impl RepoCache {
         check_name("repository name", repo)?;
         let git_dir = self.repo_dir(owner, repo);
         let lock_path = self.lock_path(owner, repo);
-        let url = format!("{}/{owner}/{repo}.git", self.remote_base);
+        let url = format!("{}/{owner}/{repo}.git", self.env.remote_base);
         {
             let _lock = RepoLock::acquire(&lock_path)?;
             if git_dir.join("HEAD").is_file() {

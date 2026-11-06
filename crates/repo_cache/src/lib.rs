@@ -31,13 +31,14 @@
 //! # Ok::<(), repo_cache::Error>(())
 //! ```
 
-mod askpass;
 mod cache;
 mod cat_file;
 mod checkout;
 mod diff;
 mod error;
 mod git;
+#[cfg(test)]
+mod http_tests;
 mod lock;
 mod oid;
 mod progress;
