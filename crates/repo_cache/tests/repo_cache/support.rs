@@ -143,7 +143,9 @@ impl Remote {
             let blob = String::from_utf8(output.stdout).unwrap();
             let mut cacheinfo = format!("100644,{},", blob.trim()).into_bytes();
             cacheinfo.extend_from_slice(path);
+            // Names as given: a Mac's git otherwise turns a decomposed name into a composed one.
             let status = Command::new("git")
+                .args(["-c", "core.precomposeUnicode=false"])
                 .args(["update-index", "--add", "--cacheinfo"])
                 .arg(OsStr::from_bytes(&cacheinfo))
                 .current_dir(&self.work)

@@ -415,3 +415,65 @@ fn a_pull_requests_own_attributes_never_apply_in_its_checkout() {
         );
     }
 }
+
+/// Whether the disk under `dir` treats `a` and `b` as one name.
+fn same_name_on_disk(dir: &Path, a: &str, b: &str) -> bool {
+    let probe = TempDir::new_in(dir).unwrap();
+    fs::write(probe.path().join(a), "").unwrap();
+    probe.path().join(b).exists()
+}
+
+#[test]
+fn names_a_disk_folds_together_never_both_hash_to_their_blobs() {
+    let f = fixture();
+    f.remote.switch("feature");
+    let nfc = "caf\u{e9}.txt";
+    let nfd = "cafe\u{301}.txt";
+    let head = f.remote.commit_with_names(
+        &[
+            (b"Lib.rs", b"pub fn evil() {}\n"),
+            (b"lib.rs", b"pub fn benign() {}\n"),
+            (nfc.as_bytes(), b"composed\n"),
+            (nfd.as_bytes(), b"decomposed\n"),
+        ],
+        "names that differ only in case or normalization",
+    );
+    f.remote.publish("refs/pull/1/head");
+    assert_eq!(fetch(&f.repo), head);
+
+    // Each name reads as its own file from git.
+    for (path, contents) in [
+        ("Lib.rs", "pub fn evil() {}\n"),
+        ("lib.rs", "pub fn benign() {}\n"),
+        (nfc, "composed\n"),
+        (nfd, "decomposed\n"),
+    ] {
+        assert_eq!(
+            f.repo.read_file(&head, path.as_bytes()).unwrap().unwrap(),
+            contents.as_bytes(),
+            "{path:?}"
+        );
+    }
+    let base = git(f.repo.git_dir(), &["rev-parse", "refs/rozed/pull/1/base"]);
+    let files = f.repo.changed_files(&base.parse().unwrap(), &head).unwrap();
+
+    let dir = f.repo.checkout(1, &head).unwrap();
+
+    for (a, b) in [("Lib.rs", "lib.rs"), (nfc, nfd)] {
+        let matches = |path: &str| {
+            let file = files
+                .iter()
+                .find(|file| file.path() == path.as_bytes())
+                .unwrap_or_else(|| panic!("{path:?} not listed"));
+            let blob = &file.new.as_ref().unwrap().oid;
+            f.repo.hash_checkout_file(&dir, path.as_bytes()).unwrap() == Some(blob.clone())
+        };
+        let (a_matches, b_matches) = (matches(a), matches(b));
+        if same_name_on_disk(&dir, a, b) {
+            // One file holds one of the two, so the other is shown from git.
+            assert!(!(a_matches && b_matches), "{a} and {b}");
+        } else {
+            assert!(a_matches && b_matches, "{a} and {b}");
+        }
+    }
+}

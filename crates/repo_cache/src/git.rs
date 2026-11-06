@@ -336,6 +336,10 @@ impl Git {
             ]);
         }
         command.args([
+            // Paths are the bytes in the tree. A Mac's git otherwise composes a decomposed name
+            // (`cafe\u{301}`) given on the command line, and reads the composed one's file.
+            "-c",
+            "core.precomposeUnicode=false",
             // Symlinks in a checkout become plain files holding their target, so nothing in a
             // checkout points outside it.
             "-c",
@@ -871,6 +875,7 @@ mod tests {
             "transfer.bundleuri=false",
             "promisor.acceptfromserver=None",
             "fetch.uriprotocols=",
+            "core.precomposeunicode=false",
         ] {
             assert!(
                 config.lines().any(|line| line.ends_with(pinned)),
