@@ -4,6 +4,7 @@ mod forest;
 mod merged;
 mod native_stack;
 mod performance;
+mod retarget;
 mod shared_commits;
 mod support;
 mod trunks;

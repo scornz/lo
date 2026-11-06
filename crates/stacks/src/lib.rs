@@ -128,6 +128,10 @@ pub struct Layer {
     /// commits that never landed as they are. Never set on a layer linked by
     /// [`Rule::NativeStack`], because GitHub rebases those itself.
     pub needs_rebase: Option<NeedsRebase>,
+    /// The base branch "Make this a GitHub stack" must give it: the head branch of the PR below,
+    /// or the root branch. `None` when its base branch is already that, or when the PR below is
+    /// from a fork, whose branch can't be a base.
+    pub retarget_to: Option<String>,
     /// The layers sitting on this one, oldest first.
     pub children: Vec<u64>,
     /// How many layers sit below it: 0 for a stack's bottom layer.
@@ -259,6 +263,7 @@ impl Stacks {
             parent,
             rule,
             needs_rebase,
+            retarget_to,
         } in open
         {
             match &parent {
@@ -272,6 +277,7 @@ impl Stacks {
                 parent,
                 rule,
                 needs_rebase,
+                retarget_to,
                 children: Vec::new(),
                 depth: 0,
             };
@@ -339,6 +345,7 @@ struct Placed<'a> {
     parent: Parent,
     rule: Option<Rule>,
     needs_rebase: Option<NeedsRebase>,
+    retarget_to: Option<String>,
 }
 
 /// The PRs the rules link: the first open or merged PR with each number.
@@ -445,22 +452,31 @@ impl<'a> Graph<'a> {
                 parent: Parent::Branch(pr.base_ref.clone()),
                 rule: None,
                 needs_rebase: None,
+                retarget_to: None,
             };
         };
         let mut squashed = false;
         // `break_cycles` has run, so this ends.
         let mut next = edge.below;
-        let parent = loop {
+        // What it sits on, and the branch that is: none for a fork's.
+        let (parent, base) = loop {
             let below = self.prs[next];
             let State::Merged { head_in_base } = below.state else {
-                break Parent::Pr(below.number);
+                let base = below.head_in_base_repo.then_some(&below.head_ref);
+                break (Parent::Pr(below.number), base);
             };
             squashed |= !head_in_base;
             match links[next] {
                 Some(link) => next = link.below,
-                None => break Parent::Branch(below.base_ref.clone()),
+                None => {
+                    break (
+                        Parent::Branch(below.base_ref.clone()),
+                        Some(&below.base_ref),
+                    );
+                }
             }
         };
+        let retarget_to = base.filter(|&base| *base != pr.base_ref).cloned();
         // GitHub rebases a stack's layers itself when a lower one merges.
         let merged = self.prs[edge.below];
         let needs_rebase = (squashed && edge.rule != Rule::NativeStack).then(|| {
@@ -481,6 +497,7 @@ impl<'a> Graph<'a> {
             parent,
             rule: Some(edge.rule),
             needs_rebase,
+            retarget_to,
         }
     }
 
