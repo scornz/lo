@@ -93,7 +93,7 @@ fn destination_file(k: usize) -> usize {
     (k * 37 + 11) % FILES
 }
 
-/// A planted move: where its block is deleted and added, and whether it's edited.
+/// A planted move: the file and first line where its block is deleted, and where it's added.
 struct Planted {
     from: (usize, u32),
     to: (usize, u32),
