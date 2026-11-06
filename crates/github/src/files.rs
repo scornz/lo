@@ -2,19 +2,26 @@
 //! (`GET /repos/{owner}/{repo}/pulls/{number}/files`), each with its patch. The PR tab shows
 //! these patches until the local copy is ready (design §11, "First open").
 
+use std::time::SystemTime;
+
 use http_client::Method;
 use serde::Deserialize;
 
-use crate::client::GithubClient;
+use crate::client::{API_URL, GithubClient};
 use crate::error::GithubError;
 use crate::patch::{self, Patch, PatchError};
+use crate::poll::RequestQueue;
 use crate::pulls::PullRef;
+use crate::rate_limit::RateLimits;
 
 /// GitHub lists at most 100 files a page.
 pub const FILES_PER_PAGE: usize = 100;
 
 /// GitHub lists at most 3,000 of a pull request's files; the rest only the local copy shows.
 pub const MAX_FILES: usize = 3_000;
+
+/// The most pages GitHub lists: [`MAX_FILES`] at [`FILES_PER_PAGE`] a page.
+pub const MAX_PAGES: usize = MAX_FILES / FILES_PER_PAGE;
 
 /// One changed file.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -76,36 +83,113 @@ impl PullRef {
     }
 }
 
+/// A pull request's files, as far as they were read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullFiles {
+    pub files: Vec<PullFile>,
+    /// Why reading stopped with pages left, if it did. GitHub's own limit of [`MAX_FILES`] can
+    /// also end the pages without a link to more; the pull request's `changed_files` tells.
+    pub cut_short: Option<CutShort>,
+}
+
+/// Why reading a pull request's files stopped with pages left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CutShort {
+    /// [`ReadFiles::max_pages`] were read.
+    Pages,
+    /// No more than [`ReadFiles::keep_requests`] of the rate limit's requests were left.
+    RateLimit,
+}
+
+/// How much of a pull request's file list to read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadFiles {
+    /// Read no more pages than this.
+    pub max_pages: usize,
+    /// Read no page while no more than this many of the REST API's requests are left, as far as
+    /// the client last heard.
+    pub keep_requests: u32,
+}
+
+impl ReadFiles {
+    /// Every page GitHub lists.
+    pub const ALL: Self = Self {
+        max_pages: MAX_PAGES,
+        keep_requests: 0,
+    };
+}
+
 impl GithubClient {
     /// One page of a pull request's files: `path` is [`PullRef::files_path`], or the previous
     /// page's [`FilesPage::next`].
     pub async fn pull_files_page(&self, path: &str) -> Result<FilesPage, GithubError> {
         let response = self.send(Method::GET, path, None, None).await?;
+        // A response may carry several `Link` headers; together they're one list.
+        let links: Vec<&str> = response
+            .headers
+            .get_all("link")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
         Ok(FilesPage {
             files: response.json()?,
-            next: response.header("link").and_then(next_link),
+            next: next_link(&links.join(", ")),
         })
     }
 
     /// Every file of the pull request GitHub lists, up to its 3,000, page by page.
     pub async fn pull_files(&self, pull: &PullRef) -> Result<Vec<PullFile>, GithubError> {
+        Ok(self
+            .read_pull_files(pull, None, ReadFiles::ALL)
+            .await?
+            .files)
+    }
+
+    /// The pull request's files, page by page, each through `queue` when there's one, as far as
+    /// `limits` allow.
+    pub async fn read_pull_files(
+        &self,
+        pull: &PullRef,
+        queue: Option<&RequestQueue>,
+        limits: ReadFiles,
+    ) -> Result<PullFiles, GithubError> {
         let mut files = Vec::new();
-        let mut pages = Pages::new(pull);
+        let mut pages = Pages::new(pull).with_max_pages(limits.max_pages);
         while let Some(path) = pages.next_path() {
-            let page = self.pull_files_page(&path).await?;
+            if few_left(&self.rate_limits(), limits.keep_requests, SystemTime::now()) {
+                pages.stop(CutShort::RateLimit);
+                break;
+            }
+            let page = match queue {
+                Some(queue) => queue.read(|| self.pull_files_page(&path)).await?,
+                None => self.pull_files_page(&path).await?,
+            };
             files.extend(page.files);
             pages.read(page.next)?;
         }
-        Ok(files)
+        Ok(PullFiles {
+            files,
+            cut_short: pages.cut_short(),
+        })
     }
 }
 
+/// Whether no more than `keep` of the REST API's requests are left, as `limits` last heard,
+/// unless the window has reset since.
+fn few_left(limits: &RateLimits, keep: u32, now: SystemTime) -> bool {
+    limits
+        .core()
+        .is_some_and(|core| core.remaining <= keep && core.reset_time() > now)
+}
+
 /// Where the next page of a pull request's files is, for a caller that reads them one page at a
-/// time, such as through an account's request queue.
+/// time.
 #[derive(Clone, Debug)]
 pub struct Pages {
     next: Option<String>,
     read: usize,
+    max_pages: usize,
+    cut_short: Option<CutShort>,
 }
 
 impl Pages {
@@ -113,6 +197,16 @@ impl Pages {
         Self {
             next: Some(pull.files_path()),
             read: 0,
+            max_pages: MAX_PAGES,
+            cut_short: None,
+        }
+    }
+
+    /// Reads no more than `max_pages`, and never more than GitHub lists.
+    pub fn with_max_pages(self, max_pages: usize) -> Self {
+        Self {
+            max_pages: max_pages.min(MAX_PAGES),
+            ..self
         }
     }
 
@@ -121,19 +215,47 @@ impl Pages {
         self.next.clone()
     }
 
-    /// Takes the `next` of the page just read. GitHub lists no more than 30 pages, so a link past
-    /// them is ignored, and one back to the same page is an error rather than a loop.
+    /// Takes the `next` of the page just read. A link past the last page to read is ignored, and
+    /// one back to the same page is an error rather than a loop.
     pub fn read(&mut self, next: Option<String>) -> Result<(), GithubError> {
         self.read += 1;
-        if next.is_some() && next == self.next {
+        if let (Some(next), Some(this)) = (&next, &self.next)
+            && on_the_api(next) == on_the_api(this)
+        {
             return Err(GithubError::Inconsistent(format!(
                 "page {} of the files links to itself",
                 self.read
             )));
         }
-        self.next = next.filter(|_| self.read < MAX_FILES / FILES_PER_PAGE);
+        self.next = next;
+        if self.read >= self.max_pages {
+            // GitHub lists no more than its 30 pages, whatever a link says.
+            let why = (self.max_pages < MAX_PAGES).then_some(CutShort::Pages);
+            self.stop_with(why);
+        }
         Ok(())
     }
+
+    /// Stops reading, with pages left if there are any.
+    pub fn stop(&mut self, why: CutShort) {
+        self.stop_with(Some(why));
+    }
+
+    fn stop_with(&mut self, why: Option<CutShort>) {
+        if self.next.take().is_some() {
+            self.cut_short = self.cut_short.or(why);
+        }
+    }
+
+    /// Why reading stopped with pages left, if it did.
+    pub fn cut_short(&self) -> Option<CutShort> {
+        self.cut_short
+    }
+}
+
+/// `path` as a path on GitHub's API: a full URL there and the path alone name the same page.
+fn on_the_api(path: &str) -> &str {
+    path.strip_prefix(API_URL).unwrap_or(path)
 }
 
 /// The `rel="next"` URL in a `Link` header, such as
@@ -347,9 +469,66 @@ mod tests {
             )
             .unwrap(),
         );
-        let client = GithubClient::new(http, Token::new("gho_FAKE"));
+        let client = GithubClient::new(http.clone(), Token::new("gho_FAKE"));
         let error = block_on(client.pull_files(&PullRef::new("o", "r", 7))).unwrap_err();
         assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
+        // The first page is read once: its link, a full URL, names the path asked for.
+        assert_eq!(http.seen().len(), 1);
+    }
+
+    #[test]
+    fn reading_stops_after_the_pages_asked_for() {
+        let http = two_pages();
+        let client = GithubClient::anonymous(http.clone());
+        let limits = ReadFiles {
+            max_pages: 1,
+            keep_requests: 0,
+        };
+        let read = block_on(client.read_pull_files(&PullRef::new("o", "r", 7), None, limits));
+        let read = read.unwrap();
+        assert_eq!(read.files.len(), 1);
+        assert_eq!(read.cut_short, Some(CutShort::Pages));
+        assert_eq!(http.seen().len(), 1);
+
+        // Reading every page isn't cut short.
+        let client = GithubClient::anonymous(two_pages());
+        let read =
+            block_on(client.read_pull_files(&PullRef::new("o", "r", 7), None, ReadFiles::ALL));
+        assert_eq!(read.unwrap().cut_short, None);
+    }
+
+    #[test]
+    fn reading_stops_while_few_requests_are_left() {
+        let reset = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3_600;
+        let next = format!("<{SECOND}>; rel=\"next\"");
+        let mut first = page(FIRST, Some(&next), serde_json::json!([]));
+        for (name, value) in [
+            ("x-ratelimit-limit", "60".to_string()),
+            ("x-ratelimit-remaining", "10".to_string()),
+            ("x-ratelimit-reset", reset.to_string()),
+            ("x-ratelimit-resource", "core".to_string()),
+        ] {
+            first.response.headers.insert(name.to_string(), value);
+        }
+        let http = Arc::new(ReplayHttpClient::from_interactions("files", [first]).unwrap());
+        let client = GithubClient::anonymous(http.clone());
+        let limits = ReadFiles {
+            max_pages: 3,
+            keep_requests: 10,
+        };
+
+        let read = block_on(client.read_pull_files(&PullRef::new("o", "r", 7), None, limits));
+
+        assert_eq!(read.unwrap().cut_short, Some(CutShort::RateLimit));
+        assert_eq!(http.seen().len(), 1);
+        // With so few left, not even a first page is read.
+        let read = block_on(client.read_pull_files(&PullRef::new("o", "r", 7), None, limits));
+        assert_eq!(read.unwrap().cut_short, Some(CutShort::RateLimit));
+        assert_eq!(http.seen().len(), 1);
     }
 
     #[test]
