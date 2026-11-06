@@ -1,8 +1,9 @@
 //! Why a pull request can't merge (design §9, "Merge status").
 
+use super::reviews::{self, MissingApprovals};
 use super::{
     CheckState, MergeSnapshot, MergeStateStatus, MergeableState, PullRequestState, RequiredCheck,
-    UnmetRule,
+    ReviewDecision, UnmetRule,
 };
 
 /// A reason a pull request can't merge.
@@ -19,6 +20,11 @@ pub enum Blocker {
     /// The base branch's rules require it to be up to date with the base, and it isn't. rozed
     /// doesn't offer GitHub's "Update branch", which adds a commit: the author updates it.
     OutOfDate,
+    /// Reviewers with write access whose latest review requests changes, by login. Each one's
+    /// approval, or the review's dismissal, clears theirs.
+    ChangesRequested { by: Vec<String> },
+    /// Approvals the base branch's rules require and it doesn't have yet.
+    Approvals(MissingApprovals),
     /// A required check that hasn't passed: it failed, is running, or hasn't reported. Never
     /// [`CheckState::Passed`].
     Check(RequiredCheck),
@@ -34,10 +40,12 @@ pub enum Blocker {
 }
 
 impl Blocker {
-    /// Whether waiting clears it without anyone here acting: a required check that's running or
-    /// hasn't reported, GitHub working out mergeability, or a rule that says waiting meets it.
+    /// Whether waiting clears it without anyone here acting: others' approvals, a required check
+    /// that's running or hasn't reported, GitHub working out mergeability, or a rule that says
+    /// waiting meets it.
     pub fn waiting(&self) -> bool {
         match self {
+            Self::Approvals(_) => true,
             Self::Check(check) => matches!(check.state, CheckState::Running | CheckState::Missing),
             Self::Rule(rule) => rule.waiting,
             Self::CheckingMergeability => true,
@@ -46,6 +54,7 @@ impl Blocker {
             | Self::Draft
             | Self::Conflicts
             | Self::OutOfDate
+            | Self::ChangesRequested { .. }
             | Self::Conversations { .. }
             | Self::Unexplained { .. } => false,
         }
@@ -62,6 +71,9 @@ impl Blocker {
 /// - A draft is `isDraft`, or `mergeStateStatus` `DRAFT`, which REST still reports.
 /// - It conflicts when `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`.
 /// - It's out of date when `mergeStateStatus` is `BEHIND`, or the caller says so.
+/// - Reviews block it only when `reviewDecision` says so. With `CHANGES_REQUESTED`, the
+///   requesters are listed, and the missing approvals when any are; with `REVIEW_REQUIRED`, the
+///   missing approvals always are.
 /// - GitHub is still working out mergeability when `mergeable` or `mergeStateStatus` is `UNKNOWN`.
 /// - When `mergeStateStatus` is `BLOCKED` and nothing else is listed but GitHub working out
 ///   mergeability, the block is [`Blocker::Unexplained`].
@@ -94,6 +106,12 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     {
         blockers.push(Blocker::OutOfDate);
     }
+    let decision = snapshot.review_decision;
+    if decision == Some(ReviewDecision::ChangesRequested) {
+        blockers.push(Blocker::ChangesRequested {
+            by: reviews::changes_requested_by(snapshot),
+        });
+    }
     blockers.extend(checks(CheckState::Failed));
     if snapshot.rules.conversation_resolution && snapshot.unresolved_threads > 0 {
         blockers.push(Blocker::Conversations {
@@ -101,6 +119,15 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
         });
     }
     blockers.extend(rules(false));
+    let missing = reviews::missing_approvals(snapshot);
+    let approvals_missing = match decision {
+        Some(ReviewDecision::ReviewRequired) => true,
+        Some(ReviewDecision::ChangesRequested) => !missing.is_empty(),
+        Some(ReviewDecision::Approved) | None => false,
+    };
+    if approvals_missing {
+        blockers.push(Blocker::Approvals(missing));
+    }
     blockers.extend(checks(CheckState::Running));
     blockers.extend(checks(CheckState::Missing));
     blockers.extend(rules(true));

@@ -7,12 +7,14 @@
 
 mod blockers;
 mod github;
+mod reviews;
 
 pub use blockers::{Blocker, blockers};
 pub use github::{
     CheckConclusion, CheckStatus, MergeMethod, MergeStateStatus, MergeableState, PullRequestState,
     ReviewDecision, ReviewState, StatusState, UnknownValue,
 };
+pub use reviews::MissingApprovals;
 
 /// What GitHub says about a pull request's merge, and the head on screen. The GitHub layer fills
 /// it from GraphQL (field names below are `PullRequest`'s unless they say otherwise) and REST,
