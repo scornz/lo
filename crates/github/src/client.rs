@@ -45,11 +45,12 @@ pub fn user_agent() -> String {
 /// [`Accounts`]: crate::accounts::Accounts
 pub type OnUnauthorized = Arc<dyn Fn(Token) -> BoxFuture<'static, Option<Token>> + Send + Sync>;
 
-/// One account's client. Clones share the account's token and rate limits.
+/// One account's client, or one without an account. Clones share the token and rate limits.
 #[derive(Clone)]
 pub struct GithubClient {
     http: Arc<dyn HttpClient>,
-    token: Arc<RwLock<Token>>,
+    /// `None` for a client without an account, which sends no token.
+    token: Arc<RwLock<Option<Token>>>,
     api_url: Arc<str>,
     state: Arc<Mutex<ClientState>>,
     on_unauthorized: Option<OnUnauthorized>,
@@ -114,6 +115,10 @@ pub enum Conditional<T> {
 
 impl GithubClient {
     pub fn new(http: Arc<dyn HttpClient>, token: Token) -> Self {
+        Self::with_token(http, Some(token))
+    }
+
+    fn with_token(http: Arc<dyn HttpClient>, token: Option<Token>) -> Self {
         Self {
             http,
             token: Arc::new(RwLock::new(token)),
@@ -123,6 +128,13 @@ impl GithubClient {
         }
     }
 
+    /// A client that signs in as nobody, for public repositories: it sends no token, and its
+    /// requests count against GitHub's 60 an hour for each IP address. A client made with a
+    /// token always sends it, even an empty one, which GitHub refuses.
+    pub fn anonymous(http: Arc<dyn HttpClient>) -> Self {
+        Self::with_token(http, None)
+    }
+
     /// Calls `hook` whenever GitHub refuses the token, retrying the request once with the token
     /// it returns.
     pub fn with_unauthorized_hook(mut self, hook: OnUnauthorized) -> Self {
@@ -130,13 +142,14 @@ impl GithubClient {
         self
     }
 
-    pub fn token(&self) -> Token {
+    /// The client's token, or `None` for a client without an account.
+    pub fn token(&self) -> Option<Token> {
         self.token.read().clone()
     }
 
     /// Replaces the token for this client and every clone of it.
     pub fn set_token(&self, token: Token) {
-        *self.token.write() = token;
+        *self.token.write() = Some(token);
     }
 
     pub fn state(&self) -> ClientState {
@@ -178,19 +191,29 @@ impl GithubClient {
 
     fn request(
         &self,
-        token: &Token,
+        token: Option<&Token>,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
         condition: Condition<'_>,
     ) -> Result<Request<AsyncBody>, GithubError> {
-        let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
-            .map_err(|_| GithubError::Decode("the token isn't a valid header value".into()))?;
-        authorization.set_sensitive(true);
+        // A client without an account sends no token.
+        let authorization = token
+            .map(|token| {
+                let mut authorization = HeaderValue::from_str(&format!("token {}", token.expose()))
+                    .map_err(|_| {
+                        GithubError::Decode("the token isn't a valid header value".into())
+                    })?;
+                authorization.set_sensitive(true);
+                Ok::<_, GithubError>(authorization)
+            })
+            .transpose()?;
         Request::builder()
             .method(method)
             .uri(self.url(path)?)
-            .header("Authorization", authorization)
+            .when_some(authorization, |builder, authorization| {
+                builder.header("Authorization", authorization)
+            })
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
             .header("User-Agent", user_agent())
@@ -265,9 +288,15 @@ impl GithubClient {
     ) -> Result<RestResponse, GithubError> {
         let token = self.token();
         let result = self
-            .send_with(&token, method.clone(), path, body.clone(), condition)
+            .send_with(
+                token.as_ref(),
+                method.clone(),
+                path,
+                body.clone(),
+                condition,
+            )
             .await;
-        let Some(hook) = &self.on_unauthorized else {
+        let (Some(hook), Some(token)) = (&self.on_unauthorized, token) else {
             return result;
         };
         if !matches!(&result, Err(error) if error.is_unauthorized()) {
@@ -277,20 +306,21 @@ impl GithubClient {
             return result;
         };
         self.set_token(new_token.clone());
-        self.send_with(&new_token, method, path, body, condition)
+        self.send_with(Some(&new_token), method, path, body, condition)
             .await
     }
 
     async fn send_with(
         &self,
-        token: &Token,
+        token: Option<&Token>,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
         condition: Condition<'_>,
     ) -> Result<RestResponse, GithubError> {
-        let request = self.request(token, method, path, body, condition)?;
-        let response = self.execute(request).await?;
+        let response = self
+            .send_unchecked(token, method, path, body, condition)
+            .await?;
         if response.status.is_success() || response.status == StatusCode::NOT_MODIFIED {
             Ok(response)
         } else {
@@ -302,8 +332,29 @@ impl GithubClient {
         }
     }
 
+    async fn send_unchecked(
+        &self,
+        token: Option<&Token>,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        condition: Condition<'_>,
+    ) -> Result<RestResponse, GithubError> {
+        let request = self.request(token, method, path, body, condition)?;
+        self.execute(request).await
+    }
+
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, GithubError> {
         self.send(Method::GET, path, None, None).await?.json()
+    }
+
+    /// A GET whose answer comes back whatever its status, for a caller that explains GitHub's
+    /// errors itself. Its rate limit is recorded as any answer's is; no hook is asked about a
+    /// refused token.
+    pub async fn get_answer(&self, path: &str) -> Result<RestResponse, GithubError> {
+        let token = self.token();
+        self.send_unchecked(token.as_ref(), Method::GET, path, None, Condition::None)
+            .await
     }
 
     /// A GET that's free when nothing changed: sends `etag` as `If-None-Match`, and returns
@@ -552,6 +603,39 @@ mod tests {
     }
 
     #[test]
+    fn only_a_client_made_without_a_token_sends_none() {
+        let http = replay(vec![
+            (
+                "GET",
+                "https://api.github.com/user",
+                401,
+                &[],
+                BAD_CREDENTIALS,
+            ),
+            (
+                "GET",
+                "https://api.github.com/user",
+                401,
+                &[],
+                BAD_CREDENTIALS,
+            ),
+        ]);
+        // An account whose stored token is empty still sends it, so GitHub refuses it and the
+        // account is signed out, rather than reading as nobody.
+        let empty = GithubClient::new(http.clone(), Token::new("  "));
+        let error =
+            futures::executor::block_on(empty.get::<serde_json::Value>("/user")).unwrap_err();
+        assert!(error.is_unauthorized(), "{error:?}");
+        assert!(http.seen()[0].header("authorization").is_some());
+        assert!(empty.token().is_some());
+
+        let anonymous = GithubClient::anonymous(http.clone());
+        futures::executor::block_on(anonymous.get::<serde_json::Value>("/user")).unwrap_err();
+        assert_eq!(http.seen()[1].header("authorization"), None);
+        assert!(anonymous.token().is_none());
+    }
+
+    #[test]
     fn errors_keep_githubs_message() {
         let http = replay(vec![(
             "GET",
@@ -628,7 +712,7 @@ mod tests {
         assert_eq!(seen[0].header("authorization"), Some("token gho_FAKE"));
         assert_eq!(seen[1].header("authorization"), Some("token gho_NEW"));
         // Every clone uses the new token from now on.
-        assert_eq!(other.token().expose(), "gho_NEW");
+        assert_eq!(other.token().unwrap().expose(), "gho_NEW");
     }
 
     #[test]
