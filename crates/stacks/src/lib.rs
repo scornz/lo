@@ -4,6 +4,7 @@
 //! layer sits on a root branch with no open PR, such as `main` or `feature-x`. [`Stacks::find`]
 //! builds the forest from the repo's PRs, and the result drives the stack sidebar and its walk.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::time::SystemTime;
@@ -56,8 +57,9 @@ pub struct NativeStackEntry {
     pub position: u32,
 }
 
-/// The rule that linked a layer to the PR below it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The rule that linked a layer to the PR below it. When several rules apply, the first in this
+/// order wins, so they sort strongest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
     /// GitHub says it's the layer above the PR below, in a stack made with GitHub's stacks.
     NativeStack,
@@ -122,6 +124,16 @@ pub struct Root {
     pub stacks: Vec<Stack>,
 }
 
+/// Links that formed a cycle. [`Stacks::find`] breaks each cycle by dropping one link: the one
+/// found by the weakest rule (shared commits, then base branch, then native stack), and of those
+/// the oldest PR's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cycle {
+    /// The PRs in the cycle, each linked to the next and the last back to the first, starting with
+    /// the PR whose link was dropped. That PR sits on its own base branch instead.
+    pub prs: Vec<u64>,
+}
+
 /// The stacks among a repository's pull requests: a forest of trees grouped by root branch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stacks {
@@ -129,6 +141,7 @@ pub struct Stacks {
     layers: HashMap<u64, Layer>,
     /// Each layer's stack, as indexes into `roots` and that root's `stacks`.
     stack_index: HashMap<u64, (usize, usize)>,
+    cycles: Vec<Cycle>,
 }
 
 impl Stacks {
@@ -137,7 +150,8 @@ impl Stacks {
     /// is used.
     pub fn find(prs: &[PullRequest]) -> Self {
         let graph = Graph::new(prs);
-        let links = graph.links();
+        let mut links = graph.links();
+        let cycles = graph.break_cycles(&mut links);
         let placed = graph
             .prs
             .iter()
@@ -155,7 +169,10 @@ impl Stacks {
                 },
             })
             .collect();
-        Self::build(placed)
+        Self {
+            cycles,
+            ..Self::build(placed)
+        }
     }
 
     /// The root branches, sorted by name.
@@ -172,6 +189,11 @@ impl Stacks {
     pub fn stack_of(&self, number: u64) -> Option<&Stack> {
         let &(root, stack) = self.stack_index.get(&number)?;
         Some(&self.roots[root].stacks[stack])
+    }
+
+    /// The cycles found and broken, in the order found.
+    pub fn cycles(&self) -> &[Cycle] {
+        &self.cycles
     }
 
     /// Lays out the open PRs, each with what it sits on, as trees.
@@ -212,6 +234,7 @@ impl Stacks {
             roots: Vec::with_capacity(bottoms.len()),
             layers,
             stack_index: HashMap::new(),
+            cycles: Vec::new(),
         };
         for (branch, mut bottoms) in bottoms {
             by_creation(&mut bottoms);
@@ -328,6 +351,54 @@ impl<'a> Graph<'a> {
             .map(edge(Rule::NativeStack))
             .or_else(|| base_branch().map(edge(Rule::BaseBranch)))
             .or_else(|| shared_commits().map(edge(Rule::SharedCommits)))
+    }
+
+    /// Breaks each cycle in `links` by dropping one link, and returns the cycles.
+    fn break_cycles(&self, links: &mut [Option<Edge>]) -> Vec<Cycle> {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Visit {
+            Unseen,
+            OnPath,
+            Done,
+        }
+        let mut visits = vec![Visit::Unseen; links.len()];
+        let mut path = Vec::new();
+        let mut cycles = Vec::new();
+        for start in 0..links.len() {
+            // Each PR has at most one link, so follow it until it reaches a PR seen before.
+            let mut next = Some(start);
+            while let Some(index) = next {
+                match visits[index] {
+                    Visit::Unseen => {
+                        visits[index] = Visit::OnPath;
+                        path.push(index);
+                        next = links[index].map(|edge| edge.below);
+                    }
+                    Visit::OnPath => {
+                        let start = path.iter().rposition(|&i| i == index).unwrap_or(0);
+                        let cycle = &path[start..];
+                        let weakest = (0..cycle.len())
+                            .max_by_key(|&at| {
+                                let pr = self.prs[cycle[at]];
+                                let rule = links[cycle[at]].map(|edge| edge.rule);
+                                (rule, Reverse(pr.created_at), Reverse(pr.number))
+                            })
+                            .unwrap_or(0);
+                        links[cycle[weakest]] = None;
+                        let prs = cycle[weakest..].iter().chain(&cycle[..weakest]);
+                        cycles.push(Cycle {
+                            prs: prs.map(|&i| self.prs[i].number).collect(),
+                        });
+                        break;
+                    }
+                    Visit::Done => break,
+                }
+            }
+            for index in path.drain(..) {
+                visits[index] = Visit::Done;
+            }
+        }
+        cycles
     }
 
     /// Indexes the PRs by `key`. Where several PRs share a key, keeps the one a rule links to: an
