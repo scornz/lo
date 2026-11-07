@@ -65,7 +65,8 @@ pub struct PullRequestTimeline {
     /// How many items GitHub counted when it was read (`filteredCount`). A read of the newest
     /// page joins this one only when the two counts differ by as many items as it adds.
     pub count: usize,
-    /// The latest time of the items the timeline shows, edits included, when it was read.
+    /// When the newest item the timeline shows was made, as of when it was read. An edit doesn't
+    /// move it (checked live, in the `review_writes_e2e_23_*` recordings).
     #[schemars(with = "Option<String>")]
     pub shown_updated_at: Option<chrono::DateTime<Utc>>,
     /// When it was last read in full. Reads in between ask only for its newest page.
@@ -404,7 +405,7 @@ struct Page {
     /// How many items the timeline has, when the page was read without a cursor; otherwise how
     /// many come before the cursor.
     count: usize,
-    /// The latest time of the items the timeline shows, edits included.
+    /// When the newest item the timeline shows was made. An edit doesn't move it.
     shown_updated_at: Option<chrono::DateTime<Utc>>,
     has_previous_page: bool,
     start_cursor: Option<String>,
@@ -531,10 +532,11 @@ impl CacheEntry for PullRequestTimeline {
 }
 
 impl CachedRead for PullRequestTimeline {
-    /// The check counts the items the timeline shows and holds the latest one's time, edits
-    /// included; so an item added, edited or deleted changes them, and a mention or a
-    /// subscription doesn't. With them, the latest commit's checks, and when the description was
-    /// last edited.
+    /// The check counts the items the timeline shows and holds when the newest was made; so an
+    /// item added or deleted changes them, and a mention or a subscription doesn't. An edit
+    /// changes neither (checked live): Lo's own edits read the timeline again themselves
+    /// ([`crate::poll::Poller::edit_comment`]), and others' show on the 5-minute refresh. With
+    /// them, the latest commit's checks, and when the description was last edited.
     const WATCHED: &'static [&'static str] =
         &["/timelineEvents", "/statusCheckRollup", "/lastEditedAt"];
 }

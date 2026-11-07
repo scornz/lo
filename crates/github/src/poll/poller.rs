@@ -407,6 +407,17 @@ enum Step {
 
 type CacheWrite = BoxFuture<'static, Result<()>>;
 
+/// A read [`Poller::read_cached`] keeps, to run again after a write
+/// ([`Poller::write_reading_again`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Reread {
+    /// The read's [`CacheEntry::NAME`].
+    pub name: &'static str,
+    /// Whether it reads everything again rather than what's new, as for an edit of an item a read
+    /// of the newest page doesn't reach.
+    pub afresh: bool,
+}
+
 /// Polls GitHub for one account (research §7 "Recommended scheme"): the open PR every 20 s,
 /// other watched PRs and their repositories' open PRs every 2 minutes, and everything every
 /// 5 minutes while Lo is in the background. Each poll asks first whether anything changed,
@@ -724,6 +735,7 @@ impl Poller {
                         retry_at: None,
                         generation: 0,
                         again_at: None,
+                        afresh: false,
                     },
                 );
                 self.wake();
@@ -792,9 +804,10 @@ impl Poller {
     }
 
     /// `pull`'s timeline, as [`Self::read_cached`] keeps it, read as this account. It's read
-    /// again when an item it shows is added, edited or deleted, the latest commit's checks change
-    /// or the description is edited ([`PullRequestTimeline`]'s [`CachedRead::WATCHED`]), and on
-    /// the 5-minute refresh: each time only its newest page, and in full at most hourly.
+    /// again when an item it shows is added or deleted, the latest commit's checks change or the
+    /// description is edited ([`PullRequestTimeline`]'s [`CachedRead::WATCHED`]), and on the
+    /// 5-minute refresh: each time only its newest page, and in full at most hourly, or after Lo
+    /// edits or deletes a comment ([`Self::edit_comment`], [`Self::delete_comment`]).
     pub fn timeline(
         &mut self,
         pull: PullRef,
@@ -875,8 +888,21 @@ impl Poller {
     /// watches say, and whatever wait its failures set. A run already under way doesn't stamp
     /// what it reads, so it runs again.
     fn read_again<T: CachedRead>(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
+        self.read_again_named(pull, T::NAME, false, cx);
+    }
+
+    /// [`Self::read_again`] for the read named `name`. `afresh`, its next run isn't given the
+    /// value Lo has, so it reads everything rather than what's new.
+    fn read_again_named(
+        &mut self,
+        pull: &PullRef,
+        name: &str,
+        afresh: bool,
+        cx: &mut Context<Self>,
+    ) {
         let state = self.pulls.get_mut(pull);
-        if let Some(read) = state.and_then(|state| state.reads.get_mut(T::NAME)) {
+        if let Some(read) = state.and_then(|state| state.reads.get_mut(name)) {
+            read.afresh |= afresh;
             read.stamp = None;
             read.generation += 1;
             read.failures = 0;
@@ -933,6 +959,24 @@ impl Poller {
         F: FnOnce(GithubClient) -> Fut + 'static,
         Fut: Future<Output = Result<T, GithubError>> + 'static,
     {
+        self.write_reading_again(target, request, |_| Vec::new(), cx)
+    }
+
+    /// [`Self::write`], then makes the reads [`Self::read_cached`] keeps for the pull request it
+    /// wrote to that `again` names due at once, whatever the fields they watch say: for a change
+    /// the check can't see, such as an edited comment. `again` is given the write's result.
+    pub(super) fn write_reading_again<T, F, Fut>(
+        &mut self,
+        target: impl Into<Target>,
+        request: F,
+        again: impl FnOnce(&Result<T, GithubError>) -> Vec<Reread> + 'static,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<T, GithubError>>
+    where
+        T: 'static,
+        F: FnOnce(GithubClient) -> Fut + 'static,
+        Fut: Future<Output = Result<T, GithubError>> + 'static,
+    {
         let target = target.into();
         let login = self.login.clone();
         let client = self
@@ -974,6 +1018,11 @@ impl Poller {
                     this.rate_limited(*secondary, *reset, *retry_after, resource.clone(), wall);
                 }
                 this.refresh_status(cx);
+                if let Target::Pull(pull) = &target {
+                    for reread in again(&result) {
+                        this.read_again_named(pull, reread.name, reread.afresh, cx);
+                    }
+                }
                 this.invalidate(&target, cx)
             });
             if let Ok(forget) = forget
@@ -1182,7 +1231,7 @@ impl Poller {
                     let read = ReadJob {
                         name,
                         run: read.run.clone(),
-                        known: read.value.clone(),
+                        known: (read.value.clone()).filter(|_| !read.afresh),
                         stamp: current,
                         generation: read.generation,
                         started: now,
@@ -1706,6 +1755,9 @@ impl Poller {
                 let complete = (read.ty.complete)(&value);
                 let stamp = (complete && generation == read.generation).then_some(stamp);
                 let restamped = read.stamp != stamp;
+                if generation == read.generation {
+                    read.afresh = false;
+                }
                 read.value = Some(value.clone());
                 read.stamp = stamp.clone();
                 read.fetched_at = Some(wall);

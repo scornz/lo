@@ -20,6 +20,10 @@ pub use self::pull_request_check::*;
 
 pub type PullRequestCheckData = PullRequestCheckRepositoryPullRequest;
 
+/// How many of a pull request's review threads the check reads the state and comment count of:
+/// its `reviewThreads(first: 100)`. Past them, only the count of threads moves.
+pub const CHECKED_THREADS: usize = 100;
+
 impl PullRequestCheckData {
     /// How many of the first 100 review threads aren't resolved.
     pub fn unresolved_threads(&self) -> usize {
@@ -53,5 +57,15 @@ impl GithubClient {
         .repository
         .and_then(|repository| repository.pull_request)
         .ok_or_else(|| not_found(format!("pull request {owner}/{name}#{number}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_check_reads_as_many_threads_as_it_says() {
+        assert!(QUERY.contains(&format!("reviewThreads(first: {CHECKED_THREADS})")));
     }
 }
