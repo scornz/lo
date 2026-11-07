@@ -34,6 +34,7 @@ mod open;
 mod parts;
 mod read_only;
 mod viewed;
+mod vim;
 
 fn link(link: &str) -> PrLink {
     link.parse().unwrap()

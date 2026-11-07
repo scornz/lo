@@ -81,6 +81,9 @@ file_actions![
     workspace::SaveWithoutFormat,
     workspace::FormatAndSave,
     workspace::ToggleReadOnlyFile,
+    // Vim's switches write Lo's settings file, which Lo doesn't read yet.
+    vim::ToggleVimMode,
+    vim::ToggleHelixMode,
     // Handing a file to the app macOS picks for it, which may run it.
     zed_actions::workspace::OpenWithSystem,
     // Changing the repository: its files, index, stashes, commits, branches or remotes.

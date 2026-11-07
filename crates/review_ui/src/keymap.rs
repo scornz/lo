@@ -1,5 +1,5 @@
-//! Lo's key bindings: Zed's default macOS keymap, minus every binding that would open, create
-//! or write files.
+//! Lo's key bindings: Zed's default macOS keymap, and vim's when vim is on, minus every binding
+//! that would open, create or write files, or take a key Lo binds.
 //!
 //! Lo is read-only (design §1). Its buffers are read-only too, but Zed's open, new and save
 //! actions work on the workspace, not a buffer: cmd-O opens any file on disk, cmd-N creates one,
@@ -8,58 +8,76 @@
 
 use gpui::{App, KeyBinding};
 use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, SettingsAssets};
+use vim_mode_setting::{HelixModeSetting, VimModeSetting};
 
 use crate::read_only::FileActions;
 
-/// Binds Zed's default macOS keymap, without [`FileActions`].
+/// Zed's actions that Lo leaves unbound because their keys are Lo's. Zed binds `cmd-enter` and
+/// `cmd-shift-enter` to these in every full-size editor, the diff's included, where they'd beat
+/// Lo's keys for the tab, which bind at the tab's depth.
+const TAKE_LOS_KEYS: &[&str] = &["editor::NewlineBelow", "editor::NewlineAbove"];
+
+/// Binds Zed's default macOS keymap, with vim's when vim is on, without [`FileActions`] and
+/// [`TAKE_LOS_KEYS`]. Vim's goes between Zed's keymap and its macOS overrides, as Zed binds it.
 pub fn load(cx: &mut App) {
-    let bindings = default_bindings(cx);
+    let vim = VimModeSetting::is_enabled(cx) || HelixModeSetting::is_enabled(cx);
+    let mut bindings = bindings_in(settings::DEFAULT_KEYMAP_PATH, KeybindSource::Default, cx);
+    if vim {
+        bindings.extend(vim_bindings(cx));
+    }
+    bindings.extend(bindings_in(
+        settings::SPECIFIC_OVERRIDES_KEYMAP_PATH,
+        KeybindSource::Default,
+        cx,
+    ));
     cx.bind_keys(bindings);
 }
 
-/// Zed's default macOS keymap, without [`FileActions`]. Bindings for actions from Zed crates Lo
-/// doesn't include (the agent, terminal, debugger and so on) are skipped.
-fn default_bindings(cx: &App) -> Vec<KeyBinding> {
-    let mut all = Vec::new();
-    for path in [
-        settings::DEFAULT_KEYMAP_PATH,
-        settings::SPECIFIC_OVERRIDES_KEYMAP_PATH,
-    ] {
-        let content = util::asset_str::<SettingsAssets>(path);
-        let bindings = match KeymapFile::load(&content, cx) {
-            KeymapFileLoadResult::Success { key_bindings } => key_bindings,
-            KeymapFileLoadResult::SomeFailedToLoad {
-                key_bindings,
-                error_message,
-            } => {
-                log::debug!(
-                    "skipped bindings in {path} for actions Lo doesn't have: {error_message}"
-                );
-                key_bindings
-            }
-            KeymapFileLoadResult::JsonParseFailure { error } => {
-                log::error!("can't parse {path}: {error:#}");
-                continue;
-            }
-        };
-        all.extend(without_file_actions(bindings));
-    }
-    for binding in &mut all {
-        binding.set_meta(KeybindSource::Default.meta());
-    }
-    all
+/// Vim's keymap, as [`load`] binds it when vim is on.
+pub(crate) fn vim_bindings(cx: &App) -> Vec<KeyBinding> {
+    bindings_in(settings::VIM_KEYMAP_PATH, KeybindSource::Vim, cx)
 }
 
-/// Drops the bindings for [`FileActions`].
-fn without_file_actions(bindings: Vec<KeyBinding>) -> impl Iterator<Item = KeyBinding> {
+/// The keymap at `path` in Zed's assets, from `source`, without [`FileActions`] and
+/// [`TAKE_LOS_KEYS`]. Bindings for actions from Zed crates Lo doesn't include (the agent,
+/// terminal, debugger and so on) are skipped.
+fn bindings_in(path: &str, source: KeybindSource, cx: &App) -> Vec<KeyBinding> {
+    let content = util::asset_str::<SettingsAssets>(path);
+    let bindings = match KeymapFile::load(&content, cx) {
+        KeymapFileLoadResult::Success { key_bindings } => key_bindings,
+        KeymapFileLoadResult::SomeFailedToLoad {
+            key_bindings,
+            error_message,
+        } => {
+            log::debug!("skipped bindings in {path} for actions Lo doesn't have: {error_message}");
+            key_bindings
+        }
+        KeymapFileLoadResult::JsonParseFailure { error } => {
+            log::error!("can't parse {path}: {error:#}");
+            return Vec::new();
+        }
+    };
+    let mut bindings: Vec<KeyBinding> = without_dropped(bindings).collect();
+    for binding in &mut bindings {
+        binding.set_meta(source.meta());
+    }
+    bindings
+}
+
+/// Drops the bindings for [`FileActions`] and [`TAKE_LOS_KEYS`].
+fn without_dropped(bindings: Vec<KeyBinding>) -> impl Iterator<Item = KeyBinding> {
     let file_actions = FileActions::names();
     bindings.into_iter().filter(move |binding| {
         let name = binding.action().name();
-        let keep = !file_actions.contains(&name);
-        if !keep {
+        if file_actions.contains(&name) {
             log::debug!("not binding {name}: it opens, creates or writes files");
+            false
+        } else if TAKE_LOS_KEYS.contains(&name) {
+            log::debug!("not binding {name}: its keys are Lo's");
+            false
+        } else {
+            true
         }
-        keep
     })
 }
 
@@ -89,34 +107,118 @@ mod tests {
         });
     }
 
+    /// Zed's bindings in the keymap at `path`, unfiltered.
+    fn zeds(path: &str, cx: &App) -> Vec<KeyBinding> {
+        let content = util::asset_str::<SettingsAssets>(path);
+        match KeymapFile::load(&content, cx) {
+            KeymapFileLoadResult::Success { key_bindings }
+            | KeymapFileLoadResult::SomeFailedToLoad { key_bindings, .. } => key_bindings,
+            KeymapFileLoadResult::JsonParseFailure { error } => panic!("{error:#}"),
+        }
+    }
+
+    /// Asserts that `bindings` bind each key to its action.
+    fn assert_binds(bindings: &[KeyBinding], path: &str, keys: &[(&'static str, &str)]) {
+        for (key, action) in keys {
+            let keystrokes: Vec<Keystroke> = key
+                .split(' ')
+                .map(|key| Keystroke::parse(key).unwrap())
+                .collect();
+            assert!(
+                bindings.iter().any(|binding| {
+                    binding.action().name() == *action
+                        && binding.match_keystrokes(&keystrokes) == Some(false)
+                }),
+                "{path} no longer binds {key} to {action}"
+            );
+        }
+    }
+
     #[gpui::test]
-    fn zeds_keymap_binds_file_actions_that_lo_drops(cx: &mut TestAppContext) {
-        // Without the filter, these keys would open, create and save files.
+    fn zeds_keymaps_bind_actions_that_lo_drops(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            let content = util::asset_str::<SettingsAssets>(settings::DEFAULT_KEYMAP_PATH);
-            let key_bindings = match KeymapFile::load(&content, cx) {
-                KeymapFileLoadResult::Success { key_bindings }
-                | KeymapFileLoadResult::SomeFailedToLoad { key_bindings, .. } => key_bindings,
-                KeymapFileLoadResult::JsonParseFailure { error } => panic!("{error:#}"),
-            };
-            for (key, action) in [
+            let path = settings::DEFAULT_KEYMAP_PATH;
+            // Without the filter, these keys would open, create and save files.
+            let file_actions = [
                 ("cmd-o", "workspace::Open"),
                 ("cmd-n", "workspace::NewFile"),
                 ("cmd-s", "workspace::Save"),
                 ("cmd-shift-s", "workspace::SaveAs"),
                 ("cmd-alt-s", "workspace::SaveAll"),
                 ("cmd-shift-n", "workspace::NewWindow"),
-            ] {
-                let keystroke = Keystroke::parse(key).unwrap();
-                assert!(
-                    key_bindings.iter().any(|binding| {
-                        binding.action().name() == action
-                            && binding.match_keystrokes(std::slice::from_ref(&keystroke))
-                                == Some(false)
-                    }),
-                    "Zed's keymap no longer binds {key} to {action}"
-                );
-            }
+            ];
+            assert_binds(&zeds(path, cx), path, &file_actions);
+            // And these would take Lo's keys in the diff.
+            let newlines = [
+                ("cmd-enter", "editor::NewlineBelow"),
+                ("cmd-shift-enter", "editor::NewlineAbove"),
+            ];
+            assert_binds(&zeds(path, cx), path, &newlines);
+            let path = settings::VIM_KEYMAP_PATH;
+            let vim_file_actions = [
+                ("ctrl-w n", "workspace::NewFileSplitHorizontal"),
+                ("g f", "editor::OpenSelectedFilename"),
+            ];
+            assert_binds(&zeds(path, cx), path, &vim_file_actions);
+        });
+    }
+
+    #[gpui::test]
+    fn no_key_takes_los_keys_from_the_diff(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let bound: Vec<&str> = keymap
+                .bindings()
+                .map(|binding| binding.action().name())
+                .filter(|name| TAKE_LOS_KEYS.contains(name))
+                .collect();
+            assert!(bound.is_empty(), "bound to a key: {bound:?}");
+        });
+    }
+
+    /// The vim:: actions bound after loading with `vim_mode` set to `on`.
+    fn vim_actions_bound(on: bool, cx: &mut TestAppContext) -> Vec<&'static str> {
+        cx.update(|cx| {
+            let mut store = settings::SettingsStore::test(cx);
+            let result = store.set_user_settings(&format!(r#"{{ "vim_mode": {on} }}"#), cx);
+            assert_eq!(result.parse_status, settings::ParseStatus::Success);
+            cx.set_global(store);
+            cx.clear_key_bindings();
+            load(cx);
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            keymap
+                .bindings()
+                .map(|binding| binding.action().name())
+                .filter(|name| name.starts_with("vim::"))
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn vims_keys_load_only_when_vim_is_on(cx: &mut TestAppContext) {
+        assert_eq!(vim_actions_bound(false, cx), [""; 0]);
+        let bound = vim_actions_bound(true, cx);
+        for action in ["vim::Down", "vim::NextWordEnd", "vim::ToggleVisual"] {
+            assert!(bound.contains(&action), "{action} isn't bound");
+        }
+        // With vim's, still no key opens, creates or writes files.
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let file_actions = FileActions::names();
+            assert!(
+                !keymap
+                    .bindings()
+                    .any(|binding| file_actions.contains(&binding.action().name()))
+            );
+            // And vim's come from vim.
+            assert!(keymap.bindings().any(|binding| {
+                binding.action().name() == "vim::Down"
+                    && binding.meta() == Some(KeybindSource::Vim.meta())
+            }));
         });
     }
 

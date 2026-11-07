@@ -44,7 +44,8 @@ actions!(
 
 const KEY_CONTEXT: &str = "AccountsModal";
 
-/// The modal's keys, over Zed's. CLAUDE.md's "Keys" table lists them, with `review_ui`'s.
+/// The modal's keys, over Zed's and vim's: bind them after `review_ui::init`, which binds those.
+/// CLAUDE.md's "Keys" table lists them, with `review_ui`'s.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
@@ -57,11 +58,10 @@ struct AccountsUnavailable(SharedString);
 
 impl Global for AccountsUnavailable {}
 
-/// Opens Lo's database, loads the accounts and registers the modal's actions. Call it after
-/// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
-/// to `None` when the database couldn't be opened.
+/// Opens Lo's database, loads the accounts and registers the modal's actions, but binds no keys
+/// ([`bind_keys`]). Call it after the app's HTTP client is set. The task resolves to the loaded
+/// accounts and their database, or to `None` when the database couldn't be opened.
 pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
-    bind_keys(cx);
     // The app menu enables an item only when something on the focused element's path handles
     // its action, and before anything in the window is focused nothing is. This handler keeps
     // "Accounts…" working then. It runs while the window that dispatched the action is being
