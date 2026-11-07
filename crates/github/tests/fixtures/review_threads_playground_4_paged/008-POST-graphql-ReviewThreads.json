@@ -1,0 +1,94 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "ReviewThreads",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 4,
+      "first": 2,
+      "after": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzo1M1rOtJeR2A=="
+    },
+    "query_sha256": "7d14f100036b097a04cba24629cc0bb6cf8c9b4273151a6c40251ef7c599ac52"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4979",
+      "x-ratelimit-reset": "1794024852",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "21"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4979,
+          "used": 21,
+          "resetAt": "2026-11-07T04:14:12Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "totalCount": 15,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzo1NFrOtJeSMg=="
+              },
+              "nodes": [
+                {
+                  "id": "PRRT_kwDOVk6v9M60l5Iy",
+                  "path": "review.txt",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": 11,
+                  "startLine": 11,
+                  "originalLine": 11,
+                  "originalStartLine": null,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzo1NFrPAAAAAQvphCA="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-mEIA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 1 extra: later thread on R3 (started on c2), line 11",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:23:54Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494820384",
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

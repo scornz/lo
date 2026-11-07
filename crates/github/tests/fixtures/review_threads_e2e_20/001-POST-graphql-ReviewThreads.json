@@ -1,0 +1,138 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "ReviewThreads",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 20,
+      "first": 100,
+      "after": null
+    },
+    "query_sha256": "7d14f100036b097a04cba24629cc0bb6cf8c9b4273151a6c40251ef7c599ac52"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4912",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "88"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4912,
+          "used": 88,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "totalCount": 2,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwMjoxNToxMlrOtMNzhA=="
+              },
+              "nodes": [
+                {
+                  "id": "PRRT_kwDOVleUfc60w3N_",
+                  "path": "e9/api/names.ts",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": 10,
+                  "startLine": 10,
+                  "originalLine": 10,
+                  "originalStartLine": null,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwMjoxNToxMlrPAAAAAQwxwp8="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVleUfc8AAAABDDHCnw",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Fixture E9: a thread on a moved line. Lo shows it under this line in the diff and in the syntax-aware view.",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-07T02:15:12Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/20#discussion_r4499554975",
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6"
+                        },
+                        "originalCommit": {
+                          "oid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOVleUfc60w3OE",
+                  "path": "e9/api/user.ts",
+                  "subjectType": "LINE",
+                  "diffSide": "LEFT",
+                  "startDiffSide": null,
+                  "line": 26,
+                  "startLine": 26,
+                  "originalLine": 26,
+                  "originalStartLine": null,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwMjoxNToxMlrPAAAAAQwxwqg="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVleUfc8AAAABDDHCqA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Fixture E9: a thread on a line only the old side has.",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-07T02:15:12Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/20#discussion_r4499554984",
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6"
+                        },
+                        "originalCommit": {
+                          "oid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

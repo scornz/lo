@@ -1,0 +1,48 @@
+# A review thread's comments after the first ReviewThreads read, $first a page.
+query ReviewThreadComments($id: ID!, $first: Int!, $after: String) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  node(id: $id) {
+    __typename
+    ... on PullRequestReviewThread {
+      comments(first: $first, after: $after) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          ...ReviewComment
+        }
+      }
+    }
+  }
+}
+
+# Kept the same as in review_threads.graphql.
+fragment ReviewComment on PullRequestReviewComment {
+  id
+  # Null for a deleted account.
+  author {
+    __typename
+    login
+  }
+  body
+  state
+  createdAt
+  url
+  viewerCanUpdate
+  viewerCanDelete
+  # Null once GitHub no longer has the commit.
+  commit {
+    oid
+  }
+  originalCommit {
+    oid
+  }
+}

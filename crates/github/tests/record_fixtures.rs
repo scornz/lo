@@ -681,3 +681,65 @@ fn stacks_cli() {
         },
     );
 }
+
+/// Records `owner/repo`'s requests that `run` makes, noting the schema.
+fn record_repo<F: Future<Output = ()>>(
+    name: &str,
+    description: &str,
+    repo: &str,
+    run: impl FnOnce(GithubClient) -> F,
+) {
+    record_with_schema(name, description, repo, schema_commit(), run);
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn review_threads_fd_2212() {
+    record_repo(
+        "review_threads_fd_2212",
+        "sharkdp/fd#2212's review threads as rozed-bot, read only: a maintainer's \
+         changes-requested review on the first push, six threads and seven comments, all outdated \
+         by the second push",
+        "sharkdp/fd",
+        |client| async move {
+            let pull = PullRef::new("sharkdp", "fd", 2212);
+            let threads = client.review_threads(&pull).await.unwrap();
+            assert!(!threads.nodes.is_empty());
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn review_threads_playground_4_paged() {
+    record_graphql(
+        "review_threads_playground_4_paged",
+        "The playground's PR #4 (review checks, closed), whose 15 threads came from \
+         docs/research/review-api-checks.md, read two threads a page, each with two comments, \
+         and the rest of a longer thread's comments two a page",
+        |client| async move {
+            let pull = PullRef::new("rozed-dev", "playground", 4);
+            let threads = client.review_threads_paged(&pull, 2).await.unwrap();
+            assert!(threads.nodes.len() > 2);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn review_threads_e2e_20() {
+    record_repo(
+        "review_threads_e2e_20",
+        "rozed-dev/e2e#20 (E9, script/e2e/README.md): rozed-bot's COMMENT review with two \
+         threads, on a moved line and on a line only the old side has; then rozed-bot's pending \
+         review, which it has none of",
+        "rozed-dev/e2e",
+        |client| async move {
+            let pull = PullRef::new("rozed-dev", "e2e", 20);
+            let threads = client.review_threads(&pull).await.unwrap();
+            assert_eq!(threads.nodes.len(), 2);
+            let pending = client.pending_review(&pull, BOT).await.unwrap();
+            assert_eq!(pending.review, None);
+        },
+    );
+}

@@ -1,0 +1,27 @@
+# The signed-in user's pending review, if they have one: GitHub keeps at most one per person per
+# pull request, and only its author sees it (design §8, "Reviews").
+query PendingReview($owner: String!, $name: String!, $number: Int!, $login: String!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(states: [PENDING], author: $login, first: 1) {
+        nodes {
+          id
+          # Null once GitHub no longer has the commit.
+          commit {
+            oid
+          }
+          comments {
+            totalCount
+          }
+        }
+      }
+    }
+  }
+}

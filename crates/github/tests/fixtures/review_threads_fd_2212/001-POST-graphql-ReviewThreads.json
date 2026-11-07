@@ -1,0 +1,333 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "ReviewThreads",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2212,
+      "first": 100,
+      "after": null
+    },
+    "query_sha256": "7d14f100036b097a04cba24629cc0bb6cf8c9b4273151a6c40251ef7c599ac52"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4919",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "81"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4919,
+          "used": 81,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "totalCount": 6,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODo1NjoyNFrOswrisg=="
+              },
+              "nodes": [
+                {
+                  "id": "PRRT_kwDOBWllys6zCIyH",
+                  "path": ".github/workflows/CICD.yml",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 187,
+                  "originalStartLine": null,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODoyNjoxMFrPAAAAAQlhhIY="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWGEhg",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "I'm a little wary of using this variable name as a future version of cargo might use it, possibly with different syntax. ",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:26:10Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452353158",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOBWllys6zCTfd",
+                  "path": "scripts/build-features.sh",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": "RIGHT",
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 21,
+                  "originalStartLine": 20,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODozNToxMFrPAAAAAQlil5E="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWKXkQ",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "```suggestion\n```",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:35:10Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452423569",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOBWllys6zCWtD",
+                  "path": ".github/workflows/CICD.yml",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 64,
+                  "originalStartLine": null,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODozNzo1M1rPAAAAAQli6Wo="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWLpag",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "why sh and not bash? \n\nEvery environment CI runs on has bash.",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:37:53Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452444522",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOBWllys6zCfe3",
+                  "path": "scripts/test-build-features.sh",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": "RIGHT",
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 44,
+                  "originalStartLine": 36,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODo0NDo0MlrPAAAAAQljyYk="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWPJiQ",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "This test doesn't seem very useful. And I'm suspicious it was AI generated.",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:44:42Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452501897",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOBWllys6zCidw",
+                  "path": "Makefile",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 3,
+                  "originalStartLine": null,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwODo0NzoxMFrPAAAAAQlkFf4="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWQV_g",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "we're invoking the shell twice here. I think this could just be\n```suggestion\nFEATURES?=$(shell . scripts/build-features.sh)\n```",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:47:10Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452521470",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOBWllys6zCuKy",
+                  "path": "Makefile",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": null,
+                  "startLine": null,
+                  "originalLine": 17,
+                  "originalStartLine": null,
+                  "isOutdated": true,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": false,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 2,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wM1QwOTowMToxM1rPAAAAAQll3tQ="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWU9WA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "Why? \n\nThe target isn't going to change between runs. ",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T08:56:24Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452597080",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      },
+                      {
+                        "id": "PRRC_kwDOBWllys8AAAABCWXe1A",
+                        "author": {
+                          "__typename": "User",
+                          "login": "tmccombs"
+                        },
+                        "body": "If it is so that it rebuilds if CARGO_BUILD_TARGET changes, I think a better way to handle that is to do something like conditionally write the value of `CARGO_BUILD_TARGET` to a file if it doesn't match the current value in the file, and have $(EXE) depend on that file. \n\nOr maybe configure the target-dir to be somekthing else if `CARGO_BUILD_TARGET` is set (that includes the build target in it).",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-03T09:01:13Z",
+                        "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452638420",
+                        "viewerCanUpdate": false,
+                        "viewerCanDelete": false,
+                        "commit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        },
+                        "originalCommit": {
+                          "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
