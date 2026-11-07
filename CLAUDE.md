@@ -163,6 +163,17 @@ the same keystrokes, or one's starting the other's, the crate's `OVER_VIM` lists
 wins, and `UNDER_VIM` vim's when vim's wins, and the row here says which vim meaning is lost. Vim's
 own keys (`j`, `k`, `w`, `b`, `gg`, `G`, `v` and the rest) aren't listed.
 
+Vim may not run a shell, touch files on disk or type in the diff (`review_ui::vim_mode::refusals`).
+Lo's command palette interceptor goes over vim's, gives it no workspace, so it lists no folders
+on disk, and swaps each refused `:` command for one whose toast says why: `:!`, `:r !` and `!`
+filters; `:w`, `:wq`, `:x`, `:up`, `:wa`, `:e`, `:r`, `:sp`, `:vs` and `:tabe` with a path,
+`:new` and `:rev`; and `:g` and `:norm`, which run other commands. Every editor also captures
+those actions before vim's handlers on it can run them, whatever dispatched them, a workspace
+runs no terminal or task, and vim's `!` and `ZZ` aren't bound. In the diff, vim's keys that start
+insert or replace mode (`i`, `a`, `o`, `c`, `s`, `R` and the rest) do nothing; a text box made with
+`vim_mode::modal` keeps them. Vim's `g x` opens the link at the cursor only if it's `http` or
+`https` (`review_ui::links`).
+
 Where a key works, in the PR tab (`crates/review_ui/src/pr_tab/keys.rs`): *tab* is anywhere in it
 (`KEY_CONTEXT`), *reading* is the tab outside any text box in it (`READING_CONTEXT`), *diff* is the
 diff's editors, both sides, which add `PrDiff` to their context (`DIFF_CONTEXT`), and *file list*
