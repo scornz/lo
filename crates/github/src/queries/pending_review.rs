@@ -47,14 +47,12 @@ pub struct PendingReviewNode {
 }
 
 impl ViewerPendingReview {
-    /// Your pending review as `review::pending` takes it. One on a commit GitHub no longer has
-    /// is recorded on no revision Lo shows, so its commit is empty, which names none: it submits
-    /// only as a comment.
+    /// Your pending review as `review::pending` takes it.
     pub fn pending_review(&self) -> Option<Pending> {
         let review = self.review.as_ref()?;
         Some(Pending {
             id: review.id.clone(),
-            commit: review.commit.clone().unwrap_or_default(),
+            commit: review.commit.clone(),
             comments: review.comments,
         })
     }
@@ -71,13 +69,16 @@ impl CacheEntry for ViewerPendingReview {
 impl CachedRead for ViewerPendingReview {
     /// Only you change your pending review, and the check holds its comment count, or nothing
     /// when you have none, so starting, adding to, submitting or deleting it from anywhere moves
-    /// it.
+    /// it. The check's is only a trigger: it asks for any pending review it can see, while this
+    /// asks for yours by login, so the count the UI shows is this one's.
     const WATCHED: &'static [&'static str] = &["/viewerPendingReview"];
 }
 
 impl GithubClient {
     /// The pending review the user with login `login` has on `pull`, if any. `login` is the
-    /// signed-in user's: nobody else's pending review can be read.
+    /// signed-in user's: nobody else's pending review can be read. An error that leaves out the
+    /// reviews, rather than a field of yours, fails the read, so it's never taken for having
+    /// none.
     pub async fn pending_review(
         &self,
         pull: &PullRef,
@@ -91,18 +92,15 @@ impl GithubClient {
                     number: pull.number,
                     login: login.to_string(),
                 },
-                2,
+                3,
             )
             .await?
             .repository
             .and_then(|repository| repository.pull_request)
             .ok_or_else(|| not_found(format!("pull request {pull}")))?
-            .reviews;
-        let node = (reviews.and_then(|reviews| reviews.nodes))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .next();
+            .reviews
+            .ok_or_else(|| GithubError::Decode("GitHub didn't list the pending reviews".into()))?;
+        let node = (reviews.nodes.into_iter().flatten().flatten()).next();
         Ok(ViewerPendingReview {
             review: node.map(|node| PendingReviewNode {
                 id: node.id,
@@ -140,7 +138,7 @@ mod tests {
             read.pending_review(),
             Some(Pending {
                 id: "PRR_kwDOAbc".into(),
-                commit: "c7f30e9b1a5d7c3e9f1b5d7a3c9e1f5b7d3a9c62".into(),
+                commit: Some("c7f30e9b1a5d7c3e9f1b5d7a3c9e1f5b7d3a9c62".into()),
                 comments: 2,
             })
         );

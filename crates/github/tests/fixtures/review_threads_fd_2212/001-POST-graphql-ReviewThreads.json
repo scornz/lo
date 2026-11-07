@@ -10,26 +10,26 @@
       "first": 100,
       "after": null
     },
-    "query_sha256": "7d14f100036b097a04cba24629cc0bb6cf8c9b4273151a6c40251ef7c599ac52"
+    "query_sha256": "c48252f9340f734e8ad9f51a8be4878dfb79ecc1886d2314dfaeab17fa9a5145"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4919",
-      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-remaining": "4975",
+      "x-ratelimit-reset": "1794031052",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "81"
+      "x-ratelimit-used": "25"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4919,
-          "used": 81,
-          "resetAt": "2026-11-07T04:10:20Z"
+          "remaining": 4975,
+          "used": 25,
+          "resetAt": "2026-11-07T05:57:32Z"
         },
         "repository": {
           "pullRequest": {
@@ -72,6 +72,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:26:10Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452353158",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -116,6 +118,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:35:10Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452423569",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -160,6 +164,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:37:53Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452444522",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -204,6 +210,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:44:42Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452501897",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -248,6 +256,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:47:10Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452521470",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -292,6 +302,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T08:56:24Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452597080",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {
@@ -311,6 +323,8 @@
                         "state": "SUBMITTED",
                         "createdAt": "2026-11-03T09:01:13Z",
                         "url": "https://github.com/sharkdp/fd/pull/2212#discussion_r4452638420",
+                        "isMinimized": false,
+                        "minimizedReason": null,
                         "viewerCanUpdate": false,
                         "viewerCanDelete": false,
                         "commit": {

@@ -36,6 +36,8 @@ fragment ReviewComment on PullRequestReviewComment {
   state
   createdAt
   url
+  isMinimized
+  minimizedReason
   viewerCanUpdate
   viewerCanDelete
   # Null once GitHub no longer has the commit.

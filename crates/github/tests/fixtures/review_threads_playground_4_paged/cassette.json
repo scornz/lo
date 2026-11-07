@@ -1,6 +1,6 @@
 {
   "description": "The playground's PR #4 (review checks, closed), whose 15 threads came from docs/research/review-api-checks.md, read two threads a page, each with two comments, and the rest of a longer thread's comments two a page",
-  "recorded_at": "2026-11-07T04:04:09Z",
+  "recorded_at": "2026-11-07T05:17:00Z",
   "repo": "rozed-dev/playground",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

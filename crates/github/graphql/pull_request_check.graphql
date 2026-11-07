@@ -66,9 +66,12 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
           }
         }
       }
-      # Your pending review, which only you can see: none, or one with its comments.
+      # Your pending review, which only you can see: none, or one with its comments. Only a
+      # trigger: the pending review's count comes from PendingReview, which asks for yours by
+      # login.
       viewerPendingReview: reviews(states: [PENDING], first: 1) {
         nodes {
+          viewerDidAuthor
           comments {
             totalCount
           }

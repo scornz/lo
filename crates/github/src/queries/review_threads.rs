@@ -42,6 +42,9 @@ pub struct ReviewThreadList {
     /// The threads as GitHub gives them. [`Self::threads`] maps them for `review`.
     #[schemars(with = "Vec<serde_json::Value>")]
     pub nodes: Vec<ReviewThread>,
+    /// How many threads and comments GitHub left out with an error, keeping the rest. The list
+    /// isn't complete while any are, so it's read again after a wait.
+    pub missing: usize,
 }
 
 impl ReviewThreadList {
@@ -125,6 +128,7 @@ impl ReviewComment {
             },
             created_at: SystemTime::from(self.created_at),
             url: self.url.clone(),
+            hidden: (self.is_minimized).then(|| self.minimized_reason.clone().unwrap_or_default()),
             viewer_can_update: self.viewer_can_update,
             viewer_can_delete: self.viewer_can_delete,
         }
@@ -145,12 +149,20 @@ impl CacheEntry for ReviewThreadList {
 }
 
 impl CachedRead for ReviewThreadList {
-    /// A push moves threads and makes some outdated. A new or deleted thread moves the count, a
-    /// reply or a deleted comment the comment count of its thread, and resolving one its state:
-    /// the check holds both for the first 100 threads. Edits show on the 5-minute refresh, and
-    /// so do replies to threads past the first 100. A comment on the pull request itself, a
-    /// review without comments, or a label changes none of them.
-    const WATCHED: &'static [&'static str] = &["/headRefOid", "/reviewThreads"];
+    /// A push moves threads and makes some outdated. A new or deleted thread anywhere moves the
+    /// count, a reply or a deleted comment the comment count of its thread, and resolving one its
+    /// state: the check holds both for the first 100 threads. Your pending review holds your
+    /// pending threads and replies, which are posted when you submit it, from Lo or anywhere else.
+    /// Edits show on the 5-minute refresh, and so do replies to threads past the first 100. A
+    /// comment on the pull request itself, a review without comments, or a label changes none of
+    /// them.
+    const WATCHED: &'static [&'static str] =
+        &["/headRefOid", "/reviewThreads", "/viewerPendingReview"];
+
+    /// Whether GitHub gave every thread and comment.
+    fn is_complete(&self) -> bool {
+        self.missing == 0
+    }
 }
 
 impl GithubClient {
@@ -168,6 +180,7 @@ impl GithubClient {
     ) -> Result<ReviewThreadList, GithubError> {
         let (owner, name, number) = (&pull.repo.owner, &pull.repo.name, pull.number);
         let mut nodes = Vec::new();
+        let mut missing = 0;
         let mut after = None;
         let mut pager = None;
         loop {
@@ -190,7 +203,12 @@ impl GithubClient {
             let pager = pager.get_or_insert_with(|| {
                 Pager::new("review threads", threads.total_count, page_size)
             });
-            nodes.extend(threads.nodes.into_iter().flatten().flatten());
+            for node in threads.nodes.into_iter().flatten() {
+                match node {
+                    Some(node) => nodes.push(node),
+                    None => missing += 1,
+                }
+            }
             after = pager.next(
                 threads.page_info.has_next_page,
                 threads.page_info.end_cursor,
@@ -202,7 +220,14 @@ impl GithubClient {
         for thread in &mut nodes {
             self.read_other_comments(thread, page_size).await?;
         }
-        Ok(ReviewThreadList { nodes })
+        missing += (nodes.iter())
+            .flat_map(|thread| thread.comments.nodes.iter().flatten())
+            .filter(|comment| comment.is_none())
+            .count();
+        if missing > 0 {
+            log::warn!("GitHub left out {missing} review threads and comments of {pull}");
+        }
+        Ok(ReviewThreadList { nodes, missing })
     }
 
     /// Reads the comments of `thread` past the ones its page held.
@@ -234,10 +259,10 @@ impl GithubClient {
                 return Err(not_found(format!("review thread {}", thread.id)));
             };
             let page = node.comments;
-            let more = (page.nodes.into_iter().flatten().flatten())
-                .map(|comment| same_comment(&comment))
+            let more = (page.nodes.into_iter().flatten())
+                .map(|comment| comment.map(|comment| same_comment(&comment)).transpose())
                 .collect::<Result<Vec<_>, _>>()?;
-            (comments.nodes.get_or_insert_with(Vec::new)).extend(more.into_iter().map(Some));
+            (comments.nodes.get_or_insert_with(Vec::new)).extend(more);
             comments.page_info.has_next_page = page.page_info.has_next_page;
             comments.page_info.end_cursor = page.page_info.end_cursor;
             after = pager.next(

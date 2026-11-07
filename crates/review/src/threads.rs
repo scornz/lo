@@ -265,6 +265,10 @@ pub struct ThreadComment {
     pub created_at: SystemTime,
     /// `url`: where it is on GitHub.
     pub url: String,
+    /// Why it's hidden, when someone hid it (`isMinimized`): `minimizedReason`, such as
+    /// `outdated` or `spam`, or an empty string when GitHub gives none. GitHub shows a hidden
+    /// comment collapsed.
+    pub hidden: Option<String>,
     /// `viewerCanUpdate`: whether you can edit it.
     pub viewer_can_update: bool,
     /// `viewerCanDelete`: whether you can delete it.
@@ -406,6 +410,7 @@ mod tests {
             state,
             created_at: SystemTime::UNIX_EPOCH,
             url: "https://github.com/octo/repo/pull/1#discussion_r1".to_string(),
+            hidden: None,
             viewer_can_update: true,
             viewer_can_delete: true,
         };

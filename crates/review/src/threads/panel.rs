@@ -52,6 +52,7 @@ mod tests {
             state: CommentState::Submitted,
             created_at: SystemTime::UNIX_EPOCH,
             url: "https://github.com/octo/repo/pull/1#discussion_r1".to_string(),
+            hidden: None,
             viewer_can_update: false,
             viewer_can_delete: false,
         }

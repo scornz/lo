@@ -8,26 +8,26 @@
       "first": 2,
       "after": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMTowN1rPAAAAAQvpCFw="
     },
-    "query_sha256": "0198347a8a95d4ccdf25a58973beb9e75168fc295025be0b1ff144610534cbca"
+    "query_sha256": "6d55325255c34ce01f889440e20742d80f24181076081562b07b9295f01c8b60"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4978",
-      "x-ratelimit-reset": "1794024852",
+      "x-ratelimit-remaining": "4988",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "22"
+      "x-ratelimit-used": "12"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4978,
-          "used": 22,
-          "resetAt": "2026-11-07T04:14:12Z"
+          "remaining": 4988,
+          "used": 12,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "node": {
           "__typename": "PullRequestReviewThread",
@@ -48,6 +48,8 @@
                 "state": "SUBMITTED",
                 "createdAt": "2026-11-06T16:21:53Z",
                 "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494798365",
+                "isMinimized": false,
+                "minimizedReason": null,
                 "viewerCanUpdate": true,
                 "viewerCanDelete": true,
                 "commit": {

@@ -12,9 +12,11 @@
 use std::sync::Arc;
 
 use futures::executor::block_on;
+use github::cassette::{Interaction, fixtures_dir, read_cassette};
+use github::poll::CachedRead;
 use github::queries::ReviewThreadList;
 use github::replay::ReplayHttpClient;
-use github::{GithubClient, PullRef, Token};
+use github::{GithubClient, GithubError, PullRef, Token};
 use review::threads::{
     CommentState, DiffSide, Line, Lines, Placement, Screen, Subject, Thread, place,
 };
@@ -86,6 +88,7 @@ fn fd_2212s_threads_are_outdated_by_the_second_push() {
         for comment in &thread.comments {
             assert_eq!(comment.author.as_deref(), Some("tmccombs"));
             assert_eq!(comment.state, CommentState::Submitted);
+            assert_eq!(comment.hidden, None);
             assert!(!comment.viewer_can_update && !comment.viewer_can_delete);
             assert!(
                 (comment.url).starts_with("https://github.com/sharkdp/fd/pull/2212#discussion_r"),
@@ -254,4 +257,68 @@ fn e9s_threads_show_on_the_moved_line_and_the_line_only_the_old_side_has() {
         place(deleted, &Screen::between(parent, head)),
         Placement::NotOnScreen
     );
+}
+
+/// `review_threads_e2e_20`'s answer to `operation`, with `edit` made to its body.
+fn edited(operation: &str, edit: impl FnOnce(&mut serde_json::Value)) -> Arc<ReplayHttpClient> {
+    let (_, interactions) = read_cassette(&fixtures_dir().join("review_threads_e2e_20")).unwrap();
+    let mut interaction: Interaction = (interactions.into_iter())
+        .map(|(_, interaction)| interaction)
+        .find(|interaction| interaction.request.operation.as_deref() == Some(operation))
+        .unwrap();
+    edit(interaction.response.body.as_mut().unwrap());
+    Arc::new(ReplayHttpClient::from_interactions(operation, [interaction]).unwrap())
+}
+
+#[test]
+fn threads_github_leaves_out_make_the_list_incomplete() {
+    // An error nulls the first thread, and the second thread's comment.
+    let http = edited("ReviewThreads", |body| {
+        let threads = &mut body["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];
+        threads[0] = serde_json::Value::Null;
+        threads[1]["comments"]["nodes"][0] = serde_json::Value::Null;
+        body["errors"] = serde_json::json!([
+            {"message": "Something went wrong", "path": ["repository", "pullRequest", "reviewThreads", "nodes", 0]},
+            {"message": "Something went wrong", "path": ["repository", "pullRequest", "reviewThreads", "nodes", 1, "comments", "nodes", 0]}
+        ]);
+    });
+    let client = GithubClient::new(http, Token::new("gho_FAKE"));
+    let list = block_on(client.review_threads(&PullRef::new("rozed-dev", "e2e", 20))).unwrap();
+    assert_eq!(list.missing, 2);
+    assert!(!list.is_complete());
+    let threads = list.threads();
+    assert_eq!(threads.len(), 1);
+    assert!(threads[0].comments.is_empty());
+
+    let whole = block_on(client_for("review_threads_e2e_20").review_threads(&e9())).unwrap();
+    assert!(whole.is_complete());
+}
+
+fn client_for(cassette: &str) -> GithubClient {
+    client(cassette).0
+}
+
+fn e9() -> PullRef {
+    PullRef::new("rozed-dev", "e2e", 20)
+}
+
+#[test]
+fn a_pending_review_github_leaves_out_isnt_taken_for_none() {
+    let refused = edited("PendingReview", |body| {
+        body["data"]["repository"]["pullRequest"]["reviews"] = serde_json::Value::Null;
+        body["errors"] = serde_json::json!([
+            {"message": "Something went wrong", "path": ["repository", "pullRequest", "reviews"]}
+        ]);
+    });
+    let client = GithubClient::new(refused, Token::new("gho_FAKE"));
+    assert!(block_on(client.pending_review(&e9(), BOT)).is_err());
+
+    let unlisted = edited("PendingReview", |body| {
+        body["data"]["repository"]["pullRequest"]["reviews"] = serde_json::Value::Null;
+    });
+    let client = GithubClient::new(unlisted, Token::new("gho_FAKE"));
+    assert!(matches!(
+        block_on(client.pending_review(&e9(), BOT)),
+        Err(GithubError::Decode(_))
+    ));
 }

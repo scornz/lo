@@ -128,7 +128,7 @@ fn a_check_counts_its_unresolved_threads() {
                 {"isResolved": false, "comments": {"totalCount": 1}}
             ]
         },
-        "viewerPendingReview": {"nodes": [{"comments": {"totalCount": 1}}]},
+        "viewerPendingReview": {"nodes": [{"viewerDidAuthor": true, "comments": {"totalCount": 1}}]},
         "comments": {"totalCount": 0},
         "changedFiles": 1,
         "lastEditedAt": null,

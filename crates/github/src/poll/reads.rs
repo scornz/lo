@@ -251,8 +251,9 @@ mod tests {
             "totalCount": 1,
             "nodes": [{"isResolved": false, "comments": {"totalCount": 1}}]
         });
-        check["viewerPendingReview"] =
-            serde_json::json!({"nodes": [{"comments": {"totalCount": 1}}]});
+        check["viewerPendingReview"] = serde_json::json!({
+            "nodes": [{"viewerDidAuthor": true, "comments": {"totalCount": 1}}]
+        });
         check
     }
 
@@ -340,19 +341,28 @@ mod tests {
             add(&mut check["timelineEvents"]["filteredCount"], 1);
         });
         assert_eq!(pushed, [true, false, true]);
-        // You add to your pending review, from Lo or from GitHub's web pages.
+        // You add to your pending review, from Lo or from GitHub's web pages: the threads hold
+        // your pending comments too.
         let pending = read_again(|check| {
             add(
                 &mut check["viewerPendingReview"]["nodes"][0]["comments"]["totalCount"],
                 1,
             );
         });
-        assert_eq!(pending, [false, true, false]);
+        assert_eq!(pending, [true, true, false]);
         // You delete it.
         let deleted = read_again(|check| {
             check["viewerPendingReview"]["nodes"] = serde_json::json!([]);
         });
-        assert_eq!(deleted, [false, true, false]);
+        assert_eq!(deleted, [true, true, false]);
+        // You submit it: its comments are posted, though no count of the threads moves.
+        let submitted = read_again(|check| {
+            check["viewerPendingReview"]["nodes"] = serde_json::json!([]);
+            add(&mut check["submittedReviews"]["totalCount"], 1);
+            add(&mut check["timelineEvents"]["filteredCount"], 1);
+            check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(submitted, [true, true, true]);
     }
 
     #[test]

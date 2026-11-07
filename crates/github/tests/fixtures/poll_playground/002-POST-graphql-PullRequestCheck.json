@@ -8,26 +8,26 @@
       "name": "playground",
       "number": 1
     },
-    "query_sha256": "404c2aa1f51a65bc4e985aff15c3f38a5455adef73ac7972e6a6f2eec56e4d93"
+    "query_sha256": "ac60175b0801cac9e8d49be73f236d916d35795a5ce5ef1971e0a672a1fcb9ba"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4982",
-      "x-ratelimit-reset": "1794024852",
+      "x-ratelimit-remaining": "4999",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "18"
+      "x-ratelimit-used": "1"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4982,
-          "used": 18,
-          "resetAt": "2026-11-07T04:14:12Z"
+          "remaining": 4999,
+          "used": 1,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "repository": {
           "pullRequest": {

@@ -88,6 +88,7 @@ fn thread(node: Node) -> Thread {
                 state: state.parse().unwrap(),
                 created_at: at(40 + index as u64),
                 url: format!("https://github.com/bob/parse/pull/7#discussion_r{index}"),
+                hidden: None,
                 viewer_can_update: *author == "alice",
                 viewer_can_delete: *author == "alice",
             })
@@ -451,7 +452,7 @@ fn alice_reviews_r3_and_approves() {
         ]
     );
     assert_eq!(dialog.pending_comments, 4);
-    assert_eq!((dialog.on.as_str(), dialog.on_screen), (R3, true));
+    assert_eq!((dialog.on.as_deref(), dialog.on_screen), (Some(R3), true));
     let submit = review.submit(ReviewEvent::Approve, "", false, R3).unwrap();
     assert_eq!(
         submit,
@@ -491,7 +492,7 @@ fn a_pending_review_started_before_a_push_keeps_its_revision() {
     let revisions = revisions();
     let review = YourReview::new(Some(PendingReview {
         id: "PRR_kwDOAbc".to_string(),
-        commit: R2.to_string(),
+        commit: Some(R2.to_string()),
         comments: 2,
     }));
     let screen = Screen::between(R2, R3);
@@ -529,12 +530,15 @@ fn a_pending_review_started_before_a_push_keeps_its_revision() {
     // The dialog says the review is recorded on r2, so it won't approve r3 with it: GitHub would
     // record approving r2. It still submits it as a comment.
     let dialog = review.submit_dialog("alice", false, R3);
-    assert_eq!(revisions.label(&dialog.on).as_deref(), Some("r2"));
+    assert_eq!(
+        revisions.label(dialog.on.as_deref().unwrap()).as_deref(),
+        Some("r2")
+    );
     assert!(!dialog.on_screen);
     assert_eq!(
         review.submit(ReviewEvent::Approve, "", false, R3),
         Err(Refusal::OtherRevision {
-            review_on: R2.to_string(),
+            review_on: Some(R2.to_string()),
         })
     );
     assert!(matches!(
@@ -695,7 +699,7 @@ fn erin_comments_on_r2_after_r3_was_pushed() {
         }
     );
     review.accepted(&start, Some("PRR_erin"));
-    assert_eq!(review.pending().unwrap().commit, R2);
+    assert_eq!(review.pending().unwrap().commit.as_deref(), Some(R2));
 
     // Another line comment on r2 would land on r3, so it's refused, and the UI offers to submit
     // the review or switch to r3, where it joins.
@@ -714,7 +718,7 @@ fn erin_comments_on_r2_after_r3_was_pushed() {
     assert_eq!(
         review.submit(ReviewEvent::Approve, "", false, R3),
         Err(Refusal::OtherRevision {
-            review_on: R2.to_string(),
+            review_on: Some(R2.to_string()),
         })
     );
     assert!(review.submit(ReviewEvent::Approve, "", false, R2).is_ok());
