@@ -7,7 +7,7 @@ use gpui::{AnyElement, App, Context, Div, KeyBinding, Window, actions, px, unifo
 use review::revisions::ViewedState;
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 
-use super::keys::{FILE_LIST_CONTEXT, KEY_CONTEXT, reading};
+use super::keys::{FILE_LIST_CONTEXT, KEY_CONTEXT, READING_CONTEXT};
 use super::{PartView, PrTab};
 use crate::file_list::{FileChange, FileOrder};
 
@@ -25,6 +25,8 @@ actions!(
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
+        // alt-o types ø. It orders the list, whatever the middle shows.
+        KeyBinding::new("alt-o", ToggleFileOrder, Some(READING_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // The workspace binds escape to stop following a collaborator.
         KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
@@ -32,8 +34,6 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("j", menu::SelectNext, Some(FILE_LIST_CONTEXT)),
         KeyBinding::new("k", menu::SelectPrevious, Some(FILE_LIST_CONTEXT)),
     ]);
-    // alt-o types ø.
-    cx.bind_keys(reading("alt-o", ToggleFileOrder));
 }
 
 /// The tab runs the file list's actions wherever their keys work.
@@ -44,7 +44,13 @@ pub(super) fn on_actions(root: Div, _: &PrTab, cx: &Context<PrTab>) -> Div {
 
 impl PrTab {
     /// Puts `tree`, the pull request's stack tree, above the file list, or takes it away.
-    pub fn set_stack_tree(&mut self, tree: Option<PartView>, cx: &mut Context<Self>) {
+    pub fn set_stack_tree(
+        &mut self,
+        tree: Option<PartView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_diff_from(self.stack_tree.as_ref(), window, cx);
         self.stack_tree = tree;
         cx.notify();
     }

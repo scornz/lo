@@ -55,7 +55,6 @@ mod right;
 mod viewed;
 
 pub use header::HeaderSlot;
-use keys::KEY_CONTEXT;
 pub(crate) use keys::bind_keys;
 pub use left::{ToggleFileList, ToggleFileOrder};
 pub use middle::{
@@ -1880,6 +1879,14 @@ impl PrTab {
         }
     }
 
+    /// Focuses the middle if `part`, which is about to hide or go, has focus, so keys keep
+    /// reaching the tab.
+    fn focus_diff_from(&self, part: Option<&PartView>, window: &mut Window, cx: &mut App) {
+        if part.is_some_and(|part| part.focus.contains_focused(window, cx)) {
+            self.focus_diff(window, cx);
+        }
+    }
+
     fn scroll_to_selected(&self) {
         if let Some(row) = self.files.selected_row() {
             self.file_list_scroll
@@ -2542,7 +2549,7 @@ impl Render for PrTab {
         let background = cx.theme().colors().editor_background;
         let github = self.diff_source == Some(DiffSource::GitHub);
         v_flex()
-            .key_context(KEY_CONTEXT)
+            .key_context(keys::tab_context(&self.middle))
             .track_focus(&self.focus_handle)
             // GitHub's diff has only the changed lines, so its excerpts can't grow.
             .when(github, |this| {
@@ -2649,6 +2656,10 @@ impl Item for PrTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Back and forward move the diff's cursor, so only while the diff shows.
+        if !self.middle.shows_diff() {
+            return false;
+        }
         match &self.diff {
             Some(diff) => diff.update(cx, |diff, cx| diff.navigate(data, window, cx)),
             None => false,

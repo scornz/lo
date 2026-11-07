@@ -31,6 +31,7 @@ mod keys;
 mod navigation;
 mod offline;
 mod open;
+mod parts;
 mod read_only;
 mod viewed;
 
@@ -293,6 +294,34 @@ fn details_at(head: &str, files: &[(&str, &str)]) -> PullRequestData {
         .map(|(path, state)| serde_json::json!({ "path": path, "viewerViewedState": state }))
         .collect();
     serde_json::from_value(details).unwrap()
+}
+
+/// A view for the tab's parts, which takes focus: a stand-in for a feature's view.
+struct Probe {
+    focus: FocusHandle,
+}
+
+impl Probe {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for Probe {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for Probe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context("Probe")
+            .track_focus(&self.focus)
+            .size_full()
+    }
 }
 
 const BOT: &str = "rozed-bot";

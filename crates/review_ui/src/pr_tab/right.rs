@@ -28,14 +28,23 @@ pub(super) fn on_actions(root: Div, _: &PrTab, cx: &Context<PrTab>) -> Div {
 }
 
 impl PrTab {
-    fn toggle_threads(&mut self, _: &ToggleThreads, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_threads(&mut self, _: &ToggleThreads, window: &mut Window, cx: &mut Context<Self>) {
         self.show_threads = !self.show_threads;
+        if !self.show_threads {
+            self.focus_diff_from(self.threads_panel.as_ref(), window, cx);
+        }
         cx.notify();
     }
 
     /// Puts `panel`, the threads panel, on the tab's right side, or takes it away. The panel draws
     /// all of itself, its heading included.
-    pub fn set_threads_panel(&mut self, panel: Option<PartView>, cx: &mut Context<Self>) {
+    pub fn set_threads_panel(
+        &mut self,
+        panel: Option<PartView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_diff_from(self.threads_panel.as_ref(), window, cx);
         self.threads_panel = panel;
         cx.notify();
     }

@@ -14,7 +14,7 @@ fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
                 .map(|context| gpui::KeyContext::parse(context).unwrap())
                 .collect()
         };
-        let tab = ["Workspace", "Pane", "PrTab"];
+        let tab = ["Workspace", "Pane", "PrTab middle=diff"];
         let diff = stack(&[&tab[..], &["Editor mode=full multibuffer"]].concat());
         let file_list = stack(&[&tab[..], &["PrFileList"]].concat());
         // A comment box in the diff, as milestone 8 adds, or any other text box in the tab.
@@ -145,11 +145,12 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
             let (bindings, _) = keymap.bindings_for_input(&[keystroke], &stack);
             bindings.first().map(|binding| binding.action().name())
         };
-        let diff = ["Workspace", "Pane", "PrTab", "Editor mode=full multibuffer"];
-        let file_list = ["Workspace", "Pane", "PrTab", "PrFileList"];
-        let comment = ["Workspace", "Pane", "PrTab", "Editor mode=auto_height"];
+        let tab = "PrTab middle=diff";
+        let diff = ["Workspace", "Pane", tab, "Editor mode=full multibuffer"];
+        let file_list = ["Workspace", "Pane", tab, "PrFileList"];
+        let comment = ["Workspace", "Pane", tab, "Editor mode=auto_height"];
         // A comment box can be a full editor too, of one buffer.
-        let full_comment = ["Workspace", "Pane", "PrTab", "Editor mode=full"];
+        let full_comment = ["Workspace", "Pane", tab, "Editor mode=full"];
         let elsewhere = ["Workspace", "Pane", "Editor mode=full multibuffer"];
 
         // Zed's keys are bound, and Lo's, bound after, win where both apply.
@@ -173,8 +174,9 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
 
 /// Each of Lo's keys does one thing wherever it's typed: on the context stack of every place in the
 /// window that takes keys, read from a window showing it, no two of Lo's bindings hold with the
-/// same keystrokes, or with one's starting the other's (see [`crate::key_clashes`]). The `lo`
-/// crate checks its Accounts modal the same way.
+/// same keystrokes, or with one's starting the other's (see [`crate::key_clashes`]). Every binding
+/// holds in one of the places, so a binding in a new context needs a place here. The `lo` crate
+/// checks its Accounts modal the same way.
 #[gpui::test]
 async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppContext) {
     let (workspace, cx) = workspace(cx).await;
@@ -224,6 +226,15 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         window.focus(&left, cx)
     });
     places.push(focused("the diff's left side", "Editor", cx));
+    // A view in the diff's place, such as the timeline.
+    let view = cx.new(Probe::new);
+    tab.update_in(cx, |tab, window, cx| {
+        tab.show_middle(Middle::View(PartView::new(&view, cx)), window, cx)
+    });
+    places.push(focused("a view in the diff's place", "Probe", cx));
+    tab.update_in(cx, |tab, window, cx| {
+        tab.show_middle(Middle::Diff, window, cx)
+    });
     // A text box in the diff, such as a comment box, and a line of text in the tab.
     for (name, editor) in [
         (
@@ -266,6 +277,8 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         assert!(keymap.bindings().len() > 30);
+        let unplaced = crate::key_clashes::unplaced(keymap.bindings(), &places);
+        assert!(unplaced.is_empty(), "{unplaced:#?}");
         let clashes = crate::key_clashes::clashes(keymap.bindings(), &places);
         assert!(clashes.is_empty(), "{clashes:#?}");
     });

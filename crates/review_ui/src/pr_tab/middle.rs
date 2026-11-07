@@ -2,12 +2,12 @@
 //! move through the diff and change how it shows (design §5 "The diff view", §10 "Window").
 
 use editor::Direction;
-use gpui::{AnyElement, App, Context, Div, Focusable as _, KeyBinding, Window, actions};
+use gpui::{AnyElement, App, Context, Div, EntityId, Focusable as _, KeyBinding, Window, actions};
 use review::revisions::Revisions;
 use settings::DiffViewStyle;
 use ui::prelude::*;
 
-use super::keys::{DIFF_CONTEXT, FILE_LIST_CONTEXT, KEY_CONTEXT, reading};
+use super::keys::{DIFF_CONTEXT, KEY_CONTEXT, diff_and_file_list, reading};
 use super::{PartView, PrTab, Status};
 use crate::diff_cursor;
 use crate::shown_files::{self, Expanded};
@@ -52,20 +52,20 @@ impl Middle {
     pub fn shows_diff(&self) -> bool {
         matches!(self, Self::Diff)
     }
+
+    /// Whether the middle shows `entity`'s view.
+    pub fn shows(&self, entity: EntityId) -> bool {
+        match self {
+            Self::Diff => false,
+            Self::View(view) => view.shows(entity),
+        }
+    }
 }
 
 /// The diff's keys.
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", SwitchSide, Some(DIFF_CONTEXT)),
-        // Option and a letter types a character where there's text to type, so these work only
-        // in the diff and the file list.
-        KeyBinding::new("alt-v", ToggleDiffLayout, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-v", ToggleDiffLayout, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("alt-w", ToggleWhitespace, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-w", ToggleWhitespace, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("alt-a", ExpandFile, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-a", ExpandFile, Some(FILE_LIST_CONTEXT)),
         // Back and forward through where the diff's cursor has been (design §10), beside Zed's
         // ctrl-- and ctrl-_.
         KeyBinding::new("ctrl-o", workspace::pane::GoBack, Some(KEY_CONTEXT)),
@@ -73,6 +73,9 @@ pub(super) fn bind_keys(cx: &mut App) {
     ]);
     cx.bind_keys(
         [
+            diff_and_file_list("alt-v", ToggleDiffLayout),
+            diff_and_file_list("alt-w", ToggleWhitespace),
+            diff_and_file_list("alt-a", ExpandFile),
             reading("] f", NextFile),
             reading("[ f", PreviousFile),
             reading("] c", NextChange),
@@ -108,7 +111,7 @@ impl PrTab {
         let focused = self.focus_handle.contains_focused(window, cx);
         self.middle = middle;
         if focused {
-            self.focus_middle(window, cx);
+            self.focus_diff(window, cx);
         }
         cx.notify();
     }
