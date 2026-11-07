@@ -50,37 +50,52 @@ impl RevisionMarks {
     }
 
     /// Forgets the seen heads and "last seen here" of every pull request closed before
-    /// [`Self::KEPT_AFTER_CLOSING`] ago, at `now`, as any account's cached summary of it says.
-    /// A closed pull request's summary is updated when it closes or later, so its update time
-    /// stands for when it closed. A pull request with no summary in the cache keeps its rows.
+    /// [`Self::KEPT_AFTER_CLOSING`] ago, at `now`, that were noted before then too. It's closed
+    /// when every account's cached summary of it says so. A closed pull request's summary is
+    /// updated when it closes or later, so its update time stands for when it closed. A pull
+    /// request with no summary in the cache, or one any account's summary says is open or was
+    /// updated since, as after it was reopened, keeps its rows.
     pub async fn prune(&self, now: SystemTime) -> Result<()> {
-        let cutoff = chrono::DateTime::<chrono::Utc>::from(now - Self::KEPT_AFTER_CLOSING)
+        let cutoff = now - Self::KEPT_AFTER_CLOSING;
+        let cutoff_secs = to_secs(cutoff);
+        let cutoff = chrono::DateTime::<chrono::Utc>::from(cutoff)
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let summary = PullSummary::NAME;
+        let bindings = (summary, cutoff, STATE, CLOSED, UPDATED_AT, cutoff_secs);
         self.db
             .connection()
             .write(move |connection| {
                 connection.with_savepoint("prune_revision_marks", || {
                     connection.exec_bound(sql!(
-                        DELETE FROM seen_heads WHERE EXISTS (
+                        DELETE FROM seen_heads WHERE first_seen < ?6 AND EXISTS (
                             SELECT pull.number FROM pr_cache AS pull
                             WHERE pull.host = seen_heads.host AND pull.owner = seen_heads.owner
                                 AND pull.repo = seen_heads.repo
                                 AND pull.number = seen_heads.number AND pull.query = ?1
-                                AND json_extract(pull.json, ?3) = ?4
-                                AND json_extract(pull.json, ?5) < ?2
+                        ) AND NOT EXISTS (
+                            SELECT pull.number FROM pr_cache AS pull
+                            WHERE pull.host = seen_heads.host AND pull.owner = seen_heads.owner
+                                AND pull.repo = seen_heads.repo
+                                AND pull.number = seen_heads.number AND pull.query = ?1
+                                AND (json_extract(pull.json, ?3) IS NOT ?4
+                                    OR json_extract(pull.json, ?5) >= ?2)
                         )
-                    ))?((summary, cutoff.clone(), STATE, CLOSED, UPDATED_AT))?;
+                    ))?(bindings.clone())?;
                     connection.exec_bound(sql!(
-                        DELETE FROM last_seen WHERE EXISTS (
+                        DELETE FROM last_seen WHERE seen_at < ?6 AND EXISTS (
                             SELECT pull.number FROM pr_cache AS pull
                             WHERE pull.host = last_seen.host AND pull.owner = last_seen.owner
                                 AND pull.repo = last_seen.repo
                                 AND pull.number = last_seen.number AND pull.query = ?1
-                                AND json_extract(pull.json, ?3) = ?4
-                                AND json_extract(pull.json, ?5) < ?2
+                        ) AND NOT EXISTS (
+                            SELECT pull.number FROM pr_cache AS pull
+                            WHERE pull.host = last_seen.host AND pull.owner = last_seen.owner
+                                AND pull.repo = last_seen.repo
+                                AND pull.number = last_seen.number AND pull.query = ?1
+                                AND (json_extract(pull.json, ?3) IS NOT ?4
+                                    OR json_extract(pull.json, ?5) >= ?2)
                         )
-                    ))?((summary, cutoff, STATE, CLOSED, UPDATED_AT))
+                    ))?(bindings)
                 })
             })
             .await
@@ -320,44 +335,53 @@ mod tests {
     #[test]
     fn pull_requests_closed_a_month_ago_are_forgotten() {
         block_on(async {
-            let (db, marks) = marks("marks_prune", &["bot"]).await;
+            let (db, marks) = marks("marks_prune", &["bot", "other"]).await;
             let cache = PrCache::new(db);
             let now = at(100 * 86_400);
-            // Closed 40 days ago, closed 10 days ago, open but untouched for 40, and never
-            // summarized.
+            let noted = now - Duration::from_secs(45 * 86_400);
+            // Closed 40 days ago; closed 10 days ago; open but untouched for 40; never
+            // summarized; closed 40 days ago as one account last saw it, but open as the other
+            // sees it now; and closed 40 days ago but seen here since.
             let pulls = [
+                (1, vec![summary(1, "closed", 40, now)], noted),
+                (2, vec![summary(2, "closed", 10, now)], noted),
+                (3, vec![summary(3, "open", 40, now)], noted),
+                (4, vec![], noted),
                 (
-                    pr("rozed-dev", "e2e", 1),
-                    Some(summary(1, "closed", 40, now)),
+                    5,
+                    vec![summary(5, "closed", 40, now), summary(5, "open", 1, now)],
+                    noted,
                 ),
-                (
-                    pr("rozed-dev", "e2e", 2),
-                    Some(summary(2, "closed", 10, now)),
-                ),
-                (pr("rozed-dev", "e2e", 3), Some(summary(3, "open", 40, now))),
-                (pr("rozed-dev", "e2e", 4), None),
+                (6, vec![summary(6, "closed", 40, now)], now),
             ];
-            for (pull, summary) in &pulls {
-                marks.record_seen("bot", pull, "h1", now).await.unwrap();
-                marks.set_last_seen("bot", pull, "h1", now).await.unwrap();
-                if let Some(summary) = summary {
+            for (number, summaries, at) in &pulls {
+                let pull = pr("rozed-dev", "e2e", *number);
+                marks.record_seen("bot", &pull, "h1", *at).await.unwrap();
+                marks.set_last_seen("bot", &pull, "h1", *at).await.unwrap();
+                for (summary, account) in summaries.iter().zip(["bot", "other"]) {
                     let target = pull.clone().into();
-                    cache.put("bot", &target, summary, None, now).await.unwrap();
+                    cache
+                        .put(account, &target, summary, None, now)
+                        .await
+                        .unwrap();
                 }
             }
 
             marks.prune(now).await.unwrap();
 
-            let kept: Vec<i64> = (pulls.iter())
-                .filter(|(pull, _)| !marks.seen_heads(pull).unwrap().is_empty())
-                .map(|(pull, _)| pull.number)
+            let numbers = pulls
+                .iter()
+                .map(|(number, ..)| pr("rozed-dev", "e2e", *number));
+            let kept: Vec<i64> = (numbers.clone())
+                .filter(|pull| !marks.seen_heads(pull).unwrap().is_empty())
+                .map(|pull| pull.number)
                 .collect();
-            assert_eq!(kept, [2, 3, 4]);
-            let last_seen: Vec<i64> = (pulls.iter())
-                .filter(|(pull, _)| marks.last_seen("bot", pull).unwrap().is_some())
-                .map(|(pull, _)| pull.number)
+            assert_eq!(kept, [2, 3, 4, 5, 6]);
+            let last_seen: Vec<i64> = numbers
+                .filter(|pull| marks.last_seen("bot", pull).unwrap().is_some())
+                .map(|pull| pull.number)
                 .collect();
-            assert_eq!(last_seen, [2, 3, 4]);
+            assert_eq!(last_seen, [2, 3, 4, 5, 6]);
         });
     }
 
