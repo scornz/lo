@@ -3,130 +3,66 @@
 //! request that's already open switches to its tab.
 
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 use futures::channel::oneshot;
 
 use editor::scroll::Autoscroll;
-use editor::{
-    Anchor, Direction, Editor, EditorEvent, EditorSettings, SelectionEffects, SplittableEditor,
-};
+use editor::{Anchor, Editor, EditorEvent, EditorSettings, SelectionEffects, SplittableEditor};
 use github::accounts::RepoAccount;
 use github::files::CutShort;
 use github::poll::{PollEvent, Poller};
 use github::queries::{FileViewedState, PullRequestData};
 use github::viewed::ViewedRecords;
-use github::{GithubClient, GithubError, HelpLink, PullRef, Target};
+use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncApp, AsyncWindowContext, Context, ElementId, Entity, EntityId,
-    EventEmitter, FocusHandle, Focusable, KeyBinding, Render, SharedString, Subscription, Task,
-    UniformListScrollHandle, WeakEntity, Window, actions, uniform_list,
+    AnyElement, App, AsyncWindowContext, Context, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
+    Window,
 };
 use language::{Capability, Point};
 use project::WorktreeId;
 use repo_cache::Oid;
 use review::revisions::{PushRecord, Revisions, ViewedState, build_revisions};
 use settings::{DiffViewStyle, Settings as _, SettingsStore};
-use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
+use ui::prelude::*;
 use util::rel_path::RelPath;
 use workspace::item::{Item, ItemEvent, TabContentParams};
-use workspace::notifications::NotificationId;
-use workspace::{ItemNavHistory, Toast, Workspace};
+use workspace::{ItemNavHistory, Workspace};
 
 use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::account_picker::{self, NotChosen};
 use crate::api_diff::{self, FilesReader, GithubDiff, thousands};
 use crate::diff_cursor;
-use crate::file_list::{FileChange, FileEntry, FileList, FileOrder};
+use crate::file_list::{FileEntry, FileList};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
-use crate::poll_state::{self, PollNote, PollState};
+use crate::poll_state::{self, PollState};
 use crate::pr_banner::{self, BannerAction, BannerKind, Banners};
 use crate::pr_diff::{self, CopyProgress, Trust};
 use crate::pr_link::PrLink;
-use crate::shown_files::{self, Expanded};
+use crate::shown_files;
 use crate::tabs::{TabKey, find_tab};
-use crate::viewed_marks::{Toggle, ViewedMarks, changed_since_viewed, write_failed};
+use crate::viewed_marks::ViewedMarks;
 use crate::window_title;
 
-actions!(
-    review_ui,
-    [
-        /// Shows or hides the file list.
-        ToggleFileList,
-        /// Shows or hides the threads panel.
-        ToggleThreads,
-        /// Switches the file list between review order and path order.
-        ToggleFileOrder,
-        /// Side by side, moves the cursor to the diff's other side.
-        SwitchSide,
-        /// Shows the diff inline or side by side.
-        ToggleDiffLayout,
-        /// Hides changes to whitespace alone, or shows them again.
-        ToggleWhitespace,
-        /// Opens the current file when it's collapsed, loads it when it's too large to have
-        /// loaded, and otherwise shows the whole file or only its changes.
-        ExpandFile,
-        /// Marks the current file viewed and moves to the next unviewed file, or clears the mark
-        /// of a viewed file.
-        ToggleViewed,
-        /// Moves to the next file in the diff.
-        NextFile,
-        /// Moves to the previous file in the diff.
-        PreviousFile,
-        /// Moves to the next change, in whichever file it is.
-        NextChange,
-        /// Moves to the previous change, in whichever file it is.
-        PreviousChange,
-    ]
-);
+mod header;
+mod keys;
+mod left;
+mod middle;
+mod right;
+mod viewed;
 
-const KEY_CONTEXT: &str = "PrTab";
-const FILE_LIST_CONTEXT: &str = "PrFileList";
-/// The diff's editors, inside the tab, where `tab` would otherwise indent: full editors of many
-/// files, not an editor that's typed in, such as a comment's, which edits one buffer.
-const DIFF_CONTEXT: &str = "PrTab > Editor && mode == full && multibuffer";
-/// The tab outside any text box in it, such as a comment box: keys that type a character work
-/// here, so a text box still types them. The diff's own editors are the only full-size editors of
-/// many files.
-const READING_CONTEXT: &str = "PrTab && !(Editor && (mode != full || !multibuffer))";
-
-/// The tab's keys. Panels toggle with Zed's keys for its docks.
-pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("tab", SwitchSide, Some(DIFF_CONTEXT)),
-        // Option and a letter types a character where there's text to type, so these work only
-        // in the diff and the file list.
-        KeyBinding::new("alt-v", ToggleDiffLayout, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-v", ToggleDiffLayout, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("alt-w", ToggleWhitespace, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-w", ToggleWhitespace, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("alt-a", ExpandFile, Some(DIFF_CONTEXT)),
-        KeyBinding::new("alt-a", ExpandFile, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
-        KeyBinding::new("cmd-alt-b", ToggleThreads, Some(KEY_CONTEXT)),
-        KeyBinding::new("cmd-r", ToggleThreads, Some(KEY_CONTEXT)),
-        // alt-o types ø.
-        KeyBinding::new("alt-o", ToggleFileOrder, Some(READING_CONTEXT)),
-        KeyBinding::new("e", ToggleViewed, Some(READING_CONTEXT)),
-        KeyBinding::new("] f", NextFile, Some(READING_CONTEXT)),
-        KeyBinding::new("[ f", PreviousFile, Some(READING_CONTEXT)),
-        KeyBinding::new("] c", NextChange, Some(READING_CONTEXT)),
-        KeyBinding::new("[ c", PreviousChange, Some(READING_CONTEXT)),
-        KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
-        // Back and forward through where the diff's cursor has been (design §10), beside Zed's
-        // ctrl-- and ctrl-_.
-        KeyBinding::new("ctrl-o", workspace::pane::GoBack, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-i", workspace::pane::GoForward, Some(KEY_CONTEXT)),
-        // The workspace binds escape to stop following a collaborator.
-        KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("enter", menu::Confirm, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("j", menu::SelectNext, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("k", menu::SelectPrevious, Some(FILE_LIST_CONTEXT)),
-    ]);
-}
+use keys::KEY_CONTEXT;
+pub(crate) use keys::bind_keys;
+pub use left::{ToggleFileList, ToggleFileOrder};
+pub use middle::{
+    ExpandFile, NextChange, NextFile, PreviousChange, PreviousFile, SwitchSide, ToggleDiffLayout,
+    ToggleWhitespace,
+};
+pub use right::ToggleThreads;
+pub use viewed::ToggleViewed;
 
 /// Opens `link`'s pull request in a tab of `workspace`, or switches to its tab if it's open. A new
 /// tab starts loading: it picks the account, reads the pull request from GitHub, copies it
@@ -1732,15 +1668,6 @@ impl PrTab {
         newer.then_some(latest.as_str())
     }
 
-    /// The header's title: the pull request's, once known.
-    pub fn title(&self) -> String {
-        match (&self.header.title, &self.status) {
-            (Some(title), _) => title.clone(),
-            (None, Status::Failed(_)) => "Not opened".to_string(),
-            (None, _) => "Loading…".to_string(),
-        }
-    }
-
     /// The window's title while this is the active tab.
     pub fn window_title(&self) -> String {
         window_title::for_pull_request(
@@ -1748,22 +1675,6 @@ impl PrTab {
             self.link().number,
             self.header.title.as_deref(),
         )
-    }
-
-    /// Who the header says the tab acts as.
-    pub fn acting_text(&self) -> String {
-        match &self.acting {
-            Some(Acting::Account(login)) => format!("as {login}"),
-            Some(Acting::Anonymous) => "not signed in".to_string(),
-            None => String::new(),
-        }
-    }
-
-    /// What the header says about how polling the pull request goes, if anything's wrong.
-    pub fn poll_note(&self) -> Option<PollNote> {
-        let login = self.acting.as_ref()?.login()?;
-        self.watched.as_ref()?;
-        poll_state::note(login, &self.poll, SystemTime::now())
     }
 
     /// Whether this is the window's active tab. The account's poller polls the active tab's pull
@@ -1785,70 +1696,10 @@ impl PrTab {
         }
     }
 
-    fn toggle_file_list(
-        &mut self,
-        _: &ToggleFileList,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.show_file_list = !self.show_file_list;
-        if self.show_file_list {
-            window.focus(&self.file_list_focus, cx);
-        } else {
-            self.focus_diff(window, cx);
-        }
-        cx.notify();
-    }
-
-    fn toggle_threads(&mut self, _: &ToggleThreads, _: &mut Window, cx: &mut Context<Self>) {
-        self.show_threads = !self.show_threads;
-        cx.notify();
-    }
-
-    fn toggle_file_order(&mut self, _: &ToggleFileOrder, _: &mut Window, cx: &mut Context<Self>) {
-        self.files.toggle_order();
-        self.scroll_to_selected();
-        cx.notify();
-    }
-
-    /// `tab`: side by side, moves the cursor to the diff's other side.
-    fn switch_side(&mut self, _: &SwitchSide, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
-            shown_files::switch_side(diff, window, cx);
-        }
-    }
-
-    /// Shows the tab's diffs inline or side by side.
-    fn toggle_diff_layout(
-        &mut self,
-        _: &ToggleDiffLayout,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.diff_style = match self.diff_style {
-            DiffViewStyle::Split => DiffViewStyle::Unified,
-            DiffViewStyle::Unified => DiffViewStyle::Split,
-        };
-        self.apply_diff_style(window, cx);
-        cx.notify();
-    }
-
     fn apply_diff_style(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(diff) = &self.diff {
             shown_files::set_style(diff, self.diff_style, window, cx);
         }
-    }
-
-    /// Hides changes to whitespace alone, or shows them again.
-    fn toggle_whitespace(
-        &mut self,
-        _: &ToggleWhitespace,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.hide_whitespace = !self.hide_whitespace;
-        self.sync_whitespace(window, cx);
-        cx.notify();
     }
 
     /// Brings each of the diff's files in line with whether whitespace changes are hidden.
@@ -1861,26 +1712,6 @@ impl PrTab {
         self._whitespace = Some(cx.spawn_in(window, async move |_, cx| {
             shown_files::hide_whitespace(diff, hide, cx).await
         }));
-    }
-
-    /// Opens, loads or shows the whole of the file selected in the file list, when it has focus,
-    /// or else the file the diff shows, which `e` acts on too.
-    fn expand_file(&mut self, _: &ExpandFile, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff.clone() else {
-            return;
-        };
-        let in_file_list = self.file_list_focus.contains_focused(window, cx);
-        let selected = self
-            .files
-            .selected()
-            .filter(|_| in_file_list)
-            .map(|entry| entry.path().to_string());
-        let Some(path) = selected.or_else(|| self.shown_file(cx).map(|(_, path)| path)) else {
-            return;
-        };
-        if shown_files::expand(&diff, &path, window, cx) == Expanded::Load {
-            self.load_file(diff, path, window, cx);
-        }
     }
 
     /// Loads `path`, a file too large to have been loaded with the others, into `diff`, unless
@@ -1952,20 +1783,6 @@ impl PrTab {
         multi_buffer.read(cx).location_for_path(&key, cx)
     }
 
-    /// What the diff says about the file it shows when GitHub says it changed since it was viewed:
-    /// the file, and since when, from the revision this Mac recorded when it was marked viewed.
-    pub fn changed_since_viewed(&self, cx: &mut App) -> Option<(String, String)> {
-        let (_, path) = self.shown_file(cx)?;
-        let github_path = self.github_path(&path)?;
-        let none = Revisions::default();
-        let note = changed_since_viewed(
-            self.revisions.as_ref().unwrap_or(&none),
-            self.marks.state(&github_path),
-            self.viewed_at.get(&github_path).map(String::as_str),
-        )?;
-        Some((path, note))
-    }
-
     /// The diff's cursor head, on its right side.
     fn diff_cursor(&self, cx: &App) -> Option<Anchor> {
         let diff = self.diff.as_ref()?.read(cx);
@@ -2020,259 +1837,6 @@ impl PrTab {
         }
     }
 
-    /// `]f` and `[f`: the next or previous file in review order, which is the diff's order,
-    /// among the files in the diff. They stop at the ends.
-    fn move_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((current, _)) = self.shown_file(cx) else {
-            return;
-        };
-        let positions: Vec<usize> = match forward {
-            true => (current + 1..self.files.len()).collect(),
-            false => (0..current).rev().collect(),
-        };
-        let target = positions
-            .into_iter()
-            .filter_map(|position| self.files.at_review_position(position))
-            .map(|entry| entry.path().to_string())
-            .find(|path| self.location_in_diff(path, cx).is_some());
-        if let Some(path) = target {
-            self.files.select_path(&path);
-            self.selection_moved(window, cx);
-        }
-    }
-
-    fn next_file(&mut self, _: &NextFile, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_file(true, window, cx);
-    }
-
-    fn previous_file(&mut self, _: &PreviousFile, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_file(false, window, cx);
-    }
-
-    /// `]c` and `[c`: the next or previous change, across files. The list follows the cursor.
-    fn next_change(&mut self, _: &NextChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
-            diff_cursor::go_to_change(diff, Direction::Next, window, cx);
-        }
-    }
-
-    fn previous_change(&mut self, _: &PreviousChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
-            diff_cursor::go_to_change(diff, Direction::Prev, window, cx);
-        }
-    }
-
-    /// `e`: marks the current file viewed and moves to the next unviewed file, or clears a viewed
-    /// file's mark. The new mark shows at once, and goes back to GitHub's if the write fails.
-    fn toggle_viewed(&mut self, _: &ToggleViewed, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, path)) = self.shown_file(cx) else {
-            self.toast(
-                "The diff is still loading, so there's no file to mark viewed yet.".into(),
-                cx,
-            );
-            return;
-        };
-        // GitHub's view didn't load, so neither would a write: the local copy shows, read-only.
-        // One older than GitHub's newest head gets the newer push's refusal below.
-        let why = match self.showing_copy {
-            Some(OlderCopy::Unreachable) => Some(format!(
-                "Lo can't reach GitHub, so it can't mark {path} viewed until it's back"
-            )),
-            Some(OlderCopy::NotLoaded) => Some(format!(
-                "GitHub's view of this pull request didn't load, so Lo can't mark {path} \
-                 viewed until it does"
-            )),
-            Some(OlderCopy::NewerNotCopied) | None => None,
-        };
-        if let Some(why) = why {
-            self.toast(
-                format!("{why}. Until then, this is the local copy, read-only."),
-                cx,
-            );
-            return;
-        }
-        let Some((poller, pull)) = self.watched.clone() else {
-            self.toast(
-                "Sign in to mark files viewed: this pull request opened without an account.".into(),
-                cx,
-            );
-            return;
-        };
-        // Every write would fail; marking ahead of GitHub would move past files whose marks then
-        // go back.
-        if self.poll.status.offline.is_some() {
-            self.toast(
-                format!("Lo can't reach GitHub, so it can't mark {path} viewed until it's back."),
-                cx,
-            );
-            return;
-        }
-        if self.poll.status.signed_out {
-            let login = poller.read(cx).login().to_string();
-            self.toast(
-                format!(
-                    "{login} is signed out, so Lo can't mark {path} viewed. Sign in again \
-                     from Accounts… in the Lo menu."
-                ),
-                cx,
-            );
-            return;
-        }
-        let Some(node_id) = self.node_id.clone() else {
-            self.toast(
-                format!(
-                    "Couldn't mark {path} viewed: GitHub hasn't sent this pull request's details \
-                     yet. Try again in a moment."
-                ),
-                cx,
-            );
-            return;
-        };
-        let Some(github_path) = self.github_path(&path) else {
-            self.file_toast(
-                &path,
-                format!(
-                    "GitHub doesn't list {path} in this pull request, so Lo can't mark it \
-                     viewed. GitHub and the local copy see this file's change differently."
-                ),
-                cx,
-            );
-            return;
-        };
-        // GitHub marks a file as of the pull request's latest head (`markFileAsViewed` takes no
-        // commit), so a file is marked only while that's the head on screen. A push inside the
-        // poll interval can still slip through.
-        let marks = self.marks.state(&github_path) != Some(ViewedState::Viewed);
-        if marks && self.newer_head().is_some() {
-            self.newer_push_toast(&path, cx);
-            return;
-        }
-        let toggle = self.marks.toggle(&github_path);
-        self.files.set_viewed(&self.marks.shown());
-        if toggle.mark {
-            // Only to a file the diff shows; the others are still loading.
-            let unviewed: Vec<String> = self
-                .files
-                .unviewed_after(&path)
-                .map(|entry| entry.path().to_string())
-                .collect();
-            match unviewed
-                .iter()
-                .find(|next| self.location_in_diff(next, cx).is_some())
-            {
-                Some(next) => {
-                    self.files.select_path(next);
-                    self.selection_moved(window, cx);
-                }
-                None => {
-                    if let Some(next) = unviewed.first() {
-                        self.toast(
-                            format!(
-                                "{next}, the next unviewed file, is still loading, so the diff \
-                                 stays on {path}."
-                            ),
-                            cx,
-                        );
-                    }
-                }
-            }
-        }
-        let (mark, github_path) = (toggle.mark, toggle.path.clone());
-        let written = ViewedWrite {
-            record: match (toggle.mark, &self.head) {
-                (true, Some(head)) => RecordChange::Record(head.clone()),
-                (true, None) => RecordChange::Keep,
-                (false, _) => RecordChange::Forget,
-            },
-            toggle,
-            pressed_at: SystemTime::now(),
-            records: self.records.clone(),
-            login: poller.read(cx).login().to_string(),
-            pull: pull.clone(),
-            workspace: self.workspace.clone(),
-            toast: toast_id(cx.entity_id(), Some(&path)),
-        };
-        let write = poller.update(cx, |poller, cx| {
-            poller.write(
-                pull,
-                move |client: GithubClient| async move {
-                    if mark {
-                        client.mark_file_as_viewed(&node_id, &github_path).await
-                    } else {
-                        client.unmark_file_as_viewed(&node_id, &github_path).await
-                    }
-                },
-                cx,
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            let result = write.await;
-            this.update(cx, |this, cx| {
-                this.viewed_written(&written, result.is_ok(), cx)
-            })
-            .ok();
-            // The tab may have closed, which the write, this Mac's record and the toast outlive.
-            written.finish(result, cx).await;
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// A toggle's write finished: the file shows the new mark, or GitHub's again if the write
-    /// failed, and on success the tab knows where this Mac records the file was viewed.
-    fn viewed_written(&mut self, written: &ViewedWrite, succeeded: bool, cx: &mut Context<Self>) {
-        self.marks
-            .finish(&written.toggle, succeeded, SystemTime::now());
-        self.files.set_viewed(&self.marks.shown());
-        if succeeded {
-            let path = written.toggle.path.clone();
-            match &written.record {
-                RecordChange::Record(head) => {
-                    self.viewed_at.insert(path, head.clone());
-                }
-                RecordChange::Forget => {
-                    self.viewed_at.remove(&path);
-                }
-                RecordChange::Keep => {}
-            }
-        }
-        cx.notify();
-    }
-
-    /// Shows a toast about the tab, which replaces the tab's last one.
-    fn toast(&self, message: String, cx: &mut Context<Self>) {
-        let id = toast_id(cx.entity_id(), None);
-        show_toast(&self.workspace, id, message, None, cx);
-    }
-
-    /// Shows a toast about `path`, which replaces only the last one about it.
-    fn file_toast(&self, path: &str, message: String, cx: &mut Context<Self>) {
-        let id = toast_id(cx.entity_id(), Some(path));
-        show_toast(&self.workspace, id, message, None, cx);
-    }
-
-    /// Says `e` didn't mark `path` because GitHub has a newer push, and offers to load it.
-    fn newer_push_toast(&self, path: &str, cx: &mut Context<Self>) {
-        let (workspace, tab) = (self.workspace.clone(), cx.entity().downgrade());
-        let load = move |window: &mut Window, cx: &mut App| {
-            let (Some(workspace), Some(tab)) = (workspace.upgrade(), tab.upgrade()) else {
-                return;
-            };
-            workspace.update(cx, |workspace, cx| reopen(workspace, &tab, window, cx));
-        };
-        show_toast(
-            &self.workspace,
-            toast_id(cx.entity_id(), None),
-            format!(
-                "There's a newer push to this pull request than the one on screen, so Lo \
-                 didn't mark {path} viewed: GitHub would mark it as of that push. Load it to mark \
-                 files viewed."
-            ),
-            Some(("Load the newer push", Box::new(load))),
-            cx,
-        );
-    }
-
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
         match &self.diff {
             Some(diff) => window.focus(&diff.focus_handle(cx), cx),
@@ -2287,34 +1851,10 @@ impl PrTab {
         }
     }
 
-    fn select_next(&mut self, _: &menu::SelectNext, window: &mut Window, cx: &mut Context<Self>) {
-        self.files.select_next();
-        self.selection_moved(window, cx);
-    }
-
-    fn select_previous(
-        &mut self,
-        _: &menu::SelectPrevious,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.files.select_previous();
-        self.selection_moved(window, cx);
-    }
-
     fn selection_moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.scroll_to_selected();
         self.reveal_selected(window, cx);
         cx.notify();
-    }
-
-    fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        self.reveal_selected(window, cx);
-        self.focus_diff(window, cx);
-    }
-
-    fn cancel(&mut self, _: &menu::Cancel, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_diff(window, cx);
     }
 
     /// Scrolls the diff to the selected file.
@@ -2345,174 +1885,6 @@ impl PrTab {
         })
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.theme().colors();
-        let number = self.link().number;
-        let title = self.title();
-        let acting = self.acting_text();
-        let revision = self
-            .revisions
-            .as_ref()
-            .and_then(|revisions| {
-                let latest = revisions.latest()?;
-                Some(format!(
-                    "{} of {}",
-                    revisions.label(&latest.head)?,
-                    revisions.len()
-                ))
-            })
-            .unwrap_or_else(|| "—".to_string());
-        h_flex()
-            .id("pr-header")
-            .w_full()
-            .flex_shrink_0()
-            .px_3()
-            .py_2()
-            .gap_4()
-            .justify_between()
-            .border_b_1()
-            .border_color(colors.border)
-            .bg(colors.panel_background)
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_0p5()
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_2()
-                            .child(Label::new(title).size(LabelSize::Large).truncate())
-                            .child(
-                                Label::new(format!("#{number}"))
-                                    .size(LabelSize::Large)
-                                    .color(Color::Muted),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1p5()
-                            .child(
-                                Label::new(self.repo_name())
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .children(self.header.author.as_ref().map(|author| {
-                                Label::new(format!("by {author}"))
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted)
-                            }))
-                            .when(!acting.is_empty(), |this| {
-                                this.child(
-                                    Label::new("·").size(LabelSize::Small).color(Color::Muted),
-                                )
-                                .child(Label::new(acting).size(LabelSize::Small))
-                            }),
-                    )
-                    .children(self.poll_note().map(render_poll_note)),
-            )
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .gap_2()
-                    // Placeholders until the merge panel and the revision picker arrive.
-                    .child(chip("merge-status", "Merge status", "not checked yet", cx))
-                    .child(chip("revision", "Revision", revision, cx)),
-            )
-    }
-
-    fn render_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let step = match &self.status {
-            Status::Ready => None,
-            Status::Loading(step) => Some((IconName::ArrowCircle, Color::Muted, step.clone())),
-            Status::Offline(why) => Some((IconName::Warning, Color::Warning, why.clone())),
-            Status::Failed(error) => Some((IconName::Warning, Color::Error, error.clone())),
-        };
-        let offline = matches!(self.status, Status::Offline(_));
-        let github = self.diff_source == Some(DiffSource::GitHub);
-        let whitespace = self.hide_whitespace;
-        if step.is_none() && !github && !whitespace {
-            return None;
-        }
-        Some(
-            h_flex()
-                .px_3()
-                .py_1()
-                .gap_2()
-                .justify_between()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .children(step.map(|(icon, color, text)| {
-                            h_flex()
-                                .gap_2()
-                                .child(Icon::new(icon).size(IconSize::Small).color(color))
-                                .child(Label::new(text).size(LabelSize::Small).color(color))
-                        }))
-                        .when(offline, |this| this.children(self.render_actions(cx))),
-                )
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .when(whitespace, |this| {
-                            this.child(
-                                div()
-                                    .id("whitespace-hidden")
-                                    .child(
-                                        Label::new("Whitespace changes hidden")
-                                            .size(LabelSize::Small)
-                                            .color(Color::Muted),
-                                    )
-                                    .tooltip(Tooltip::text(
-                                        "Lines whose only change is to whitespace show as \
-                                         unchanged, with the head's whitespace on both sides, \
-                                         so text copied from the left side has the head's \
-                                         whitespace too.",
-                                    )),
-                            )
-                        })
-                        .when(github, |this| {
-                            this.child(
-                                Label::new("GitHub's diff: changed lines only")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                        }),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// The note above the diff while the current file changed since it was viewed.
-    fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (path, note) = self.changed_since_viewed(cx)?;
-        let colors = cx.theme().colors();
-        Some(
-            h_flex()
-                .id("changed-since-viewed")
-                .w_full()
-                .flex_shrink_0()
-                .px_3()
-                .py_1()
-                .gap_2()
-                .border_b_1()
-                .border_color(colors.border_variant)
-                .bg(colors.panel_background)
-                .child(
-                    Icon::new(IconName::FileDiff)
-                        .size(IconSize::Small)
-                        .color(Color::Warning),
-                )
-                .child(Label::new(path).size(LabelSize::Small))
-                .child(
-                    Label::new(note)
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .truncate(),
-                )
-                .into_any_element(),
-        )
-    }
-
     /// GitHub's links for fixing why the tab stopped, and its button to try again or choose an
     /// account.
     fn render_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -2530,254 +1902,7 @@ impl PrTab {
         });
         links.chain(action).collect()
     }
-
-    fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.theme().colors();
-        let order = match self.files.order() {
-            FileOrder::Review => "Review order",
-            FileOrder::Path => "Path order",
-        };
-        let count = match self.files.len() {
-            1 => "1 file".to_string(),
-            count => format!("{count} files"),
-        };
-        v_flex()
-            .id("pr-file-list")
-            .key_context(FILE_LIST_CONTEXT)
-            .track_focus(&self.file_list_focus)
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::select_previous))
-            .on_action(cx.listener(Self::confirm))
-            .on_action(cx.listener(Self::cancel))
-            .w(px(300.))
-            .h_full()
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(colors.border)
-            .bg(colors.panel_background)
-            .child(
-                h_flex()
-                    .px_2()
-                    .py_1()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(colors.border_variant)
-                    .child(Label::new(count).size(LabelSize::Small).color(Color::Muted))
-                    .child(
-                        Label::new(order)
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    ),
-            )
-            .child(
-                uniform_list(
-                    "pr-files",
-                    self.files.len(),
-                    cx.processor(|this, range: Range<usize>, _window, cx| {
-                        range
-                            .filter_map(|row| this.render_file_row(row, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.file_list_scroll)
-                .flex_1(),
-            )
-    }
-
-    fn render_file_row(&self, row: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let entry = self.files.row(row)?;
-        let selected = self.files.selected_row() == Some(row);
-        let (dir, name) = match entry.path().rsplit_once('/') {
-            Some((dir, name)) => (Some(dir.to_string()), name.to_string()),
-            None => (None, entry.path().to_string()),
-        };
-        let change_color = match entry.change {
-            FileChange::Added => Color::Created,
-            FileChange::Deleted => Color::Deleted,
-            FileChange::Modified | FileChange::Renamed | FileChange::TypeChanged => Color::Modified,
-        };
-        let file = &entry.file;
-        Some(
-            ListItem::new(("pr-file", row))
-                .spacing(ListItemSpacing::Dense)
-                .toggle_state(selected)
-                .start_slot(
-                    Label::new(entry.change.letter())
-                        .size(LabelSize::Small)
-                        .color(change_color),
-                )
-                .child(
-                    h_flex()
-                        .min_w_0()
-                        .gap_1p5()
-                        .child(Label::new(name).size(LabelSize::Small).truncate())
-                        .children(dir.map(|dir| {
-                            Label::new(dir)
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted)
-                                .truncate()
-                        })),
-                )
-                .end_slot(
-                    h_flex()
-                        .gap_1()
-                        .when(!file.binary, |this| {
-                            this.child(
-                                Label::new(format!("+{}", file.additions))
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Created),
-                            )
-                            .child(
-                                Label::new(format!("−{}", file.deletions))
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Deleted),
-                            )
-                        })
-                        .children(viewed_mark(row, entry.viewed)),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.files.select_row(row);
-                    this.reveal_selected(window, cx);
-                    cx.notify();
-                }))
-                .into_any_element(),
-        )
-    }
-
-    fn render_threads(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = cx.theme().colors();
-        v_flex()
-            .id("pr-threads")
-            .w(px(280.))
-            .h_full()
-            .flex_shrink_0()
-            .p_2()
-            .gap_1()
-            .border_l_1()
-            .border_color(colors.border)
-            .bg(colors.panel_background)
-            .child(
-                Label::new("Threads")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-            .child(
-                Label::new("No threads yet")
-                    .size(LabelSize::Small)
-                    .color(Color::Disabled),
-            )
-    }
 }
-
-/// The toast that says why a viewed mark couldn't be set or cleared.
-struct ViewedMarkToast;
-
-/// The ID of a viewed-mark toast from the tab `tab`, about the file at `path` or about the tab.
-/// Each file and each tab has its own, so one toast doesn't replace another's.
-fn toast_id(tab: EntityId, path: Option<&str>) -> NotificationId {
-    let id = match path {
-        Some(path) => format!("{}:{path}", tab.as_u64()),
-        None => tab.as_u64().to_string(),
-    };
-    NotificationId::composite::<ViewedMarkToast>(ElementId::Name(id.into()))
-}
-
-/// A toggle's write to GitHub, with what's needed once it finishes, whether or not its tab is
-/// still open.
-struct ViewedWrite {
-    toggle: Toggle,
-    /// What this Mac records about the file once GitHub took the write.
-    record: RecordChange,
-    /// When `e` was pressed, which the record keeps.
-    pressed_at: SystemTime,
-    records: Option<ViewedRecords>,
-    login: String,
-    pull: PullRef,
-    workspace: WeakEntity<Workspace>,
-    /// The toast that says why the write failed, the file's own.
-    toast: NotificationId,
-}
-
-/// How a successful write changes this Mac's record of where a file was viewed.
-enum RecordChange {
-    /// Marked viewed with this head on screen.
-    Record(String),
-    /// Cleared.
-    Forget,
-    /// Marked, but the head on screen isn't known.
-    Keep,
-}
-
-impl ViewedWrite {
-    /// The write finished: on success this Mac records or forgets where the file was viewed; on
-    /// failure a toast says why.
-    async fn finish(self, result: Result<(), GithubError>, cx: &mut AsyncApp) {
-        let Self {
-            toggle,
-            record,
-            pressed_at,
-            records,
-            login,
-            pull,
-            workspace,
-            toast,
-        } = self;
-        if let Err(error) = result {
-            log::warn!("{pull}: {}: {error}", toggle.path);
-            let message = write_failed(&toggle, &login, &error);
-            cx.update(|cx| show_toast(&workspace, toast, message, None, cx));
-            return;
-        }
-        let Some(records) = records else {
-            return;
-        };
-        let path = &toggle.path;
-        let written = match record {
-            RecordChange::Record(head) => {
-                records.record(&login, &pull, path, &head, pressed_at).await
-            }
-            RecordChange::Forget => records.forget(&login, &pull, path).await,
-            RecordChange::Keep => Ok(()),
-        };
-        if let Err(error) = written {
-            log::error!("{pull}: recording where {path} was viewed: {error:#}");
-        }
-    }
-}
-
-/// A toast's button: its label and what it does.
-type ToastButton = (&'static str, Box<dyn Fn(&mut Window, &mut App)>);
-
-/// Shows a toast in `workspace` about a viewed mark, with `button` if there's one.
-fn show_toast(
-    workspace: &WeakEntity<Workspace>,
-    id: NotificationId,
-    message: String,
-    button: Option<ToastButton>,
-    cx: &mut App,
-) {
-    #[cfg(test)]
-    cx.default_global::<ToastLog>().0.push((
-        id.clone(),
-        message.clone(),
-        button.as_ref().map(|(label, _)| label.to_string()),
-    ));
-    let mut toast = Toast::new(id, message);
-    if let Some((label, on_click)) = button {
-        toast = toast.on_click(label, on_click);
-    }
-    workspace
-        .update(cx, |workspace, cx| workspace.show_toast(toast, cx))
-        .ok();
-}
-
-/// The toasts the tabs showed, for tests: each one's ID, text and button.
-#[cfg(test)]
-#[derive(Default)]
-struct ToastLog(Vec<(NotificationId, String, Option<String>)>);
-
-#[cfg(test)]
-impl gpui::Global for ToastLog {}
 
 /// How long to wait before reading GitHub's diff again the first time. Each failure doubles it, up
 /// to 5 minutes, as for the local copy.
@@ -2860,78 +1985,6 @@ fn viewed_state(state: &FileViewedState) -> Option<ViewedState> {
         FileViewedState::DISMISSED => Some(ViewedState::Dismissed),
         FileViewedState::Other(_) => None,
     }
-}
-
-/// How the file list shows the viewed mark of the file at `row`.
-fn viewed_mark(row: usize, viewed: Option<ViewedState>) -> Option<AnyElement> {
-    match viewed? {
-        ViewedState::Viewed => Some(
-            Icon::new(IconName::Check)
-                .size(IconSize::XSmall)
-                .color(Color::Success)
-                .into_any_element(),
-        ),
-        ViewedState::Dismissed => Some(
-            div()
-                .id(("pr-file-changed", row))
-                .child(
-                    Label::new("changed")
-                        .size(LabelSize::XSmall)
-                        .color(Color::Warning),
-                )
-                .tooltip(Tooltip::text(
-                    "Changed since viewed: a push changed it after it was marked viewed",
-                ))
-                .into_any_element(),
-        ),
-        ViewedState::Unviewed => None,
-    }
-}
-
-/// The header's line about how polling goes, with GitHub's link to fix it if there's one.
-fn render_poll_note(note: PollNote) -> impl IntoElement {
-    let (icon, color) = match note.severity {
-        Severity::Error => (IconName::XCircle, Color::Error),
-        Severity::Warning => (IconName::Warning, Color::Warning),
-        _ => (IconName::Info, Color::Muted),
-    };
-    h_flex()
-        .id("poll-note")
-        .min_w_0()
-        .gap_1p5()
-        .child(Icon::new(icon).size(IconSize::Small).color(color))
-        .child(
-            Label::new(note.text)
-                .size(LabelSize::Small)
-                .color(color)
-                .truncate(),
-        )
-        .children(note.link.map(|link| {
-            let url = link.url().to_string();
-            Button::new("poll-note-link", link.label())
-                .label_size(LabelSize::Small)
-                .on_click(move |_, _, cx| cx.open_url(&url))
-        }))
-}
-
-/// A placeholder in the header: a name and what it says.
-fn chip(
-    id: &'static str,
-    name: &'static str,
-    value: impl Into<SharedString>,
-    cx: &App,
-) -> impl IntoElement {
-    h_flex()
-        .id(id)
-        .gap_1()
-        .px_2()
-        .py_0p5()
-        .rounded_sm()
-        .border_1()
-        .border_color(cx.theme().colors().border_variant)
-        .child(Label::new(name).size(LabelSize::XSmall).color(Color::Muted))
-        .child(Label::new(value.into()).size(LabelSize::Small))
-        .tooltip(Tooltip::text(format!("{name} isn't built yet")))
 }
 
 /// The tab's title: the repository, the number and as much of the title as fits.
@@ -3479,18 +2532,7 @@ impl Render for PrTab {
                     |_: &editor::actions::ExpandExcerptsDown, _, cx| cx.stop_propagation(),
                 )
             })
-            .on_action(cx.listener(Self::toggle_file_list))
-            .on_action(cx.listener(Self::toggle_threads))
-            .on_action(cx.listener(Self::toggle_file_order))
-            .on_action(cx.listener(Self::switch_side))
-            .on_action(cx.listener(Self::toggle_diff_layout))
-            .on_action(cx.listener(Self::toggle_whitespace))
-            .on_action(cx.listener(Self::expand_file))
-            .on_action(cx.listener(Self::toggle_viewed))
-            .on_action(cx.listener(Self::next_file))
-            .on_action(cx.listener(Self::previous_file))
-            .on_action(cx.listener(Self::next_change))
-            .on_action(cx.listener(Self::previous_change))
+            .map(|this| keys::on_actions(this, cx))
             .size_full()
             .bg(background)
             .child(self.render_header(cx))

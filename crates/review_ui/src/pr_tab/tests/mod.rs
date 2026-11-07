@@ -20,6 +20,10 @@ use crate::test_support::{
     Answer, FakeGithub, FakePull, GitServer, anonymous, init, sign_in, sign_in_as, workspace,
 };
 
+use super::viewed::ToastLog;
+use crate::file_list::FileOrder;
+use workspace::notifications::NotificationId;
+
 mod accounts;
 mod github_diff;
 mod keys;
