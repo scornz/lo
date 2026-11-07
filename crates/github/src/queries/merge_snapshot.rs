@@ -55,9 +55,6 @@ pub struct MergeSnapshot;
 // The generated types, named from this module, such as `queries::merge_snapshot::Variables`.
 pub use self::merge_snapshot::*;
 
-/// A check run or commit status as `MergeSnapshot` and `MergeChecks` read it.
-pub type MergeCheckNode = MergeCheck;
-
 /// The most pages of checks read: 1,000 checks. A head with more has them cut short.
 pub const MAX_CHECK_PAGES: usize = 10;
 
@@ -1107,7 +1104,7 @@ impl GithubClient {
         login: &str,
         known: Option<&MergeFacts>,
     ) -> Result<MergeFacts, GithubError> {
-        let repository = self
+        let mut repository = self
             .graphql_keeping_partial::<MergeSnapshot>(
                 Variables {
                     owner: pull.repo.owner.clone(),
@@ -1120,7 +1117,7 @@ impl GithubClient {
             .await?
             .repository
             .ok_or_else(|| not_found(format!("repository {}", pull.repo)))?;
-        let pull_request = (repository.pull_request.clone())
+        let pull_request = (repository.pull_request.take())
             .ok_or_else(|| not_found(format!("pull request {pull}")))?;
         let (mut facts, next) = MergeFacts::from_data(repository, pull_request, login);
         if let Some(next) = next {
@@ -1258,6 +1255,15 @@ pub async fn read_merge_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_queries_read_a_check_the_same_way() {
+        let fragment = |query: &str| {
+            let start = query.find("fragment MergeCheck").unwrap();
+            query[start..].to_string()
+        };
+        assert_eq!(fragment(QUERY), fragment(merge_checks::QUERY));
+    }
 
     fn rest(json: serde_json::Value) -> BranchRule {
         BranchRule::from_rest(serde_json::from_value(json).unwrap())
