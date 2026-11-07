@@ -11,17 +11,20 @@
 # refs (refs/rozed/ -> refs/lo/), environment variables (ROZED_* -> LO_*), the URL schemes
 # (rozed:// -> lo://, rozed-dev:// -> lo-dev://), the folders (~/.config/lo, and
 # ~/Library/Application Support/Lo, ~/Library/Caches/Lo and ~/Library/Logs/Lo, capitalised as
-# Zed's are), file names, the user agent and the repository (scornz/rozed -> scornz/lo).
+# Zed's are), file names, any other name with a rozed- prefix (rozed-last-used -> lo-last-used),
+# the user agent and the repository (scornz/rozed -> scornz/lo).
 #
 # Text a person reads isn't changed here: menus, window titles, messages and docs say "Lo", with
 # a capital L, even mid-sentence, and that's for a person to judge line by line. The list at the
-# end shows what's left.
+# end shows what's left. The rozed- prefix rule can't tell code from prose, though: check the diff
+# for a hyphenated word it lowercased, such as rozed-specific, which should read Lo-specific.
 #
 # Kept as they are: the test org rozed-dev and its secrets folder ~/.config/rozed-dev/, the bot
 # rozed-bot (its token variable ROZED_BOT_TOKEN, which ~/.config/rozed-dev/bot.env sets, and its
-# email address), the Zed fork's branch rozed/v1.27.0, this Mac's ~/src/rozed folders, and text
-# already on GitHub in the test org: rozed-dev/playground's description and pull requests, as the
-# GitHub cassettes recorded them, and the bot's review that script/e2e/fixtures.sh looks up.
+# email address), the Zed fork's branch rozed/v1.27.0, this Mac's ~/src/rozed and
+# ~/src/rozed-worktrees folders, and text already on GitHub in the test org:
+# rozed-dev/playground's description and pull requests, as the GitHub cassettes recorded them,
+# and the bot's review that script/e2e/fixtures.sh looks up.
 #
 # Running it again changes nothing more. On a branch that predates the rename, merge origin/main
 # first, then run it: the merge brings main's renamed lines, git moves files the branch added in
@@ -52,7 +55,7 @@ cd "$(git rev-parse --show-toplevel)"
 readonly self=script/rename-to-lo.sh
 
 # Names that keep "rozed", in any case. The listing ignores them.
-readonly KEPT='rozed-dev|rozed-bot|rozed/v1\.27\.0(?![\w.-])|ROZED_BOT_TOKEN|rozed-test\@scornz\.com|~/src/rozed(?:-worktrees)?(?![\w.])|rozed (?:stack fixture|test fixtures|marks this revision)'
+readonly KEPT='rozed-dev|rozed-bot|rozed/v1\.27\.0(?![\w.-])|ROZED_BOT_TOKEN|rozed-test\@scornz\.com|(?:~/src/)?rozed-worktrees|~/src/rozed(?![\w.-])|rozed (?:stack fixture|test fixtures|marks this revision)'
 
 # The code-name renames, as one Perl substitution pass over a line or a path. Kept names are
 # swapped out first and restored after, so no rule can touch them.
@@ -80,7 +83,7 @@ readonly RENAME='
   s{(?<=_)rozed(?![A-Za-z0-9])}{lo}g;
   s{(?<![A-Za-z0-9])rozed(?=_)}{lo}g;
   s{(?<![\w-])rozed\.(sqlite|scm|invalid)\b}{lo.$1}g;
-  s{\brozed-(?=(?:test|last-used|home|ext|zed-latest|e2e)\b)}{lo-}g;
+  s{(?<![A-Za-z0-9])rozed-(?=[A-Za-z0-9])}{lo-}g;
   s{(?<=["\x27`])rozed/(?!v[\d<])}{lo/}g;
   s{(?<=[=,])rozed(?==)}{lo}g;
   s{\brozed::(?=[a-z_])}{lo::}g;
