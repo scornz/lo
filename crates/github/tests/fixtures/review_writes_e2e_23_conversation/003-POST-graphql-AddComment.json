@@ -14,17 +14,17 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4895",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4935",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "105"
+      "x-ratelimit-used": "65"
     },
     "body": {
       "data": {
         "addComment": {
           "commentEdge": {
             "node": {
-              "id": "IC_kwDOVleUfc8AAAABj4mUsQ"
+              "id": "IC_kwDOVleUfc8AAAABj5Kehg"
             }
           }
         }

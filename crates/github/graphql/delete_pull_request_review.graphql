@@ -1,0 +1,9 @@
+# Deletes your pending review and its comments, as "Cancel review" on GitHub's web pages does.
+# GitHub deletes only a pending review.
+mutation DeletePullRequestReview($pullRequestReviewId: ID!) {
+  deletePullRequestReview(input: { pullRequestReviewId: $pullRequestReviewId }) {
+    pullRequestReview {
+      id
+    }
+  }
+}

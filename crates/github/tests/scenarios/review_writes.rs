@@ -9,7 +9,9 @@ use std::time::Duration;
 use github::queries::{PullRequestCheckData, ReviewThreadList, ViewerPendingReview};
 use github::review_writes::{CommentId, Sent};
 use github::{GithubClient, GithubError, PullRef};
-use review::pending::{Mutation, NewComment, NewThread, Posting, ReviewEvent, YourReview};
+use review::pending::{
+    Mutation, NewComment, NewThread, PendingReview, Posting, ReviewEvent, YourReview,
+};
 use review::threads::{Line, Lines};
 
 pub const BOT: &str = "rozed-bot";
@@ -114,6 +116,8 @@ pub const OUTSIDE: &str = "line 25, outside the diff's hunks.";
 pub const UNCHANGED: &str = "a file-level thread on a file the pull request doesn't change.";
 pub const PENDING_REPLY: &str = "a reply in the pending review.";
 pub const SUMMARY: &str = "the pending review's summary, submitted as a comment.";
+pub const JOINED_REPLY: &str =
+    "a reply sent to be posted at once, which joined the pending review.";
 
 /// What the pending review scenario saw.
 pub struct Pending {
@@ -132,14 +136,15 @@ pub struct Pending {
     pub check: PullRequestCheckData,
     pub post_while_pending: Result<Sent, GithubError>,
     pub file_comment_while_pending: Result<Sent, GithubError>,
+    pub reply_while_pending: Sent,
     pub submitted: Sent,
     pub after: ViewerPendingReview,
     pub review: YourReview,
 }
 
 /// Starts a pending review with a line thread, adds a range, a file-level thread and a reply,
-/// tries a line outside the diff and a file the pull request doesn't change, and a comment posted
-/// at once while the review is pending, then submits it as a comment.
+/// tries a line outside the diff and a file the pull request doesn't change, and a thread, a file
+/// comment and a reply posted at once while the review is pending, then submits it as a comment.
 pub async fn pending(client: &GithubClient, pause: Pause<'_>) -> Pending {
     let pull = pull();
     let (id, head) = pull_request(client).await;
@@ -192,6 +197,12 @@ pub async fn pending(client: &GithubClient, pause: Pause<'_>) -> Pending {
         panic!("not posted at once");
     };
     let file_comment_while_pending = send(client, &id, &mut nothing_pending, &post).await;
+    // A reply isn't refused: it quietly joins the pending review.
+    let joining = reply_to(&line_thread, JOINED_REPLY);
+    let Ok(Posting::Now(post)) = nothing_pending.post(&head, &head, &joining) else {
+        panic!("not posted at once");
+    };
+    let reply_while_pending = (send(client, &id, &mut nothing_pending, &post).await).unwrap();
 
     let submit = review.submit(ReviewEvent::Comment, &text(SUMMARY), true, &head);
     let submitted = send(client, &id, &mut review, &submit.unwrap())
@@ -215,6 +226,7 @@ pub async fn pending(client: &GithubClient, pause: Pause<'_>) -> Pending {
         check,
         post_while_pending,
         file_comment_while_pending,
+        reply_while_pending,
         submitted,
         after,
         review,
@@ -431,5 +443,98 @@ pub async fn conversation(client: &GithubClient, pause: Pause<'_>) -> Conversati
         checks: [initial, after_commenting, after_editing, after_deleting],
         edited,
         deleted,
+    }
+}
+
+pub const STALE_LINE: &str = "a thread for a pending review deleted since.";
+pub const STALE_SUBMITTED: &str = "the thread of a review submitted since.";
+pub const STALE_ADDED: &str = "a thread for a review submitted since.";
+pub const STALE_REPLY: &str = "a reply for a review submitted since.";
+pub const STALE_ORPHAN: &str = "a reply to a thread deleted since.";
+
+/// What the stale scenario saw.
+pub struct Stale {
+    pub deleted: Result<(), GithubError>,
+    pub thread_on_deleted: Result<Sent, GithubError>,
+    pub submit_deleted: Result<Sent, GithubError>,
+    pub submitted: Sent,
+    pub thread_on_submitted: Result<Sent, GithubError>,
+    pub reply_on_submitted: Result<Sent, GithubError>,
+    pub deleted_comment: Result<(), GithubError>,
+    pub reply_to_deleted: Result<Sent, GithubError>,
+    pub after: ViewerPendingReview,
+}
+
+/// Sends what Lo would plan with IDs that are no longer current, as when a review or thread
+/// changed elsewhere since Lo read it: a thread added to, and a submission of, a pending review
+/// deleted since; a thread and a reply added to a review submitted since; and a reply to a thread
+/// whose only comment was deleted since.
+pub async fn stale(client: &GithubClient, pause: Pause<'_>) -> Stale {
+    let pull = pull();
+    let (id, head) = pull_request(client).await;
+    let before = client.pending_review(&pull, BOT).await.unwrap();
+    assert_eq!(before.review, None, "rozed-bot has a pending review on #23");
+
+    // An empty pending review, deleted as on GitHub's web pages, while Lo still holds it.
+    let mut review = YourReview::default();
+    let start = Mutation::StartReview {
+        commit: head.clone(),
+        thread: None,
+    };
+    let started = send(client, &id, &mut review, &start).await.unwrap();
+    let deleted = client
+        .delete_pending_review(started.review.as_deref().unwrap())
+        .await;
+    pause(SETTLE);
+    let line_10 = thread(REVIEWED, Some(Lines::one(Line::right(10))), STALE_LINE);
+    let add = review.add(&head, &head, &line_10).unwrap();
+    let thread_on_deleted = send(client, &id, &mut review, &add).await;
+    let submit = review.submit(ReviewEvent::Comment, &text("never submitted."), true, &head);
+    let submit_deleted = send(client, &id, &mut review, &submit.unwrap()).await;
+
+    // A pending review with a thread, submitted, while Lo still holds it as pending.
+    let mut fresh = YourReview::default();
+    let line_30 = thread(REVIEWED, Some(Lines::one(Line::right(30))), STALE_SUBMITTED);
+    let start = fresh.add(&head, &head, &line_30).unwrap();
+    let started = send(client, &id, &mut fresh, &start).await.unwrap();
+    let submit = fresh.submit(ReviewEvent::Comment, "", true, &head).unwrap();
+    let submitted = send(client, &id, &mut fresh, &submit).await.unwrap();
+    pause(SETTLE);
+    let mut held = YourReview::new(Some(PendingReview {
+        id: started.review.clone().unwrap(),
+        commit: Some(head.clone()),
+        comments: 1,
+    }));
+    let line_50 = thread(REVIEWED, Some(Lines::one(Line::right(50))), STALE_ADDED);
+    let add = held.add(&head, &head, &line_50).unwrap();
+    let thread_on_submitted = send(client, &id, &mut held, &add).await;
+    let threads = client.review_threads(&pull).await.unwrap();
+    let submitted_thread = thread_saying(&threads, STALE_SUBMITTED).id.clone();
+    let add = held.add(&head, &head, &reply_to(&submitted_thread, STALE_REPLY));
+    let reply_on_submitted = send(client, &id, &mut held, &add.unwrap()).await;
+    pause(SETTLE);
+
+    // The thread's only comment deleted, as elsewhere, then a reply to it posted at once.
+    let only = CommentId::Thread(started.comment.clone().unwrap());
+    let deleted_comment = client.delete_comment(&only).await;
+    pause(SETTLE);
+    let mut nothing_pending = YourReview::default();
+    let reply = reply_to(&submitted_thread, STALE_ORPHAN);
+    let Ok(Posting::Now(post)) = nothing_pending.post(&head, &head, &reply) else {
+        panic!("not posted at once");
+    };
+    let reply_to_deleted = send(client, &id, &mut nothing_pending, &post).await;
+    pause(SETTLE);
+    let after = client.pending_review(&pull, BOT).await.unwrap();
+    Stale {
+        deleted,
+        thread_on_deleted,
+        submit_deleted,
+        submitted,
+        thread_on_submitted,
+        reply_on_submitted,
+        deleted_comment,
+        reply_to_deleted,
+        after,
     }
 }

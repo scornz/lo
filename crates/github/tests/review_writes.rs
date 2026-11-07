@@ -81,13 +81,16 @@ fn a_pending_review_starts_with_a_line_thread_and_gathers_threads_and_replies() 
             "AddPullRequestReviewThread",
             "AddPullRequestReviewThread",
             "AddPullRequestReviewThread",
+            "ReviewState",
             "AddPullRequestReviewThread",
+            "ReviewState",
             "ReviewThreads",
             "AddPullRequestReviewThreadReply",
             "PendingReview",
             "PullRequestCheck",
             "AddPullRequestReview",
             "POST /repos/rozed-dev/e2e/pulls/23/comments",
+            "AddPullRequestReviewThreadReply",
             "SubmitPullRequestReview",
             "PendingReview",
         ]
@@ -118,7 +121,7 @@ fn a_pending_review_starts_with_a_line_thread_and_gathers_threads_and_replies() 
     assert_eq!(added[1]["subjectType"], "FILE");
     assert!(added[1].get("line").is_none(), "{}", added[1]);
     // GitHub answers `thread: null`, with no error, for a line outside the diff and for a file
-    // the pull request doesn't change.
+    // the pull request doesn't change; Lo asks whether the review is still pending, and it is.
     assert_eq!(rejection(&seen.outside), &Rejection::NotInDiff);
     assert_eq!(rejection(&seen.unchanged), &Rejection::NotInDiff);
 
@@ -156,6 +159,18 @@ fn a_pending_review_starts_with_a_line_thread_and_gathers_threads_and_replies() 
         rejection(&seen.file_comment_while_pending),
         &Rejection::PendingReviewExists
     );
+    // A reply sent to be posted at once isn't refused: it joins the pending review, quietly but
+    // for its state, which Lo reads.
+    let joined = &seen.reply_while_pending;
+    assert_eq!(joined.joined_pending.as_deref(), Some(review.as_str()));
+    assert_eq!(joined.review.as_deref(), Some(review.as_str()));
+    let replies = variables(&http, "AddPullRequestReviewThreadReply");
+    assert!(
+        replies[1].get("pullRequestReviewId").is_none(),
+        "{}",
+        replies[1]
+    );
+    assert_eq!(seen.reply.joined_pending, None);
 
     assert_eq!(seen.submitted.review.as_deref(), Some(review.as_str()));
     assert_eq!(seen.after.review, None);
@@ -194,10 +209,10 @@ fn comments_and_reviews_post_at_once_and_its_author_can_only_comment() {
     // REST's file comment names its comment, not its review's node ID.
     assert_eq!(seen.file.review, None);
     assert!(seen.file.comment.as_deref().unwrap().starts_with("PRRC_"));
-    assert_eq!(
-        variables(&http, "AddPullRequestReviewThreadReply")[0]["pullRequestReviewId"],
-        serde_json::Value::Null
-    );
+    let reply = &variables(&http, "AddPullRequestReviewThreadReply")[0];
+    assert!(reply.get("pullRequestReviewId").is_none(), "{reply}");
+    // Without a pending review, it's posted.
+    assert_eq!(seen.reply.joined_pending, None);
 
     assert_eq!(rejection(&seen.approve), &Rejection::OwnPullRequest);
     assert_eq!(rejection(&seen.request_changes), &Rejection::OwnPullRequest);
@@ -250,11 +265,8 @@ fn threads_resolve_and_comments_edit_and_delete_and_the_check_sees_some() {
         rejection(&seen.blank),
         &Rejection::Other("Body can't be blank".into())
     );
-    assert!(
-        matches!(&seen.deleted_again, Err(GithubError::NotFound { .. })),
-        "{:?}",
-        seen.deleted_again
-    );
+    // GitHub says "not found".
+    assert_eq!(rejection(&seen.deleted_again), &Rejection::Gone);
 
     let [initial, resolved, unresolved, edited, deleted] = &seen.checks;
     let index = (seen.before.nodes.iter())
@@ -338,4 +350,45 @@ fn an_edit_of_a_conversation_comment_moves_only_the_pull_requests_time() {
         field(initial, "/timelineEvents")
     );
     assert_eq!(field(deleted, "/comments"), field(initial, "/comments"));
+}
+
+#[test]
+fn writes_naming_what_changed_elsewhere_are_refused_as_gone() {
+    let (client, http) = client("review_writes_e2e_23_stale");
+    let seen = block_on(scenarios::stale(&client, &no_pause));
+
+    assert_eq!(
+        requests(&http),
+        [
+            "GET /repos/rozed-dev/e2e/pulls/23",
+            "PendingReview",
+            "AddPullRequestReview",
+            "DeletePullRequestReview",
+            "AddPullRequestReviewThread",
+            "SubmitPullRequestReview",
+            "AddPullRequestReview",
+            "SubmitPullRequestReview",
+            "AddPullRequestReviewThread",
+            "ReviewState",
+            "ReviewThreads",
+            "AddPullRequestReviewThreadReply",
+            "ReviewState",
+            "DeletePullRequestReviewComment",
+            "AddPullRequestReviewThreadReply",
+            "PendingReview",
+        ]
+    );
+    seen.deleted.as_ref().unwrap();
+    // A pending review deleted since: GitHub says "not found".
+    assert_eq!(rejection(&seen.thread_on_deleted), &Rejection::Gone);
+    assert_eq!(rejection(&seen.submit_deleted), &Rejection::Gone);
+    // A review submitted since: GitHub answers `null` with no error, as for a line outside the
+    // diff, and the review's state says why.
+    assert!(seen.submitted.review.is_some());
+    assert_eq!(rejection(&seen.thread_on_submitted), &Rejection::Gone);
+    assert_eq!(rejection(&seen.reply_on_submitted), &Rejection::Gone);
+    // A thread whose only comment was deleted since: "not found".
+    seen.deleted_comment.as_ref().unwrap();
+    assert_eq!(rejection(&seen.reply_to_deleted), &Rejection::Gone);
+    assert_eq!(seen.after.review, None);
 }

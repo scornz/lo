@@ -10,10 +10,10 @@
       "content-type": "application/json; charset=utf-8",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4994",
-      "x-ratelimit-reset": "1794034152",
+      "x-ratelimit-remaining": "4999",
+      "x-ratelimit-reset": "1794038733",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "6"
+      "x-ratelimit-used": "1"
     },
     "body": {
       "message": "Validation Failed",

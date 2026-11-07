@@ -4,7 +4,7 @@
     "url": "https://api.github.com/graphql",
     "operation": "SubmitPullRequestReview",
     "variables": {
-      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlR4mQ",
+      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlhDMA",
       "event": "COMMENT",
       "body": "Fixture E11: the pending review's summary, submitted as a comment."
     },
@@ -15,16 +15,16 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4919",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4957",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "81"
+      "x-ratelimit-used": "43"
     },
     "body": {
       "data": {
         "submitPullRequestReview": {
           "pullRequestReview": {
-            "id": "PRR_kwDOVleUfc8AAAABWlR4mQ",
+            "id": "PRR_kwDOVleUfc8AAAABWlhDMA",
             "state": "COMMENTED"
           }
         }

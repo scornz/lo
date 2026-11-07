@@ -7,20 +7,31 @@
 //! `rozed-bot` on its own pull requests (the `review_writes_*` recordings in `tests/fixtures`):
 //!
 //! - `addPullRequestReviewThread` refuses a line outside the diff, or a file the pull request
-//!   doesn't change, by answering `thread: null` with no error. Lo takes that as
-//!   [`Rejection::NotInDiff`], never as an acceptance. `addPullRequestReview` refuses such a
-//!   line with "Line could not be resolved", and REST with "could not be resolved".
+//!   doesn't change, by answering `thread: null` with no error, and refuses a review submitted
+//!   since the same way. So after a `null`, Lo asks whether the review is still pending: if it
+//!   is, that's [`Rejection::NotInDiff`], and otherwise [`Rejection::Gone`], never an acceptance.
+//!   `addPullRequestReview` refuses a line outside the diff with "Line could not be resolved",
+//!   and REST with "could not be resolved".
+//! - A reply to a review submitted since is answered `comment: null`, explained the same way. A
+//!   review, thread or comment deleted since is "not found" ([`Rejection::Gone`]).
 //! - While you have a pending review, GitHub refuses another, even one posted at once: "User can
 //!   only have one pending review per pull request" ([`Rejection::PendingReviewExists`]).
 //! - A pull request's author can only comment: "Review Can not approve your own pull request"
 //!   ([`Rejection::OwnPullRequest`]).
 //! - A COMMENT review with neither a body nor a comment is refused with an empty message
 //!   ([`Rejection::NothingToSubmit`]).
-//! - A blank edit is refused: "Body can't be blank". A comment deleted already is "not found".
+//! - A reply sent to be posted at once, while you have a pending review, quietly joins it
+//!   ([`Sent::joined_pending`]).
+//! - A blank edit is refused: "Body can't be blank".
 //! - A review without a summary goes once its last comment is deleted, from the timeline too.
 //!
 //! Every refusal is a [`GithubError::Rejected`], whose text the UI can show as it is.
+//!
+//! Lo never sends a write again by itself. A write that failed may still have been done, when its
+//! answer was lost or GitHub's server failed ([`GithubError::may_have_posted`]): before offering to
+//! send it again, the UI checks whether it was, against what the write's read-back brings.
 
+use graphql_client::GraphQLQuery;
 use review::pending::{Mutation, NewThread, ReviewEvent};
 use review::threads::{self, Lines};
 use serde::{Deserialize, Serialize};
@@ -30,21 +41,22 @@ use crate::error::GithubError;
 use crate::pulls::PullRef;
 use crate::queries::{
     AddComment, AddPullRequestReview, AddPullRequestReviewThread, AddPullRequestReviewThreadReply,
-    DeleteIssueComment, DeletePullRequestReviewComment, ResolveReviewThread,
-    SubmitPullRequestReview, UnresolveReviewThread, UpdateIssueComment,
-    UpdatePullRequestReviewComment, add_comment, add_pull_request_review,
+    DeleteIssueComment, DeletePullRequestReview, DeletePullRequestReviewComment,
+    ResolveReviewThread, ReviewState, SubmitPullRequestReview, UnresolveReviewThread,
+    UpdateIssueComment, UpdatePullRequestReviewComment, add_comment, add_pull_request_review,
     add_pull_request_review_thread, add_pull_request_review_thread_reply, delete_issue_comment,
-    delete_pull_request_review_comment, resolve_review_thread, submit_pull_request_review,
-    unresolve_review_thread, update_issue_comment, update_pull_request_review_comment,
+    delete_pull_request_review, delete_pull_request_review_comment, resolve_review_thread,
+    submit_pull_request_review, unresolve_review_thread, update_issue_comment,
+    update_pull_request_review_comment,
 };
 
 /// Why GitHub refused a comment, a review, or an edit of one. Its text is for the person who wrote
 /// it, as in "Couldn't post the comment: …".
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Rejection {
-    /// The lines aren't in the pull request's diff, or the file isn't one it changes. GitHub's
-    /// web pages take a comment outside the diff, but its API doesn't, so the UI offers a comment
-    /// on the file instead.
+    /// The lines aren't in the pull request's diff, or the file isn't one it changes, and the
+    /// review the thread was sent to is still pending. GitHub's web pages take a comment outside
+    /// the diff, but its API doesn't, so the UI offers a comment on the file instead.
     #[error("GitHub takes comments only on lines and files in the pull request's diff")]
     NotInDiff,
     /// You have a pending review already, perhaps started elsewhere, and GitHub allows one per
@@ -58,6 +70,17 @@ pub enum Rejection {
     /// A comment, or a request for changes, with neither a summary nor a comment.
     #[error("A review needs a summary or a comment")]
     NothingToSubmit,
+    /// The review, thread or comment it names is gone, or the review is no longer pending: your
+    /// pending review was submitted or deleted elsewhere since Lo read it, or the thread or
+    /// comment was deleted. GitHub answers "not found" for what was deleted, and `null` for a
+    /// thread or reply sent to a review submitted since.
+    #[error("It was submitted or deleted elsewhere since Lo last looked")]
+    Gone,
+    /// GitHub's limit on how fast content is created: "was submitted too quickly", in GitHub's
+    /// words. Nothing was posted, so it can be sent again after a wait. Taken from GitHub's
+    /// documented message, not seen live.
+    #[error("GitHub turned it away as sent too soon after others ({0}); wait a minute and send it")]
+    TooFast(String),
     /// GitHub answered nothing, or refused with an empty message where that means nothing else.
     #[error("GitHub refused it without saying why")]
     Unexplained,
@@ -79,6 +102,8 @@ impl Rejection {
             Self::PendingReviewExists
         } else if lower.contains("your own pull request") {
             Self::OwnPullRequest
+        } else if lower.contains("submitted too quickly") {
+            Self::TooFast(message.to_string())
         } else {
             Self::Other(message.to_string())
         }
@@ -162,10 +187,18 @@ pub struct Sent {
     /// The review the write started, added to, posted or submitted. A comment posted at once is a
     /// review of its own. REST's file comment doesn't name its review's node ID, so it has none.
     pub review: Option<String>,
-    /// The thread it started, or replied to.
+    /// The thread it added to your pending review, or replied to. `addPullRequestReview` doesn't
+    /// name the thread its comment starts (a comment has no thread field), so a
+    /// [`Mutation::StartReview`] with a thread and a [`Mutation::PostThread`] leave it `None`, as
+    /// REST's file comment does; the threads' read finds it.
     pub thread: Option<String>,
     /// The comment it posted, or added to your pending review.
     pub comment: Option<String>,
+    /// For a reply sent to be posted at once ([`Mutation::PostReply`]), the pending review it went
+    /// into instead. GitHub does that quietly when you have a pending review, such as one started
+    /// elsewhere that Lo hasn't read yet. The UI says the reply was added to your pending review,
+    /// as for [`review::pending::Posting::Pending`].
+    pub joined_pending: Option<String>,
 }
 
 /// A comment Lo can edit or delete, by node ID.
@@ -197,9 +230,24 @@ fn rejected(rejection: Rejection) -> GithubError {
 }
 
 impl GithubClient {
+    /// Runs a write's GraphQL mutation, with GitHub's refusals as [`GithubError::Rejected`]
+    /// ([`rejecting`]), and "not found" as [`Rejection::Gone`]: a node the write names is gone.
+    async fn mutate<Q: GraphQLQuery>(
+        &self,
+        variables: Q::Variables,
+        empty: Rejection,
+    ) -> Result<Q::ResponseData, GithubError> {
+        (self.graphql::<Q>(variables).await).map_err(|error| match error {
+            GithubError::NotFound { .. } => rejected(Rejection::Gone),
+            error => rejecting(error, empty),
+        })
+    }
+
     /// Sends `mutation`, planned by [`review::pending::YourReview`] for `pull`, whose node ID is
     /// `pull_request_id`, as the mutation's docs name. On success, [`Sent`] names what it made; a
     /// refusal is [`GithubError::Rejected`], including a thread GitHub answered with `null`.
+    ///
+    /// Never sent again by itself: a failure may still have posted ([`GithubError::may_have_posted`]).
     pub async fn send_review_mutation(
         &self,
         pull: &PullRef,
@@ -282,8 +330,9 @@ impl GithubClient {
                 }]
             }),
         };
-        let data = (self.graphql::<AddPullRequestReview>(variables).await)
-            .map_err(|error| rejecting(error, empty))?;
+        let data = self
+            .mutate::<AddPullRequestReview>(variables, empty)
+            .await?;
         let review = (data.add_pull_request_review)
             .and_then(|payload| payload.pull_request_review)
             .ok_or_else(|| rejected(Rejection::Unexplained))?;
@@ -296,8 +345,8 @@ impl GithubClient {
         }
         Ok(Sent {
             review: Some(review.id),
-            thread: None,
             comment,
+            ..Sent::default()
         })
     }
 
@@ -322,12 +371,14 @@ impl GithubClient {
             start_line,
             start_side,
         };
-        let data = (self.graphql::<AddPullRequestReviewThread>(variables).await)
-            .map_err(|error| rejecting(error, Rejection::Unexplained))?;
-        // GitHub's refusal of a line outside the diff: no thread, and no error.
-        let thread = (data.add_pull_request_review_thread)
-            .and_then(|payload| payload.thread)
-            .ok_or_else(|| rejected(Rejection::NotInDiff))?;
+        let data =
+            (self.mutate::<AddPullRequestReviewThread>(variables, Rejection::Unexplained)).await?;
+        // GitHub's refusal of a line outside the diff: no thread, and no error. It refuses a
+        // review that's no longer pending the same way.
+        let Some(thread) = (data.add_pull_request_review_thread).and_then(|payload| payload.thread)
+        else {
+            return Err(self.refused_in(review, Rejection::NotInDiff).await);
+        };
         let comment = (thread.comments.nodes.into_iter().flatten().flatten()).next();
         Ok(Sent {
             review: (comment.as_ref())
@@ -335,6 +386,7 @@ impl GithubClient {
                 .map(|review| review.id.clone()),
             thread: Some(thread.id),
             comment: comment.map(|comment| comment.id),
+            joined_pending: None,
         })
     }
 
@@ -353,17 +405,48 @@ impl GithubClient {
             pull_request_review_id: review.map(str::to_string),
         };
         let data = (self
-            .graphql::<AddPullRequestReviewThreadReply>(variables)
-            .await)
-            .map_err(|error| rejecting(error, Rejection::Unexplained))?;
-        let comment = (data.add_pull_request_review_thread_reply)
-            .and_then(|payload| payload.comment)
-            .ok_or_else(|| rejected(Rejection::Unexplained))?;
+            .mutate::<AddPullRequestReviewThreadReply>(variables, Rejection::Unexplained))
+        .await?;
+        let Some(comment) = (data.add_pull_request_review_thread_reply).and_then(|p| p.comment)
+        else {
+            return Err(match review {
+                // As a thread's: a review that's no longer pending.
+                Some(review) => self.refused_in(review, Rejection::Unexplained).await,
+                None => rejected(Rejection::Unexplained),
+            });
+        };
+        let pending = matches!(comment.state, q::PullRequestReviewCommentState::PENDING);
+        let joined = comment.pull_request_review.map(|review| review.id);
         Ok(Sent {
-            review: comment.pull_request_review.map(|review| review.id),
+            joined_pending: joined.clone().filter(|_| review.is_none() && pending),
+            review: joined,
             thread: Some(thread.to_string()),
             comment: Some(comment.id),
         })
+    }
+
+    /// The refusal of a thread or a reply GitHub answered with `null`, sent to the review
+    /// `review`: [`Rejection::Gone`] when the review is no longer pending, and otherwise
+    /// `pending`, what the `null` means while it is. When its state can't be read, `pending`.
+    async fn refused_in(&self, review: &str, pending: Rejection) -> GithubError {
+        use crate::queries::review_state as q;
+        let variables = q::Variables { id: review.into() };
+        let rejection = match self.graphql::<ReviewState>(variables).await {
+            Ok(data) => match data.node {
+                Some(q::ReviewStateNode::PullRequestReview(review))
+                    if matches!(review.state, q::PullRequestReviewState::PENDING) =>
+                {
+                    pending
+                }
+                _ => Rejection::Gone,
+            },
+            Err(GithubError::NotFound { .. }) => Rejection::Gone,
+            Err(error) => {
+                log::warn!("reading whether review {review} is pending: {error:#}");
+                pending
+            }
+        };
+        rejected(rejection)
     }
 
     /// REST's file-level comment on `path`, posted at once on `commit`.
@@ -388,9 +471,8 @@ impl GithubClient {
         .await
         .map_err(|error| rejecting(error, Rejection::Unexplained))?;
         Ok(Sent {
-            review: None,
-            thread: None,
             comment: Some(posted.node_id),
+            ..Sent::default()
         })
     }
 
@@ -412,8 +494,8 @@ impl GithubClient {
             },
             body: Some(body.to_string()),
         };
-        let data = (self.graphql::<SubmitPullRequestReview>(variables).await)
-            .map_err(|error| rejecting(error, Rejection::NothingToSubmit))?;
+        let data =
+            (self.mutate::<SubmitPullRequestReview>(variables, Rejection::NothingToSubmit)).await?;
         let review = (data.submit_pull_request_review)
             .and_then(|payload| payload.pull_request_review)
             .ok_or_else(|| rejected(Rejection::Unexplained))?;
@@ -423,14 +505,17 @@ impl GithubClient {
         })
     }
 
-    /// Resolves the review thread `thread`, or with `resolved: false` unresolves it.
+    /// Resolves the review thread `thread`, or with `resolved: false` unresolves it. Never sent
+    /// again by itself ([`GithubError::may_have_posted`]).
     pub async fn resolve_thread(&self, thread: &str, resolved: bool) -> Result<(), GithubError> {
-        let reject = |error| rejecting(error, Rejection::Unexplained);
+        let none = || Rejection::Unexplained;
         let answered = if resolved {
             let variables = resolve_review_thread::Variables {
                 thread_id: thread.to_string(),
             };
-            let data = (self.graphql::<ResolveReviewThread>(variables).await).map_err(reject)?;
+            let data = self
+                .mutate::<ResolveReviewThread>(variables, none())
+                .await?;
             (data.resolve_review_thread)
                 .and_then(|payload| payload.thread)
                 .map(|thread| thread.is_resolved)
@@ -438,7 +523,9 @@ impl GithubClient {
             let variables = unresolve_review_thread::Variables {
                 thread_id: thread.to_string(),
             };
-            let data = (self.graphql::<UnresolveReviewThread>(variables).await).map_err(reject)?;
+            let data = self
+                .mutate::<UnresolveReviewThread>(variables, none())
+                .await?;
             (data.unresolve_review_thread)
                 .and_then(|payload| payload.thread)
                 .map(|thread| thread.is_resolved)
@@ -449,19 +536,18 @@ impl GithubClient {
         }
     }
 
-    /// Replaces `comment`'s text with `body`.
+    /// Replaces `comment`'s text with `body`. Never sent again by itself
+    /// ([`GithubError::may_have_posted`]).
     pub async fn edit_comment(&self, comment: &CommentId, body: &str) -> Result<(), GithubError> {
-        let reject = |error| rejecting(error, Rejection::Unexplained);
+        let none = || Rejection::Unexplained;
         let edited = match comment {
             CommentId::Thread(id) => {
                 let variables = update_pull_request_review_comment::Variables {
                     id: id.clone(),
                     body: body.to_string(),
                 };
-                let data = (self
-                    .graphql::<UpdatePullRequestReviewComment>(variables)
-                    .await)
-                    .map_err(reject)?;
+                let data =
+                    (self.mutate::<UpdatePullRequestReviewComment>(variables, none())).await?;
                 (data.update_pull_request_review_comment)
                     .and_then(|payload| payload.pull_request_review_comment)
                     .is_some()
@@ -471,7 +557,7 @@ impl GithubClient {
                     id: id.clone(),
                     body: body.to_string(),
                 };
-                let data = (self.graphql::<UpdateIssueComment>(variables).await).map_err(reject)?;
+                let data = self.mutate::<UpdateIssueComment>(variables, none()).await?;
                 (data.update_issue_comment)
                     .and_then(|payload| payload.issue_comment)
                     .is_some()
@@ -484,21 +570,20 @@ impl GithubClient {
         }
     }
 
-    /// Deletes `comment`. A thread whose last comment is deleted is gone.
+    /// Deletes `comment`. A thread whose last comment is deleted is gone, and so is a review
+    /// without a summary. Never sent again by itself ([`GithubError::may_have_posted`]).
     pub async fn delete_comment(&self, comment: &CommentId) -> Result<(), GithubError> {
-        let reject = |error| rejecting(error, Rejection::Unexplained);
+        let none = || Rejection::Unexplained;
         let deleted = match comment {
             CommentId::Thread(id) => {
                 let variables = delete_pull_request_review_comment::Variables { id: id.clone() };
-                let data = (self
-                    .graphql::<DeletePullRequestReviewComment>(variables)
-                    .await)
-                    .map_err(reject)?;
+                let data =
+                    (self.mutate::<DeletePullRequestReviewComment>(variables, none())).await?;
                 data.delete_pull_request_review_comment.is_some()
             }
             CommentId::Conversation(id) => {
                 let variables = delete_issue_comment::Variables { id: id.clone() };
-                let data = (self.graphql::<DeleteIssueComment>(variables).await).map_err(reject)?;
+                let data = self.mutate::<DeleteIssueComment>(variables, none()).await?;
                 data.delete_issue_comment.is_some()
             }
         };
@@ -509,8 +594,24 @@ impl GithubClient {
         }
     }
 
+    /// Deletes your pending review `review` with its comments, as "Cancel review" on GitHub does.
+    /// GitHub deletes only a pending review. Never sent again by itself
+    /// ([`GithubError::may_have_posted`]).
+    pub async fn delete_pending_review(&self, review: &str) -> Result<(), GithubError> {
+        let variables = delete_pull_request_review::Variables {
+            pull_request_review_id: review.to_string(),
+        };
+        let data =
+            (self.mutate::<DeletePullRequestReview>(variables, Rejection::Unexplained)).await?;
+        (data.delete_pull_request_review)
+            .and_then(|payload| payload.pull_request_review)
+            .map(|_| ())
+            .ok_or_else(|| rejected(Rejection::Unexplained))
+    }
+
     /// Comments `body` on the pull request whose node ID is `pull_request_id`, in its
-    /// conversation. Returns the comment's node ID.
+    /// conversation. Returns the comment's node ID. Never sent again by itself
+    /// ([`GithubError::may_have_posted`]).
     pub async fn add_conversation_comment(
         &self,
         pull_request_id: &str,
@@ -520,8 +621,9 @@ impl GithubClient {
             subject_id: pull_request_id.to_string(),
             body: body.to_string(),
         };
-        let data = (self.graphql::<AddComment>(variables).await)
-            .map_err(|error| rejecting(error, Rejection::Unexplained))?;
+        let data = self
+            .mutate::<AddComment>(variables, Rejection::Unexplained)
+            .await?;
         (data.add_comment)
             .and_then(|payload| payload.comment_edge)
             .and_then(|edge| edge.node)
@@ -663,6 +765,30 @@ mod tests {
                 none()
             ),
             Rejection::Other("Validation Failed".into())
+        );
+    }
+
+    #[test]
+    fn githubs_limit_on_how_fast_comments_come_is_its_own_refusal() {
+        // GitHub's documented answer to content created too fast, through REST and GraphQL.
+        let fast = serde_json::json!([{
+            "resource": "IssueComment", "code": "unprocessable", "field": "data",
+            "message": "was submitted too quickly"
+        }]);
+        let too_fast = Rejection::TooFast("was submitted too quickly".into());
+        assert_eq!(
+            rejection(
+                validation("Validation Failed", fast),
+                Rejection::Unexplained
+            ),
+            too_fast
+        );
+        assert_eq!(
+            rejection(
+                unprocessable("was submitted too quickly"),
+                Rejection::Unexplained
+            ),
+            too_fast
         );
     }
 

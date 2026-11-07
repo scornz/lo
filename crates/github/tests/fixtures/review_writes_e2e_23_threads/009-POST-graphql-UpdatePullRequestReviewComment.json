@@ -4,7 +4,7 @@
     "url": "https://api.github.com/graphql",
     "operation": "UpdatePullRequestReviewComment",
     "variables": {
-      "id": "PRRC_kwDOVleUfc8AAAABDD6fyw",
+      "id": "PRRC_kwDOVleUfc8AAAABDEGlcw",
       "body": ""
     },
     "query_sha256": "9a66dfb07e6ae1b2df5b455b472fb2e3f2cc7cf917220ae6900c4f6d486afd60"
@@ -14,10 +14,10 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4899",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4939",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "101"
+      "x-ratelimit-used": "61"
     },
     "body": {
       "data": {

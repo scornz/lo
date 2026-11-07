@@ -4,10 +4,12 @@
     "url": "https://api.github.com/graphql",
     "operation": "AddPullRequestReviewThread",
     "variables": {
-      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlR4mQ",
-      "path": "README.md",
-      "body": "Fixture E11: a file-level thread on a file the pull request doesn't change.",
-      "subjectType": "FILE"
+      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlhizQ",
+      "path": "e11/review.txt",
+      "body": "Fixture E11: a thread for a review submitted since.",
+      "subjectType": "LINE",
+      "line": 50,
+      "side": "RIGHT"
     },
     "query_sha256": "4624cd7587d73c9a3571cc35ea71da931d03296ebbb6dc93f6bb3fd4e9cacd16"
   },
@@ -16,10 +18,10 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4923",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4908",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "77"
+      "x-ratelimit-used": "92"
     },
     "body": {
       "data": {

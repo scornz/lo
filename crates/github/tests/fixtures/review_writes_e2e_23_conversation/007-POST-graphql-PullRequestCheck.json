@@ -15,23 +15,23 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4892",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4931",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "108"
+      "x-ratelimit-used": "69"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4892,
-          "used": 108,
-          "resetAt": "2026-11-07T06:16:51Z"
+          "remaining": 4931,
+          "used": 69,
+          "resetAt": "2026-11-07T07:38:10Z"
         },
         "repository": {
           "pullRequest": {
-            "updatedAt": "2026-11-07T06:02:46Z",
+            "updatedAt": "2026-11-07T07:06:14Z",
             "state": "OPEN",
             "isDraft": false,
             "baseRefName": "e11/base",
@@ -42,8 +42,8 @@
             "statusCheckRollup": null,
             "mergeQueueEntry": null,
             "timelineItems": {
-              "updatedAt": "2026-11-07T06:02:41Z",
-              "totalCount": 8
+              "updatedAt": "2026-11-07T07:06:11Z",
+              "totalCount": 10
             },
             "revisionEvents": {
               "filteredCount": 0
@@ -52,10 +52,10 @@
               "totalCount": 1
             },
             "reviews": {
-              "totalCount": 5
+              "totalCount": 7
             },
             "submittedReviews": {
-              "totalCount": 5
+              "totalCount": 7
             },
             "reviewThreads": {
               "totalCount": 5,
@@ -63,7 +63,7 @@
                 {
                   "isResolved": false,
                   "comments": {
-                    "totalCount": 2
+                    "totalCount": 3
                   }
                 },
                 {
@@ -101,8 +101,8 @@
             "changedFiles": 2,
             "lastEditedAt": null,
             "timelineEvents": {
-              "filteredCount": 7,
-              "updatedAt": "2026-11-07T06:02:41Z"
+              "filteredCount": 9,
+              "updatedAt": "2026-11-07T07:06:11Z"
             }
           }
         }

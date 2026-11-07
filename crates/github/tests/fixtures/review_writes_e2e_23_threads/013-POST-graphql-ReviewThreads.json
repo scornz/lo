@@ -17,19 +17,19 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4994",
-      "x-ratelimit-reset": "1794034914",
+      "x-ratelimit-remaining": "4992",
+      "x-ratelimit-reset": "1794038585",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "6"
+      "x-ratelimit-used": "8"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4994,
-          "used": 6,
-          "resetAt": "2026-11-07T07:01:54Z"
+          "remaining": 4992,
+          "used": 8,
+          "resetAt": "2026-11-07T08:03:05Z"
         },
         "repository": {
           "pullRequest": {
@@ -37,11 +37,11 @@
               "totalCount": 5,
               "pageInfo": {
                 "hasNextPage": false,
-                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMjoxNVrOtMtiFA=="
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNTo0M1rOtM1JhA=="
               },
               "nodes": [
                 {
-                  "id": "PRRT_kwDOVleUfc60y104",
+                  "id": "PRRT_kwDOVleUfc60zUbV",
                   "path": "e11/review.txt",
                   "subjectType": "LINE",
                   "diffSide": "RIGHT",
@@ -56,22 +56,22 @@
                   "viewerCanResolve": true,
                   "viewerCanUnresolve": false,
                   "comments": {
-                    "totalCount": 2,
+                    "totalCount": 3,
                     "pageInfo": {
                       "hasNextPage": false,
-                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMjowM1rPAAAAAQw-nOM="
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNTozNFrPAAAAAQxBpE8="
                     },
                     "nodes": [
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6ZnQ",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGiag",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a line thread, the first comment of a pending review.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:01:55Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500396445",
+                        "createdAt": "2026-11-07T07:05:21Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500595306",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -84,15 +84,36 @@
                         }
                       },
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6c4w",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGjnQ",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a reply in the pending review.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:02:03Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500397283",
+                        "createdAt": "2026-11-07T07:05:29Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500595613",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "5a48d2255817f0f19dfdfc3168925f0cdb85c630"
+                        },
+                        "originalCommit": {
+                          "oid": "5a48d2255817f0f19dfdfc3168925f0cdb85c630"
+                        }
+                      },
+                      {
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGkTw",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Fixture E11: a reply sent to be posted at once, which joined the pending review.",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-07T07:05:34Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500595791",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -108,7 +129,7 @@
                   }
                 },
                 {
-                  "id": "PRRT_kwDOVleUfc60y13u",
+                  "id": "PRRT_kwDOVleUfc60zUcg",
                   "path": "e11/review.txt",
                   "subjectType": "LINE",
                   "diffSide": "RIGHT",
@@ -126,19 +147,19 @@
                     "totalCount": 2,
                     "pageInfo": {
                       "hasNextPage": false,
-                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMjoxOVrPAAAAAQw-oWA="
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNTo0N1rPAAAAAQxBp6k="
                     },
                     "nodes": [
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6anA",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGi3w",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a range from the base's line 10 to the head's line 11.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:01:58Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500396700",
+                        "createdAt": "2026-11-07T07:05:24Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500595423",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -151,15 +172,15 @@
                         }
                       },
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6hYA",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGnqQ",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a reply that started an empty pending review.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:02:19Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500398432",
+                        "createdAt": "2026-11-07T07:05:47Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500596649",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -175,7 +196,7 @@
                   }
                 },
                 {
-                  "id": "PRRT_kwDOVleUfc60y15Q",
+                  "id": "PRRT_kwDOVleUfc60zUc1",
                   "path": "e11/notes.md",
                   "subjectType": "FILE",
                   "diffSide": "RIGHT",
@@ -193,19 +214,19 @@
                     "totalCount": 1,
                     "pageInfo": {
                       "hasNextPage": false,
-                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMTo1OVrPAAAAAQw-mxY="
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNToyNVrPAAAAAQxBovs="
                     },
                     "nodes": [
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6bFg",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGi-w",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a file-level thread.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:01:59Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500396822",
+                        "createdAt": "2026-11-07T07:05:25Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500595451",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -221,7 +242,7 @@
                   }
                 },
                 {
-                  "id": "PRRT_kwDOVleUfc60y2Hy",
+                  "id": "PRRT_kwDOVleUfc60zUlp",
                   "path": "e11/review.txt",
                   "subjectType": "LINE",
                   "diffSide": "RIGHT",
@@ -239,19 +260,19 @@
                     "totalCount": 1,
                     "pageInfo": {
                       "hasNextPage": false,
-                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMjoxNFrPAAAAAQw-oEo="
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNTo0MlrPAAAAAQxBpic="
                     },
                     "nodes": [
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6gSg",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGmJw",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a line thread posted at once, on line 50.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:02:14Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500398154",
+                        "createdAt": "2026-11-07T07:05:42Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500596263",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,
@@ -267,7 +288,7 @@
                   }
                 },
                 {
-                  "id": "PRRT_kwDOVleUfc60y2IU",
+                  "id": "PRRT_kwDOVleUfc60zUmE",
                   "path": "e11/notes.md",
                   "subjectType": "FILE",
                   "diffSide": "RIGHT",
@@ -285,19 +306,19 @@
                     "totalCount": 1,
                     "pageInfo": {
                       "hasNextPage": false,
-                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNjowMjoxNVrPAAAAAQw-oII="
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwNzowNTo0M1rPAAAAAQxBplg="
                     },
                     "nodes": [
                       {
-                        "id": "PRRC_kwDOVleUfc8AAAABDD6ggg",
+                        "id": "PRRC_kwDOVleUfc8AAAABDEGmWA",
                         "author": {
                           "__typename": "User",
                           "login": "rozed-bot"
                         },
                         "body": "Fixture E11: a file-level comment posted at once, through REST.",
                         "state": "SUBMITTED",
-                        "createdAt": "2026-11-07T06:02:15Z",
-                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500398210",
+                        "createdAt": "2026-11-07T07:05:43Z",
+                        "url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500596312",
                         "isMinimized": false,
                         "minimizedReason": null,
                         "viewerCanUpdate": true,

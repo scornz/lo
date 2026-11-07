@@ -90,7 +90,7 @@ The numbers are from 2026-11-06. `reset-e1` gives E1 a new number, so tests read
 | **E8** hostile files | #19 | `e8/hostile` → `e8/base` | Milestone 10 (10h's hardening, behind 10g's trust); [below](#e8-hostile-files). Trusted, after 2 minutes of scrolling and hovering, no marker exists: `lo-e8-rustc-wrapper` (`.cargo/config.toml`), `lo-e8-rust-analyzer`, `-gopls`, `-vtsls` and `-basedpyright` (`.zed/settings.json`), `lo-e8-tsserver` (`node_modules/typescript`) and `lo-e8-python` (`.venv/`). The two toolchain baits, `e8/pinned/rust-toolchain.toml` and `go.mod`, leave none, so the check reads the servers' environments instead. |
 | **E9** moves and syntax | #20 | `e9/moves` → `e9/base` | Milestones 11 and 13; [below](#e9-moves-and-syntax). **11a:** the cross-file move shows both links, only its edited line has word highlights, `g m` round-trips, the within-file move works and the 2-line block isn't a move. **11b:** the renamed variable highlights only the name; the reordered arguments; the wrapped block marks only the `if`; the JSON reorder; the parse error and the 1.2 MB file fall back. **11c:** the thread on a moved line sits under the same line in both views. **13d** drives the moves and the syntax view. |
 | **E10** large | #21 | `e10/large` → `e10/base` | Milestones 10, 12 and 13; [below](#e10-large). **10b:** the debug log shows both trees indexed with their times, and reopening reuses blobs. **12f:** ⌘P filters its 300 files at once. **13e:** the budgets for the first file (1.5 s warm) and all files (6 s), moved-code detection (200 ms), and memory with `fd#2212` open too (1 GB). |
-| **E11** review writes | #23 | `e11/writes` → `e11/base` | Milestone 8; [below](#e11-review-writes). `github`'s recordings of comments, replies and reviews, written as rozed-bot by `crates/github/tests/record_fixtures.rs` (`review_writes_e2e_23`), which deletes the comments it can afterwards. Not for checks that need it unchanged: each run leaves two reviews GitHub can't delete. |
+| **E11** review writes | #23 | `e11/writes` → `e11/base` | Milestone 8; [below](#e11-review-writes). `github`'s recordings of comments, replies and reviews, written as rozed-bot by `crates/github/tests/record_fixtures.rs` (`review_writes_e2e_23` and `review_writes_stale_e2e_23`), which delete the comments they can before and after. Not for checks that need it unchanged: each run leaves two reviews GitHub can't delete. Writes only with `LO_RECORD_WRITES=1`. |
 | **E12** extension languages | #22 | `e12/languages` → `e12/base` | Milestones 10 (10i) and 13 (13f). One file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed. **Untrusted:** every file is highlighted on both sides, and the debug log shows no request at launch. **Trusted:** the Terraform server downloads from `releases.hashicorp.com`. |
 | **#17** images | #17 | `e5/images` → `main` | Milestone 5 (5d's image previews); 8g's timeline images go through the same preview helper. SVGs whose `<image>`s point at files on the reviewer's disk and at `/dev/zero` draw only their frame and dot; the 316-byte pattern bomb (a 20000 × 20000 tile) fails with "couldn't preview this image" and Lo stays responsive; the 48 × 48 PNG previews. Opened by hand first; `setup` would recreate the same files, two of whose SVG comments use the project's first name, as on GitHub. |
 
@@ -208,20 +208,33 @@ and the PR changes lines 10, 11, 30 and 50, so its diff has three hunks (lines 7
 47–53) and lines outside them; `e11/notes.md` changes one line, for file-level comments. It has
 no review of its own.
 
-`cargo test -p github --test record_fixtures -- --ignored --exact review_writes_e2e_23` writes to
-it as rozed-bot, checking `GET /user` first, and records four cassettes, `review_writes_e2e_23_*`:
+Two recorders in `crates/github/tests/record_fixtures.rs` write to it as rozed-bot, and only with
+`LO_RECORD_WRITES=1`, so recording every cassette never writes:
+
+```sh
+LO_RECORD_WRITES=1 cargo test -p github --test record_fixtures -- --ignored --exact review_writes_e2e_23
+LO_RECORD_WRITES=1 cargo test -p github --test record_fixtures -- --ignored --exact review_writes_stale_e2e_23
+```
+
+Each checks `GET /user` first. `review_writes_e2e_23` records four cassettes,
+`review_writes_e2e_23_*`:
 
 - **pending:** a pending review started with a line thread, then a range from the base's line 10
   to the head's 11, a file-level thread and a reply; a line outside the diff and a file the PR
-  doesn't change, which GitHub answers with `thread: null`; a comment posted at once, refused
-  while the review is pending; then the review submitted as a comment.
+  doesn't change, which GitHub answers with `thread: null`; a thread and a file comment posted at
+  once, refused while the review is pending, and a reply posted at once, which joins it; then the
+  review submitted as a comment.
 - **posted:** a reply, a line thread, a REST file-level comment and a review with only a summary,
   all posted at once; approving, requesting changes and an empty comment, which GitHub refuses
   its author; a reply that starts an empty pending review, submitted without a summary.
 - **threads:** a thread resolved and unresolved, a reply edited, edited blank and deleted twice.
 - **conversation:** two comments on the PR itself, the first edited, then both deleted.
 
-Afterwards it deletes every comment of rozed-bot's starting `Fixture E11:`, so the PR keeps no
-threads. GitHub drops a review without a summary once its last comment goes, so each run leaves
-two submitted reviews, the two with a summary, which can't be deleted. A run stops before writing
-anything if rozed-bot has a pending review there.
+`review_writes_stale_e2e_23` records `review_writes_e2e_23_stale`: writes naming a pending review
+deleted since, a review submitted since and a thread deleted since.
+
+Before and after each, whether it finishes or fails, the recorder deletes rozed-bot's pending
+review there and every comment of its starting `Fixture E11:`, in threads and on the PR itself, so
+the PR keeps no threads and a failed run doesn't block the next. GitHub drops a review without a
+summary once its last comment goes, so each run of `review_writes_e2e_23` leaves two submitted
+reviews, the two with a summary, which can't be deleted.

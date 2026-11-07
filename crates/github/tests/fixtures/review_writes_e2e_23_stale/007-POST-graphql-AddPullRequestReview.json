@@ -6,11 +6,10 @@
     "variables": {
       "pullRequestId": "PR_kwDOVleUfc8AAAABNeGO7Q",
       "commitOID": "5a48d2255817f0f19dfdfc3168925f0cdb85c630",
-      "event": "COMMENT",
       "threads": [
         {
-          "body": "Fixture E11: never posted.",
-          "line": 50,
+          "body": "Fixture E11: the thread of a review submitted since.",
+          "line": 30,
           "path": "e11/review.txt",
           "side": "RIGHT"
         }
@@ -23,30 +22,27 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4920",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4910",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "80"
+      "x-ratelimit-used": "90"
     },
     "body": {
       "data": {
-        "addPullRequestReview": null
-      },
-      "errors": [
-        {
-          "type": "UNPROCESSABLE",
-          "path": [
-            "addPullRequestReview"
-          ],
-          "locations": [
-            {
-              "line": 13,
-              "column": 4
+        "addPullRequestReview": {
+          "pullRequestReview": {
+            "id": "PRR_kwDOVleUfc8AAAABWlhizQ",
+            "state": "PENDING",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOVleUfc8AAAABDEG13g"
+                }
+              ]
             }
-          ],
-          "message": "User can only have one pending review per pull request"
+          }
         }
-      ]
+      }
     }
   }
 }

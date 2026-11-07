@@ -1,13 +1,20 @@
 //! Records the cassettes in `tests/fixtures` from `rozed-dev/playground`, a private repo where PR
 //! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3. The push histories
 //! and stacks come from `rozed-dev/e2e`'s fixtures (`script/e2e/README.md`), and from
-//! `sharkdp/fd` and `github/gh-stack`, read only. `review_writes_e2e_23` writes comments and
-//! reviews to E11, `rozed-dev/e2e#23`, a fixture of rozed-bot's own, and records them.
+//! `sharkdp/fd` and `github/gh-stack`, read only.
 //!
 //! Each test is ignored; run them by hand, one cassette or all:
 //!
 //! ```sh
 //! cargo test -p github --test record_fixtures -- --ignored [cassette_name]
+//! ```
+//!
+//! The `review_writes_*` recorders write comments and reviews to E11, `rozed-dev/e2e#23`, a
+//! fixture of rozed-bot's own (`script/e2e/README.md`), and record them. They write only with
+//! `LO_RECORD_WRITES=1`, and do nothing otherwise, so recording everything never writes:
+//!
+//! ```sh
+//! LO_RECORD_WRITES=1 cargo test -p github --test record_fixtures -- --ignored --exact review_writes_e2e_23
 //! ```
 //!
 //! They use Lo's own OAuth token for the test bot, read from `LO_FIXTURE_TOKEN_FILE`
@@ -884,19 +891,88 @@ fn rest_pull_files_berry_7077() {
 #[path = "scenarios/review_writes.rs"]
 mod scenarios;
 
-/// Writes to E11, `rozed-dev/e2e#23` (`script/e2e/README.md`), as rozed-bot, recording each of
-/// `scenarios`' writes into a cassette of its own, then deletes the comments it can. Submitted
-/// reviews stay: GitHub doesn't delete them. Prints what GitHub answered.
-#[test]
-#[ignore = "writes to rozed-dev/e2e#23 as rozed-bot and records it; run by hand"]
-fn review_writes_e2e_23() {
-    use github::review_writes::CommentId;
-
+/// Runs `record`, which writes to E11 as rozed-bot, when `LO_RECORD_WRITES` is `1`, and does
+/// nothing otherwise. It checks first that the token is rozed-bot's, and clears what an earlier run
+/// may have left on E11 before and after, whether `record` finishes or panics.
+fn writing_to_e11(record: impl FnOnce(Token)) {
+    if std::env::var("LO_RECORD_WRITES").as_deref() != Ok("1") {
+        eprintln!("not writing to rozed-dev/e2e#23: set LO_RECORD_WRITES=1 to record writes");
+        return;
+    }
     let token = token();
     let plain = GithubClient::new(http(), token.clone());
     // Writes go only to rozed-bot's own fixture: check whose token it is first.
     let user = block_on(plain.user()).unwrap();
     assert_eq!(user.user.login, scenarios::BOT);
+    clean_up_e11(&plain);
+    let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| record(token)));
+    clean_up_e11(&plain);
+    if let Err(panic) = recorded {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Clears E11 of what the recorders write, unrecorded: rozed-bot's pending review there, and its
+/// comments that start with [`scenarios::MARK`], in threads and on the pull request itself. A
+/// thread goes with its last comment, and a review without a summary with its last comment.
+/// Submitted reviews with a summary stay: GitHub doesn't delete them.
+fn clean_up_e11(plain: &GithubClient) {
+    use github::review_writes::CommentId;
+
+    let ours = |login: Option<&str>, body: &str| {
+        login == Some(scenarios::BOT) && body.starts_with(scenarios::MARK)
+    };
+    block_on(async {
+        let pull = scenarios::pull();
+        let pending = plain.pending_review(&pull, scenarios::BOT).await.unwrap();
+        if let Some(review) = pending.review {
+            let deleted = plain.delete_pending_review(&review.id).await;
+            eprintln!(
+                "clean-up: deleted pending review {}: {deleted:?}",
+                review.id
+            );
+        }
+        let threads = plain.review_threads(&pull).await.unwrap();
+        let comments = (threads.nodes.iter())
+            .flat_map(|thread| thread.comments.nodes.iter().flatten().flatten())
+            .filter(|comment| {
+                let login = comment.author.as_ref().map(|author| author.login.as_str());
+                ours(login, &comment.body)
+            });
+        for comment in comments {
+            let id = CommentId::Thread(comment.id.clone());
+            let deleted = plain.delete_comment(&id).await;
+            eprintln!("clean-up: deleted {}: {deleted:?}", comment.id);
+        }
+        let path = format!(
+            "/repos/{}/issues/{}/comments?per_page=100",
+            scenarios::REPO,
+            scenarios::NUMBER
+        );
+        let conversation: Vec<serde_json::Value> = plain.get(&path).await.unwrap();
+        for comment in conversation {
+            let body = comment["body"].as_str().unwrap_or_default();
+            if ours(comment["user"]["login"].as_str(), body) {
+                let id = comment["node_id"].as_str().unwrap().to_string();
+                let deleted = plain
+                    .delete_comment(&CommentId::Conversation(id.clone()))
+                    .await;
+                eprintln!("clean-up: deleted {id}: {deleted:?}");
+            }
+        }
+    });
+}
+
+/// Writes to E11, `rozed-dev/e2e#23` (`script/e2e/README.md`), as rozed-bot, recording each of
+/// `scenarios`' writes into a cassette of its own; [`writing_to_e11`] clears what they leave.
+/// Prints what GitHub answered.
+#[test]
+#[ignore = "with LO_RECORD_WRITES=1, writes to rozed-dev/e2e#23 as rozed-bot and records it"]
+fn review_writes_e2e_23() {
+    writing_to_e11(record_review_writes);
+}
+
+fn record_review_writes(token: Token) {
     let pause = |duration| std::thread::sleep(duration);
     let record = |name: &str, description: &str| {
         (
@@ -1032,21 +1108,45 @@ fn review_writes_e2e_23() {
             serde_json::to_value(&check.timeline_items).unwrap()
         );
     }
+}
 
-    // Clean up, unrecorded: every comment of rozed-bot's these wrote. A thread goes with its last.
-    block_on(async {
-        let threads = plain.review_threads(&scenarios::pull()).await.unwrap();
-        let comments = (threads.nodes.iter())
-            .flat_map(|thread| thread.comments.nodes.iter().flatten().flatten())
-            .filter(|comment| {
-                comment.author.as_ref().map(|author| author.login.as_str()) == Some(scenarios::BOT)
-                    && comment.body.starts_with(scenarios::MARK)
-            });
-        for comment in comments {
-            let deleted = plain
-                .delete_comment(&CommentId::Thread(comment.id.clone()))
-                .await;
-            eprintln!("clean-up: deleted {}: {deleted:?}", comment.id);
-        }
+/// Writes to E11 with IDs Lo holds that are no longer current: a pending review deleted, and one
+/// submitted, as elsewhere, and a thread whose comment was deleted. Records what GitHub answers.
+#[test]
+#[ignore = "with LO_RECORD_WRITES=1, writes to rozed-dev/e2e#23 as rozed-bot and records it"]
+fn review_writes_stale_e2e_23() {
+    writing_to_e11(|token| {
+        let pause = |duration| std::thread::sleep(duration);
+        let stale = record_as(
+            token,
+            "review_writes_e2e_23_stale",
+            "rozed-bot's writes on rozed-dev/e2e#23 (E11) with IDs no longer current: a thread \
+             added to and a submission of a pending review deleted since, a thread and a reply \
+             added to a review submitted since, and a reply to a thread deleted since",
+            scenarios::REPO,
+            schema_commit(),
+            |client| async move { scenarios::stale(&client, &pause).await },
+        );
+        eprintln!("stale: deleted the pending review {:?}", stale.deleted);
+        eprintln!("stale: thread on it {:?}", stale.thread_on_deleted);
+        eprintln!("stale: submitting it {:?}", stale.submit_deleted);
+        eprintln!("stale: submitted {:?}", stale.submitted);
+        eprintln!(
+            "stale: thread on the submitted one {:?}",
+            stale.thread_on_submitted
+        );
+        eprintln!(
+            "stale: reply in the submitted one {:?}",
+            stale.reply_on_submitted
+        );
+        eprintln!(
+            "stale: deleted the thread's comment {:?}",
+            stale.deleted_comment
+        );
+        eprintln!(
+            "stale: reply to the deleted thread {:?}",
+            stale.reply_to_deleted
+        );
+        eprintln!("stale: pending afterwards {:?}", stale.after);
     });
 }

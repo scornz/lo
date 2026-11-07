@@ -4,7 +4,7 @@
     "url": "https://api.github.com/graphql",
     "operation": "DeletePullRequestReviewComment",
     "variables": {
-      "id": "PRRC_kwDOVleUfc8AAAABDD6fyw"
+      "id": "PRRC_kwDOVleUfc8AAAABDEGlcw"
     },
     "query_sha256": "1e842a0990ac317f6f90649972672c695db4347de6d338ee27b695045e830a26"
   },
@@ -13,10 +13,10 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4897",
-      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-remaining": "4937",
+      "x-ratelimit-reset": "1794037090",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "103"
+      "x-ratelimit-used": "63"
     },
     "body": {
       "data": {
@@ -34,7 +34,7 @@
               "column": 3
             }
           ],
-          "message": "Could not resolve to a node with the global id of 'PRRC_kwDOVleUfc8AAAABDD6fyw'."
+          "message": "Could not resolve to a node with the global id of 'PRRC_kwDOVleUfc8AAAABDEGlcw'."
         }
       ]
     }
