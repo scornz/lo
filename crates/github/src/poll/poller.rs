@@ -25,8 +25,10 @@ use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
 use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
 use crate::push_history::{PushHistory, read_push_history};
+use crate::queries::stack_layers::read_stack_layers;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
+    StackLayerList,
 };
 use crate::rate_limit::RateLimits;
 use crate::revision_marks::RevisionMarks;
@@ -701,6 +703,45 @@ impl Poller {
             move |client, known| read_push_history(client, target.clone(), login.clone(), known),
             cx,
         )
+    }
+
+    /// What the stack tree shows of the layers whose node IDs are `ids`, kept for `pull`, the
+    /// layer that's open, as [`Self::read_cached`] keeps it. It's read again when the open layer's
+    /// state, head, review decision, checks or queue entry change ([`StackLayerList`]'s
+    /// [`CachedRead::WATCHED`]), on the 5-minute refresh, and at once when the layers asked for
+    /// aren't the ones it holds. Until then it returns what it holds, which may be another set of
+    /// layers.
+    pub fn stack_layers(
+        &mut self,
+        pull: PullRef,
+        ids: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<StackLayerList>>> {
+        let asked = ids.clone();
+        let cached = self.read_cached(
+            pull.clone(),
+            move |client, _| read_stack_layers(client, asked.clone()),
+            cx,
+        );
+        if cached
+            .as_ref()
+            .is_some_and(|cached| cached.value.ids != ids)
+        {
+            self.read_again::<StackLayerList>(&pull, cx);
+        }
+        cached
+    }
+
+    /// Makes a read [`Self::read_cached`] keeps for `pull` due at once, whatever the fields it
+    /// watches say.
+    fn read_again<T: CachedRead>(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
+        let state = self.pulls.get_mut(pull);
+        if let Some(read) = state.and_then(|state| state.reads.get_mut(T::NAME))
+            && read.stamp.take().is_some()
+        {
+            self.wake();
+            cx.notify();
+        }
     }
 
     /// Runs a write (a comment, a review, viewed marks, a merge) that changes `target`, with the

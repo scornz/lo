@@ -519,6 +519,7 @@ mod tests {
     use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
     use crate::push_history::PushHistory;
+    use crate::queries::StackLayerList;
 
     fn account(login: &str) -> Account {
         Account {
@@ -750,6 +751,7 @@ mod tests {
             PullRequestCheckData::NAME,
             OpenPullRequestList::NAME,
             Stamped::<PushHistory>::NAME,
+            Stamped::<StackLayerList>::NAME,
         ];
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "{names:?}");
@@ -764,6 +766,10 @@ mod tests {
                     Stamped::<PushHistory>::NAME,
                     Stamped::<PushHistory>::version()
                 ),
+                (
+                    Stamped::<StackLayerList>::NAME,
+                    Stamped::<StackLayerList>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
@@ -772,6 +778,7 @@ mod tests {
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
                 ("OpenPullRequests", "af1d1e34e2bad5d5".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
+                ("StackLayers", "a404ac19cb8d7d00".to_string()),
             ]
         );
     }

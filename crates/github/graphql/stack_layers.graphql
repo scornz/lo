@@ -1,0 +1,36 @@
+# What a stack's tree shows of its layers (design §4, "The stack tree") that the open pull request
+# list doesn't keep current: each layer's review decision, checks and merge queue entry, and how
+# many of its first 100 files the viewer has viewed. Asked for by node ID, at most 100 at a time.
+query StackLayers($ids: [ID!]!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  nodes(ids: $ids) {
+    __typename
+    ... on PullRequest {
+      id
+      number
+      state
+      headRefOid
+      reviewDecision
+      statusCheckRollup {
+        state
+      }
+      isInMergeQueue
+      mergeQueueEntry {
+        position
+        state
+      }
+      files(first: 100) {
+        totalCount
+        nodes {
+          viewerViewedState
+        }
+      }
+    }
+  }
+}
