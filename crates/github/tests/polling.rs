@@ -18,12 +18,13 @@ use github::cache::PrCache;
 use github::cassette::{self, Interaction};
 use github::db::{AccountSource, RozedDb};
 use github::poll::{
-    LowLimit, Offline, PauseReason, PollConfig, PollEvent, PollStatus, Poller, RateLimitState,
-    WallClock,
+    CachedRead, LowLimit, Offline, PauseReason, PollConfig, PollEvent, PollStatus, Poller,
+    RateLimitState, WallClock,
 };
+use github::push_history::PushHistory;
 use github::queries::{PullRequestData, pull_request};
 use github::replay::ReplayHttpClient;
-use github::{AuthenticatedUser, PullRef, RepoRef, Target, Token, User};
+use github::{AuthenticatedUser, GithubError, PullRef, RepoRef, Target, Token, User};
 use gpui::{AppContext as _, BackgroundExecutor, Entity, TestAppContext};
 use http_client::http::HeaderValue;
 use http_client::{AsyncBody, HttpClient, Request, Response, Url};
@@ -31,7 +32,7 @@ use parking_lot::Mutex;
 
 /// The wall clock when each test starts: after every recorded rate-limit window has reset, so
 /// only the windows a test sets count.
-const START: u64 = 1_794_000_000;
+const START: u64 = 1_794_020_000;
 const LOGIN: &str = "rozed-bot";
 
 fn wall(secs: u64) -> SystemTime {
@@ -296,6 +297,10 @@ impl Polling {
                     format!("open PRs of {repo}: {}", list.pull_requests.len())
                 }
                 PollEvent::Failed { target, error } => format!("failed {target:?}: {error}"),
+                PollEvent::Read { pull, name } => format!("read {name} #{}", pull.number),
+                PollEvent::ReadFailed { pull, name, error } => {
+                    format!("failed to read {name} #{}: {error}", pull.number)
+                }
             })
             .collect()
     }
@@ -1871,4 +1876,420 @@ async fn unwatching_stops_polling(cx: &mut TestAppContext) {
         t.read(|poller| poller.open_pull_requests(&playground())),
         None
     );
+}
+
+// Reads the poller keeps in the cache, with a made-up read whose requests send nothing: each
+// counts itself and answers what the test set.
+
+/// What [`counted`] reads: the value the test set.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct Counted(u32);
+
+impl github::cache::CacheEntry for Counted {
+    const NAME: &'static str = "Counted";
+
+    fn shape() -> String {
+        github::cache::schema_shape::<Self>()
+    }
+}
+
+impl CachedRead for Counted {
+    /// What a push history watches.
+    const WATCHED: &'static [&'static str] = PushHistory::WATCHED;
+
+    /// Zero stands for a value one of whose parts couldn't be read.
+    fn is_complete(&self) -> bool {
+        self.0 != 0
+    }
+}
+
+/// How many times the read ran, and what it answers next: a value, or an error.
+#[derive(Clone)]
+struct Answers {
+    runs: Arc<std::sync::atomic::AtomicU32>,
+    next: Arc<Mutex<Result<u32, String>>>,
+}
+
+impl Default for Answers {
+    fn default() -> Self {
+        Self {
+            runs: Arc::default(),
+            next: Arc::new(Mutex::new(Ok(1))),
+        }
+    }
+}
+
+impl Answers {
+    fn runs(&self) -> u32 {
+        self.runs.load(Ordering::SeqCst)
+    }
+
+    fn answer(&self, next: Result<u32, &str>) {
+        *self.next.lock() = next.map_err(str::to_string);
+    }
+}
+
+/// Keeps a [`Counted`] read for `pull`, returning what the poller has at once.
+fn counted(
+    poller: &mut Poller,
+    pull: PullRef,
+    answers: &Answers,
+    cx: &mut gpui::Context<Poller>,
+) -> Option<u32> {
+    let answers = answers.clone();
+    poller
+        .read_cached(
+            pull,
+            move |_, _known| {
+                answers.runs.fetch_add(1, Ordering::SeqCst);
+                let next = answers.next.lock().clone();
+                async move { next.map(Counted).map_err(GithubError::Decode) }
+            },
+            cx,
+        )
+        .map(|cached| cached.value.0)
+}
+
+fn cached_count(t: &Polling) -> Option<u32> {
+    t.read(|poller| poller.cached_read::<Counted>(&pr(1)))
+        .map(|cached| cached.value.0)
+}
+
+/// PR #1's recorded check with `edit` made to it.
+fn check_with(r: &[Interaction], edit: impl FnOnce(&mut serde_json::Value)) -> Interaction {
+    with_body(r[1].clone(), |body| {
+        edit(&mut body["data"]["repository"]["pullRequest"])
+    })
+}
+
+#[gpui::test]
+async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_watches_changes(
+    cx: &mut TestAppContext,
+) {
+    let r = recorded();
+    let rollup = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+    });
+    let commented = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["timelineItems"]["updatedAt"] = "2026-11-06T12:00:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+    });
+    let force_pushed = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["timelineItems"]["updatedAt"] = "2026-11-06T12:01:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+        pull["revisionEvents"]["filteredCount"] = 1.into();
+    });
+    // You submit the review you had pending: the count of every review, which held it already,
+    // stays as it was.
+    let submitted = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["timelineItems"]["updatedAt"] = "2026-11-06T12:02:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+        pull["revisionEvents"]["filteredCount"] = 1.into();
+        let submitted = pull["submittedReviews"]["totalCount"].as_i64().unwrap();
+        pull["submittedReviews"]["totalCount"] = (submitted + 1).into();
+    });
+    let mut interactions = vec![
+        r[0].clone(),
+        r[6].clone(),
+        r[1].clone(),
+        r[1].clone(),
+        rollup,
+        commented,
+        force_pushed,
+        submitted,
+        r[2].clone(),
+    ];
+    interactions.extend(repo_answers(&r));
+    let mut t = Polling::new("cached_read", interactions, cx).await;
+    let answers = Answers::default();
+    answers.answer(Ok(1));
+    let at_once = t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx)
+    });
+    assert_eq!(at_once, None);
+    t.run();
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(cached_count(&t), Some(1));
+    assert!(t.events().contains(&"read Counted #1".to_string()));
+
+    // The checks' state isn't a field it watches, and a comment, which moves the timeline,
+    // changes none.
+    t.run_until(40);
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(t.events(), ["check #1"]);
+    t.run_until(60);
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(t.events(), ["check #1"]);
+
+    // A force-push: it's read again, after the poll. An unchanged answer sends nothing.
+    t.run_until(80);
+    assert_eq!(answers.runs(), 2);
+    assert_eq!(t.events(), ["check #1"]);
+    assert_eq!(cached_count(&t), Some(1));
+    // A submitted review: it's read again.
+    t.run_until(100);
+    assert_eq!(answers.runs(), 3);
+    t.run_until(120);
+    assert_eq!(answers.runs(), 3);
+
+    // The cache took the new stamp, so after a restart it isn't read again.
+    t.restart();
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run_until(125);
+    assert_eq!(answers.runs(), 3);
+}
+
+#[gpui::test]
+async fn a_cached_read_is_refreshed_every_five_minutes_and_kept_across_restarts(
+    cx: &mut TestAppContext,
+) {
+    let mut t = Polling::new("cached_read_refresh", recorded(), cx).await;
+    let answers = Answers::default();
+    answers.answer(Ok(1));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    t.events();
+
+    // Like the details, every 5 minutes in the foreground. A new answer is sent.
+    answers.answer(Ok(2));
+    t.run_until(299);
+    assert_eq!(answers.runs(), 1);
+    t.run_until(300);
+    assert_eq!(answers.runs(), 2);
+    assert_eq!(t.events(), ["read Counted #1"]);
+    let refreshed = t.read(|poller| poller.cached_read::<Counted>(&pr(1)).unwrap());
+    assert_eq!((refreshed.value.0, refreshed.fetched_at), (2, wall(300)));
+    // Not in the background.
+    t.update(|poller, cx| poller.set_foreground(false, cx));
+    t.run_until(1000);
+    assert_eq!(answers.runs(), 2);
+    t.update(|poller, cx| poller.set_foreground(true, cx));
+    t.run_until(1001);
+    assert_eq!(answers.runs(), 3);
+
+    // After a restart, it's there at once, and since the check hasn't moved, it isn't read again.
+    t.restart();
+    let at_once = t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx)
+    });
+    assert_eq!(at_once, Some(2));
+    t.run_until(1010);
+    assert_eq!(answers.runs(), 3);
+}
+
+#[gpui::test]
+async fn a_cached_read_that_fails_says_so_and_is_tried_again_at_the_open_prs_interval(
+    cx: &mut TestAppContext,
+) {
+    let mut t = Polling::new("cached_read_fails", recorded(), cx).await;
+    let answers = Answers::default();
+    answers.answer(Err("no good"));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    assert_eq!(answers.runs(), 1);
+    assert!(
+        t.events()
+            .contains(&"failed to read Counted #1: couldn't read GitHub's answer: no good".into())
+    );
+    // The pull request itself is fine, and polled as ever.
+    assert!(t.read(|poller| poller.check(&pr(1))).is_some());
+
+    answers.answer(Ok(7));
+    t.run_until(19);
+    assert_eq!(answers.runs(), 1);
+    t.run_until(20);
+    assert_eq!(answers.runs(), 2);
+    assert_eq!(t.events(), ["read Counted #1"]);
+    assert_eq!(cached_count(&t), Some(7));
+}
+
+#[gpui::test]
+async fn a_cached_read_whose_refresh_keeps_failing_waits_longer_each_time(cx: &mut TestAppContext) {
+    let mut t = Polling::new("cached_read_refresh_fails", recorded(), cx).await;
+    let answers = Answers::default();
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    assert_eq!(answers.runs(), 1);
+
+    // GitHub starts failing it, from its 5-minute refresh on.
+    answers.answer(Err("bad gateway"));
+    t.run_until(300);
+    assert_eq!(answers.runs(), 2);
+    t.run_until(319);
+    assert_eq!(answers.runs(), 2);
+    // It waits the open PR's 20 s, then 40, 80 and 160, then the 5-minute refresh's 300 each
+    // time: tries at 320, 360, 440, 600, 900, 1200, 1500, 1800 and 2100 s.
+    t.run_until(300 + 30 * 60);
+    assert_eq!(answers.runs(), 11);
+    assert_eq!(cached_count(&t), Some(1));
+
+    // One that works again is read as before.
+    answers.answer(Ok(5));
+    t.run_until(2400);
+    assert_eq!(answers.runs(), 12);
+    assert_eq!(cached_count(&t), Some(5));
+    t.run_until(2690);
+    assert_eq!(answers.runs(), 12);
+}
+
+#[gpui::test]
+async fn a_cached_read_that_isnt_complete_is_kept_and_read_again_after_a_wait(
+    cx: &mut TestAppContext,
+) {
+    let mut t = Polling::new("cached_read_incomplete", recorded(), cx).await;
+    let answers = Answers::default();
+    answers.answer(Ok(0));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run();
+    assert_eq!(answers.runs(), 1);
+    assert_eq!(cached_count(&t), Some(0));
+    assert!(t.events().contains(&"read Counted #1".to_string()));
+
+    // Nothing it watches changed, but it's read again after the open PR's interval, then
+    // waiting longer each time, as a read that failed is.
+    t.run_until(19);
+    assert_eq!(answers.runs(), 1);
+    t.run_until(20);
+    assert_eq!(answers.runs(), 2);
+    t.run_until(59);
+    assert_eq!(answers.runs(), 2);
+    answers.answer(Ok(4));
+    t.run_until(60);
+    assert_eq!(answers.runs(), 3);
+    assert_eq!(cached_count(&t), Some(4));
+    // Complete, it waits for its watched fields or the 5-minute refresh.
+    t.run_until(359);
+    assert_eq!(answers.runs(), 3);
+}
+
+#[gpui::test]
+async fn a_cached_read_waits_while_its_pull_request_isnt_open(cx: &mut TestAppContext) {
+    let mut t = Polling::new("cached_read_watched", recorded(), cx).await;
+    let answers = Answers::default();
+    answers.answer(Ok(1));
+    t.update(|poller, cx| {
+        counted(poller, pr(1), &answers, cx);
+    });
+    t.run_until(200);
+    assert_eq!(answers.runs(), 0);
+
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run_until(201);
+    assert_eq!(answers.runs(), 1);
+}
+
+#[gpui::test]
+async fn a_write_goes_between_the_requests_of_a_long_cached_read(cx: &mut TestAppContext) {
+    let r = recorded();
+    let mut interactions = r.clone();
+    interactions.push(comment(&r));
+    let mut t = Polling::with(
+        "read_yields",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    let runs = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        let runs = runs.clone();
+        // A read of three requests, a second each.
+        poller.read_cached(
+            pr(1),
+            move |client, _| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    for _ in 0..3 {
+                        client.get::<serde_json::Value>(&pr(1).rest_path()).await?;
+                    }
+                    Ok(Counted(1))
+                }
+            },
+            cx,
+        );
+    });
+    // The open PR's poll and the repository's take the first five seconds; the read starts at 5.
+    t.run_until(6);
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    let write = t.update(post_comment);
+    t.run_until(12);
+    write.await.unwrap();
+
+    let requests: Vec<(u64, String)> = (t.requests().into_iter())
+        .filter(|(secs, _)| (5..=8).contains(secs))
+        .collect();
+    assert_eq!(
+        requests,
+        log(&[
+            (5, "GET /pulls/1"),
+            (6, "GET /pulls/1"),
+            (7, "POST /issues/1/comments"),
+            (8, "GET /pulls/1"),
+        ])
+    );
+}
+
+#[gpui::test]
+async fn the_poller_notes_every_head_it_sees(cx: &mut TestAppContext) {
+    let r = recorded();
+    let pushed = "1111111111111111111111111111111111111111";
+    let moved = updated(asked_since(r[3].clone(), &last_modified(&r[3])), |body| {
+        body["head"]["sha"] = pushed.into();
+    });
+    let mut interactions = r.clone();
+    // Ahead of the recorded 304, so it's the answer to the second poll.
+    interactions.insert(8, moved);
+    let mut t = Polling::new("seen_heads", interactions, cx).await;
+    t.update(|poller, cx| {
+        poller.watch(pr(2), cx);
+        poller.set_open(Some(pr(1)), cx);
+    });
+    t.run();
+    let marks = t.read(|poller| poller.revision_marks().clone());
+    let summary = |n| t.read(|poller| poller.summary(&pr(n)).unwrap());
+    let seen = |n| -> Vec<(String, SystemTime)> {
+        marks
+            .seen_heads(&pr(n))
+            .unwrap()
+            .into_iter()
+            .map(|seen| (seen.head, seen.first_seen))
+            .collect()
+    };
+    // The open PR's head from its summary, check and details, which agree; the other PR's from
+    // its summary.
+    let head_1 = summary(1).head.sha.clone();
+    assert_eq!(seen(1), [(head_1.clone(), wall(0))]);
+    let head_2 = summary(2).head.sha.clone();
+    assert_eq!(seen(2), [(head_2.clone(), wall(0))]);
+
+    // A push to PR #2, seen at its next poll.
+    t.run_until(120);
+    assert_eq!(summary(2).head.sha, pushed);
+    assert_eq!(
+        seen(2),
+        [(head_2, wall(0)), (pushed.to_string(), wall(120))]
+    );
+    assert_eq!(seen(1), [(head_1, wall(0))]);
 }

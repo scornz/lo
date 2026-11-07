@@ -1,0 +1,123 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequestRevisions",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 16,
+      "login": "rozed-bot",
+      "first": 100,
+      "timelineAfter": null,
+      "reviewsAfter": null
+    },
+    "query_sha256": "9ae5a1cf4defb264981f45ca1f51a86cd7feceb2546b9c750ac6e26ccabaf1b1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4891",
+      "x-ratelimit-reset": "1794008620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "109"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4891,
+          "used": 109,
+          "resetAt": "2026-11-06T23:43:40Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "createdAt": "2026-11-06T19:29:48Z",
+            "closed": false,
+            "closedAt": null,
+            "merged": false,
+            "headRefName": "e1/revisions-4",
+            "headRefOid": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+            "baseRefName": "main",
+            "headRepository": {
+              "name": "e2e",
+              "owner": {
+                "__typename": "Organization",
+                "login": "rozed-dev"
+              }
+            },
+            "mergeCommit": null,
+            "timelineItems": {
+              "filteredCount": 0,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "reviews": {
+              "totalCount": 1,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0xMS0wNlQxOToyOTo1NVq0MjAyNi0xMS0wNlQxOToyOTo1NVrPAAAAAVoOHfg="
+              },
+              "nodes": [
+                {
+                  "submittedAt": "2026-11-06T19:29:55Z",
+                  "commit": {
+                    "oid": "b88cc8b3c4c702f34cd11d0e46fe27a285967e23"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "rozed-bot"
+                  }
+                }
+              ]
+            },
+            "viewerLastReview": {
+              "nodes": [
+                {
+                  "submittedAt": "2026-11-06T19:29:55Z",
+                  "commit": {
+                    "oid": "b88cc8b3c4c702f34cd11d0e46fe27a285967e23"
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "60005cf756d9ed28f97cd8f6f81ada3bee320e97",
+                    "checkSuites": {
+                      "nodes": []
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "b88cc8b3c4c702f34cd11d0e46fe27a285967e23",
+                    "checkSuites": {
+                      "nodes": []
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+                    "checkSuites": {
+                      "nodes": []
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

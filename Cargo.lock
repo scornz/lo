@@ -3280,6 +3280,7 @@ dependencies = [
  "paths",
  "regex",
  "reqwest_client",
+ "review",
  "schemars",
  "serde",
  "serde_json",

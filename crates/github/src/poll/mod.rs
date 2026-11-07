@@ -3,6 +3,7 @@
 mod governor;
 mod poller;
 mod queue;
+pub(crate) mod reads;
 
 pub use governor::{
     Cooldown, LowLimit, PauseReason, PollConfig, RateLimitState, Tier, WallClock, backoff,
@@ -10,3 +11,4 @@ pub use governor::{
 };
 pub use poller::{Offline, PollEvent, PollStatus, Poller, PullRequestAnswer};
 pub use queue::RequestQueue;
+pub use reads::CachedRead;

@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/voidsipp/fd/activity?ref=refs%2Fheads%2Ffix%2F1822-explicit-jemalloc&direction=desc&per_page=100",
+    "if_none_match": "\"9eb8d0a0ba90757502b5a0db903fe567f13cab61226a992f07eebbf33324c58b\""
+  },
+  "response": {
+    "status": 304,
+    "headers": {
+      "etag": "\"9eb8d0a0ba90757502b5a0db903fe567f13cab61226a992f07eebbf33324c58b\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4931",
+      "x-ratelimit-reset": "1794008622",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "69"
+    }
+  }
+}

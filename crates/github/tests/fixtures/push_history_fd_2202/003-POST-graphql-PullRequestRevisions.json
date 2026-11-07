@@ -1,0 +1,156 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequestRevisions",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2202,
+      "login": "rozed-bot",
+      "first": 100,
+      "timelineAfter": null,
+      "reviewsAfter": null
+    },
+    "query_sha256": "9ae5a1cf4defb264981f45ca1f51a86cd7feceb2546b9c750ac6e26ccabaf1b1"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4886",
+      "x-ratelimit-reset": "1794008620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "114"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4886,
+          "used": 114,
+          "resetAt": "2026-11-06T23:43:40Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "createdAt": "2026-10-28T03:56:05Z",
+            "closed": true,
+            "closedAt": "2026-10-30T07:33:38Z",
+            "merged": true,
+            "headRefName": "ci/windows-arm64-gnullvm",
+            "headRefOid": "31f36c873e1065755830f947c05db158348d586d",
+            "baseRefName": "master",
+            "headRepository": null,
+            "mergeCommit": {
+              "oid": "8b14e8dc5f1bd8c2656d735e80f1e6335b335bbf",
+              "parents": {
+                "nodes": [
+                  {
+                    "oid": "5e10274e350b5c20407dcfa6d42be6971242b377"
+                  },
+                  {
+                    "oid": "31f36c873e1065755830f947c05db158348d586d"
+                  }
+                ]
+              }
+            },
+            "timelineItems": {
+              "filteredCount": 0,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "reviews": {
+              "totalCount": 4,
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0xMC0zMFQwNzozMzoxN1q0MjAyNi0xMC0zMFQwNzozMzoxN1rPAAAAAVRNgxo="
+              },
+              "nodes": [
+                {
+                  "submittedAt": "2026-10-29T06:09:16Z",
+                  "commit": {
+                    "oid": "4feccf0ae8840cad866647eaf76127bab756ccfd"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "tmccombs"
+                  }
+                },
+                {
+                  "submittedAt": "2026-10-29T06:31:09Z",
+                  "commit": {
+                    "oid": "31f36c873e1065755830f947c05db158348d586d"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "meop"
+                  }
+                },
+                {
+                  "submittedAt": "2026-10-29T06:31:11Z",
+                  "commit": {
+                    "oid": "31f36c873e1065755830f947c05db158348d586d"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "meop"
+                  }
+                },
+                {
+                  "submittedAt": "2026-10-30T07:33:17Z",
+                  "commit": {
+                    "oid": "31f36c873e1065755830f947c05db158348d586d"
+                  },
+                  "author": {
+                    "__typename": "User",
+                    "login": "tmccombs"
+                  }
+                }
+              ]
+            },
+            "viewerLastReview": {
+              "nodes": []
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "4feccf0ae8840cad866647eaf76127bab756ccfd",
+                    "checkSuites": {
+                      "nodes": [
+                        {
+                          "createdAt": "2026-10-28T03:56:10Z",
+                          "branch": null,
+                          "push": null
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "31f36c873e1065755830f947c05db158348d586d",
+                    "checkSuites": {
+                      "nodes": [
+                        {
+                          "createdAt": "2026-10-29T06:31:08Z",
+                          "branch": null,
+                          "push": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
