@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Sets up the GitHub fixtures in rozed-dev/e2e that Lo's revisions and stacks features are
-# checked against, as rozed-bot. README.md beside this script has the fixture map.
+# Sets up the GitHub fixtures in rozed-dev/e2e that Lo is checked against, as rozed-bot: revisions
+# and stacks (E1–E3), code navigation and trust (E6, E8), moved code and the syntax-aware view
+# (E9), performance (E10), languages from bundled extensions (E12) and image previews (#17).
+# trees.sh beside this script writes the files of E6 onwards, and README.md has the fixture map.
 #
 # Usage: script/e2e/fixtures.sh <setup | status [--json] | push-r4 | rebase-r5 | push-r6 | reset-e1>
 #
@@ -10,10 +12,11 @@
 # pushes over HTTPS with a credential helper that reads the token from the environment, so the
 # token never reaches a remote URL, a config file or a command line.
 #
-# setup, push-r4, rebase-r5 and push-r6 are idempotent: they find what exists by branch, PR and
-# commit subject, and only add what's missing. reset-e1 makes a new E1 each time. The script never
-# pushes to main, force-pushes or deletes anything; main moves only through merged PRs, and r5's
-# rebase is GitHub's own. Writes go only to rozed-dev/e2e. A failed GitHub request stops it.
+# setup, push-r4, rebase-r5 and push-r6 are idempotent: they find what exists by branch, PR,
+# commit subject and review, and only add what's missing. reset-e1 makes a new E1 each time. The
+# script never pushes to main, force-pushes or deletes anything; main moves only through merged
+# PRs, and r5's rebase is GitHub's own. Writes go only to rozed-dev/e2e. A failed GitHub request
+# stops it.
 set -euo pipefail
 
 # The token is in this script's environment, so a trace would print it.
@@ -39,11 +42,22 @@ readonly E2_LAYERS="a b c e d s1 s2"
 readonly E1_REVISIONS='[.commits[] | (.commit.message | split("\n")[0]
   | capture("^test\\(e1\\): (?<r>r[0-9]+) ").r) as $r | {($r): .sha}] | add // {}'
 
+# E9's review, found by its text, and its two threads, placed by the text of their lines.
+readonly E9_REVIEW="Fixture E9's review: a thread on a moved line, and one on a line only the old side has. Made by script/e2e/fixtures.sh in scornz/lo."
+readonly E9_MOVED_LINE='    const middle = user.middle?.trim();'
+readonly E9_MOVED_COMMENT="Fixture E9: a thread on a moved line. Lo shows it under this line in the diff and in the syntax-aware view."
+# shellcheck disable=SC2016 # TypeScript, not shell
+readonly E9_OLD_LINE='  return `${user.last.toUpperCase()}, ${user.first}`;'
+readonly E9_OLD_COMMENT="Fixture E9: a thread on a line only the old side has."
+
+# shellcheck source-path=SCRIPTDIR source=trees.sh
+. "$(dirname "${BASH_SOURCE[0]}")/trees.sh"
+
 usage() {
   cat <<'EOF'
 Usage: script/e2e/fixtures.sh <command>
 
-  setup           create any fixture (E1, E2, E3) that's missing
+  setup           create any fixture that's missing: E1–E3, E6, E8–E10, E12 and #17
   status [--json] print each fixture's PRs, branches and heads
   push-r4         push E1's r4, a normal push
   rebase-r5       move main one commit, then rebase E1's PR on GitHub (r5)
@@ -80,9 +94,11 @@ prepare() {
   local tool login
   [[ -n ${ROZED_BOT_TOKEN:+set} ]] || die "ROZED_BOT_TOKEN isn't set (see --help)"
   [[ -x $GH ]] || die "no gh at $GH (set LO_E2E_GH)"
-  for tool in git jq awk; do
+  for tool in git jq awk base64; do
     command -v "$tool" >/dev/null || die "needs $tool"
   done
+  command -v sha256sum >/dev/null || command -v shasum >/dev/null ||
+    die "needs sha256sum or shasum"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/lo-e2e.XXXXXX")
   trap 'rm -rf "$tmp"' EXIT
   # The credential helper reads ROZED_BOT_TOKEN, so git's children need it.
@@ -162,6 +178,13 @@ pr_state() {
 }
 
 pr_head() { gh_api "repos/$REPO/pulls/$1" --jq .head.sha; }
+
+# How many of PR <n>'s reviews are rozed-bot's with exactly <body>.
+review_count() {
+  gh_api "repos/$REPO/pulls/$1/reviews?per_page=100" |
+    jq --arg bot "$BOT" --arg body "$2" \
+      '[.[] | select(.user.login == $bot and .body == $body)] | length'
+}
 
 # Opens a PR and sets PR to its number. A branch pushed a moment ago can be invisible to the API
 # for a moment, and a failed POST may still have opened the PR, so it looks before trying again.
@@ -275,12 +298,6 @@ e1_commit() {
     awk -v s="$subject" 'substr($0, 42) == s { print $1 }'
 }
 
-e1_review_count() {
-  gh_api "repos/$REPO/pulls/$1/reviews?per_page=100" |
-    jq --arg bot "$BOT" --arg body "$E1_REVIEW" \
-      '[.[] | select(.user.login == $bot and .body == $body)] | length'
-}
-
 # The force-pushes in PR <n>'s timeline, as a JSON array.
 force_pushes() {
   # shellcheck disable=SC2016 # GraphQL variables, not shell ones
@@ -354,7 +371,7 @@ e1_setup() {
     pr=$PR
   fi
   e1_push 2 "$branch" "$pr"
-  count=$(e1_review_count "$pr")
+  count=$(review_count "$pr" "$E1_REVIEW")
   if ((count == 0)); then
     r2=$(e1_commit 2 "$branch")
     [[ -n $r2 ]] || die "can't find r2 on $branch"
@@ -586,12 +603,170 @@ e3_setup() {
     die "#$y targets $base, not e3/x; 'Automatically delete head branches' must stay off"
 }
 
+# --- E6–E12 and #17: code, hostile files, moves, large, languages and images -------------------
+#
+# trees.sh writes their files. E6, E9, E10 and E12 change code that has to exist first, so each has
+# a base branch, e<n>/base, that adds its base side to main, and its PR targets that branch, not
+# main. main never moves for them, so E1's base still moves only under rebase-r5. E8 and #17 only
+# add files, so their PRs target main. Like E2 and E3, they have no reset: setup accepts their PRs
+# in any state.
+
+# Builds what's missing of a fixture whose PR changes files: <base> from main with the files' base
+# side, <branch> from <base> with their head side, then the PR from <branch> into <base>. trees.sh's
+# <fixture>_tree writes the files. Sets PR.
+changed_tree_setup() {
+  local fixture=$1 base=$2 branch=$3 subject=$4 title=$5 body=$6
+  if ! has_branch "$base"; then
+    start_at main
+    "${fixture}_tree" base "$work"
+    commit "test($fixture): add the files $branch changes"
+    push "$base"
+    say "pushed $base"
+  fi
+  if ! has_branch "$branch"; then
+    start_at "$base"
+    "${fixture}_tree" head "$work"
+    commit "$subject"
+    push "$branch"
+    say "pushed $branch"
+  fi
+  PR=$(pr_number "$branch")
+  if [[ -z $PR ]]; then open_pr "$branch" "$base" "$title" "$body"; fi
+}
+
+# Builds what's missing of a fixture whose PR only adds files: <branch> from main, then the PR into
+# main. Sets PR.
+added_tree_setup() {
+  local fixture=$1 branch=$2 subject=$3 title=$4 body=$5
+  if ! has_branch "$branch"; then
+    start_at main
+    "${fixture}_tree" "$work"
+    commit "$subject"
+    push "$branch"
+    say "pushed $branch"
+  fi
+  PR=$(pr_number "$branch")
+  if [[ -z $PR ]]; then open_pr "$branch" main "$title" "$body"; fi
+}
+
+# #17 was opened by hand before this script made it, with the same files and title.
+images_setup() {
+  local body
+  # read, not $(cat <<…), which bash 3.2 can't parse when the text has an apostrophe.
+  IFS= read -r -d '' body <<'EOF' || true
+Fixture for checking Lo's image previews on screen. Not for merging.
+
+- `e5/desktop-picture.svg`, `e5/local-image.svg`, `e5/dev-zero.svg`: each `<image>` points at a file on the reviewer's disk (a macOS desktop picture, the default wallpaper through a symlink and a relative path, and `/dev/zero`), as `href`, `xlink:href` and `file://` URLs. Only each SVG's frame and coloured dot should draw.
+- `e5/pattern-bomb.svg`: 316 bytes, a `<pattern>` with a 20000 × 20000 tile. The preview should fail with "couldn't preview this image" and the app should stay responsive.
+- `e5/small.png`: a 48 × 48 gradient that should preview normally.
+
+Made by `script/e2e/fixtures.sh` in scornz/lo.
+EOF
+  added_tree_setup images e5/images $'test(e5): add image preview safety fixtures\n\nSVGs whose <image> points at local files and /dev/zero, a 316-byte pattern bomb with a 20000x20000 tile, and a small PNG.' \
+    "test(e5): image preview safety fixtures" "$body"
+}
+
+e6_setup() {
+  changed_tree_setup e6 e6/base e6/code "test(e6): add and change code in four languages" \
+    "E6: code" "Fixture E6 (code, to trust): Rust, TypeScript, Python and Go under \`e6/\`, for Lo's code navigation, language servers and trust. \`e6/rust/src/render/parse.rs\` adds a second \`parse\`, colliding with \`e6/rust/src/parse.rs\`'s; \`lib.rs\` imports serde, which is never installed; and \`summarize\` becomes \`describe\`, so the old name still resolves on the left. The PR calls functions in files it changes and in files it doesn't. It targets \`e6/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
+}
+
+e8_setup() {
+  local body
+  IFS= read -r -d '' body <<'EOF' || true
+**A test fixture for Lo's trust handling, not code to run or merge.**
+
+Its files try to run code, or steer a language server, when the pull request is checked out and opened:
+
+- `.cargo/config.toml` sets a `rustc-wrapper`;
+- `rust-toolchain.toml` names a toolchain that doesn't exist;
+- `.zed/settings.json` points rust-analyzer at another binary;
+- `node_modules/typescript/lib/tsserver.js` is a workspace TypeScript server;
+- `pyrightconfig.json` names a virtual environment whose interpreter is a script;
+- `go.mod` asks for Go toolchain `go1.99`, which doesn't exist.
+
+The only script any of them runs is `e8/evil.sh`, which creates one empty marker file, `$TMPDIR/lo-e8-<name>`, and nothing else: no network, no deletes, no reads. Lo passes while no marker appears. `e8/README.md` lists each file and its marker.
+
+Made by `script/e2e/fixtures.sh` in scornz/lo.
+EOF
+  added_tree_setup e8 e8/hostile "test(e8): add files that try to run code when opened" \
+    "E8: hostile files" "$body"
+}
+
+# The number of the one line of <path>, at <branch>'s tip, that reads <text>.
+line_of() {
+  local n
+  n=$(g show "refs/remotes/origin/$1:$2" | TEXT=$3 awk '$0 == ENVIRON["TEXT"] { print NR }') ||
+    return 1
+  if [[ ! $n =~ ^[0-9]+$ ]]; then
+    say "$2 on $1 doesn't have exactly one line reading: $3"
+    return 1
+  fi
+  echo "$n"
+}
+
+# Posts rozed-bot's COMMENT review on E9's PR <n>, at its head, with a thread on a moved line of
+# e9/api/names.ts and one on a line of e9/api/user.ts only the old side has.
+e9_review() {
+  local pr=$1 head moved old request
+  head=$(pr_head "$pr") || return 1
+  moved=$(line_of e9/moves e9/api/names.ts "$E9_MOVED_LINE") || return 1
+  old=$(line_of e9/base e9/api/user.ts "$E9_OLD_LINE") || return 1
+  request=$(jq -n --arg head "$head" --arg body "$E9_REVIEW" \
+    --argjson moved "$moved" --arg moved_body "$E9_MOVED_COMMENT" \
+    --argjson old "$old" --arg old_body "$E9_OLD_COMMENT" '{
+      commit_id: $head, event: "COMMENT", body: $body,
+      comments: [
+        {path: "e9/api/names.ts", side: "RIGHT", line: $moved, body: $moved_body},
+        {path: "e9/api/user.ts", side: "LEFT", line: $old, body: $old_body}
+      ]}') || return 1
+  gh_api -X POST "repos/$REPO/pulls/$pr/reviews" --input - --silent <<<"$request"
+}
+
+# GitHub may not have worked out a new PR's diff yet, and refuses comments on it until then. A
+# failed POST may still have posted the review, so it looks before trying again.
+e9_review_once() {
+  local count
+  e9_review "$1" && return 0
+  count=$(review_count "$1" "$E9_REVIEW") || return 1
+  ((count > 0))
+}
+
+e9_setup() {
+  local pr count
+  changed_tree_setup e9 e9/base e9/moves "test(e9): move code and change its syntax" \
+    "E9: moves and syntax" "Fixture E9 (moves and syntax), for Lo's moved code and syntax-aware view. Moves: \`fullName\` from \`e9/api/user.ts\` into the \`Names\` class in \`e9/api/names.ts\`, re-indented with its return line edited; \`checksum\` up \`e9/lib.rs\`; and two lines down \`e9/short.py\`, too few to count. Syntax: a renamed variable (\`e9/syntax/rename.rs\`), reordered arguments (\`args.ts\`), a block wrapped in a new \`if\` (\`wrap.py\`) and reordered JSON keys (\`config.json\`). Fallbacks: a parse error (\`e9/broken.ts\`) and a 1.2 MB file (\`e9/large.ts\`). rozed-bot's review has a thread on a moved line and one on a line only the old side has. It targets \`e9/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
+  pr=$PR
+  count=$(review_count "$pr" "$E9_REVIEW")
+  if ((count == 0)); then
+    retry 10 e9_review_once "$pr" || die "couldn't post E9's review on #$pr"
+    CHANGED=$((CHANGED + 1))
+    say "reviewed #$pr"
+  fi
+}
+
+e10_setup() {
+  changed_tree_setup e10 e10/base e10/large "test(e10): change 300 files" "E10: large" \
+    "Fixture E10 (large), for Lo's performance budgets: a seeded, deterministic PR of 300 files and about 25,000 changed lines, in TypeScript, Rust, Python, Go and TOML. It changes 254 files, adds 30 and deletes 16, moves functions within and between files, adds a 6,000-line file (\`e10/src/big/catalog.ts\`) and changes a lockfile (\`e10/package-lock.json\`). It targets \`e10/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
+}
+
+e12_setup() {
+  changed_tree_setup e12 e12/base e12/languages "test(e12): change a file in each extension language" \
+    "E12: extension languages" "Fixture E12 (extension languages), for the languages Lo bundles as extensions: one file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed, so both sides need highlighting. None is part of a project a language server would build. It targets \`e12/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
+}
+
 # E3 goes first: its merge moves main, so a new E1's base then moves only under rebase-r5.
 cmd_setup() {
   clone
   e3_setup
   e1_setup
   e2_setup
+  images_setup
+  e6_setup
+  e8_setup
+  e9_setup
+  e10_setup
+  e12_setup
   if ((CHANGED == 0)); then say "Nothing to change: every fixture exists."; fi
 }
 
@@ -615,8 +790,74 @@ e1_revisions() {
     + ($post | with_entries(select(.key as $k | $pre | has($k) | not)))'
 }
 
+sha256() {
+  if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | awk '{ print $1 }'
+}
+
+# Maps each path on stdin, one a line, to the SHA-256 of the path, which GitHub's links to a file
+# in a PR's diff use (#diff-<hash>), as a JSON object.
+path_hashes() {
+  local path hash
+  while IFS= read -r path; do
+    hash=$(printf '%s' "$path" | sha256) || return 1
+    printf '%s\t%s\n' "$path" "$hash"
+  done | jq -R -s 'split("\n") | map(select(. != "") | split("\t") | {(.[0]): .[1]}) | add // {}'
+}
+
+# PR <n>'s changed files, as [{path, status, additions, deletions, hash}].
+pr_files() {
+  local files hashes
+  files=$(gh_api --paginate "repos/$REPO/pulls/$1/files?per_page=100") || return 1
+  files=$(jq -s 'add // [] | map({path: .filename, status, additions, deletions})' <<<"$files") ||
+    return 1
+  hashes=$(jq -r '.[].path' <<<"$files" | path_hashes) || return 1
+  jq --argjson hashes "$hashes" 'map(. + {hash: $hashes[.path]})' <<<"$files"
+}
+
+# The PR from <branch>, from status_json's $prs and $heads: its number, branch, base, head and
+# state, and its base branch's head. With `files`, also its changed files; with `size`, only how
+# many, and its added and deleted lines. null when there's no PR.
+fixture_json() {
+  local pr extra
+  pr=$(jq --arg b "$1" 'first(.[] | select(.branch == $b) | .pr) // empty' <<<"$prs") || return 1
+  if [[ -z $pr ]]; then
+    echo null
+    return
+  fi
+  case $2 in
+    files) extra=$(pr_files "$pr") && extra=$(jq '{files: .}' <<<"$extra") ;;
+    size)
+      extra=$(gh_api "repos/$REPO/pulls/$pr" \
+        --jq '{size: {files: .changed_files, additions, deletions}}')
+      ;;
+    *) die "fixture_json takes files or size" ;;
+  esac || return 1
+  jq --arg b "$1" --argjson heads "$heads" --argjson extra "$extra" '
+    first(.[] | select(.branch == $b)) | del(.merge_commit) + {base_head: $heads[.base]} + $extra' \
+    <<<"$prs"
+}
+
+# rozed-bot's review on E9's PR <n>, with its threads' first comments, or null.
+e9_review_json() {
+  local review comments
+  review=$(gh_api "repos/$REPO/pulls/$1/reviews?per_page=100") || return 1
+  review=$(jq --arg bot "$BOT" --arg body "$E9_REVIEW" 'first(.[]
+    | select(.user.login == $bot and .body == $body) | {id, commit: .commit_id}) // null' \
+    <<<"$review") || return 1
+  if [[ $review == null ]]; then
+    echo null
+    return
+  fi
+  comments=$(gh_api --paginate "repos/$REPO/pulls/$1/comments?per_page=100") || return 1
+  jq -s --argjson review "$review" 'add // [] | $review + {comments: [.[]
+    | select(.pull_request_review_id == $review.id) | {
+      thread: (if .side == "LEFT" then "old_side_only" else "moved" end),
+      id, node_id, path, side, line}]}' <<<"$comments"
+}
+
 status_json() {
-  local prs branches main max e1=null e1_branch e1_pr pushes review revisions stack=null s1
+  local prs heads branches main max e1=null e1_branch e1_pr pushes review revisions stack=null s1
+  local e6 e8 e9 e10 e12 images
   # Only rozed-bot's PRs from rozed-dev/e2e itself: anyone can open a PR from a fork's e2/d.
   prs=$(gh_api --paginate "repos/$REPO/pulls?state=all&per_page=100")
   prs=$(jq -s --arg bot "$BOT" --arg repo "$REPO" 'add // []
@@ -624,7 +865,9 @@ status_json() {
       pr: .number, branch: .head.ref, base: .base.ref, head: .head.sha,
       state: (if .merged_at then "merged" else .state end),
       merge_commit: (if .merged_at then .merge_commit_sha else null end)})' <<<"$prs")
-  branches=$(gh_api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name')
+  heads=$(gh_api --paginate "repos/$REPO/branches?per_page=100" --jq '.[] | {(.name): .commit.sha}')
+  heads=$(jq -s 'add // {}' <<<"$heads")
+  branches=$(jq -r 'keys[]' <<<"$heads")
   main=$(gh_api "repos/$REPO/branches/main" --jq .commit.sha)
 
   max=$(e1_max <<<"$branches")
@@ -656,7 +899,21 @@ status_json() {
     stack=$(jq 'first(.[] | {number, prs: [.pull_requests[].number]}) // null' <<<"$stack")
   fi
 
-  jq --arg main "$main" --argjson e1 "$e1" --argjson stack "$stack" --arg layers "$E2_LAYERS" '
+  images=$(fixture_json e5/images files)
+  e6=$(fixture_json e6/code files)
+  e8=$(fixture_json e8/hostile files)
+  e9=$(fixture_json e9/moves files)
+  if [[ $e9 != null ]]; then
+    review=$(jq .pr <<<"$e9")
+    review=$(e9_review_json "$review")
+    e9=$(jq --argjson review "$review" '. + {review: $review}' <<<"$e9")
+  fi
+  e10=$(fixture_json e10/large size)
+  e12=$(fixture_json e12/languages files)
+
+  jq --arg main "$main" --argjson e1 "$e1" --argjson stack "$stack" --arg layers "$E2_LAYERS" \
+    --argjson e6 "$e6" --argjson e8 "$e8" --argjson e9 "$e9" --argjson e10 "$e10" \
+    --argjson e12 "$e12" --argjson images "$images" '
     . as $prs
     | def layer($b): first($prs[] | select(.branch == $b)) // null;
     {
@@ -668,7 +925,13 @@ status_json() {
       e3: {
         x: layer("e3/x"),
         y: (layer("e3/y") | if . then del(.merge_commit) + {retargeted: (.base != "e3/x")} else . end)
-      }
+      },
+      e6: $e6,
+      e8: $e8,
+      e9: $e9,
+      e10: $e10,
+      e12: $e12,
+      images: $images
     }' <<<"$prs"
 }
 
@@ -695,7 +958,24 @@ status_text() {
     (.e3.x | row("x")),
     (if .e3.x.merge_commit then "      merge commit \(.e3.x.merge_commit | short)" else empty end),
     (.e3.y | row("y")),
-    (if .e3.y then "      retargeted: \(.e3.y.retargeted)" else empty end)'
+    (if .e3.y then "      retargeted: \(.e3.y.retargeted)" else empty end),
+    "E6 code",
+    (.e6 | row("e6")),
+    "E8 hostile files",
+    (.e8 | row("e8")),
+    "E9 moves and syntax",
+    (.e9 | row("e9")),
+    (if .e9 == null then empty
+     elif .e9.review then "      review \(.e9.review.id) on \(.e9.review.commit | short)",
+       (.e9.review.comments[] | "      \(.thread) thread #\(.id) on \(.side) \(.path):\(.line)")
+     else "      no review" end),
+    "E10 large",
+    (.e10 | row("e10")),
+    (if .e10 then "      \(.e10.size.files) files, +\(.e10.size.additions) -\(.e10.size.deletions)" else empty end),
+    "E12 extension languages",
+    (.e12 | row("e12")),
+    "#17 images",
+    (.images | row("images"))'
 }
 
 cmd_status() {

@@ -1,8 +1,11 @@
 # e2e fixtures
 
 `fixtures.sh` sets up the pull requests in [`rozed-dev/e2e`](https://github.com/rozed-dev/e2e) that
-Lo's revisions (milestone 6) and stacks (milestone 7) are checked against. It runs as
-`rozed-bot` and builds nothing.
+Lo is checked against: image previews (milestone 5), revisions (6), stacks (7), code features and
+trust (10), moved code and the syntax-aware view (11), the file picker (12), and the nightly suite,
+performance budgets and app check (13). It
+runs as `rozed-bot` and builds nothing. `trees.sh` writes the files of E6 onwards. It reads no
+network or token, and writes the same bytes on any machine.
 
 ```sh
 (set -a; . ~/.config/rozed-dev/bot.env; set +a; script/e2e/fixtures.sh setup)
@@ -11,7 +14,7 @@ Lo's revisions (milestone 6) and stacks (milestone 7) are checked against. It ru
 | Command | What it does |
 |---|---|
 | `setup` | Creates any fixture that's missing. Run twice, the second run changes nothing. |
-| `status [--json]` | Prints each fixture's PR numbers, branches and heads. Tests read `--json`. |
+| `status [--json]` | Prints each fixture's PR numbers, branches and heads. From E6 on, also its base branch's head and changed files, each with the SHA-256 of its path that GitHub's `#diff-<hash>` links use; E9 adds its review and comment IDs, and E10 its size. Tests read `--json`. |
 | `push-r4` | Pushes E1's r4, a normal push touching `e1/a.txt` and `e1/b.txt`. |
 | `rebase-r5` | Moves `main` one commit, then rebases E1's PR on GitHub (`updatePullRequestBranch`, `REBASE`). |
 | `push-r6` | Pushes E1's r6 after the rebase, a normal push changing line 3 of `e1/a.txt`. |
@@ -25,23 +28,33 @@ Lo's revisions (milestone 6) and stacks (milestone 7) are checked against. It ru
     It pushes over HTTPS through a credential helper that reads the token from the environment.
   - It refuses to run under `bash -x`, which would print the token.
 - **What it writes,** only to `rozed-dev/e2e`:
-  - branches under `e1/`, `e2/` and `e3/`, and their PRs;
-  - E1's review;
+  - branches under `e1/`, `e2/`, `e3/`, `e5/`, `e6/`, `e8/`, `e9/`, `e10/` and `e12/`, and their
+    PRs;
+  - E1's review, and E9's review with its two threads;
   - E2's native stack;
   - squash merges of `e3/x` and `e1/move-main*`.
 - **What it never does:** push to `main`, force-push or delete a branch. `main` moves only through
   PRs it opened, which it checks by author, base and title before merging.
-- **Finding what exists.** It finds fixtures by branch, PR and commit subject, and counts only
-  rozed-bot's PRs from `rozed-dev/e2e` itself, never a fork's. A failed GitHub request stops it
-  before it writes anything.
+- **Base branches.** E6, E9, E10 and E12 change files that have to exist first, so each has a base
+  branch, `e<n>/base`, that adds their base side to `main`, and its PR targets that branch. `main`
+  never moves for them, so E1's base still moves only under `rebase-r5`. E8 and #17 only add files,
+  so their PRs target `main`.
+- **Finding what exists.** It finds fixtures by branch, PR, commit subject and review text, and
+  counts only rozed-bot's PRs from `rozed-dev/e2e` itself, never a fork's. A failed GitHub request
+  stops it before it writes anything.
 - **If `reset-e1` fails partway,** finish it with `setup`. Running `reset-e1` again starts yet
   another E1.
-- **E2 and E3 have no reset.** `setup` accepts their PRs in any state, so once a later test merges
-  or closes them, they're not rebuilt.
-- **Not yet:** E4 (merge states, rulesets, merge queue) and E5 (PRs the bot can approve).
-  - E4's protected bases will be separate branches: `gated` (required checks, an approval and
-    CODEOWNERS) and `queued` (the merge queue).
-  - `main` stays unprotected, so `rebase-r5` and E3's merge keep working.
+- **E2, E3 and E6 onwards have no reset.** `setup` accepts their PRs in any state, so once a later
+  test merges or closes them, they're not rebuilt.
+- **Not yet:**
+  - **E4** (merge states, rulesets, merge queue). Its protected bases will be separate branches:
+    `gated` (required checks, an approval and CODEOWNERS) and `queued` (the merge queue). `main`
+    stays unprotected, so `rebase-r5` and E3's merge keep working.
+  - **E5** (PRs the bot can approve). #17's branch, `e5/images`, predates it, so E5's branches need
+    other names.
+  - **E7** (a fork PR, `rozed-bot/e2e:e7/fork` → `rozed-dev/e2e:main`) waits for the user's OK: the
+    fork would live under `rozed-bot`, outside `rozed-dev`. Until then `sharkdp/fd#2212`, already
+    from a fork, stands in, read-only.
 
 ## Fixture map
 
@@ -61,6 +74,12 @@ The numbers are from 2026-11-06. `reset-e1` gives E1 a new number, so tests read
 | | #7, #8 | `e2/s1` → `main`, `e2/s2` → `e2/s1` | A native GitHub stack (#9), separate from the chain. s2 → s1 also matches the base-branch rule, so the tree looks the same if native-stack detection breaks. Only the rule tooltip tells them apart. |
 | **E3** needs rebase | #10 | `e3/x` → `main` | Two commits, head `e86aa48`, squash-merged into `main` as `04bdf22`. Its branch is kept. |
 | | #11 | `e3/y` → `e3/x` | One commit on x. It still targets `e3/x`, because GitHub retargets only when the base branch is deleted. `setup` fails if that changes, so "Automatically delete head branches" must stay off. It shows "needs rebase" and compares against x's head, `e86aa48`, not the squash commit, so only y's change shows. |
+| **E6** code | #18 | `e6/code` → `e6/base` | Milestones 10 and 13; [below](#e6-code). **Untrusted:** `gd` on `parse` lists both definitions, same folder first, and `enter` jumps into the diff (10d); `g r` lists both and their callers (10f); the left side's `g f` shows the base version (10e). **Trust (10g):** the banner; trusting checks it out and starts rust-analyzer, the trust survives a relaunch, and removing E6 from the list stops it. **Trusted (10h):** `gd`, `g r` and `K` come from servers in all four languages, labelled "syntax" until they're ready, and `gd` on `Deserialize` shows its `use` line. **13d** drives `gd` and `g r` untrusted; **13f** opens it untrusted, trusts it and waits for rust-analyzer, vtsls and basedpyright. |
+| **E8** hostile files | #19 | `e8/hostile` → `main` | Milestone 10 (10h's hardening, behind 10g's trust); [below](#e8-hostile-files). Trusted, after 2 minutes of scrolling and hovering, no `$TMPDIR/lo-e8-*` marker exists. |
+| **E9** moves and syntax | #20 | `e9/moves` → `e9/base` | Milestones 11 and 13; [below](#e9-moves-and-syntax). **11a:** the cross-file move shows both links, only its edited line has word highlights, `g m` round-trips, the within-file move works and the 2-line block isn't a move. **11b:** the renamed variable highlights only the name; the reordered arguments; the wrapped block marks only the `if`; the JSON reorder; the parse error and the 1.2 MB file fall back. **11c:** the thread on a moved line sits under the same line in both views. **13d** drives the moves and the syntax view. |
+| **E10** large | #21 | `e10/large` → `e10/base` | Milestones 10, 12 and 13; [below](#e10-large). **10b:** the debug log shows both trees indexed with their times, and reopening reuses blobs. **12f:** ⌘P filters its 300 files at once. **13e:** the budgets for the first file (1.5 s warm) and all files (6 s), moved-code detection (200 ms), and memory with `fd#2212` open too (1 GB). |
+| **E12** extension languages | #22 | `e12/languages` → `e12/base` | Milestones 10 (10i) and 13 (13f). One file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed. **Untrusted:** every file is highlighted on both sides, and the debug log shows no request at launch. **Trusted:** the Terraform server downloads from `releases.hashicorp.com`. |
+| **#17** images | #17 | `e5/images` → `main` | Milestone 5 (5d's image previews); 8g's timeline images go through the same preview helper. SVGs whose `<image>`s point at files on the reviewer's disk and at `/dev/zero` draw only their frame and dot; the 316-byte pattern bomb (a 20000 × 20000 tile) fails with "couldn't preview this image" and Lo stays responsive; the 48 × 48 PNG previews. Opened by hand first; `setup` would recreate the same files, two of whose SVG comments use the project's first name, as on GitHub. |
 
 ### E1 revisions
 
@@ -85,3 +104,71 @@ rebase and r6 changes line 3 of `a.txt`.
   - **Why that matters:** a revision's base is its merge base with `main`, which is `03fa28b` for
     r1–r4, not `main`'s tip when it was pushed. With the tip, r4 would show `e3/x.txt`.
   - `setup` now builds E3 before E1, so a new E1's base moves only under `rebase-r5`.
+
+### E6 code
+
+#18, head `e184ac6`, on `e6/base` at `a958353`. It changes six files and adds two.
+
+- **Rust,** `e6/rust/`:
+  - `src/render/parse.rs` (added) defines a second `parse`, colliding with `src/parse.rs`'s
+    (unchanged).
+  - `src/lib.rs` has `use serde::Deserialize` on line 3. `Cargo.toml` never declares serde, so it's
+    never installed.
+  - `summarize` (line 6 on the left) becomes `describe` (line 18 on the right).
+  - `lib.rs` calls `parse::count` in the unchanged `parse.rs`, and `render::parse::parse` in the
+    added file.
+- **TypeScript,** `e6/ts/src/`: `index.ts` calls `isAdmin` in `user.ts` (both changed) and
+  `initials` in `names.ts` (unchanged).
+- **Python,** `e6/py/`: `app.py` calls `truncate`, which `util.py` adds.
+- **Go,** `e6/go/`: `main.go` calls `shout`, which `util.go` adds.
+
+### E8 hostile files
+
+#19, head `46253d2`. Every file below leads only to `e8/evil.sh`, which creates one empty marker
+file, `$TMPDIR/lo-e8-<name>`, and does nothing else: no network, no deletes, no reads. The config
+files sit at the repository's root, where each tool looks for them, and `e8/` holds a small Rust,
+TypeScript, Python and Go project, so each server has something to open.
+
+| File | What it tries | Marker |
+|---|---|---|
+| `.cargo/config.toml` | `rustc-wrapper = "e8/evil.sh"`, so cargo runs it in place of rustc | `lo-e8-rustc-wrapper` |
+| `rust-toolchain.toml` | toolchain `1.999.0`, which doesn't exist, so rustup tries to download it | none |
+| `.zed/settings.json` | points rust-analyzer's binary at `e8/evil.sh` | `lo-e8-rust-analyzer` |
+| `node_modules/typescript/lib/tsserver.js` | a workspace TypeScript whose server runs `e8/evil.sh` | `lo-e8-tsserver` |
+| `pyrightconfig.json` | a virtual environment, `e8/venv`, whose `bin/python` runs `e8/evil.sh` | `lo-e8-python` |
+| `go.mod` | `toolchain go1.99`, which doesn't exist, so go tries to download it | none |
+
+### E9 moves and syntax
+
+#20, head `243ff70`, on `e9/base` at `25c5f34`. It changes ten files.
+
+- **Moves:**
+  - `fullName` moves from `e9/api/user.ts` (lines 14–19) into the `Names` class in
+    `e9/api/names.ts` (lines 8–13), one level deeper. Its first line changes, so the move runs from
+    the next line, 15–19 → 9–13, with its return line edited (18 → 12). The code is the example in
+    `diff_extras::moved`'s docs.
+  - `checksum` moves up `e9/lib.rs`, unchanged: 22–28 → 8–14.
+  - `TIMEOUT_SECONDS` and `RETRY_LIMIT` move down `e9/short.py`, 3–4 → 12–13: two lines, too few to
+    be a move.
+- **Syntax cases,** in `e9/syntax/`: `rename.rs` renames `total` to `sum`, `args.ts` reorders
+  `clamp`'s arguments in its signature and at its call, `wrap.py` wraps a block in a new `if`, and
+  `config.json` reorders keys at two levels.
+- **Fallbacks:** `e9/broken.ts` gains a parse error, and `e9/large.ts` is 1,229,048 bytes on both
+  sides, past `diff_extras`'s 1,000,000-byte limit and 1 MiB.
+- **Threads:** rozed-bot's COMMENT review (`e9.review` in `status --json`) has two threads:
+  - on a moved line, `e9/api/names.ts:10` on the right (`const middle = …`);
+  - on a line only the old side has, `e9/api/user.ts:26` on the left, in `legacyName`, which the PR
+    deletes.
+
+### E10 large
+
+#21, head `1591774`, on `e10/base` at `8cac962`. 300 files, +19,545 −5,798: 25,343 changed lines.
+`trees.sh` generates it from fixed seeds, so it's the same each time.
+
+- **298 files** of TypeScript, TypeScript tests, Rust, Python, Go and TOML, under `e10/src`,
+  `e10/rust`, `e10/py`, `e10/go` and `e10/config`. 254 are changed, 30 added and 16 deleted. Every
+  ninth file moves its first function to its end, and a few move one to a file of the same language.
+- **`e10/src/big/catalog.ts`:** added, 6,000 lines, over the 5,000 changed lines past which Lo
+  collapses a file.
+- **`e10/package-lock.json`:** a lockfile of 450 packages, collapsed as generated. The PR bumps every
+  fourth, drops every 31st and adds 40 (+570 −414).
