@@ -1,9 +1,9 @@
-//! The tab's left side: the pull request's files, in review order or by path (design §5 "File
-//! order", §10 "Window").
+//! The tab's left side: a slot for the pull request's stack tree, above its files, in review order
+//! or by path (design §4 "The stack tree", §5 "File order", §10 "Window").
 
 use std::ops::Range;
 
-use gpui::{AnyElement, App, Context, Div, KeyBinding, Window, actions, px, uniform_list};
+use gpui::{AnyElement, AnyView, App, Context, Div, KeyBinding, Window, actions, px, uniform_list};
 use review::revisions::ViewedState;
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 
@@ -43,6 +43,34 @@ pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
 }
 
 impl PrTab {
+    /// Shows `tree`, the pull request's stack tree, above the file list, or takes it away.
+    pub fn set_stack_tree(&mut self, tree: Option<AnyView>, cx: &mut Context<Self>) {
+        self.stack_tree = tree;
+        cx.notify();
+    }
+
+    /// The tab's left side, unless it's empty: the stack tree, if there is one, above the file
+    /// list while it's shown.
+    pub(super) fn render_left(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if self.stack_tree.is_none() && !self.show_file_list {
+            return None;
+        }
+        let colors = cx.theme().colors();
+        Some(
+            v_flex()
+                .w(px(300.))
+                .h_full()
+                .flex_shrink_0()
+                .border_r_1()
+                .border_color(colors.border)
+                .bg(colors.panel_background)
+                .children(self.stack_tree.clone())
+                .when(self.show_file_list, |this| {
+                    this.child(self.render_file_list(cx))
+                }),
+        )
+    }
+
     fn toggle_file_list(
         &mut self,
         _: &ToggleFileList,
@@ -88,7 +116,7 @@ impl PrTab {
         self.focus_diff(window, cx);
     }
 
-    pub(super) fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let order = match self.files.order() {
             FileOrder::Review => "Review order",
@@ -106,12 +134,8 @@ impl PrTab {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::cancel))
-            .w(px(300.))
-            .h_full()
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(colors.border)
-            .bg(colors.panel_background)
+            .flex_1()
+            .min_h_0()
             .child(
                 h_flex()
                     .px_2()

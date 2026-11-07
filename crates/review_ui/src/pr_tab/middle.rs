@@ -1,5 +1,5 @@
-//! The middle of the tab: the pull request's diff, and the keys that move through it and change how
-//! it shows (design §5 "The diff view", §10 "Window").
+//! The middle of the tab: the pull request's diff, or another view in its place, and the keys that
+//! move through the diff and change how it shows (design §5 "The diff view", §10 "Window").
 
 use editor::Direction;
 use gpui::{AnyElement, App, Context, Div, KeyBinding, Window, actions};
@@ -7,8 +7,8 @@ use review::revisions::Revisions;
 use settings::DiffViewStyle;
 use ui::prelude::*;
 
-use super::PrTab;
 use super::keys::{DIFF_CONTEXT, FILE_LIST_CONTEXT, KEY_CONTEXT, READING_CONTEXT};
+use super::{PrTab, Status};
 use crate::diff_cursor;
 use crate::shown_files::{self, Expanded};
 use crate::viewed_marks::changed_since_viewed;
@@ -35,6 +35,14 @@ actions!(
         PreviousChange,
     ]
 );
+
+/// What the middle of the tab shows. Other views take the diff's place here, and give it back.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Middle {
+    /// The pull request's diff.
+    #[default]
+    Diff,
+}
 
 /// The diff's keys.
 pub(super) fn bind_keys(cx: &mut App) {
@@ -72,6 +80,45 @@ pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
 }
 
 impl PrTab {
+    /// What the middle of the tab shows.
+    pub fn middle(&self) -> &Middle {
+        &self.middle
+    }
+
+    /// Shows `middle` in the middle of the tab, in place of what it showed.
+    pub fn show_middle(&mut self, middle: Middle, cx: &mut Context<Self>) {
+        self.middle = middle;
+        cx.notify();
+    }
+
+    /// The middle of the tab, between the file list and the threads panel: what
+    /// [`Self::middle`] says.
+    pub(super) fn render_middle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let middle = v_flex().flex_1().min_w_0().h_full();
+        match self.middle {
+            Middle::Diff => middle
+                .children(self.render_changed_since_viewed(cx))
+                .child(self.render_diff(cx)),
+        }
+    }
+
+    /// The diff, or why the pull request couldn't open.
+    fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let diff: AnyElement = match (&self.diff, &self.status) {
+            (_, Status::Failed(error)) => v_flex()
+                .size_full()
+                .p_4()
+                .gap_2()
+                .child(Label::new("Lo couldn't open this pull request").color(Color::Error))
+                .child(Label::new(error.clone()).size(LabelSize::Small))
+                .child(h_flex().gap_2().children(self.render_actions(cx)))
+                .into_any_element(),
+            (Some(diff), _) => diff.clone().into_any_element(),
+            (None, _) => div().size_full().into_any_element(),
+        };
+        div().flex_1().min_h_0().w_full().child(diff)
+    }
+
     /// `tab`: side by side, moves the cursor to the diff's other side.
     fn switch_side(&mut self, _: &SwitchSide, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(diff) = &self.diff {
@@ -183,7 +230,7 @@ impl PrTab {
     }
 
     /// The note above the diff while the current file changed since it was viewed.
-    pub(super) fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_changed_since_viewed(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (path, note) = self.changed_since_viewed(cx)?;
         let colors = cx.theme().colors();
         Some(

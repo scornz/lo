@@ -17,9 +17,9 @@ use github::queries::{FileViewedState, PullRequestData};
 use github::viewed::ViewedRecords;
 use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
-    AnyElement, App, AsyncWindowContext, Context, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Render, SharedString, Subscription, Task, UniformListScrollHandle, WeakEntity,
-    Window,
+    AnyElement, AnyView, App, AsyncWindowContext, Context, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, Render, SharedString, Subscription, Task, UniformListScrollHandle,
+    WeakEntity, Window,
 };
 use language::{Capability, Point};
 use project::WorktreeId;
@@ -54,12 +54,13 @@ mod middle;
 mod right;
 mod viewed;
 
+pub use header::HeaderSlot;
 use keys::KEY_CONTEXT;
 pub(crate) use keys::bind_keys;
 pub use left::{ToggleFileList, ToggleFileOrder};
 pub use middle::{
-    ExpandFile, NextChange, NextFile, PreviousChange, PreviousFile, SwitchSide, ToggleDiffLayout,
-    ToggleWhitespace,
+    ExpandFile, Middle, NextChange, NextFile, PreviousChange, PreviousFile, SwitchSide,
+    ToggleDiffLayout, ToggleWhitespace,
 };
 pub use right::ToggleThreads;
 pub use viewed::ToggleViewed;
@@ -315,6 +316,14 @@ pub struct PrTab {
     /// Keeps the diff's images right as it goes side by side and back, and stops decoding a
     /// file's images when it folds.
     _diff_watch: Vec<Subscription>,
+    /// What features show in the header's slots, by [`HeaderSlot`].
+    header_slots: [Option<AnyView>; HeaderSlot::ALL.len()],
+    /// The pull request's stack tree, above the file list.
+    stack_tree: Option<AnyView>,
+    /// What the middle of the tab shows.
+    middle: Middle,
+    /// The threads panel, on the right.
+    threads_panel: Option<AnyView>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab, until the tab closes.
@@ -422,6 +431,10 @@ impl PrTab {
             _whitespace: None,
             loading: HashMap::new(),
             _diff_watch: Vec::new(),
+            header_slots: Default::default(),
+            stack_tree: None,
+            middle: Middle::default(),
+            threads_panel: None,
             show_file_list: true,
             show_threads: true,
             watched: None,
@@ -2504,18 +2517,6 @@ impl Focusable for PrTab {
 impl Render for PrTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().colors().editor_background;
-        let diff: AnyElement = match (&self.diff, &self.status) {
-            (_, Status::Failed(error)) => v_flex()
-                .size_full()
-                .p_4()
-                .gap_2()
-                .child(Label::new("Lo couldn't open this pull request").color(Color::Error))
-                .child(Label::new(error.clone()).size(LabelSize::Small))
-                .child(h_flex().gap_2().children(self.render_actions(cx)))
-                .into_any_element(),
-            (Some(diff), _) => diff.clone().into_any_element(),
-            (None, _) => div().size_full().into_any_element(),
-        };
         let github = self.diff_source == Some(DiffSource::GitHub);
         v_flex()
             .key_context(KEY_CONTEXT)
@@ -2543,20 +2544,9 @@ impl Render for PrTab {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .when(self.show_file_list, |this| {
-                        this.child(self.render_file_list(cx))
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .children(self.render_changed_since_viewed(cx))
-                            .child(div().flex_1().min_h_0().w_full().child(diff)),
-                    )
-                    .when(self.show_threads, |this| {
-                        this.child(self.render_threads(cx))
-                    }),
+                    .children(self.render_left(cx))
+                    .child(self.render_middle(cx))
+                    .children(self.render_right(cx)),
             )
     }
 }
