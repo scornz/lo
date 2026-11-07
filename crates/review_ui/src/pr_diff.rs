@@ -1,10 +1,11 @@
 //! A pull request in Zed's side-by-side diff (`SplittableEditor`), every changed file in one
 //! scrolling view.
 //!
-//! Both sides' text comes from git: the left side is the merge base's, the right side the head's,
-//! each in an in-memory buffer. With a trusted checkout, a file whose bytes there hash to the head's
-//! blob shows the checkout's project buffer on the right instead, so language servers attach to
-//! it. Modelled on Zed's `git_ui_core/src/file_diff_view.rs` (project buffer on the right) and
+//! Both sides' text comes from git, each in an in-memory buffer: the left side is the old side of
+//! what the diff compares ([`ShownComparison`]), the merge base's for the whole pull request, and
+//! the right side its new side, a head. With a trusted checkout, a file whose bytes there hash to
+//! the head's blob shows the checkout's project buffer on the right instead, so language servers
+//! attach to it. Modelled on Zed's `git_ui_core/src/file_diff_view.rs` (project buffer on the right) and
 //! `git_ui/src/commit_view.rs` (many files in one view), without depending on either crate.
 //!
 //! The local copy is `repo_cache`'s. No changed file is left out. Generated files, lockfiles and
@@ -65,6 +66,7 @@ use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
 use crate::pr_tab::{DiffSource, ExpandFile, PrTab};
+use crate::shown_comparison::ShownComparison;
 use crate::shown_files::{self, ShownFile, ShownFiles};
 use crate::trust;
 
@@ -114,7 +116,7 @@ pub async fn open(
         );
         cx.background_spawn(async move { copy(&cache, &link, &pull_request, token, progress) })
     };
-    let local = copy_with_retries(&tab, &link, copy_once, cx).await?;
+    let (local, comparison) = copy_with_retries(&tab, &link, copy_once, cx).await?;
     let title = format!(
         "{link}: {}",
         crate::window_title::without_bidi(&pull_request.title)
@@ -125,6 +127,7 @@ pub async fn open(
         link,
         title,
         local,
+        comparison,
         answered_at,
         trust,
         launched,
@@ -168,7 +171,7 @@ pub async fn open_offline(
         })
         .await
         .with_context(|| format!("reading {link} from its local copy"))?;
-    let local = match local {
+    let (local, comparison) = match local {
         Ok(local) => local,
         Err(lacks) => {
             log::info!("{link}: offline, and the local copy {lacks}");
@@ -177,20 +180,20 @@ pub async fn open_offline(
     };
     log::info!(
         "{link}: offline, so showing the local copy's head {head}, {} changed files",
-        local.files.len()
+        comparison.files.len()
     );
     let title = format!(
         "{link}: {}",
         crate::window_title::without_bidi(&details.title)
     );
-    let local = Arc::new(local);
     let polled_at = saved.fetched_at;
     show_local_copy(
         tab,
         workspace,
         link,
         title,
-        local,
+        Arc::new(local),
+        Arc::new(comparison),
         polled_at,
         Trust::Untrusted,
         launched,
@@ -221,9 +224,9 @@ pub(crate) async fn copy_with_retries(
     mut copy_once: impl FnMut(
         mpsc::UnboundedSender<CopyProgress>,
         &mut AsyncWindowContext,
-    ) -> Task<anyhow::Result<LocalPullRequest>>,
+    ) -> Task<anyhow::Result<(LocalPullRequest, ShownComparison)>>,
     cx: &mut AsyncWindowContext,
-) -> anyhow::Result<Arc<LocalPullRequest>> {
+) -> anyhow::Result<(Arc<LocalPullRequest>, Arc<ShownComparison>)> {
     let mut wait = FIRST_RETRY;
     let mut unknown = 0;
     loop {
@@ -244,16 +247,16 @@ pub(crate) async fn copy_with_retries(
             }
         };
         let error = match copied {
-            Ok(local) => {
+            Ok((local, comparison)) => {
                 log::info!(
                     "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
                     started.elapsed(),
-                    local.files.len(),
+                    comparison.files.len(),
                     local.base,
                     local.head
                 );
                 tab.update(cx, |tab, cx| tab.copy_retried(None, cx))?;
-                return Ok(Arc::new(local));
+                return Ok((Arc::new(local), Arc::new(comparison)));
             }
             Err(error) => error,
         };
@@ -359,10 +362,10 @@ fn retry(error: &anyhow::Error) -> Option<Retry> {
         })
 }
 
-/// Shows the local copy's diff of the pull request in `tab`, of the head GitHub gave at
-/// `polled_at`. While the tab shows a diff, GitHub's or an older local copy's, this one is built
-/// out of sight and replaces it once every file is in, scrolled to the same file and line;
-/// otherwise it shows at once and fills in as files load.
+/// Shows `comparison` of `local`, the pull request's local copy, in `tab`: the head GitHub gave at
+/// `polled_at`, compared as `comparison` says. While the tab shows a diff, GitHub's or an older
+/// local copy's, this one is built out of sight and replaces it once every file is in, scrolled
+/// to the same file and line; otherwise it shows at once and fills in as files load.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn show_local_copy(
     tab: WeakEntity<PrTab>,
@@ -370,6 +373,7 @@ pub(crate) async fn show_local_copy(
     link: PrLink,
     title: String,
     local: Arc<LocalPullRequest>,
+    comparison: Arc<ShownComparison>,
     polled_at: SystemTime,
     trust: Trust,
     launched: Instant,
@@ -384,7 +388,7 @@ pub(crate) async fn show_local_copy(
             if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
                 banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
             }
-            if let Some(why) = &local.attributes_unread {
+            if let Some(why) = &comparison.attributes_unread {
                 banners.show(
                     BannerKind::AttributesUnread,
                     Severity::Info,
@@ -416,19 +420,19 @@ pub(crate) async fn show_local_copy(
             // Keeps the clone open, so no cleanup removes it or its checkout while the tab shows
             // it, and lets a large file load on a key.
             if let Some(files) = editor.addon_mut::<ShownFiles>() {
-                files.local = Some(local.clone());
+                files.comparison = Some(comparison.clone());
             }
         })
     });
     // The tab lists the files and says where each goes in the diff, at once, or with a diff on
     // screen, once this one replaces it, so the list always matches the diff shown.
-    let entries = local.entries();
+    let entries = comparison.entries();
     let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
         if let Some(source) = tab.diff_source() {
             return (Some(source), tab.positions_of(&entries));
         }
         tab.set_local_copy(local.clone());
-        let positions = tab.copied(entries.clone(), &local.head, polled_at, cx);
+        let positions = tab.copied(entries.clone(), &comparison.new, polled_at, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (None, positions)
     })?;
@@ -437,7 +441,7 @@ pub(crate) async fn show_local_copy(
     }
 
     let mut target = Target {
-        repo_name: &local.name,
+        repo_name: &comparison.repo_name,
         project: &project,
         checkout: None,
         languages: &languages,
@@ -445,18 +449,18 @@ pub(crate) async fn show_local_copy(
         hide_whitespace: false,
     };
     // Each file's buffer and what it shows, for switching to the checkout.
-    let mut shown_files = Vec::with_capacity(local.files.len());
+    let mut shown_files = Vec::with_capacity(comparison.files.len());
     // Files whose header says they couldn't be shown.
     let mut not_shown = 0;
-    for (index, file) in local.files.iter().enumerate() {
+    for (index, file) in comparison.files.iter().enumerate() {
         target.hide_whitespace = tab.update(cx, |tab, cx| {
-            tab.loading_diff(index + 1, local.files.len(), cx);
+            tab.loading_diff(index + 1, comparison.files.len(), cx);
             tab.hides_whitespace()
         })?;
-        let generated = local.generated[index];
+        let generated = comparison.generated[index];
         let plan = cx
             .background_spawn({
-                let repo = local.repo.clone();
+                let repo = comparison.repo.clone();
                 let file = file.clone();
                 async move { plan_file(&repo, &file, generated, None, false) }
             })
@@ -501,7 +505,7 @@ pub(crate) async fn show_local_copy(
     }
     log::info!(
         "{link}: all {} files shown {:?} after launch",
-        local.files.len(),
+        comparison.files.len(),
         launched.elapsed()
     );
 
@@ -514,8 +518,8 @@ pub(crate) async fn show_local_copy(
     tab.update_in(cx, |tab, window, cx| {
         if replacing.is_some() {
             tab.set_local_copy(local.clone());
-            tab.copied(entries, &local.head, polled_at, cx);
-            tab.switch_diff(editor.clone(), &local.head, window, cx);
+            tab.copied(entries, &comparison.new, polled_at, cx);
+            tab.switch_diff(editor.clone(), &comparison.new, window, cx);
         }
         tab.diff_loaded(window, cx);
     })?;
@@ -547,7 +551,7 @@ pub(crate) async fn show_local_copy(
         log::info!("{link}: not trusted, so no checkout and no language servers");
         return Ok(());
     }
-    let checkout = check_out(&local, &link, &project, cx).await;
+    let checkout = check_out(&comparison, &link, &project, cx).await;
     banners.update(cx, |banners, cx| banners.hide(BannerKind::CheckingOut, cx));
     let checkout = match checkout {
         Ok(checkout) => {
@@ -583,14 +587,14 @@ pub(crate) async fn show_local_copy(
         checkout: Some(&checkout),
         ..target
     };
-    for (index, (file, shown)) in local.files.iter().zip(&shown_files).enumerate() {
+    for (index, (file, shown)) in comparison.files.iter().zip(&shown_files).enumerate() {
         let Some((buffer_id, first)) = shown else {
             continue;
         };
-        let generated = local.generated[index];
+        let generated = comparison.generated[index];
         let plan = cx
             .background_spawn({
-                let repo = local.repo.clone();
+                let repo = comparison.repo.clone();
                 let file = file.clone();
                 let dir = checkout.dir.clone();
                 async move { plan_file(&repo, &file, generated, Some(&dir), false) }
@@ -644,25 +648,25 @@ pub(crate) async fn load_large_file(
 ) -> anyhow::Result<()> {
     let found = cx.update(|_, cx| {
         shown_files::read(&diff, cx, |files| {
-            let local = files.local.clone()?;
-            let index = local
+            let comparison = files.comparison.clone()?;
+            let index = comparison
                 .files
                 .iter()
                 .position(|file| file.display_path() == path)?;
             let position = usize::try_from(files.get(&path)?.key.sort_prefix?).ok()?;
-            Some((local, files.checkout.clone(), index, position))
+            Some((comparison, files.checkout.clone(), index, position))
         })
         .flatten()
     })?;
-    let Some((local, checkout, index, position)) = found else {
+    let Some((comparison, checkout, index, position)) = found else {
         return Ok(());
     };
-    let file = local.files[index].clone();
-    let generated = local.generated[index];
+    let file = comparison.files[index].clone();
+    let generated = comparison.generated[index];
     let started = Instant::now();
     let plan = cx
         .background_spawn({
-            let (repo, file) = (local.repo.clone(), file.clone());
+            let (repo, file) = (comparison.repo.clone(), file.clone());
             let dir = checkout.as_ref().map(|checkout| checkout.dir.clone());
             async move { plan_file(&repo, &file, generated, dir.as_deref(), true) }
         })
@@ -671,7 +675,7 @@ pub(crate) async fn load_large_file(
     let opens = !matches!(plan.collapsed, Some(Collapsed::TooLarge { .. }));
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let target = Target {
-        repo_name: &local.name,
+        repo_name: &comparison.repo_name,
         project: &project,
         checkout: checkout.as_ref(),
         languages: &languages,
@@ -887,18 +891,18 @@ fn buffer_anchor(
         .buffer_point_to_anchor(&buffer, point, cx)
 }
 
-/// Checks the head out, trusts that checkout and nothing else, and opens it as a folder of
-/// `project`, so language servers start there.
+/// Checks `comparison`'s new side out, trusts that checkout and nothing else, and opens it as a
+/// folder of `project`, so language servers start there.
 async fn check_out(
-    local: &Arc<LocalPullRequest>,
+    comparison: &Arc<ShownComparison>,
     link: &PrLink,
     project: &Entity<Project>,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<Checkout> {
     let dir = cx
         .background_spawn({
-            let (local, number) = (local.clone(), link.number);
-            async move { local.repo.checkout(number, &local.head) }
+            let (comparison, number) = (comparison.clone(), link.number);
+            async move { comparison.repo.checkout(number, &comparison.new) }
         })
         .await
         .with_context(|| format!("checking {link} out"))?;
@@ -1017,35 +1021,27 @@ impl CopyProgress {
     }
 }
 
-/// A pull request in the local copy.
+/// A pull request in the local copy: its clone, and where its whole diff starts and ends. What
+/// the diff compares is a [`ShownComparison`] of it.
 #[cfg_attr(test, derive(Clone))]
-pub(crate) struct LocalPullRequest {
-    repo: Repo,
-    /// The repository's canonical name, GitHub's, which starts each file's full path.
-    name: String,
-    /// The commit the diff starts from: where the head branched from the base branch.
-    base: Oid,
-    /// The head shown: GitHub's, checked against `refs/pull/<n>/head`.
-    head: Oid,
+pub struct LocalPullRequest {
+    pub(crate) repo: Repo,
+    /// The repository's canonical owner and name, GitHub's. The name starts each file's full
+    /// path.
+    pub(crate) owner: String,
+    pub(crate) name: String,
+    pub(crate) number: u64,
+    /// Where the head branched from the base branch.
+    pub(crate) base: Oid,
+    /// The head: GitHub's, checked against `refs/pull/<n>/head`.
+    pub(crate) head: Oid,
     /// Where the head came from.
-    head_source: HeadSource,
-    /// What changed between `base` and `head`, in git's order.
-    files: Vec<ChangedFile>,
-    /// Each file's `linguist-generated` attribute in the head's `.gitattributes`, in the same
-    /// order (see `review::files::ChangedFile::linguist_generated`).
-    generated: Vec<Option<bool>>,
-    /// Why the `.gitattributes` files couldn't be read, when they couldn't.
-    attributes_unread: Option<String>,
+    pub(crate) head_source: HeadSource,
 }
 
-impl LocalPullRequest {
-    /// The file list's entry for each file, in git's order.
-    pub(crate) fn entries(&self) -> Vec<FileEntry> {
-        self.files
-            .iter()
-            .zip(&self.generated)
-            .map(|(file, generated)| FileEntry::from_local(file, *generated))
-            .collect()
+impl std::fmt::Display for LocalPullRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}#{}", self.owner, self.name, self.number)
     }
 }
 
@@ -1056,7 +1052,7 @@ struct SavedBase {
     tip: Option<Oid>,
 }
 
-/// The pull request from its clone alone, or what the clone lacks for it: `head`, if the clone
+/// The whole pull request from its clone alone, or what the clone lacks for it: `head`, if the clone
 /// fetched it as one of the pull request's heads, from where it branched off the saved base.
 /// That's `base.tip` when the clone has it pinned as one of the pull request's bases; else the
 /// tip of `base.branch` as last fetched, if the pull request was ever fetched against that
@@ -1071,7 +1067,7 @@ fn copy_offline(
     number: u64,
     head: &Oid,
     base: &SavedBase,
-) -> anyhow::Result<Result<LocalPullRequest, String>> {
+) -> anyhow::Result<Result<(LocalPullRequest, ShownComparison), String>> {
     let Some(repo) = cache.open_offline(owner, name)? else {
         return Ok(Err("doesn't exist".into()));
     };
@@ -1104,32 +1100,29 @@ fn copy_offline(
             "lacks some changed files' contents from {merge_base} to {head}"
         )));
     }
-    let files = repo.changed_files(&merge_base, head)?;
-    // Offline, the .gitattributes files are read only if the clone has them.
-    let link = format!("{owner}/{name}#{number}");
-    let (generated, attributes_unread) =
-        linguist_generated(&repo, &merge_base, head, &files, &link);
-    Ok(Ok(LocalPullRequest {
+    let local = LocalPullRequest {
         repo,
+        owner: owner.to_string(),
         name: name.to_string(),
+        number,
         base: merge_base,
         head: head.clone(),
         head_source: HeadSource::PullRef,
-        files,
-        generated,
-        attributes_unread,
-    }))
+    };
+    // Offline, the .gitattributes files are read only if the clone has them.
+    let comparison = ShownComparison::full(&local)?;
+    Ok(Ok((local, comparison)))
 }
 
 /// Fetches the pull request into its repository's clone, finds where it branched from its base
-/// and lists what changed. Makes no checkout. Blocks while git runs.
+/// and lists what changed in the whole of it. Makes no checkout. Blocks while git runs.
 fn copy(
     cache: &RepoCache,
     link: &PrLink,
     pull_request: &PullRequest,
     token: Option<Token>,
     progress: mpsc::UnboundedSender<CopyProgress>,
-) -> anyhow::Result<LocalPullRequest> {
+) -> anyhow::Result<(LocalPullRequest, ShownComparison)> {
     // The repository's canonical name, not the link's, so a renamed one keeps its clone.
     let (owner, name) = pull_request.base.repo.owner_and_name()?;
     let repo = cache.open(owner, name, token)?;
@@ -1191,59 +1184,17 @@ fn copy(
             )
         })?;
     progress.unbounded_send(CopyProgress::Listing).ok();
-    let files = repo.changed_files(&base, &fetched.head)?;
-    let (generated, attributes_unread) =
-        linguist_generated(&repo, &base, &fetched.head, &files, link);
-    Ok(LocalPullRequest {
+    let local = LocalPullRequest {
         repo,
+        owner: owner.to_string(),
         name: name.to_string(),
+        number: link.number,
         base,
         head: fetched.head,
         head_source: fetched.head_source,
-        files,
-        generated,
-        attributes_unread,
-    })
-}
-
-/// Each of `files`' `linguist-generated` attribute in `head`'s `.gitattributes`, or `base`'s for
-/// a file the pull request deletes, which git reads from the commit. When they can't be read, no
-/// file counts as generated by attribute, though lockfiles still do by name, and the second value
-/// says why.
-fn linguist_generated(
-    repo: &Repo,
-    base: &Oid,
-    head: &Oid,
-    files: &[ChangedFile],
-    link: &dyn std::fmt::Display,
-) -> (Vec<Option<bool>>, Option<String>) {
-    let mut generated = vec![None; files.len()];
-    let mut unread = None;
-    for (rev, deleted) in [(head, false), (base, true)] {
-        let (indices, paths): (Vec<usize>, Vec<&[u8]>) = files
-            .iter()
-            .enumerate()
-            .filter(|(_, file)| file.new.is_none() == deleted)
-            .map(|(index, file)| (index, file.path()))
-            .unzip();
-        if paths.is_empty() {
-            continue;
-        }
-        match repo.attribute(rev, "linguist-generated", &paths) {
-            Ok(attributes) => {
-                for (index, attribute) in indices.into_iter().zip(attributes) {
-                    generated[index] = attribute.as_bool();
-                }
-            }
-            Err(error) => {
-                log::warn!(
-                    "{link}: can't read which files .gitattributes marks generated: {error}"
-                );
-                unread.get_or_insert_with(|| error.to_string());
-            }
-        }
-    }
-    (generated, unread)
+    };
+    let comparison = ShownComparison::full(&local)?;
+    Ok((local, comparison))
 }
 
 /// The key a file's excerpts sit under in the diff: its position in the tab's order, then its
@@ -2441,11 +2392,13 @@ pub(crate) mod tests {
         assert_eq!(normalized(b"a\r\r\n"), b"a\n\n");
     }
 
-    /// A pull request copied locally from a fixture, with a checkout when asked for.
+    /// A pull request copied locally from a fixture, and the whole of it, with a checkout when
+    /// asked for.
     pub(crate) struct Copied {
         pub(crate) _fixture: fixtures::Fixture,
         pub(crate) _cache: TempDir,
         pub(crate) local: LocalPullRequest,
+        pub(crate) comparison: ShownComparison,
         pub(crate) checkout: Option<PathBuf>,
     }
 
@@ -2468,25 +2421,22 @@ pub(crate) mod tests {
             .merge_base(&fetched.head, &fetched.base_tip)
             .unwrap()
             .unwrap();
-        let files = repo.changed_files(&base, &fetched.head).unwrap();
-        let link: PrLink = "https://github.com/owner/repo/pull/1".parse().unwrap();
-        let (generated, attributes_unread) =
-            linguist_generated(&repo, &base, &fetched.head, &files, &link);
         let local = LocalPullRequest {
             repo,
+            owner: "owner".into(),
             name: "repo".into(),
+            number: 1,
             base,
             head: fetched.head,
             head_source: fetched.head_source,
-            files,
-            generated,
-            attributes_unread,
         };
+        let comparison = ShownComparison::full(&local).unwrap();
         let checkout = checkout.then(|| local.repo.checkout(1, &local.head).unwrap());
         Copied {
             _fixture: fixture,
             _cache: cache_dir,
             local,
+            comparison,
             checkout,
         }
     }
@@ -2499,14 +2449,14 @@ pub(crate) mod tests {
 
         /// Each file's path and plan, loading large files when `load_large` says.
         fn plans_loading(&self, load_large: bool) -> Vec<(String, FilePlan)> {
-            let local = &self.local;
-            local
+            let comparison = &self.comparison;
+            comparison
                 .files
                 .iter()
-                .zip(&local.generated)
+                .zip(&comparison.generated)
                 .map(|(file, generated)| {
                     let plan = plan_file(
-                        &local.repo,
+                        &comparison.repo,
                         file,
                         *generated,
                         self.checkout.as_deref(),
@@ -2666,11 +2616,11 @@ pub(crate) mod tests {
             false,
         );
         let generated: Vec<_> = copied
-            .local
+            .comparison
             .files
             .iter()
             .map(|file| file.display_path().into_owned())
-            .zip(copied.local.generated.iter().copied())
+            .zip(copied.comparison.generated.iter().copied())
             .collect();
         assert_eq!(
             generated,
@@ -2877,11 +2827,11 @@ pub(crate) mod tests {
             &[Entry::File("a.rs", b"fn b() {}\n")],
             false,
         );
-        let mut file = copied.local.files[0].clone();
+        let mut file = copied.comparison.files[0].clone();
         let missing = "f".repeat(40);
         file.new.as_mut().unwrap().oid = missing.parse().unwrap();
 
-        let plan = plan_file(&copied.local.repo, &file, None, None, false);
+        let plan = plan_file(&copied.comparison.repo, &file, None, None, false);
 
         let Content::Placeholder { text, .. } = &plan.content else {
             panic!("{plan:?}");
@@ -3074,7 +3024,7 @@ pub(crate) mod tests {
             false,
         );
 
-        let headers: Vec<_> = copied.local.files.iter().map(FileHeader::of).collect();
+        let headers: Vec<_> = copied.comparison.files.iter().map(FileHeader::of).collect();
         assert_eq!(
             headers
                 .iter()
@@ -3101,7 +3051,10 @@ pub(crate) mod tests {
             &[Entry::File("a.rs", b"b\n")],
             false,
         );
-        assert_eq!(FileHeader::of(&modified.local.files[0]).renamed_from, None);
+        assert_eq!(
+            FileHeader::of(&modified.comparison.files[0]).renamed_from,
+            None
+        );
     }
 
     /// Pull requests in real repositories, served over `file://` as GitHub serves them.
@@ -3134,10 +3087,34 @@ pub(crate) mod tests {
             pub fn base_url(&self) -> String {
                 format!("file://{}", self.dir.path().display())
             }
+
+            fn git_dir(&self) -> std::path::PathBuf {
+                self.dir.path().join("owner/repo.git")
+            }
+
+            /// Writes a commit holding exactly `entries`, on top of `parent`, and returns its ID.
+            pub fn commit(&self, entries: &[Entry], parent: Option<&str>) -> String {
+                commit(
+                    &self.git_dir(),
+                    &self.dir.path().join("index"),
+                    entries,
+                    parent,
+                )
+            }
+
+            /// Points `reference`, such as `refs/heads/main`, at `commit`.
+            pub fn set_ref(&self, reference: &str, commit: &str) {
+                run(
+                    &self.git_dir(),
+                    &["update-ref", reference, commit],
+                    None,
+                    None,
+                );
+            }
         }
 
-        /// A pull request from a base commit holding `base` to a head commit holding `head`.
-        pub fn pull_request(base: &[Entry], head: &[Entry]) -> Fixture {
+        /// A bare repository `owner/repo` with no commits.
+        pub fn empty() -> Fixture {
             let dir = TempDir::new().unwrap();
             let git_dir = dir.path().join("owner/repo.git");
             std::fs::create_dir_all(&git_dir).unwrap();
@@ -3154,22 +3131,17 @@ pub(crate) mod tests {
                 None,
                 None,
             );
-            let index = dir.path().join("index");
-            let base = commit(&git_dir, &index, base, None);
-            let head = commit(&git_dir, &index, head, Some(&base));
-            run(
-                &git_dir,
-                &["update-ref", "refs/heads/main", &base],
-                None,
-                None,
-            );
-            run(
-                &git_dir,
-                &["update-ref", "refs/pull/1/head", &head],
-                None,
-                None,
-            );
             Fixture { dir }
+        }
+
+        /// A pull request from a base commit holding `base` to a head commit holding `head`.
+        pub fn pull_request(base: &[Entry], head: &[Entry]) -> Fixture {
+            let fixture = empty();
+            let base = fixture.commit(base, None);
+            let head = fixture.commit(head, Some(&base));
+            fixture.set_ref("refs/heads/main", &base);
+            fixture.set_ref("refs/pull/1/head", &head);
+            fixture
         }
 
         /// Writes a commit whose tree holds exactly `entries`, and returns its ID.

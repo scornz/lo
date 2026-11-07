@@ -27,7 +27,8 @@ use settings::DiffViewStyle;
 use ui::{Label, LabelSize, prelude::*};
 
 use crate::file_display::{Collapsed, ImageSide, Images, without_whitespace_changes};
-use crate::pr_diff::{Checkout, FileHeaders, LocalPullRequest};
+use crate::pr_diff::{Checkout, FileHeaders};
+use crate::shown_comparison::ShownComparison;
 use crate::{image_preview, preview_pool};
 
 /// One file in the diff.
@@ -315,9 +316,9 @@ pub(crate) fn release_images(
 #[derive(Default)]
 pub(crate) struct ShownFiles {
     files: HashMap<String, ShownFile>,
-    /// The local copy the files come from, which loads a large file on a key and keeps the clone
+    /// What the local copy's diff compares, which loads a large file on a key and keeps the clone
     /// open while the diff shows. `None` for GitHub's diff.
-    pub(crate) local: Option<Arc<LocalPullRequest>>,
+    pub(crate) comparison: Option<Arc<ShownComparison>>,
     /// The trusted checkout the local copy's files show from, once it's ready, which a large
     /// file loaded on a key shows from too.
     pub(crate) checkout: Option<Checkout>,
@@ -1071,7 +1072,7 @@ fn render_images(drawn: &Drawn, side: Side, cx: &mut BlockContext) -> AnyElement
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::time::Instant;
@@ -1092,7 +1093,7 @@ mod tests {
     const PULL: &str = "https://github.com/owner/repo/pull/1";
 
     /// Lo's window with a tab for [`PULL`], wide enough to show its diff side by side.
-    async fn tab(cx: &mut TestAppContext) -> (Entity<PrTab>, &mut VisualTestContext) {
+    pub(crate) async fn tab(cx: &mut TestAppContext) -> (Entity<PrTab>, &mut VisualTestContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
             editor::init(cx);
@@ -1139,9 +1140,10 @@ mod tests {
             _fixture: fixture,
             _cache: cache,
             local,
+            comparison,
             ..
         } = copied;
-        let local = Arc::new(local);
+        let (local, comparison) = (Arc::new(local), Arc::new(comparison));
         tab.update_in(cx, |tab, window, cx| {
             let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
             cx.spawn_in(window, async move |tab, cx| {
@@ -1152,6 +1154,7 @@ mod tests {
                     link,
                     title,
                     local,
+                    comparison,
                     std::time::SystemTime::now(),
                     Trust::Untrusted,
                     Instant::now(),

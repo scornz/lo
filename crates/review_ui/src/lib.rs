@@ -23,6 +23,7 @@ pub mod pr_tab;
 mod preview_pool;
 mod read_only;
 pub mod recent_prs;
+pub mod shown_comparison;
 mod shown_files;
 pub mod tabs;
 #[cfg(test)]

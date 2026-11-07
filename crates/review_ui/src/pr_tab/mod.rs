@@ -43,6 +43,7 @@ use crate::poll_state;
 use crate::pr_banner::{self, BannerAction, BannerKind, Banners};
 use crate::pr_diff::{self, CopyProgress, LocalPullRequest, Trust};
 use crate::pr_link::PrLink;
+use crate::shown_comparison::ShownComparison;
 use crate::shown_files;
 use crate::tabs::{TabKey, find_tab};
 use crate::viewed_marks::ViewedMarks;
@@ -284,7 +285,8 @@ pub enum PrTabEvent {
     /// GitHub's latest head for the pull request changed: GitHub said it for the first time, or
     /// the pull request got a push.
     HeadChanged,
-    /// The diff shows another comparison: GitHub's diff, or the local copy's.
+    /// The diff shows another comparison: GitHub's diff, or the local copy's
+    /// ([`PrTab::comparison`]).
     ComparisonChanged,
 }
 
@@ -674,6 +676,11 @@ impl PrTab {
     /// Where the diff shown comes from, once one shows.
     pub fn diff_source(&self) -> Option<DiffSource> {
         self.diff_source
+    }
+
+    /// What the diff shown compares, when it's the local copy's.
+    pub fn comparison(&self, cx: &App) -> Option<Arc<ShownComparison>> {
+        shown_files::read(self.diff.as_ref()?, cx, |files| files.comparison.clone()).flatten()
     }
 
     /// Whether the tab's diffs show inline or side by side.
