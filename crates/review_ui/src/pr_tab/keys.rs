@@ -5,27 +5,41 @@
 //! The tab's own context says what its middle shows, `middle=diff` or `middle=view`
 //! ([`tab_context`]). Keys that act on the diff hold only while it shows, so they don't reach a
 //! hidden diff, and a view in its place can bind the same keys.
+//!
+//! Vim's keys bind at the depth of the editor they work in, and before Lo's. So in the diff, Lo's
+//! keys bind at the depth of its editors too ([`DIFF_CONTEXT`]), where Lo's win, being bound
+//! later.
 
-use gpui::{Action, App, Context, Div, KeyBinding, KeyContext};
+use std::any::Any;
+
+use editor::{Addon, SplittableEditor};
+use gpui::{Action, App, Context, Div, Entity, KeyBinding, KeyContext};
 
 use super::{Middle, PrTab, left, middle, right, viewed};
 
 pub(crate) const KEY_CONTEXT: &str = "PrTab";
 pub(crate) const FILE_LIST_CONTEXT: &str = "PrFileList";
-/// The diff's editors, inside the tab while it shows the diff, where `tab` would otherwise indent:
-/// full editors of many files, not an editor that's typed in, such as a comment's, which edits one
-/// buffer.
-pub(crate) const DIFF_CONTEXT: &str =
-    "PrTab && middle == diff > Editor && mode == full && multibuffer";
+/// What the diff's editors, both sides, add to their own context ([`mark_diff`]).
+pub(crate) const PR_DIFF: &str = "PrDiff";
+/// The diff's editors, inside the tab while it shows the diff, where Lo's keys bind at the
+/// editors' depth, so they win over vim's there. Not while vim waits for the rest of a command:
+/// after an operator such as `y` (`vim_mode == operator`), for the character after `f`, `t`, `m`,
+/// `'` or a register's `"` (`waiting`, or `literal`), or with a count typed (`VimCount`). So `ye`,
+/// `fe` and `3e` are vim's. Never in a text box, such as a comment box: an editor that isn't full
+/// size never matches, and while an editor inside the diff has focus, Zed leaves the diff's own
+/// context, `PrDiff` included, out of the stack.
+pub(crate) const DIFF_CONTEXT: &str = "(PrTab && middle == diff > Editor && PrDiff) \
+    && !(Editor && mode != full) \
+    && vim_mode != operator && vim_mode != waiting && vim_mode != literal && !VimCount";
 /// The file list while the tab shows the diff, for keys that act on the diff from the list.
 pub(crate) const DIFF_FILE_LIST_CONTEXT: &str = "PrTab && middle == diff > PrFileList";
 /// The tab outside any text box in it, such as a comment box: keys that type a character work
 /// here, so a text box still types them. The diff's own editors are the only full-size editors of
 /// many files.
 pub(crate) const READING_CONTEXT: &str = "PrTab && !(Editor && (mode != full || !multibuffer))";
-/// [`READING_CONTEXT`] while the tab shows the diff: where keys for reading the diff work.
-pub(crate) const DIFF_READING_CONTEXT: &str =
-    "PrTab && middle == diff && !(Editor && (mode != full || !multibuffer))";
+/// The tab outside any editor while it shows the diff, such as in the file list: where keys for
+/// reading the diff work besides the diff itself ([`DIFF_CONTEXT`]). A text box types them.
+pub(crate) const DIFF_READING_CONTEXT: &str = "PrTab && middle == diff && !Editor";
 
 /// The tab's root context: [`KEY_CONTEXT`], and what its middle shows.
 pub(crate) fn tab_context(middle: &Middle) -> KeyContext {
@@ -70,16 +84,15 @@ pub(super) fn on_actions(root: Div, tab: &PrTab, cx: &Context<PrTab>) -> Div {
         .fold(root, |root, on_actions| on_actions(root, tab, cx))
 }
 
-/// Binds `keystrokes` to `action`, which reads the diff, wherever the diff is read: in the diff and
-/// the file list, and on the tab around them, while the diff shows, but not in a text box in the
-/// tab, which types them. Every key for reading the diff goes through here, so where they work can
-/// change in this one place.
+/// Binds `keystrokes` to `action`, which reads the diff, wherever the diff is read: in the diff
+/// ([`DIFF_CONTEXT`]), and elsewhere in the tab while the diff shows, such as the file list
+/// ([`DIFF_READING_CONTEXT`]), but not in a text box in the tab, which types them. Every key for
+/// reading the diff goes through here, so where they work can change in this one place.
 pub(crate) fn reading<A: Action + Clone>(keystrokes: &'static str, action: A) -> Vec<KeyBinding> {
-    vec![KeyBinding::new(
-        keystrokes,
-        action,
-        Some(DIFF_READING_CONTEXT),
-    )]
+    vec![
+        KeyBinding::new(keystrokes, action.clone(), Some(DIFF_CONTEXT)),
+        KeyBinding::new(keystrokes, action, Some(DIFF_READING_CONTEXT)),
+    ]
 }
 
 /// Binds `keystrokes` to `action`, which acts on the diff, in the diff and in the file list, while
@@ -93,4 +106,34 @@ pub(crate) fn diff_and_file_list<A: Action + Clone>(
         KeyBinding::new(keystrokes, action.clone(), Some(DIFF_CONTEXT)),
         KeyBinding::new(keystrokes, action, Some(DIFF_FILE_LIST_CONTEXT)),
     ]
+}
+
+/// Adds [`PR_DIFF`] to an editor's context.
+struct DiffKeyContext;
+
+impl Addon for DiffKeyContext {
+    fn extend_key_context(&self, context: &mut KeyContext, _: &App) {
+        context.add(PR_DIFF);
+    }
+
+    fn to_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Gives `diff`'s editors, both sides, the diff's context, [`PR_DIFF`]. Call it whenever the
+/// diff may have gone side by side, which makes a new left-hand editor.
+pub(crate) fn mark_diff(diff: &Entity<SplittableEditor>, cx: &mut App) {
+    let editors = {
+        let diff = diff.read(cx);
+        [Some(diff.rhs_editor().clone()), diff.lhs_editor().cloned()]
+    };
+    for editor in editors.into_iter().flatten() {
+        if editor.read(cx).addon::<DiffKeyContext>().is_none() {
+            editor.update(cx, |editor, cx| {
+                editor.register_addon(DiffKeyContext);
+                cx.notify();
+            });
+        }
+    }
 }

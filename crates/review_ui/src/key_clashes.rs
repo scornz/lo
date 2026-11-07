@@ -192,7 +192,7 @@ mod tests {
                     "Workspace",
                     "Pane",
                     "PrTab middle=diff",
-                    "Editor mode=full multibuffer",
+                    "Editor mode=full multibuffer PrDiff",
                 ]),
             },
             Place {

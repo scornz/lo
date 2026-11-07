@@ -15,16 +15,37 @@ fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
                 .collect()
         };
         let tab = ["Workspace", "Pane", "PrTab middle=diff"];
-        let diff = stack(&[&tab[..], &["Editor mode=full multibuffer"]].concat());
+        let diff = "Editor mode=full multibuffer PrDiff";
+        let vim_diff = "Editor mode=full multibuffer PrDiff VimControl vim_mode=normal";
+        let diffs = [
+            stack(&[&tab[..], &[diff]].concat()),
+            stack(&[&tab[..], &[vim_diff]].concat()),
+        ];
         let file_list = stack(&[&tab[..], &["PrFileList"]].concat());
-        // A comment box in the diff, as milestone 8 adds, or any other text box in the tab.
-        let text_box = stack(
-            &[
-                &tab[..],
-                &["Editor mode=full multibuffer", "Editor mode=auto_height"],
-            ]
-            .concat(),
-        );
+        // A comment box in the diff, as milestone 8 adds. While it has focus, Zed leaves the
+        // diff's own context, `PrDiff` and vim's included, out of the stack. Without that, the
+        // box's size alone keeps Lo's keys out.
+        let text_boxes = [
+            stack(
+                &[
+                    &tab[..],
+                    &["Editor mode=full multibuffer", "Editor mode=auto_height"],
+                ]
+                .concat(),
+            ),
+            stack(&[&tab[..], &[diff, "Editor mode=auto_height"]].concat()),
+            stack(
+                &[
+                    &tab[..],
+                    &[
+                        "Editor mode=full multibuffer",
+                        "Editor mode=auto_height VimControl vim_mode=normal",
+                    ],
+                ]
+                .concat(),
+            ),
+        ];
+        // Any other text box in the tab.
         let line = stack(&[&tab[..], &["Editor mode=single_line"]].concat());
         let lo = |input: &'static str, contexts: &[gpui::KeyContext]| {
             let keystrokes: Vec<gpui::Keystroke> = input
@@ -48,16 +69,21 @@ fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
             ("[ c", "review_ui::PreviousChange"),
             ("alt-o", "review_ui::ToggleFileOrder"),
         ] {
-            assert_eq!(lo(keys, &diff).0, [action], "{keys} in the diff");
+            for diff in &diffs {
+                assert_eq!(lo(keys, diff).0, [action], "{keys} in the diff");
+            }
             assert_eq!(lo(keys, &file_list).0, [action], "{keys} in the file list");
-            for contexts in [&text_box, &line] {
+            for contexts in text_boxes.iter().chain([&line]) {
                 assert_eq!(lo(keys, contexts).0, [""; 0], "{keys} in a text box");
             }
         }
         // A bracket types at once, not waiting for a second key.
         for prefix in ["]", "["] {
-            assert!(lo(prefix, &diff).1, "{prefix} waits in the diff");
-            assert!(!lo(prefix, &text_box).1, "{prefix} types in a text box");
+            assert!(lo(prefix, &diffs[0]).1, "{prefix} waits in the diff");
+            assert!(
+                !lo(prefix, &text_boxes[0]).1,
+                "{prefix} types in a text box"
+            );
         }
     });
 }
@@ -146,7 +172,12 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
             bindings.first().map(|binding| binding.action().name())
         };
         let tab = "PrTab middle=diff";
-        let diff = ["Workspace", "Pane", tab, "Editor mode=full multibuffer"];
+        let diff = [
+            "Workspace",
+            "Pane",
+            tab,
+            "Editor mode=full multibuffer PrDiff",
+        ];
         let file_list = ["Workspace", "Pane", tab, "PrFileList"];
         let comment = ["Workspace", "Pane", tab, "Editor mode=auto_height"];
         // A comment box can be a full editor too, of one buffer.

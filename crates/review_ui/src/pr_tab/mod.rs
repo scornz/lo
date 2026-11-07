@@ -1474,8 +1474,10 @@ impl PrTab {
         // Loads into a diff no longer shown stop, and let it go.
         let shown = editor.entity_id();
         self.loading.retain(|(diff, _), _| *diff == shown);
+        keys::mark_diff(&editor, cx);
         self._diff_watch = vec![
             cx.observe_in(&editor, window, |_, diff, window, cx| {
+                keys::mark_diff(&diff, cx);
                 shown_files::sync_side_by_side(&diff, window, cx)
             }),
             cx.subscribe_in(&editor, window, |_, diff, event: &EditorEvent, _, cx| {
