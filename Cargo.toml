@@ -64,6 +64,7 @@ github = { path = "crates/github" }
 repo_cache = { path = "crates/repo_cache" }
 review = { path = "crates/review" }
 review_ui = { path = "crates/review_ui" }
+stacks = { path = "crates/stacks" }
 
 # Other crates. Versions match Zed's where Zed has them.
 anyhow = "1.0.86"
