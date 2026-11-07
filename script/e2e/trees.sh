@@ -1,10 +1,10 @@
 # shellcheck shell=bash
-# The files of fixtures E6, E8, E9, E10, E12 and #17, which fixtures.sh sources and pushes.
+# The files of fixtures E6, E8, E9, E10, E11, E12 and #17, which fixtures.sh sources and pushes.
 #
 # Each <fixture>_tree function writes one side of a fixture into the folder of a checkout,
 # replacing what's there:
 #
-#   e6_tree, e9_tree, e10_tree, e12_tree <base | head> <folder>
+#   e6_tree, e9_tree, e10_tree, e11_tree, e12_tree <base | head> <folder>
 #   e8_tree, images_tree <folder>      (their PRs only add files, so they have no base side)
 #
 # Nothing here reads the network or the token, and every file comes out byte for byte the same
@@ -1059,6 +1059,32 @@ e10_tree() {
       write_lockfile()
       if (side == "head") write_catalog()
     }'
+}
+
+# --- E11: review writes ------------------------------------------------------------------------
+
+# A 60-line text file whose head changes lines 10, 11, 30 and 50, so the diff has three hunks
+# (lines 7–14, 27–33 and 47–53) with lines outside them, and a short Markdown file with one line
+# changed, for file-level comments. Lo's recordings of comments, replies and reviews are written
+# here (crates/github/tests/record_fixtures.rs).
+e11_tree() {
+  local side=$1 dir=${2:?}/e11 n
+  check_side "$side" || return 1
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  for ((n = 1; n <= 60; n++)); do
+    case $side:$n in
+      head:10 | head:11 | head:30 | head:50) echo "line $n changed" ;;
+      *) echo "line $n" ;;
+    esac
+  done >"$dir/review.txt"
+  put "$dir/notes.md" <<EOF
+# Review writes
+
+Fixture E11: Lo comments, replies and reviews here as rozed-bot.
+
+This line is the $side side's.
+EOF
 }
 
 # --- E12: languages from bundled extensions ----------------------------------------------------

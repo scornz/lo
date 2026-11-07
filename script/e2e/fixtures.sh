@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Sets up the GitHub fixtures in rozed-dev/e2e that Lo is checked against, as rozed-bot: revisions
 # and stacks (E1–E3), code navigation and trust (E6, E8), moved code and the syntax-aware view
-# (E9), performance (E10), languages from bundled extensions (E12) and image previews (#17).
+# (E9), performance (E10), review writes (E11), languages from bundled extensions (E12) and image
+# previews (#17).
 # trees.sh beside this script writes the files of E6 onwards, and README.md has the fixture map.
 #
 # Usage: script/e2e/fixtures.sh <setup | status [--json] | push-r4 | rebase-r5 | push-r6 | reset-e1>
@@ -57,7 +58,7 @@ usage() {
   cat <<'EOF'
 Usage: script/e2e/fixtures.sh <command>
 
-  setup           create any fixture that's missing: E1–E3, E6, E8–E10, E12 and #17
+  setup           create any fixture that's missing: E1–E3, E6, E8–E12 and #17
   status [--json] print each fixture's PRs, branches and heads
   push-r4         push E1's r4, a normal push
   rebase-r5       move main one commit, then rebase E1's PR on GitHub (r5)
@@ -614,9 +615,9 @@ e3_setup() {
     die "#$y targets $base, not e3/x; 'Automatically delete head branches' must stay off"
 }
 
-# --- E6–E12 and #17: code, hostile files, moves, large, languages and images -------------------
+# --- E6–E12 and #17: code, hostile files, moves, large, writes, languages and images ------------
 #
-# trees.sh writes their files. E6, E9, E10 and E12 change code that has to exist first, so each has
+# trees.sh writes their files. E6, E9–E12 change code that has to exist first, so each has
 # a base branch, e<n>/base, that adds its base side to main, and its PR targets that branch, not
 # main. E8 has one too, holding only main, so merging it can't put its baits on main. main never
 # moves for them, so E1's base still moves only under rebase-r5. #17 only adds harmless files, so it
@@ -817,6 +818,13 @@ e10_setup() {
     "Fixture E10 (large), for Lo's performance budgets: a seeded, deterministic PR of 300 files and about 25,000 changed lines, in TypeScript, Rust, Python, Go and TOML. It changes 254 files, adds 30 and deletes 16, moves functions within and between files, adds a 6,000-line file (\`e10/src/big/catalog.ts\`) and changes a lockfile (\`e10/package-lock.json\`). It targets \`e10/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
 }
 
+# E11 has no review of its own: Lo's recordings write to it (crates/github/tests/record_fixtures.rs)
+# and delete what they can afterwards.
+e11_setup() {
+  changed_tree_setup e11 e11/base e11/writes "test(e11): change lines in three places" \
+    "E11: review writes" "Fixture E11 (review writes): Lo's recordings of comments, replies and reviews are written here as rozed-bot, which can only comment on its own pull request. \`e11/review.txt\` changes lines 10, 11, 30 and 50, so the diff has three hunks with lines outside them, and \`e11/notes.md\` changes one line, for file-level comments. The recordings delete the comments they can afterwards; submitted reviews stay. It targets \`e11/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
+}
+
 e12_setup() {
   changed_tree_setup e12 e12/base e12/languages "test(e12): change a file in each extension language" \
     "E12: extension languages" "Fixture E12 (extension languages), for the languages Lo bundles as extensions: one file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed, so both sides need highlighting. None is part of a project a language server would build. It targets \`e12/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
@@ -833,6 +841,7 @@ cmd_setup() {
   e8_setup
   e9_setup
   e10_setup
+  e11_setup
   e12_setup
   if ((CHANGED == 0)); then say "Nothing to change: every fixture exists."; fi
 }
@@ -924,7 +933,7 @@ e9_review_json() {
 
 status_json() {
   local prs heads branches main max e1=null e1_branch e1_pr pushes review revisions stack=null s1
-  local e6 e8 e9 e10 e12 images
+  local e6 e8 e9 e10 e11 e12 images
   # Only rozed-bot's PRs from rozed-dev/e2e itself: anyone can open a PR from a fork's e2/d.
   prs=$(gh_api --paginate "repos/$REPO/pulls?state=all&per_page=100")
   prs=$(jq -s --arg bot "$BOT" --arg repo "$REPO" 'add // []
@@ -976,11 +985,12 @@ status_json() {
     e9=$(jq --argjson review "$review" '. + {review: $review}' <<<"$e9")
   fi
   e10=$(fixture_json e10/large size)
+  e11=$(fixture_json e11/writes files)
   e12=$(fixture_json e12/languages files)
 
   jq --arg main "$main" --argjson e1 "$e1" --argjson stack "$stack" --arg layers "$E2_LAYERS" \
     --argjson e6 "$e6" --argjson e8 "$e8" --argjson e9 "$e9" --argjson e10 "$e10" \
-    --argjson e12 "$e12" --argjson images "$images" '
+    --argjson e11 "$e11" --argjson e12 "$e12" --argjson images "$images" '
     . as $prs
     | def layer($b): first($prs[] | select(.branch == $b)) // null;
     {
@@ -997,6 +1007,7 @@ status_json() {
       e8: $e8,
       e9: $e9,
       e10: $e10,
+      e11: $e11,
       e12: $e12,
       images: $images
     }' <<<"$prs"
@@ -1039,6 +1050,8 @@ status_text() {
     "E10 large",
     (.e10 | row("e10")),
     (if .e10 then "      \(.e10.size.files) files, +\(.e10.size.additions) -\(.e10.size.deletions)" else empty end),
+    "E11 review writes",
+    (.e11 | row("e11")),
     "E12 extension languages",
     (.e12 | row("e12")),
     "#17 images",

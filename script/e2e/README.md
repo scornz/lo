@@ -1,9 +1,10 @@
 # e2e fixtures
 
 `fixtures.sh` sets up the pull requests in [`rozed-dev/e2e`](https://github.com/rozed-dev/e2e) that
-Lo is checked against: image previews (milestone 5), revisions (6), stacks (7), code features and
-trust (10), moved code and the syntax-aware view (11), the file picker (12), and the nightly suite,
-performance budgets and app check (13). It runs as `rozed-bot` and builds nothing.
+Lo is checked against: image previews (milestone 5), revisions (6), stacks (7), comments and reviews
+(8), code features and trust (10), moved code and the syntax-aware view (11), the file picker (12),
+and the nightly suite, performance budgets and app check (13). It runs as `rozed-bot` and builds
+nothing.
 
 `trees.sh` writes the files of E6 onwards. It reads no network or token, and writes the same bytes
 each time. Its awk is checked on macOS's awk only so far, though it uses nothing gawk or mawk
@@ -34,15 +35,15 @@ would read differently.
     file.
   - It refuses to run under `bash -x`, which would print the token.
 - **What it writes,** only to `rozed-dev/e2e`:
-  - branches under `e1/`, `e2/`, `e3/`, `e5/`, `e6/`, `e8/`, `e9/`, `e10/` and `e12/`, and their
-    PRs;
+  - branches under `e1/`, `e2/`, `e3/`, `e5/`, `e6/`, `e8/`, `e9/`, `e10/`, `e11/` and `e12/`, and
+    their PRs;
   - E1's review, and E9's review with its two threads;
   - E2's native stack;
   - squash merges of `e3/x` and `e1/move-main*`;
   - E8's updates: a new commit on `e8/hostile`, and its PR's base and description.
 - **What it never does:** push to `main`, force-push or delete a branch. `main` moves only through
   PRs it opened, which it checks by author, base and title before merging.
-- **Base branches.** E6, E9, E10 and E12 change files that have to exist first, so each has a base
+- **Base branches.** E6, E9–E12 change files that have to exist first, so each has a base
   branch, `e<n>/base`, that adds their base side to `main`, and its PR targets that branch. E8 has
   one too, `e8/base`, holding only what `main` held when E8 was made, so merging E8 can't put its
   baits on `main`. `main` never moves for any of them, so E1's base still moves only under
@@ -89,6 +90,7 @@ The numbers are from 2026-11-06. `reset-e1` gives E1 a new number, so tests read
 | **E8** hostile files | #19 | `e8/hostile` → `e8/base` | Milestone 10 (10h's hardening, behind 10g's trust); [below](#e8-hostile-files). Trusted, after 2 minutes of scrolling and hovering, no marker exists: `lo-e8-rustc-wrapper` (`.cargo/config.toml`), `lo-e8-rust-analyzer`, `-gopls`, `-vtsls` and `-basedpyright` (`.zed/settings.json`), `lo-e8-tsserver` (`node_modules/typescript`) and `lo-e8-python` (`.venv/`). The two toolchain baits, `e8/pinned/rust-toolchain.toml` and `go.mod`, leave none, so the check reads the servers' environments instead. |
 | **E9** moves and syntax | #20 | `e9/moves` → `e9/base` | Milestones 11 and 13; [below](#e9-moves-and-syntax). **11a:** the cross-file move shows both links, only its edited line has word highlights, `g m` round-trips, the within-file move works and the 2-line block isn't a move. **11b:** the renamed variable highlights only the name; the reordered arguments; the wrapped block marks only the `if`; the JSON reorder; the parse error and the 1.2 MB file fall back. **11c:** the thread on a moved line sits under the same line in both views. **13d** drives the moves and the syntax view. |
 | **E10** large | #21 | `e10/large` → `e10/base` | Milestones 10, 12 and 13; [below](#e10-large). **10b:** the debug log shows both trees indexed with their times, and reopening reuses blobs. **12f:** ⌘P filters its 300 files at once. **13e:** the budgets for the first file (1.5 s warm) and all files (6 s), moved-code detection (200 ms), and memory with `fd#2212` open too (1 GB). |
+| **E11** review writes | #23 | `e11/writes` → `e11/base` | Milestone 8; [below](#e11-review-writes). `github`'s recordings of comments, replies and reviews, written as rozed-bot by `crates/github/tests/record_fixtures.rs` (`review_writes_e2e_23`), which deletes the comments it can afterwards. Not for checks that need it unchanged: each run leaves two reviews GitHub can't delete. |
 | **E12** extension languages | #22 | `e12/languages` → `e12/base` | Milestones 10 (10i) and 13 (13f). One file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed. **Untrusted:** every file is highlighted on both sides, and the debug log shows no request at launch. **Trusted:** the Terraform server downloads from `releases.hashicorp.com`. |
 | **#17** images | #17 | `e5/images` → `main` | Milestone 5 (5d's image previews); 8g's timeline images go through the same preview helper. SVGs whose `<image>`s point at files on the reviewer's disk and at `/dev/zero` draw only their frame and dot; the 316-byte pattern bomb (a 20000 × 20000 tile) fails with "couldn't preview this image" and Lo stays responsive; the 48 × 48 PNG previews. Opened by hand first; `setup` would recreate the same files, two of whose SVG comments use the project's first name, as on GitHub. |
 
@@ -198,3 +200,28 @@ only a toolchain it downloads or finds on `PATH`. The toolchain file has a crate
   collapses a file.
 - **`e10/package-lock.json`:** a lockfile of 450 packages, collapsed as generated. The PR bumps every
   fourth, drops every 31st and adds 40 (+570 −414).
+
+### E11 review writes
+
+#23, head `5a48d22`, on `e11/base` at `5055651`. `e11/review.txt` holds `line 1` to `line 60`,
+and the PR changes lines 10, 11, 30 and 50, so its diff has three hunks (lines 7–14, 27–33 and
+47–53) and lines outside them; `e11/notes.md` changes one line, for file-level comments. It has
+no review of its own.
+
+`cargo test -p github --test record_fixtures -- --ignored --exact review_writes_e2e_23` writes to
+it as rozed-bot, checking `GET /user` first, and records four cassettes, `review_writes_e2e_23_*`:
+
+- **pending:** a pending review started with a line thread, then a range from the base's line 10
+  to the head's 11, a file-level thread and a reply; a line outside the diff and a file the PR
+  doesn't change, which GitHub answers with `thread: null`; a comment posted at once, refused
+  while the review is pending; then the review submitted as a comment.
+- **posted:** a reply, a line thread, a REST file-level comment and a review with only a summary,
+  all posted at once; approving, requesting changes and an empty comment, which GitHub refuses
+  its author; a reply that starts an empty pending review, submitted without a summary.
+- **threads:** a thread resolved and unresolved, a reply edited, edited blank and deleted twice.
+- **conversation:** two comments on the PR itself, the first edited, then both deleted.
+
+Afterwards it deletes every comment of rozed-bot's starting `Fixture E11:`, so the PR keeps no
+threads. GitHub drops a review without a summary once its last comment goes, so each run leaves
+two submitted reviews, the two with a summary, which can't be deleted. A run stops before writing
+anything if rozed-bot has a pending review there.
