@@ -153,6 +153,19 @@ impl Domain for LoDb {
                 FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
             ) STRICT;
         ),
+        sql!(
+            // The merge method last used in each repository, which the merge panel picks first.
+            // A habit of the person at this Mac, so it's kept whichever account merged. Not
+            // cached data, so clearing the cache keeps it.
+            CREATE TABLE merge_methods(
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                // GraphQL's PullRequestMergeMethod: MERGE, SQUASH or REBASE.
+                method TEXT NOT NULL,
+                PRIMARY KEY(host, owner, repo)
+            ) STRICT;
+        ),
     ];
 }
 
@@ -816,6 +829,59 @@ mod tests {
                 }]
             );
             assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
+        });
+    }
+
+    /// Lo's database as it was before merge methods were remembered: with revision marks.
+    struct BeforeMergeMethods;
+
+    impl Domain for BeforeMergeMethods {
+        const NAME: &str = LoDb::NAME;
+        // The first five steps.
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(5).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_merge_methods() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lo.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeMergeMethods>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO last_seen(host, account, owner, repo, number, head, seen_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "h1", 100)
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = LoDb::open(&path).await.unwrap();
+            let pull = crate::PullRef::new("o", "r", 1);
+            let marks = crate::revision_marks::RevisionMarks::new(db.clone());
+            assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
+            let methods = crate::merge_methods::MergeMethods::new(db);
+            let repo = crate::RepoRef::new("o", "r");
+            assert_eq!(methods.preferred(&repo).unwrap(), None);
+            methods
+                .remember(&repo, review::merge::MergeMethod::Squash)
+                .await
+                .unwrap();
+            assert_eq!(
+                methods.preferred(&repo).unwrap(),
+                Some(review::merge::MergeMethod::Squash)
+            );
         });
     }
 

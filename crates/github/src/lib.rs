@@ -17,6 +17,7 @@ mod error;
 pub mod files;
 pub mod gh_import;
 mod graphql;
+pub mod merge_methods;
 pub mod patch;
 pub mod poll;
 mod pulls;
