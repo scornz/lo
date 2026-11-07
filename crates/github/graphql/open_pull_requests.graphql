@@ -1,8 +1,19 @@
-# A repository's open pull requests, with what stack detection needs: branches, head commits and
-# native stack membership. A page at a time, newest first: rozed reads at most 1,000, and when a
-# repository has more, the oldest are the ones to leave out. Creation time doesn't change while
-# paging, unlike the time of the last update.
-query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: String) {
+# A repository's open pull requests, with what finding stacks needs (design §4): their branches,
+# recent commits and native stack membership, and what a stack's tree shows of each. With them, the
+# repository's trunks and the pull requests merged most recently, which finding stacks needs too.
+#
+# A page at a time, newest first: rozed reads at most 1,000, and when a repository has more, the
+# oldest are the ones to leave out. Creation time doesn't change while paging, unlike the time of
+# the last update. Only the first page asks for merged pull requests ($merged is 0 after it); the
+# trunks, which can't be left out, come again with every page. A page costs 1 point: GitHub adds
+# up the connections it may read, 144 here, and divides by 100.
+query OpenPullRequests(
+  $owner: String!
+  $name: String!
+  $first: Int!
+  $after: String
+  $merged: Int!
+) {
   rateLimit {
     cost
     limit
@@ -11,6 +22,27 @@ query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: St
     resetAt
   }
   repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      name
+    }
+    # Only people who can administer the repository see these; for anyone else there are none.
+    branchProtectionRules(first: 100) {
+      nodes {
+        pattern
+      }
+    }
+    # Every branch ruleset that applies to the repository, its organization's included.
+    rulesets(first: 100, targets: [BRANCH]) {
+      nodes {
+        enforcement
+        conditions {
+          refName {
+            include
+            exclude
+          }
+        }
+      }
+    }
     pullRequests(
       states: [OPEN]
       orderBy: { field: CREATED_AT, direction: DESC }
@@ -23,18 +55,49 @@ query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: St
         endCursor
       }
       nodes {
+        id
         number
         title
         isDraft
+        createdAt
         updatedAt
+        author {
+          __typename
+          login
+        }
         baseRefName
         baseRefOid
+        # The base branch's tip now, which baseRefOid, set when the head last moved, isn't. Null
+        # once the branch is deleted.
+        baseRef {
+          target {
+            __typename
+            oid
+          }
+        }
         headRefName
         headRefOid
         isCrossRepository
         headRepositoryOwner {
           __typename
           login
+        }
+        # Oldest first, so the last is the head.
+        commits(last: 20) {
+          nodes {
+            commit {
+              oid
+            }
+          }
+        }
+        reviewDecision
+        statusCheckRollup {
+          state
+        }
+        isInMergeQueue
+        mergeQueueEntry {
+          position
+          state
         }
         stackEntry {
           position
@@ -45,6 +108,56 @@ query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: St
           }
         }
       }
+    }
+    # The pull requests merged most recently. Their commits link the layers still open above them
+    # once their head branch is deleted, when GitHub moves those layers to the branch below.
+    mergedPullRequests: pullRequests(
+      states: [MERGED]
+      orderBy: { field: UPDATED_AT, direction: DESC }
+      first: $merged
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+  }
+}
+
+# What finding stacks reads of a merged pull request. `MergedPullRequests` reads the same.
+fragment MergedPullRequestFields on PullRequest {
+  number
+  createdAt
+  baseRefName
+  baseRef {
+    target {
+      __typename
+      oid
+    }
+  }
+  headRefName
+  headRefOid
+  isCrossRepository
+  commits(last: 20) {
+    nodes {
+      commit {
+        oid
+      }
+    }
+  }
+  # Its head is in its base branch when it's this commit or one of its parents: after a merge
+  # commit or a fast-forward, not a squash or a rebase.
+  mergeCommit {
+    oid
+    parents(first: 2) {
+      nodes {
+        oid
+      }
+    }
+  }
+  stackEntry {
+    position
+    stack {
+      number
     }
   }
 }

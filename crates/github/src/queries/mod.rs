@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use crate::error::GithubError;
 
 pub mod mark_file_as_viewed;
+pub mod merged_pull_requests;
 pub mod open_pull_requests;
 pub mod pull_request;
 pub mod pull_request_check;
@@ -19,6 +20,7 @@ pub mod unmark_file_as_viewed;
 pub mod viewer;
 
 pub use mark_file_as_viewed::MarkFileAsViewed;
+pub use merged_pull_requests::{MergedPullRequest, MergedPullRequests, StackEntry};
 pub use open_pull_requests::{OpenPullRequest, OpenPullRequestList, OpenPullRequests};
 pub use pull_request::{
     FileViewedState, PullRequest, PullRequestData, PullRequestFile, PullRequestState,

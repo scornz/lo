@@ -22,6 +22,7 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
 use github::queries::FileViewedState;
+use github::queries::open_pull_requests::RECENTLY_MERGED;
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
@@ -238,7 +239,7 @@ fn graphql_open_pull_requests_paged() {
         "The OpenPullRequests query for the playground, one PR a page",
         |client| async move {
             client
-                .open_pull_requests_paged("rozed-dev", "playground", 1)
+                .open_pull_requests_paged("rozed-dev", "playground", 1, RECENTLY_MERGED)
                 .await
                 .unwrap();
         },

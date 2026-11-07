@@ -7,30 +7,40 @@
       "owner": "rozed-dev",
       "name": "playground",
       "first": 100,
-      "after": null
+      "after": null,
+      "merged": 20
     },
-    "query_sha256": "175997f20ee70cb327adb8d0ce5187355cf6994462a92e293f38b3f196de1513"
+    "query_sha256": "664e34cc1c8f14f95b471432cb68cd52acf3cf705d2af31cf5b65211365e636d"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4979",
-      "x-ratelimit-reset": "1794012781",
+      "x-ratelimit-remaining": "4976",
+      "x-ratelimit-reset": "1794016455",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "21"
+      "x-ratelimit-used": "24"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4979,
-          "used": 21,
-          "resetAt": "2026-11-07T00:53:01Z"
+          "remaining": 4976,
+          "used": 24,
+          "resetAt": "2026-11-07T01:54:15Z"
         },
         "repository": {
+          "defaultBranchRef": {
+            "name": "main"
+          },
+          "branchProtectionRules": {
+            "nodes": []
+          },
+          "rulesets": {
+            "nodes": []
+          },
           "pullRequests": {
             "totalCount": 2,
             "pageInfo": {
@@ -39,12 +49,24 @@
             },
             "nodes": [
               {
+                "id": "PR_kwDOVk6v9M8AAAABNQwF5A",
                 "number": 2,
                 "title": "feat: stack layer B",
                 "isDraft": false,
+                "createdAt": "2026-11-06T08:15:08Z",
                 "updatedAt": "2026-11-06T08:15:08Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
                 "baseRefName": "stack-a",
                 "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "b046244d9569964088e952243e5e557312322488"
+                  }
+                },
                 "headRefName": "stack-b",
                 "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
                 "isCrossRepository": false,
@@ -52,6 +74,19 @@
                   "__typename": "Organization",
                   "login": "rozed-dev"
                 },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d712aa7652cc723fee5fd9b3eba867b0480d40da"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": null,
+                "statusCheckRollup": null,
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
                 "stackEntry": {
                   "position": 2,
                   "stack": {
@@ -62,12 +97,24 @@
                 }
               },
               {
+                "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
                 "number": 1,
                 "title": "feat: stack layer A",
                 "isDraft": false,
+                "createdAt": "2026-11-06T08:15:07Z",
                 "updatedAt": "2026-11-06T08:15:07Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
                 "baseRefName": "main",
                 "baseRefOid": "6ce218eb1930c49db64d5744c76a6739d4525e82",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "6ce218eb1930c49db64d5744c76a6739d4525e82"
+                  }
+                },
                 "headRefName": "stack-a",
                 "headRefOid": "b046244d9569964088e952243e5e557312322488",
                 "isCrossRepository": false,
@@ -75,6 +122,19 @@
                   "__typename": "Organization",
                   "login": "rozed-dev"
                 },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "b046244d9569964088e952243e5e557312322488"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": null,
+                "statusCheckRollup": null,
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
                 "stackEntry": {
                   "position": 1,
                   "stack": {
@@ -85,6 +145,9 @@
                 }
               }
             ]
+          },
+          "mergedPullRequests": {
+            "nodes": []
           }
         }
       }

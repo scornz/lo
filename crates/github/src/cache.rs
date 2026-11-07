@@ -20,9 +20,11 @@ use crate::client::API_VERSION;
 use crate::credentials::HOST;
 use crate::db::RozedDb;
 use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
+use crate::queries::merged_pull_requests::{MAX_BRANCH_LOOKUPS, MERGED_PER_BRANCH};
+use crate::queries::open_pull_requests::RECENTLY_MERGED;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
-    open_pull_requests, pull_request, pull_request_check,
+    merged_pull_requests, open_pull_requests, pull_request, pull_request_check,
 };
 
 /// Something the cache can hold.
@@ -139,9 +141,12 @@ impl CacheEntry for OpenPullRequestList {
 
     fn shape() -> String {
         format!(
-            "{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page",
+            "{}\n{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page, with the \
+             {RECENTLY_MERGED} merged most recently and {MERGED_PER_BRANCH} merged from each of \
+             at most {MAX_BRANCH_LOOKUPS} branches",
             schema_shape::<Self>(),
-            open_pull_requests::QUERY
+            open_pull_requests::QUERY,
+            merged_pull_requests::QUERY
         )
     }
 }
@@ -765,7 +770,7 @@ mod tests {
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
-                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+                ("OpenPullRequests", "af1d1e34e2bad5d5".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
             ]
         );
