@@ -1105,6 +1105,25 @@ impl PrTab {
         self.pull.files.review_positions()
     }
 
+    /// The local copy's diff of other revisions than the load showed, of `entries` with `head`
+    /// on the right, is about to show: lists them and returns where each file goes in the diff,
+    /// by its index in `entries`. The revisions stay as they are.
+    pub(crate) fn compared(
+        &mut self,
+        entries: Vec<FileEntry>,
+        head: &Oid,
+        cx: &mut Context<Self>,
+    ) -> Vec<usize> {
+        self.list(entries);
+        // A head other than GitHub's latest is older news than anything GitHub said, so `e` marks
+        // nothing while it shows.
+        self.set_head(head.as_str(), SystemTime::UNIX_EPOCH);
+        self.pull.status = Status::Loading("Loading the diff…".into());
+        self.scroll_to_selected();
+        cx.notify();
+        self.pull.files.review_positions()
+    }
+
     /// Where each of the local copy's `entries` goes in its diff, by its index in `entries`,
     /// without listing them yet.
     pub(crate) fn positions_of(&self, entries: &[FileEntry]) -> Vec<usize> {
@@ -1616,15 +1635,9 @@ impl PrTab {
         cx.notify();
     }
 
-    /// Replaces GitHub's diff with the local copy's, `editor` of `head`, at the same file and
-    /// line, and says so if GitHub's diff showed another head.
-    pub(crate) fn switch_diff(
-        &mut self,
-        editor: Entity<SplittableEditor>,
-        head: &Oid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Says, when GitHub's diff showed another head than `head`, the one the local copy's diff
+    /// shows, that the pull request moved on while it loaded.
+    pub(crate) fn say_if_moved_on(&mut self, head: &Oid, cx: &mut Context<Self>) {
         let moved_on = self
             .pull
             .github_head
@@ -1642,6 +1655,16 @@ impl PrTab {
             Some(text) => banners.show(BannerKind::MovedOn, Severity::Warning, text, cx),
             None => banners.hide(BannerKind::MovedOn, cx),
         });
+    }
+
+    /// Replaces the diff shown, GitHub's or the local copy's, with `editor`, the local copy's, at
+    /// the same file and line, with files open or folded as the reviewer left them.
+    pub(crate) fn switch_diff(
+        &mut self,
+        editor: Entity<SplittableEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (position, cursor) = match &self.pull.diff {
             Some(diff) => (
                 pr_diff::scroll_position(diff, cx),

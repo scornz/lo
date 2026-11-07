@@ -1022,7 +1022,8 @@ async fn after_github_listed_a_newer_head_its_older_copy_doesnt_mark_as_of_it(
     });
     add_test_files(&editor, &files, &positions, cx).await;
     tab.update_in(cx, |tab, window, cx| {
-        tab.switch_diff(editor.clone(), &head, window, cx)
+        tab.say_if_moved_on(&head, cx);
+        tab.switch_diff(editor.clone(), window, cx)
     });
     cx.run_until_parked();
     assert_eq!(

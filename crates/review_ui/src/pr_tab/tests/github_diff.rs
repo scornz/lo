@@ -325,7 +325,7 @@ fn show_local_copy(
         let tab = tab.handle(cx);
         cx.spawn_in(window, async move |_, cx| {
             let title = format!("{link}: Change a and b");
-            pr_diff::show_local_copy(
+            pr_diff::load_local_copy(
                 tab,
                 workspace,
                 link,

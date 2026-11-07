@@ -67,7 +67,7 @@ use crate::github_layer::Saved;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::{DiffSource, PullHandle};
+use crate::pr_tab::{DiffSource, PrTab, PullHandle};
 use crate::shown_comparison::ShownComparison;
 use crate::shown_files::{self, ShownFile, ShownFiles};
 use crate::trust;
@@ -123,7 +123,7 @@ pub async fn open(
         "{link}: {}",
         crate::window_title::without_bidi(&pull_request.title)
     );
-    show_local_copy(
+    load_local_copy(
         tab,
         workspace,
         link,
@@ -189,7 +189,7 @@ pub async fn open_offline(
         crate::window_title::without_bidi(&details.title)
     );
     let polled_at = saved.fetched_at;
-    show_local_copy(
+    load_local_copy(
         tab,
         workspace,
         link,
@@ -364,12 +364,27 @@ fn retry(error: &anyhow::Error) -> Option<Retry> {
         })
 }
 
-/// Shows `comparison` of `local`, the pull request's local copy, in `tab`: the head GitHub gave at
-/// `polled_at`, compared as `comparison` says. While the tab shows a diff, GitHub's or an older
-/// local copy's, this one is built out of sight and replaces it once every file is in, scrolled
-/// to the same file and line; otherwise it shows at once and fills in as files load.
+/// What only loading the pull request does, besides showing its diff.
+#[derive(Clone, Copy)]
+struct Load {
+    /// When GitHub gave the head the local copy fetched.
+    polled_at: SystemTime,
+    trust: Trust,
+}
+
+/// Loads the pull request's local copy, `local`, into `tab`, showing `comparison` of it: the
+/// whole pull request when it opens, of the head GitHub gave at `polled_at`. While the tab shows a
+/// diff, GitHub's or an older local copy's, this one is built out of sight and replaces it once
+/// every file is in, scrolled to the same file and line; otherwise it shows at once and fills in
+/// as files load.
+///
+/// What only a load does goes with it: the tab takes `local` as the pull request's copy and
+/// builds its revisions, banners say when the head isn't GitHub's or GitHub's diff showed another,
+/// and with `trust`, the head is checked out for language servers, which the files of a
+/// comparison of that head then show from. To show other revisions afterwards, use
+/// [`show_comparison`].
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn show_local_copy(
+pub(crate) async fn load_local_copy(
     tab: PullHandle,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
@@ -381,17 +396,76 @@ pub(crate) async fn show_local_copy(
     launched: Instant,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
+    let load = Load { polled_at, trust };
+    show(
+        tab,
+        workspace,
+        link,
+        title,
+        local,
+        comparison,
+        Some(load),
+        launched,
+        cx,
+    )
+    .await
+}
+
+/// Shows `comparison` of `local`, the pull request's local copy, in `tab`, in place of the diff
+/// it shows, at the same file and line, as when the reviewer picks other revisions: built out of
+/// sight, then swapped in, or at once when nothing shows yet. The file list lists its files, and
+/// its new side is the head on screen, so `e` marks files only when that's GitHub's latest.
+///
+/// Nothing only a load does happens: the revisions, the banners about the load, and the
+/// checkout stay as they are, and every file shows from git.
+#[allow(clippy::too_many_arguments)]
+pub async fn show_comparison(
+    tab: PullHandle,
+    workspace: WeakEntity<Workspace>,
+    link: PrLink,
+    title: String,
+    local: Arc<LocalPullRequest>,
+    comparison: Arc<ShownComparison>,
+    launched: Instant,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    show(
+        tab, workspace, link, title, local, comparison, None, launched, cx,
+    )
+    .await
+}
+
+/// [`load_local_copy`] with `load`, else [`show_comparison`].
+#[allow(clippy::too_many_arguments)]
+async fn show(
+    tab: PullHandle,
+    workspace: WeakEntity<Workspace>,
+    link: PrLink,
+    title: String,
+    local: Arc<LocalPullRequest>,
+    comparison: Arc<ShownComparison>,
+    load: Option<Load>,
+    launched: Instant,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let banners = tab.update(cx, |tab, _| tab.banners().clone())?;
+    // Only the head the load checked out shows from the checkout.
+    let trust = load
+        .map(|load| load.trust)
+        .filter(|_| *comparison.new_side() == local.head)
+        .unwrap_or(Trust::Untrusted);
     // What the banners say about this diff, once it shows.
     let show_banners = |cx: &mut AsyncWindowContext| {
         banners.update(cx, |banners, cx| {
-            if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
+            if load.is_some()
+                && let Some(text) = head_banner(&link, &local.head, &local.head_source)
+            {
                 banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
             }
-            if let Some(why) = comparison.attributes_unread() {
-                banners.show(
+            match comparison.attributes_unread() {
+                Some(why) => banners.show(
                     BannerKind::AttributesUnread,
                     Severity::Info,
                     format!(
@@ -399,7 +473,8 @@ pub(crate) async fn show_local_copy(
                          marks generated start expanded: {why}"
                     ),
                     cx,
-                );
+                ),
+                None => banners.hide(BannerKind::AttributesUnread, cx),
             }
             if trust == Trust::Checkout {
                 banners.show(
@@ -429,12 +504,19 @@ pub(crate) async fn show_local_copy(
     // The tab lists the files and says where each goes in the diff, at once, or with a diff on
     // screen, once this one replaces it, so the list always matches the diff shown.
     let entries = comparison.entries();
+    let new_side = comparison.new_side().clone();
+    let list = |tab: &mut PrTab, cx: &mut gpui::Context<PrTab>| match load {
+        Some(load) => {
+            tab.set_local_copy(local.clone());
+            tab.copied(entries.clone(), &new_side, load.polled_at, cx)
+        }
+        None => tab.compared(entries.clone(), &new_side, cx),
+    };
     let (replacing, positions) = tab.update_in(cx, |tab, window, cx| {
         if let Some(source) = tab.diff_source() {
             return (Some(source), tab.positions_of(&entries));
         }
-        tab.set_local_copy(local.clone());
-        let positions = tab.copied(entries.clone(), comparison.new_side(), polled_at, cx);
+        let positions = list(tab, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (None, positions)
     })?;
@@ -450,66 +532,16 @@ pub(crate) async fn show_local_copy(
         editor: &editor,
         hide_whitespace: false,
     };
-    // Each file's buffer and what it shows, for switching to the checkout.
-    let mut shown_files = Vec::with_capacity(comparison.files().len());
-    // Files whose header says they couldn't be shown.
-    let mut not_shown = 0;
-    for (index, file) in comparison.files().iter().enumerate() {
-        target.hide_whitespace = tab.update(cx, |tab, cx| {
-            tab.loading_diff(index + 1, comparison.files().len(), cx);
-            tab.hides_whitespace()
-        })?;
-        let (file, generated) = (&file.change, file.generated);
-        let plan = cx
-            .background_spawn({
-                let repo = comparison.repo().clone();
-                let file = file.clone();
-                async move { plan_file(&repo, &file, generated, None, false) }
-            })
-            .await;
-        let position = positions[index];
-        let (path, deleted) = (file.display_path(), file.new.is_none());
-        let header = FileHeader::of(file);
-        let shown = match target
-            .add_file(position, &path, deleted, plan.clone(), header.clone(), cx)
-            .await
-        {
-            Ok(shown) => Ok((shown, plan)),
-            Err(error) => {
-                let plan = FilePlan::failed(&error);
-                target
-                    .add_file(position, &path, deleted, plan.clone(), header, cx)
-                    .await
-                    .map(|shown| (shown, plan))
-            }
-        };
-        match shown {
-            Ok((shown, plan)) => {
-                if let Some(warning) = &shown.warning {
-                    log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
-                    not_shown += usize::from(warning.label == NOT_SHOWN);
-                }
-                shown_files.push(Some((shown.buffer_id, plan)));
-            }
-            // Only when even the placeholder that says why can't be shown.
-            Err(error) => {
-                not_shown += 1;
-                log::error!("{link}: can't show {}: {error:#}", file.display_path());
-                shown_files.push(None);
-            }
-        }
-        if index == 0 {
-            log::info!(
-                "{link}: first file shown {:?} after launch",
-                launched.elapsed()
-            );
-        }
-    }
-    log::info!(
-        "{link}: all {} files shown {:?} after launch",
-        comparison.files().len(),
-        launched.elapsed()
-    );
+    let (shown_files, not_shown) = add_files(
+        &tab,
+        &mut target,
+        &comparison,
+        &positions,
+        &link,
+        launched,
+        cx,
+    )
+    .await?;
 
     if not_shown > 0 {
         let files = if not_shown == 1 { "file" } else { "files" };
@@ -519,9 +551,11 @@ pub(crate) async fn show_local_copy(
     }
     tab.update_in(cx, |tab, window, cx| {
         if replacing.is_some() {
-            tab.set_local_copy(local.clone());
-            tab.copied(entries, comparison.new_side(), polled_at, cx);
-            tab.switch_diff(editor.clone(), comparison.new_side(), window, cx);
+            list(tab, cx);
+            if load.is_some() {
+                tab.say_if_moved_on(&new_side, cx);
+            }
+            tab.switch_diff(editor.clone(), window, cx);
         }
         tab.diff_loaded(window, cx);
     })?;
@@ -529,7 +563,7 @@ pub(crate) async fn show_local_copy(
         show_banners(cx);
         let replaced = match replaced {
             DiffSource::GitHub => "GitHub's diff",
-            DiffSource::LocalCopy => "an older local copy's",
+            DiffSource::LocalCopy => "another local copy's",
         };
         log::info!(
             "{link}: switched from {replaced} to the local copy's diff {:?} after launch",
@@ -549,11 +583,14 @@ pub(crate) async fn show_local_copy(
         })?;
     }
 
+    if load.is_none() {
+        return Ok(());
+    }
     if trust == Trust::Untrusted {
         log::info!("{link}: not trusted, so no checkout and no language servers");
         return Ok(());
     }
-    let checkout = check_out(&comparison, &link, &project, cx).await;
+    let checkout = check_out(&local, &link, &project, cx).await;
     banners.update(cx, |banners, cx| banners.hide(BannerKind::CheckingOut, cx));
     let checkout = match checkout {
         Ok(checkout) => {
@@ -637,6 +674,79 @@ pub(crate) async fn show_local_copy(
         launched.elapsed()
     );
     Ok(())
+}
+
+/// Adds each of `comparison`'s files to `target`, at its place in `positions`, telling `tab` how
+/// far it's got. Returns each file's buffer and plan, for switching to the checkout, and how many
+/// files couldn't be shown.
+async fn add_files(
+    tab: &PullHandle,
+    target: &mut Target<'_>,
+    comparison: &ShownComparison,
+    positions: &[usize],
+    link: &PrLink,
+    launched: Instant,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<(Vec<Option<(BufferId, FilePlan)>>, usize)> {
+    let mut shown_files = Vec::with_capacity(comparison.files().len());
+    let mut not_shown = 0;
+    for (index, file) in comparison.files().iter().enumerate() {
+        target.hide_whitespace = tab.update(cx, |tab, cx| {
+            tab.loading_diff(index + 1, comparison.files().len(), cx);
+            tab.hides_whitespace()
+        })?;
+        let (file, generated) = (&file.change, file.generated);
+        let plan = cx
+            .background_spawn({
+                let repo = comparison.repo().clone();
+                let file = file.clone();
+                async move { plan_file(&repo, &file, generated, None, false) }
+            })
+            .await;
+        let position = positions[index];
+        let (path, deleted) = (file.display_path(), file.new.is_none());
+        let header = FileHeader::of(file);
+        let shown = match target
+            .add_file(position, &path, deleted, plan.clone(), header.clone(), cx)
+            .await
+        {
+            Ok(shown) => Ok((shown, plan)),
+            Err(error) => {
+                let plan = FilePlan::failed(&error);
+                target
+                    .add_file(position, &path, deleted, plan.clone(), header, cx)
+                    .await
+                    .map(|shown| (shown, plan))
+            }
+        };
+        match shown {
+            Ok((shown, plan)) => {
+                if let Some(warning) = &shown.warning {
+                    log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
+                    not_shown += usize::from(warning.label == NOT_SHOWN);
+                }
+                shown_files.push(Some((shown.buffer_id, plan)));
+            }
+            // Only when even the placeholder that says why can't be shown.
+            Err(error) => {
+                not_shown += 1;
+                log::error!("{link}: can't show {}: {error:#}", file.display_path());
+                shown_files.push(None);
+            }
+        }
+        if index == 0 {
+            log::info!(
+                "{link}: first file shown {:?} after launch",
+                launched.elapsed()
+            );
+        }
+    }
+    log::info!(
+        "{link}: all {} files shown {:?} after launch",
+        comparison.files().len(),
+        launched.elapsed()
+    );
+    Ok((shown_files, not_shown))
 }
 
 /// Loads `path`, a file too large to have been loaded with the others, into `diff` in place of
@@ -906,18 +1016,18 @@ fn buffer_anchor(
         .buffer_point_to_anchor(&buffer, point, cx)
 }
 
-/// Checks `comparison`'s new side out, trusts that checkout and nothing else, and opens it as a
+/// Checks the pull request's head out, trusts that checkout and nothing else, and opens it as a
 /// folder of `project`, so language servers start there.
 async fn check_out(
-    comparison: &Arc<ShownComparison>,
+    local: &Arc<LocalPullRequest>,
     link: &PrLink,
     project: &Entity<Project>,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<Checkout> {
     let dir = cx
         .background_spawn({
-            let (comparison, number) = (comparison.clone(), link.number);
-            async move { comparison.repo().checkout(number, comparison.new_side()) }
+            let (local, number) = (local.clone(), link.number);
+            async move { local.repo.checkout(number, &local.head) }
         })
         .await
         .with_context(|| format!("checking {link} out"))?;

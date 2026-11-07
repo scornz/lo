@@ -353,7 +353,7 @@ mod tests {
             let tab = tab.handle(cx);
             cx.spawn_in(window, async move |_, cx| {
                 let title = format!("{link}: test");
-                pr_diff::show_local_copy(
+                pr_diff::load_local_copy(
                     tab,
                     workspace,
                     link,
@@ -815,6 +815,101 @@ mod tests {
             2,
             "the file list lists the layer's files"
         );
+    }
+
+    /// Shows `comparison` of `local` in `tab` in place of its diff, as picking other revisions
+    /// does.
+    fn compare(
+        tab: &Entity<PrTab>,
+        local: LocalPullRequest,
+        comparison: ShownComparison,
+        cx: &mut VisualTestContext,
+    ) {
+        let (local, comparison) = (Arc::new(local), Arc::new(comparison));
+        tab.update_in(cx, |tab, window, cx| {
+            let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
+            let tab = tab.handle(cx);
+            cx.spawn_in(window, async move |_, cx| {
+                let title = format!("{link}: test");
+                pr_diff::show_comparison(
+                    tab,
+                    workspace,
+                    link,
+                    title,
+                    local,
+                    comparison,
+                    Instant::now(),
+                    cx,
+                )
+                .await
+                .unwrap()
+            })
+            .detach();
+        });
+        cx.run_until_parked();
+    }
+
+    /// Showing two older revisions after the pull request loaded shows their diff and nothing
+    /// else: the revisions stay, no banner says the pull request moved on, and the head on screen
+    /// is the newer revision's, older than GitHub's latest.
+    #[gpui::test]
+    async fn showing_other_revisions_leaves_the_load_alone(cx: &mut TestAppContext) {
+        let fixture = fixtures::empty();
+        let base = fixture.commit(&[Entry::File("a.txt", &eight(&[]))], None);
+        let r1 = fixture.commit(&[Entry::File("a.txt", &eight(&[2]))], Some(&base));
+        let r2 = fixture.commit(&[Entry::File("a.txt", &eight(&[2, 5]))], Some(&r1));
+        let r3 = fixture.commit(&[Entry::File("a.txt", &eight(&[2, 5, 8]))], Some(&r2));
+        fixture.set_ref("refs/heads/main", &base);
+        fixture.set_ref("refs/pull/1/head", &r3);
+        let (local, _clone) = copy(&fixture, "main", &[&r1, &r2]);
+
+        // GitHub's diff of r3, then the local copy's of the whole pull request.
+        let (tab, cx) = shown_files::tests::tab(cx).await;
+        tab.update_in(cx, |tab, window, cx| {
+            let source = crate::api_diff::GithubDiff {
+                link: tab.link().clone(),
+                title: "GitHub's".into(),
+                repo_name: "repo".into(),
+                head: Some(r3.clone()),
+                listed_at: SystemTime::now(),
+            };
+            let files = vec![shown_files::tests::github_file("a.txt", "a", 8)];
+            tab.show_github_files(source, files, window, cx)
+        });
+        cx.run_until_parked();
+        let full = ShownComparison::full(&local).unwrap();
+        show(&tab, local.clone(), full, cx);
+        let revisions = |cx: &mut VisualTestContext| {
+            tab.read_with(cx, |tab, _| {
+                let revisions = tab.revisions().unwrap();
+                (revisions.len(), revisions.latest().unwrap().head.clone())
+            })
+        };
+        assert_eq!(revisions(cx), (1, r3.clone()));
+
+        let between =
+            ShownComparison::between(&local, &revision(&base, &r1), &revision(&base, &r2)).unwrap();
+        compare(&tab, local, between, cx);
+        let diff = tab.read_with(cx, |tab, _| tab.diff().unwrap().clone());
+        assert_eq!(
+            sides(&diff, cx),
+            [side("a.txt", &text(eight(&[2])), &text(eight(&[2, 5])))]
+        );
+        assert_eq!(revisions(cx), (1, r3.clone()));
+        let banners: Vec<String> = tab.read_with(cx, |tab, cx| {
+            (tab.banners().read(cx).messages().iter())
+                .map(|message| message.text.to_string())
+                .collect()
+        });
+        assert!(
+            !banners.iter().any(|banner| banner.contains("moved on")),
+            "{banners:#?}"
+        );
+        tab.read_with(cx, |tab, _| {
+            assert_eq!(tab.pull().head(), Some(r2.as_str()));
+            assert_eq!(tab.pull().latest_head(), Some(r3.as_str()));
+            assert_eq!(tab.status(), &crate::pr_tab::Status::Ready);
+        });
     }
 
     /// A lower layer's head the clone doesn't have is refused, never downloaded with its history.
