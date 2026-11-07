@@ -1981,6 +1981,16 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
         pull["comments"]["totalCount"] = 1.into();
         pull["revisionEvents"]["filteredCount"] = 1.into();
     });
+    // You submit the review you had pending: the count of every review, which held it already,
+    // stays as it was.
+    let submitted = check_with(&r, |pull| {
+        pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        pull["timelineItems"]["updatedAt"] = "2026-11-06T12:02:00Z".into();
+        pull["comments"]["totalCount"] = 1.into();
+        pull["revisionEvents"]["filteredCount"] = 1.into();
+        let submitted = pull["submittedReviews"]["totalCount"].as_i64().unwrap();
+        pull["submittedReviews"]["totalCount"] = (submitted + 1).into();
+    });
     let mut interactions = vec![
         r[0].clone(),
         r[6].clone(),
@@ -1989,6 +1999,7 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
         rollup,
         commented,
         force_pushed,
+        submitted,
         r[2].clone(),
     ];
     interactions.extend(repo_answers(&r));
@@ -2019,8 +2030,11 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
     assert_eq!(answers.runs(), 2);
     assert_eq!(t.events(), ["check #1"]);
     assert_eq!(cached_count(&t), Some(1));
+    // A submitted review: it's read again.
     t.run_until(100);
-    assert_eq!(answers.runs(), 2);
+    assert_eq!(answers.runs(), 3);
+    t.run_until(120);
+    assert_eq!(answers.runs(), 3);
 
     // The cache took the new stamp, so after a restart it isn't read again.
     t.restart();
@@ -2028,8 +2042,8 @@ async fn a_cached_read_runs_after_the_open_prs_poll_and_again_when_a_field_it_wa
         poller.set_open(Some(pr(1)), cx);
         counted(poller, pr(1), &answers, cx);
     });
-    t.run_until(105);
-    assert_eq!(answers.runs(), 2);
+    t.run_until(125);
+    assert_eq!(answers.runs(), 3);
 }
 
 #[gpui::test]

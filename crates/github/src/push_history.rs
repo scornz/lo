@@ -199,14 +199,15 @@ impl CacheEntry for PushHistory {
 }
 
 impl CachedRead for PushHistory {
-    /// A push changes the head, a retarget the base, a merge or close the state, and a review the
-    /// count of reviews; force-pushes and retargets are among the revision events. A comment,
-    /// which moves the timeline, changes none of them.
+    /// A push changes the head, a retarget the base, a merge or close the state, and a submitted
+    /// review, your own pending one included, the count of submitted reviews; force-pushes and
+    /// retargets are among the revision events. A comment, which moves the timeline, changes none
+    /// of them.
     const WATCHED: &'static [&'static str] = &[
         "/headRefOid",
         "/baseRefName",
         "/state",
-        "/reviews/totalCount",
+        "/submittedReviews/totalCount",
         "/revisionEvents/filteredCount",
     ];
 

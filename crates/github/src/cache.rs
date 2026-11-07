@@ -764,9 +764,9 @@ mod tests {
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
-                ("PullRequestCheck", "494eb53b56bf261a".to_string()),
+                ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
                 ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
-                ("PushHistory", "cdf4f4990b8324f6".to_string()),
+                ("PushHistory", "1f9c5b1925f77e8b".to_string()),
             ]
         );
     }

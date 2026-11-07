@@ -8,26 +8,26 @@
       "name": "playground",
       "number": 1
     },
-    "query_sha256": "494eb53b56bf261a93d24fb975ffe9977f77a2757363877461b0eee046e00254"
+    "query_sha256": "098cc23f0fe0c48df4509831e3744a0ac93f3bebd398f86da37ce1fc37d8eb83"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4884",
-      "x-ratelimit-reset": "1794008620",
+      "x-ratelimit-remaining": "4981",
+      "x-ratelimit-reset": "1794012781",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "116"
+      "x-ratelimit-used": "19"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4884,
-          "used": 116,
-          "resetAt": "2026-11-06T23:43:40Z"
+          "remaining": 4981,
+          "used": 19,
+          "resetAt": "2026-11-07T00:53:01Z"
         },
         "repository": {
           "pullRequest": {
@@ -52,6 +52,9 @@
               "totalCount": 1
             },
             "reviews": {
+              "totalCount": 0
+            },
+            "submittedReviews": {
               "totalCount": 0
             },
             "reviewThreads": {

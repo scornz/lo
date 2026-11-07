@@ -50,6 +50,11 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
       reviews {
         totalCount
       }
+      # Submitted reviews alone. The count of every review counts the viewer's pending one too, so
+      # submitting it doesn't move that.
+      submittedReviews: reviews(states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+        totalCount
+      }
       reviewThreads(first: 100) {
         totalCount
         nodes {

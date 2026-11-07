@@ -11,10 +11,10 @@
       "last-modified": "Fri, 06 Nov 2026 08:15:08 GMT",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4928",
-      "x-ratelimit-reset": "1794008622",
+      "x-ratelimit-remaining": "4968",
+      "x-ratelimit-reset": "1794012780",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "72"
+      "x-ratelimit-used": "32"
     },
     "body": {
       "url": "https://api.github.com/repos/rozed-dev/playground/pulls/2",

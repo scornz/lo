@@ -8,25 +8,25 @@
       "name": "playground",
       "number": 1
     },
-    "query_sha256": "494eb53b56bf261a93d24fb975ffe9977f77a2757363877461b0eee046e00254"
+    "query_sha256": "098cc23f0fe0c48df4509831e3744a0ac93f3bebd398f86da37ce1fc37d8eb83"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4999",
+      "x-ratelimit-remaining": "4991",
       "x-ratelimit-reset": "1794012205",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "1"
+      "x-ratelimit-used": "9"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4999,
-          "used": 1,
+          "remaining": 4991,
+          "used": 9,
           "resetAt": "2026-11-07T00:43:25Z"
         },
         "repository": {
@@ -52,6 +52,9 @@
               "totalCount": 1
             },
             "reviews": {
+              "totalCount": 0
+            },
+            "submittedReviews": {
               "totalCount": 0
             },
             "reviewThreads": {

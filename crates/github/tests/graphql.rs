@@ -118,6 +118,7 @@ fn a_check_counts_its_unresolved_threads() {
         "revisionEvents": {"filteredCount": 0},
         "commits": {"totalCount": 1},
         "reviews": {"totalCount": 1},
+        "submittedReviews": {"totalCount": 1},
         "reviewThreads": {
             "totalCount": 3,
             "nodes": [{"isResolved": false}, {"isResolved": true}, {"isResolved": false}]

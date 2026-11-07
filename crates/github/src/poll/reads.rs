@@ -23,7 +23,7 @@ use crate::pulls::Target;
 pub trait CachedRead: CacheEntry + Clone + PartialEq + Send + Sync + 'static {
     /// The fields of the open pull request's check (`queries::PullRequestCheckData`) whose
     /// change means it's out of date, as JSON pointers into the check, which names fields as
-    /// GraphQL does: `/headRefOid`, `/reviews/totalCount`.
+    /// GraphQL does: `/headRefOid`, `/submittedReviews/totalCount`.
     const WATCHED: &'static [&'static str];
 
     /// Whether every part of it was read. One that isn't, because a part failed for a reason
