@@ -313,6 +313,53 @@ fn reads_files_by_path_at_any_revision() {
 }
 
 #[test]
+fn describes_a_file_at_any_revision_as_a_diff_would() {
+    let f = fixture();
+    let version = |rev: &Oid, path: &str| f.repo.file_version(rev, path.as_bytes()).unwrap();
+    let side = |rev: &Oid, path: &str, mode| f.version(rev, path, mode);
+
+    assert_eq!(
+        version(&f.head, "keep.txt"),
+        side(&f.head, "keep.txt", FileMode::Regular)
+    );
+    assert_eq!(
+        version(&f.head, "run.sh"),
+        side(&f.head, "run.sh", FileMode::Executable)
+    );
+    assert_eq!(
+        version(&f.base, "link"),
+        side(&f.base, "link", FileMode::Symlink)
+    );
+    assert_eq!(
+        version(&f.base, "odd\nname.txt"),
+        side(&f.base, "odd\nname.txt", FileMode::Regular)
+    );
+    // A submodule is the commit it points at, which nothing reads.
+    assert_eq!(
+        version(&f.head, "vendor/lib"),
+        Some(FileVersion {
+            path: b"vendor/lib".to_vec(),
+            oid: SUBMODULE_AFTER.parse().unwrap(),
+            mode: FileMode::Submodule,
+            size: None,
+        })
+    );
+    // As the diff listed it.
+    let listed = f.repo.changed_files(&f.base, &f.head).unwrap();
+    let keep = listed
+        .iter()
+        .find(|file| file.path() == b"keep.txt")
+        .unwrap();
+    assert_eq!(version(&f.head, "keep.txt").as_ref(), keep.new.as_ref());
+    assert_eq!(version(&f.base, "keep.txt").as_ref(), keep.old.as_ref());
+
+    assert_eq!(version(&f.head, "gone.txt"), None);
+    assert_eq!(version(&f.head, "src/"), None);
+    let error = f.repo.file_version(&f.head, b"src").unwrap_err();
+    assert!(error.to_string().contains("src is a tree"), "{error}");
+}
+
+#[test]
 fn never_fetches_a_submodules_commit() {
     let f = fixture();
 

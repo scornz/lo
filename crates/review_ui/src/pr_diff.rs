@@ -182,7 +182,7 @@ pub async fn open_offline(
     };
     log::info!(
         "{link}: offline, so showing the local copy's head {head}, {} changed files",
-        comparison.files.len()
+        comparison.files().len()
     );
     let title = format!(
         "{link}: {}",
@@ -253,7 +253,7 @@ pub(crate) async fn copy_with_retries(
                 log::info!(
                     "{link}: local copy ready in {:?}, {} changed files, base {}, head {}",
                     started.elapsed(),
-                    comparison.files.len(),
+                    comparison.files().len(),
                     local.base,
                     local.head
                 );
@@ -390,7 +390,7 @@ pub(crate) async fn show_local_copy(
             if let Some(text) = head_banner(&link, &local.head, &local.head_source) {
                 banners.show(BannerKind::HeadMismatch, Severity::Warning, text, cx);
             }
-            if let Some(why) = &comparison.attributes_unread {
+            if let Some(why) = comparison.attributes_unread() {
                 banners.show(
                     BannerKind::AttributesUnread,
                     Severity::Info,
@@ -434,7 +434,7 @@ pub(crate) async fn show_local_copy(
             return (Some(source), tab.positions_of(&entries));
         }
         tab.set_local_copy(local.clone());
-        let positions = tab.copied(entries.clone(), &comparison.new, polled_at, cx);
+        let positions = tab.copied(entries.clone(), comparison.new_side(), polled_at, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (None, positions)
     })?;
@@ -443,7 +443,7 @@ pub(crate) async fn show_local_copy(
     }
 
     let mut target = Target {
-        repo_name: &comparison.repo_name,
+        repo_name: comparison.repo_name(),
         project: &project,
         checkout: None,
         languages: &languages,
@@ -451,18 +451,18 @@ pub(crate) async fn show_local_copy(
         hide_whitespace: false,
     };
     // Each file's buffer and what it shows, for switching to the checkout.
-    let mut shown_files = Vec::with_capacity(comparison.files.len());
+    let mut shown_files = Vec::with_capacity(comparison.files().len());
     // Files whose header says they couldn't be shown.
     let mut not_shown = 0;
-    for (index, file) in comparison.files.iter().enumerate() {
+    for (index, file) in comparison.files().iter().enumerate() {
         target.hide_whitespace = tab.update(cx, |tab, cx| {
-            tab.loading_diff(index + 1, comparison.files.len(), cx);
+            tab.loading_diff(index + 1, comparison.files().len(), cx);
             tab.hides_whitespace()
         })?;
-        let generated = comparison.generated[index];
+        let (file, generated) = (&file.change, file.generated);
         let plan = cx
             .background_spawn({
-                let repo = comparison.repo.clone();
+                let repo = comparison.repo().clone();
                 let file = file.clone();
                 async move { plan_file(&repo, &file, generated, None, false) }
             })
@@ -507,7 +507,7 @@ pub(crate) async fn show_local_copy(
     }
     log::info!(
         "{link}: all {} files shown {:?} after launch",
-        comparison.files.len(),
+        comparison.files().len(),
         launched.elapsed()
     );
 
@@ -520,8 +520,8 @@ pub(crate) async fn show_local_copy(
     tab.update_in(cx, |tab, window, cx| {
         if replacing.is_some() {
             tab.set_local_copy(local.clone());
-            tab.copied(entries, &comparison.new, polled_at, cx);
-            tab.switch_diff(editor.clone(), &comparison.new, window, cx);
+            tab.copied(entries, comparison.new_side(), polled_at, cx);
+            tab.switch_diff(editor.clone(), comparison.new_side(), window, cx);
         }
         tab.diff_loaded(window, cx);
     })?;
@@ -589,14 +589,14 @@ pub(crate) async fn show_local_copy(
         checkout: Some(&checkout),
         ..target
     };
-    for (index, (file, shown)) in comparison.files.iter().zip(&shown_files).enumerate() {
+    for (index, (file, shown)) in comparison.files().iter().zip(&shown_files).enumerate() {
         let Some((buffer_id, first)) = shown else {
             continue;
         };
-        let generated = comparison.generated[index];
+        let (file, generated) = (&file.change, file.generated);
         let plan = cx
             .background_spawn({
-                let repo = comparison.repo.clone();
+                let repo = comparison.repo().clone();
                 let file = file.clone();
                 let dir = checkout.dir.clone();
                 async move { plan_file(&repo, &file, generated, Some(&dir), false) }
@@ -653,9 +653,9 @@ pub(crate) async fn load_large_file(
         shown_files::read(&diff, cx, |files| {
             let comparison = files.comparison.clone()?;
             let index = comparison
-                .files
+                .files()
                 .iter()
-                .position(|file| file.display_path() == path)?;
+                .position(|file| file.change.display_path() == path)?;
             let position = usize::try_from(files.get(&path)?.key.sort_prefix?).ok()?;
             Some((comparison, files.checkout.clone(), index, position))
         })
@@ -664,12 +664,12 @@ pub(crate) async fn load_large_file(
     let Some((comparison, checkout, index, position)) = found else {
         return Ok(());
     };
-    let file = comparison.files[index].clone();
-    let generated = comparison.generated[index];
+    let file = comparison.files()[index].change.clone();
+    let generated = comparison.files()[index].generated;
     let started = Instant::now();
     let plan = cx
         .background_spawn({
-            let (repo, file) = (comparison.repo.clone(), file.clone());
+            let (repo, file) = (comparison.repo().clone(), file.clone());
             let dir = checkout.as_ref().map(|checkout| checkout.dir.clone());
             async move { plan_file(&repo, &file, generated, dir.as_deref(), true) }
         })
@@ -678,7 +678,7 @@ pub(crate) async fn load_large_file(
     let opens = !matches!(plan.collapsed, Some(Collapsed::TooLarge { .. }));
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let target = Target {
-        repo_name: &comparison.repo_name,
+        repo_name: comparison.repo_name(),
         project: &project,
         checkout: checkout.as_ref(),
         languages: &languages,
@@ -917,7 +917,7 @@ async fn check_out(
     let dir = cx
         .background_spawn({
             let (comparison, number) = (comparison.clone(), link.number);
-            async move { comparison.repo.checkout(number, &comparison.new) }
+            async move { comparison.repo().checkout(number, comparison.new_side()) }
         })
         .await
         .with_context(|| format!("checking {link} out"))?;
@@ -2465,14 +2465,14 @@ pub(crate) mod tests {
         fn plans_loading(&self, load_large: bool) -> Vec<(String, FilePlan)> {
             let comparison = &self.comparison;
             comparison
-                .files
+                .files()
                 .iter()
-                .zip(&comparison.generated)
+                .map(|file| (&file.change, file.generated))
                 .map(|(file, generated)| {
                     let plan = plan_file(
-                        &comparison.repo,
+                        comparison.repo(),
                         file,
-                        *generated,
+                        generated,
                         self.checkout.as_deref(),
                         load_large,
                     );
@@ -2631,10 +2631,9 @@ pub(crate) mod tests {
         );
         let generated: Vec<_> = copied
             .comparison
-            .files
+            .files()
             .iter()
-            .map(|file| file.display_path().into_owned())
-            .zip(copied.comparison.generated.iter().copied())
+            .map(|file| (file.change.display_path().into_owned(), file.generated))
             .collect();
         assert_eq!(
             generated,
@@ -2841,11 +2840,11 @@ pub(crate) mod tests {
             &[Entry::File("a.rs", b"fn b() {}\n")],
             false,
         );
-        let mut file = copied.comparison.files[0].clone();
+        let mut file = copied.comparison.files()[0].change.clone();
         let missing = "f".repeat(40);
         file.new.as_mut().unwrap().oid = missing.parse().unwrap();
 
-        let plan = plan_file(&copied.comparison.repo, &file, None, None, false);
+        let plan = plan_file(copied.comparison.repo(), &file, None, None, false);
 
         let Content::Placeholder { text, .. } = &plan.content else {
             panic!("{plan:?}");
@@ -3038,7 +3037,9 @@ pub(crate) mod tests {
             false,
         );
 
-        let headers: Vec<_> = copied.comparison.files.iter().map(FileHeader::of).collect();
+        let headers: Vec<_> = (copied.comparison.files().iter())
+            .map(|file| FileHeader::of(&file.change))
+            .collect();
         assert_eq!(
             headers
                 .iter()
@@ -3066,7 +3067,7 @@ pub(crate) mod tests {
             false,
         );
         assert_eq!(
-            FileHeader::of(&modified.comparison.files[0]).renamed_from,
+            FileHeader::of(&modified.comparison.files()[0].change).renamed_from,
             None
         );
     }

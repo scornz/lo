@@ -1268,7 +1268,7 @@ pub(crate) mod tests {
     }
 
     /// What `path`'s header says it's collapsed for, which names the load key as the keymap has it.
-    fn collapsed_label(
+    pub(crate) fn collapsed_label(
         diff: &Entity<SplittableEditor>,
         path: &str,
         cx: &mut VisualTestContext,
