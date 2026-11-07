@@ -249,64 +249,95 @@ impl FakeGithub {
         if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
             return Ok(answer.clone());
         }
-        let not_found = || Answer::new(404, r#"{"message":"Not Found"}"#);
-        let Some(rest) = path.strip_prefix("/repos/") else {
-            return Ok(not_found());
-        };
-        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
-        let segments: Vec<&str> = rest.split('/').collect();
-        let (owner, repo) = match segments.as_slice() {
-            [owner, repo, ..] => (*owner, *repo),
-            _ => return Ok(not_found()),
-        };
-        let asked = format!("{owner}/{repo}").to_ascii_lowercase();
-        let Some(canonical) = state
-            .pulls
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let asked = Asked { path, query, token };
+        Ok(HANDLERS
             .iter()
-            .find(|pull| {
-                pull.repo.eq_ignore_ascii_case(&asked)
-                    || pull
-                        .old_names
-                        .iter()
-                        .any(|old| old.eq_ignore_ascii_case(&asked))
-            })
-            .map(|pull| pull.repo.clone())
-        else {
-            return Ok(not_found());
-        };
-        let key = canonical.to_ascii_lowercase();
-        let visible = state.public.contains(&key)
-            || state
-                .sees
-                .get(token)
-                .is_some_and(|repos| repos.contains(&key));
-        if !visible {
-            return Ok(not_found());
-        }
-        match segments.as_slice() {
-            [_, _] => Ok(Answer::new(
-                200,
-                serde_json::json!({ "full_name": canonical }).to_string(),
-            )),
-            [_, _, "pulls", number] => {
-                let Some(pull) = state.pulls.iter().find(|pull| {
-                    pull.repo.eq_ignore_ascii_case(&canonical) && number.parse() == Ok(pull.number)
-                }) else {
-                    return Ok(not_found());
-                };
-                Ok(Answer::new(200, pull_json(pull).to_string()))
-            }
-            [_, _, "pulls", number, "files"] => {
-                let Some(pull) = state.pulls.iter().find(|pull| {
-                    pull.repo.eq_ignore_ascii_case(&canonical) && number.parse() == Ok(pull.number)
-                }) else {
-                    return Ok(not_found());
-                };
-                Ok(files_page(pull, query))
-            }
-            _ => Ok(not_found()),
-        }
+            .find_map(|handler| handler(state, &asked))
+            .unwrap_or_else(not_found))
     }
+}
+
+/// A request to the fake GitHub.
+struct Asked<'a> {
+    /// The path, without its query.
+    path: &'a str,
+    query: &'a str,
+    /// The token it came with, `""` for none.
+    token: &'a str,
+}
+
+/// Answers the requests it knows, and leaves the rest to the next handler with `None`.
+type Handler = fn(&State, &Asked) -> Option<Answer>;
+
+/// The fake GitHub's handlers, tried in order once no answer a test set fits. A request none of
+/// them answers isn't found. A feature's tests add their handlers here, each written in a file of
+/// its own under `test_support/github/`.
+const HANDLERS: &[Handler] = &[get_repo, get_pull, get_pull_files];
+
+fn not_found() -> Answer {
+    Answer::new(404, r#"{"message":"Not Found"}"#)
+}
+
+/// The repository a request under `/repos/{owner}/{name}` is for, as GitHub names it now, and the
+/// path's segments after its name, when the request's token can see it. Its old names find it too.
+fn repository<'a>(state: &State, asked: &Asked<'a>) -> Option<(String, Vec<&'a str>)> {
+    let mut segments = asked.path.strip_prefix("/repos/")?.split('/');
+    let (owner, repo) = (segments.next()?, segments.next()?);
+    let asked_for = format!("{owner}/{repo}").to_ascii_lowercase();
+    let canonical = state
+        .pulls
+        .iter()
+        .find(|pull| {
+            pull.repo.eq_ignore_ascii_case(&asked_for)
+                || pull
+                    .old_names
+                    .iter()
+                    .any(|old| old.eq_ignore_ascii_case(&asked_for))
+        })
+        .map(|pull| pull.repo.clone())?;
+    let key = canonical.to_ascii_lowercase();
+    let visible = state.public.contains(&key)
+        || state
+            .sees
+            .get(asked.token)
+            .is_some_and(|repos| repos.contains(&key));
+    visible.then(|| (canonical, segments.collect()))
+}
+
+/// Pull request `number` of `repo`, as GitHub names it now.
+fn pull_request<'a>(state: &'a State, repo: &str, number: &str) -> Option<&'a FakePull> {
+    state
+        .pulls
+        .iter()
+        .find(|pull| pull.repo.eq_ignore_ascii_case(repo) && number.parse() == Ok(pull.number))
+}
+
+/// `/repos/{owner}/{name}`: the repository, by its name now.
+fn get_repo(state: &State, asked: &Asked) -> Option<Answer> {
+    let (repo, rest) = repository(state, asked)?;
+    rest.is_empty()
+        .then(|| Answer::new(200, serde_json::json!({ "full_name": repo }).to_string()))
+}
+
+/// `/repos/{owner}/{name}/pulls/{number}`: the pull request.
+fn get_pull(state: &State, asked: &Asked) -> Option<Answer> {
+    let (repo, rest) = repository(state, asked)?;
+    let ["pulls", number] = rest.as_slice() else {
+        return None;
+    };
+    let pull = pull_request(state, &repo, number)?;
+    Some(Answer::new(200, pull_json(pull).to_string()))
+}
+
+/// `/repos/{owner}/{name}/pulls/{number}/files`: a page of the pull request's files.
+fn get_pull_files(state: &State, asked: &Asked) -> Option<Answer> {
+    let (repo, rest) = repository(state, asked)?;
+    let ["pulls", number, "files"] = rest.as_slice() else {
+        return None;
+    };
+    let pull = pull_request(state, &repo, number)?;
+    Some(files_page(pull, asked.query))
 }
 
 /// One page of `pull`'s files, as `query` (`per_page` and `page`) asks, with a `Link` header to
