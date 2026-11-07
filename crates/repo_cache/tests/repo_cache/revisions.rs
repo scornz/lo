@@ -264,3 +264,31 @@ fn lists_commits_offline_but_never_downloads_one() {
         "{error:?}"
     );
 }
+
+#[test]
+fn heads_noted_as_lost_that_the_clone_has_now_or_that_dont_parse_are_left_out() {
+    let server = Server::new();
+    let pr = pull_request(&server);
+    let ForcePushed { r1, r3, .. } = force_pushed(&pr);
+    pr.remote.forget_unreachable();
+    let (_dir, cache) = server.cache();
+    let repo = cache.open("owner", "repo", None).unwrap();
+    assert_eq!(fetch(&repo, 1).head, r3);
+    let lost = vec![r1.clone()];
+    assert_eq!(
+        repo.fetch_commits(1, std::slice::from_ref(&r1)).unwrap(),
+        lost
+    );
+    // A write cut short, and a head the clone got since, from another pull request's fetch.
+    let file = repo.git_dir().join("rozed-unavailable/pull-1");
+    let noted = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, format!("{noted}{}\n12ab", pr.base)).unwrap();
+
+    assert_eq!(repo.unavailable_revisions(1).unwrap(), lost);
+    // The next fetch writes the file again with only what's still lost.
+    assert_eq!(
+        repo.fetch_commits(1, &[r1.clone(), r3.clone()]).unwrap(),
+        lost
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{r1}\n"));
+}

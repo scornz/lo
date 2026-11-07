@@ -394,7 +394,7 @@ impl Repo {
                 wanted.push(oid);
             }
         }
-        let lost_before = self.unavailable_revisions(number)?;
+        let lost_before = self.remembered_unavailable(number)?;
         let present = self.commits_present(&wanted)?;
         let mut unavailable: Vec<Oid> = Vec::new();
         let mut missing: Vec<Oid> = Vec::new();
@@ -426,12 +426,18 @@ impl Repo {
                 Err(error) => return Err(error),
             }
         }
-        if !newly_lost.is_empty() {
-            let mut lost = lost_before;
-            lost.extend(newly_lost.iter().cloned());
+        // Heads the clone has now, from another pull request's fetch say, aren't lost any more.
+        let still_lost: Vec<&Oid> = (lost_before.iter())
+            .filter(|oid| !wanted.contains(oid) || unavailable.contains(oid))
+            .collect();
+        let still_lost = (still_lost.iter().zip(self.commits_present(&still_lost)?))
+            .filter(|(_, present)| !present)
+            .map(|(oid, _)| (*oid).clone());
+        let lost: Vec<Oid> = still_lost.chain(newly_lost.iter().cloned()).collect();
+        if lost != lost_before {
             self.remember_unavailable(number, &lost)?;
-            unavailable.extend(newly_lost);
         }
+        unavailable.extend(newly_lost);
         let pins: Vec<&Oid> = (wanted.into_iter())
             .filter(|oid| !unavailable.contains(oid))
             .collect();
@@ -452,24 +458,55 @@ impl Repo {
     }
 
     /// The heads of pull request `number` that GitHub no longer had when
-    /// [`Self::fetch_commits`] asked for them. Reads only the clone, so it works offline.
+    /// [`Self::fetch_commits`] asked for them, and that the clone still lacks. Reads only the
+    /// clone, so it works offline.
     pub fn unavailable_revisions(&self, number: u64) -> Result<Vec<Oid>, Error> {
-        let path = self.unavailable_file(number);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => text.lines().map(str::parse).collect(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(Error::io(format!("reading {}", path.display()))(error)),
-        }
+        let remembered = self.remembered_unavailable(number)?;
+        let remembered_refs: Vec<&Oid> = remembered.iter().collect();
+        let present = self.commits_present(&remembered_refs)?;
+        Ok((remembered.iter().zip(present))
+            .filter(|(_, present)| !present)
+            .map(|(oid, _)| oid.clone())
+            .collect())
     }
 
-    /// Notes `lost` as pull request `number`'s heads GitHub no longer has. The caller holds the
-    /// lock.
+    /// The heads of pull request `number` noted as lost. A line that isn't an ID, as a write cut
+    /// short could leave, is skipped.
+    fn remembered_unavailable(&self, number: u64) -> Result<Vec<Oid>, Error> {
+        let path = self.unavailable_file(number);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::io(format!("reading {}", path.display()))(error)),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|line| match line.parse() {
+                Ok(oid) => Some(oid),
+                Err(_) => {
+                    log::warn!(
+                        "{}: skipping {line:?} in {}",
+                        self.shared.name,
+                        path.display()
+                    );
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Notes `lost` as pull request `number`'s heads GitHub no longer has, replacing the file
+    /// whole, so a reader never sees half of it. The caller holds the lock.
     fn remember_unavailable(&self, number: u64, lost: &[Oid]) -> Result<(), Error> {
         let path = self.unavailable_file(number);
         let dir = path.parent().expect("the file is in a folder");
         std::fs::create_dir_all(dir).map_err(Error::io(format!("creating {}", dir.display())))?;
         let text: String = lost.iter().map(|oid| format!("{oid}\n")).collect();
-        std::fs::write(&path, text).map_err(Error::io(format!("writing {}", path.display())))
+        let temporary = dir.join(format!(".pull-{number}.{}", std::process::id()));
+        std::fs::write(&temporary, text)
+            .map_err(Error::io(format!("writing {}", temporary.display())))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(Error::io(format!("replacing {}", path.display())))
     }
 
     fn unavailable_file(&self, number: u64) -> PathBuf {
