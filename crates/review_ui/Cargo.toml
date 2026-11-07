@@ -34,6 +34,8 @@ settings.workspace = true
 ui.workspace = true
 usvg.workspace = true
 util.workspace = true
+vim.workspace = true
+vim_mode_setting.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 

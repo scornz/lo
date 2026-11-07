@@ -48,7 +48,7 @@ Things that surprised:
 
 ## Zed crates compiled in
 
-Lo compiles in 107 Zed crates: everything reachable from the `lo` package through normal
+Lo compiles in 110 Zed crates: everything reachable from the `lo` package through normal
 dependencies on macOS, which is what gets linked into the binary. `script/zed-crates.txt` lists
 them, and `script/check-zed-crates.sh`, which CI runs, fails when the set changes, so a new Zed
 crate shows up in review. It lists them with `cargo tree -p lo -e normal` for the host platform.
@@ -57,14 +57,17 @@ crate shows up in review. It lists them with `cargo tree -p lo -e normal` for th
 
 What Lo uses:
 
-- **UI (28):** `gpui`, `gpui_apple`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
+- **UI (29):** `gpui`, `gpui_apple`, `gpui_macos`, `gpui_macros`, `gpui_platform`,
   `gpui_shared_string`, `gpui_tokio`, `gpui_util`, `ui`, `ui_input`, `ui_macros`, `component`,
   `icons`, `file_icons`, `assets`, `theme`, `theme_settings`, `syntax_theme`, `refineable`,
   `derive_refineable`, `menu`, `zed_actions`, `breadcrumbs`, `markdown`, `mermaid_render`,
-  `command_palette`, `command_palette_hooks`, `picker`.
-- **Editor and languages (17):** `editor`, `multi_buffer`, `buffer_diff`, `text`, `rope`,
+  `command_palette`, `command_palette_hooks`, `picker`, `picker_preview`.
+- **Editor and languages (19):** `editor`, `multi_buffer`, `buffer_diff`, `text`, `rope`,
   `sum_tree`, `language`, `language_core`, `language_detection`, `languages`, `grammars`, `lsp`,
-  `snippet`, `snippet_provider`, `fuzzy`, `fuzzy_nucleo`, `vim_mode_setting`.
+  `snippet`, `snippet_provider`, `fuzzy`, `fuzzy_nucleo`, `vim`, `vim_mode_setting`, `search`.
+  `vim` is Zed's vim mode, and brings `search` (buffer and project search, which vim's `/`, `n`
+  and `*` use) and `picker_preview` (`search`'s previews in pickers). None of the three makes a
+  network request; `vim`'s `neovim` feature, which would, is off.
 - **Project and workspace (15):** `project`, `workspace`, `worktree`, `fs`, `git`,
   `git_hosting_providers`, `task`, `file_content`, `json_schema_store`, `askpass`, `node_runtime`,
   `session`, `db`, `sqlez`, `sqlez_macros`.

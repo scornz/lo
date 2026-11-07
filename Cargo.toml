@@ -55,6 +55,8 @@ ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
 # under Lo's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
+vim = { path = "third_party/zed/crates/vim" }
+vim_mode_setting = { path = "third_party/zed/crates/vim_mode_setting" }
 workspace = { path = "third_party/zed/crates/workspace" }
 zed_actions = { path = "third_party/zed/crates/zed_actions" }
 zlog = { path = "third_party/zed/crates/zlog" }
