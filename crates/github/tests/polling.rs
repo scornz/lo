@@ -716,8 +716,10 @@ async fn a_check_that_changes_is_sent(cx: &mut TestAppContext) {
     let moved = with_body(r[1].clone(), |body| {
         let pull = &mut body["data"]["repository"]["pullRequest"];
         pull["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
-        pull["reviewThreads"] =
-            serde_json::json!({"totalCount": 1, "nodes": [{"isResolved": false}]});
+        pull["reviewThreads"] = serde_json::json!({
+            "totalCount": 1,
+            "nodes": [{"isResolved": false, "comments": {"totalCount": 1}}]
+        });
     });
     let mut interactions = vec![
         r[0].clone(),

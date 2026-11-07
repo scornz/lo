@@ -8,26 +8,26 @@
       "name": "playground",
       "number": 1
     },
-    "query_sha256": "098cc23f0fe0c48df4509831e3744a0ac93f3bebd398f86da37ce1fc37d8eb83"
+    "query_sha256": "404c2aa1f51a65bc4e985aff15c3f38a5455adef73ac7972e6a6f2eec56e4d93"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4981",
-      "x-ratelimit-reset": "1794012781",
+      "x-ratelimit-remaining": "4923",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "19"
+      "x-ratelimit-used": "77"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4981,
-          "used": 19,
-          "resetAt": "2026-11-07T00:53:01Z"
+          "remaining": 4923,
+          "used": 77,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "repository": {
           "pullRequest": {
@@ -61,10 +61,18 @@
               "totalCount": 0,
               "nodes": []
             },
+            "viewerPendingReview": {
+              "nodes": []
+            },
             "comments": {
               "totalCount": 0
             },
-            "changedFiles": 1
+            "changedFiles": 1,
+            "lastEditedAt": null,
+            "timelineEvents": {
+              "filteredCount": 2,
+              "updatedAt": "2026-11-06T08:15:21Z"
+            }
           }
         }
       }
