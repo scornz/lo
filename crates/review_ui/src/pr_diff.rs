@@ -2149,11 +2149,13 @@ impl Addon for FileHeaders {
         }
         Some(
             h_flex()
+                // Each badge's ID is its place among them, inside the buffer's.
+                .id(("file-badges", id.to_proto()))
                 .flex_shrink_0()
                 .gap_2()
                 .children(
                     (badges.iter().enumerate())
-                        .map(|(index, badge)| render_badge(badge, (id, index), cx)),
+                        .map(|(index, badge)| render_badge(badge, index, cx)),
                 )
                 .into_any_element(),
         )
@@ -2161,8 +2163,8 @@ impl Addon for FileHeaders {
 }
 
 /// `badge`, the `n`th of a buffer's.
-fn render_badge(badge: &Badge, (buffer, n): (BufferId, usize), cx: &App) -> AnyElement {
-    let id = ElementId::NamedInteger(format!("file-badge-{n}").into(), buffer.to_proto());
+fn render_badge(badge: &Badge, n: usize, cx: &App) -> AnyElement {
+    let id = ElementId::Integer(n as u64);
     let tooltip = |element: Stateful<Div>| match &badge.detail {
         Some(detail) => element.tooltip(Tooltip::text(detail.clone())),
         None => element,
