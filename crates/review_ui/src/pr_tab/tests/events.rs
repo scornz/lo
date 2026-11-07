@@ -77,10 +77,17 @@ async fn swapping_the_pull_request_swaps_what_the_tab_knows_about_it(cx: &mut Te
     list_test_files(&tab, &files, cx);
     let events = record_events(&tab, cx);
 
-    let other = ShownPull::new(link("https://github.com/owner/repo/pull/2"));
-    let first = tab.update(cx, |tab, cx| tab.show_pull(other, cx));
+    let first = tab.read_with(cx, |tab, _| tab.pull().id());
+    tab.update_in(cx, |tab, window, cx| {
+        let other = ShownPull::new(link("https://github.com/owner/repo/pull/2"), cx);
+        let first = tab.show_pull(other, window, cx);
+        tab.keep_pull(first);
+    });
     cx.run_until_parked();
-    assert_eq!(taken(&events), [PrTabEvent::PullChanged]);
+    assert_eq!(
+        taken(&events),
+        [PrTabEvent::PullChanged, PrTabEvent::ComparisonChanged]
+    );
     assert_eq!(cx.window_title().as_deref(), Some("owner/repo#2"));
     tab.read_with(cx, |tab, _| {
         assert_eq!(tab.pull().number(), 2);
@@ -89,13 +96,17 @@ async fn swapping_the_pull_request_swaps_what_the_tab_knows_about_it(cx: &mut Te
         assert_eq!(tab.files().len(), 0);
         assert!(tab.revisions().is_none());
         assert_eq!(tab.pull().latest_head(), None);
+        let kept = &tab.kept_pulls()[0];
+        assert_eq!(kept.number(), 1);
+        assert_eq!(kept.latest_head(), Some("2".repeat(40).as_str()));
     });
-    assert_eq!(first.number(), 1);
-    assert_eq!(first.latest_head(), Some("2".repeat(40).as_str()));
 
-    tab.update(cx, |tab, cx| tab.show_pull(first, cx));
+    assert!(tab.update_in(cx, |tab, window, cx| tab.show_kept_pull(first, window, cx)));
     cx.run_until_parked();
-    assert_eq!(taken(&events), [PrTabEvent::PullChanged]);
+    assert_eq!(
+        taken(&events),
+        [PrTabEvent::PullChanged, PrTabEvent::ComparisonChanged]
+    );
     tab.read_with(cx, |tab, _| {
         assert_eq!(tab.pull().number(), 1);
         assert_eq!(
@@ -109,4 +120,52 @@ async fn swapping_the_pull_request_swaps_what_the_tab_knows_about_it(cx: &mut Te
         cx.window_title().as_deref(),
         Some("sharkdp/fd#1 — Honor explicit use-jemalloc requests")
     );
+}
+
+/// When the tab shows another pull request whose details its poller has, features hear of the new
+/// pull request before they hear of its head.
+#[gpui::test]
+async fn features_hear_of_a_new_pull_request_before_its_head(cx: &mut TestAppContext) {
+    let (workspace, cx) = workspace(cx).await;
+    let tab = open_unloaded(&workspace, "github.com/rozed-dev/playground/pull/2", cx);
+    let signed_in = sign_in_bot(&tab, "new_pull_before_its_head", &[], cx).await;
+    let poller = signed_in._poller.clone();
+    tab.update(cx, |tab, cx| tab.set_active(true, cx));
+    let other = PullRef::new("rozed-dev", "playground", 3);
+    signed_in
+        .cache
+        .put(
+            BOT,
+            &Target::Pull(other.clone()),
+            &details_headed("Add c", "UNVIEWED", &"e".repeat(40)),
+            None,
+            SystemTime::now(),
+        )
+        .await
+        .unwrap();
+    // The other pull request is kept out of sight, watched, as a stack's other layer is.
+    let kept = tab.update(cx, |tab, cx| {
+        let pull = ShownPull::new(link("github.com/rozed-dev/playground/pull/3"), cx);
+        let id = pull.id();
+        tab.keep_pull(pull);
+        tab.with_pull(id, cx, |tab, cx| tab.watch(poller, other, None, cx));
+        id
+    });
+    cx.run_until_parked();
+    let events = record_events(&tab, cx);
+
+    tab.update_in(cx, |tab, window, cx| tab.show_kept_pull(kept, window, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        taken(&events),
+        [
+            PrTabEvent::PullChanged,
+            PrTabEvent::HeadChanged,
+            PrTabEvent::ComparisonChanged
+        ]
+    );
+    tab.read_with(cx, |tab, _| {
+        assert_eq!(tab.header().title.as_deref(), Some("Add c"));
+        assert_eq!(tab.pull().latest_head(), Some("e".repeat(40).as_str()));
+    });
 }

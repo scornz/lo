@@ -596,6 +596,11 @@ impl Poller {
         cx.notify();
     }
 
+    /// Whether it watches `pull`.
+    pub fn watches(&self, pull: &PullRef) -> bool {
+        self.pulls.contains_key(pull)
+    }
+
     pub fn open(&self) -> Option<&PullRef> {
         self.open.as_ref()
     }

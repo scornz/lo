@@ -24,7 +24,7 @@ use ui::{ListItem, ListItemSpacing, prelude::*};
 use workspace::{DismissDecision, ModalView, Workspace};
 
 use crate::github_layer;
-use crate::pr_tab::PrTab;
+use crate::pr_tab::PullHandle;
 
 const KEY_CONTEXT: &str = "AccountPicker";
 
@@ -101,7 +101,7 @@ pub type Answer = oneshot::Receiver<Result<String, NotChosen>>;
 /// otherwise once the picker asking it, or the same question for another tab, is answered. The
 /// picker asks only while `tab` is the active tab.
 pub fn ask(
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
     owner: &str,
@@ -137,7 +137,7 @@ pub(crate) fn tab_closed(tab: EntityId, cx: &mut App) {
             questions.update(cx, |questions, cx| {
                 questions
                     .waiting
-                    .retain(|waiter| waiter.tab.entity_id() != tab);
+                    .retain(|waiter| waiter.tab.tab().entity_id() != tab);
                 questions.settle(cx);
             })
         });
@@ -172,9 +172,9 @@ fn settle_soon(cx: &mut App) {
     }
 }
 
-/// A tab waiting for an account.
+/// A tab's pull request waiting for an account.
 struct Waiter {
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
     owner: String,
@@ -196,7 +196,8 @@ impl Waiter {
             return false;
         };
         crate::window_title::shown_pull_request(workspace.read(cx), cx)
-            .is_some_and(|tab| tab.entity_id() == self.tab.entity_id())
+            .is_some_and(|tab| tab.entity_id() == self.tab.tab().entity_id())
+            && self.tab.is_shown(cx)
     }
 
     /// Tells the tab whether the picker asks its question now, or it waits.

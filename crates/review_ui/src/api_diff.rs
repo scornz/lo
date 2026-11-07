@@ -18,7 +18,7 @@ use github::files::{FileStatus, PullFile, PullFiles, ReadFiles};
 use github::patch::{HunkLine, Patch};
 use github::poll::RequestQueue;
 use github::{GithubClient, GithubError, PullRef};
-use gpui::{AppContext as _, AsyncWindowContext, WeakEntity};
+use gpui::{AppContext as _, AsyncWindowContext};
 use language::{BufferSnapshot, Point};
 use ui::SharedString;
 
@@ -26,7 +26,7 @@ use crate::file_display::{Collapsed, initial_collapse};
 use crate::file_list::{FileChange, FileEntry};
 use crate::pr_diff::{self, FileHeader, FilePlan, NewSide, Target, Warning};
 use crate::pr_link::PrLink;
-use crate::pr_tab::PrTab;
+use crate::pr_tab::PullHandle;
 
 /// How a tab reads GitHub's list of files.
 #[derive(Clone)]
@@ -86,7 +86,7 @@ pub(crate) struct GithubDiff {
 /// Shows GitHub's diff of the pull request, `files`, in `tab`, unless the local copy's diff got
 /// there first. `launched` is when the tab opened, for timing.
 pub(crate) async fn show(
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     source: GithubDiff,
     files: Vec<PullFile>,
     launched: Instant,
@@ -100,7 +100,7 @@ pub(crate) async fn show(
         })
         .await;
     let (workspace, style) =
-        tab.read_with(cx, |tab, _| (tab.workspace().clone(), tab.diff_style()))?;
+        tab.update(cx, |tab, _| (tab.workspace().clone(), tab.diff_style()))?;
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let (_, editor) =
@@ -130,7 +130,7 @@ pub(crate) async fn show(
         hide_whitespace: false,
     };
     for (index, (file, plan)) in files.iter().zip(plans).enumerate() {
-        target.hide_whitespace = tab.read_with(cx, |tab, _| tab.hides_whitespace())?;
+        target.hide_whitespace = tab.update(cx, |tab, _| tab.hides_whitespace())?;
         let (position, path) = (positions[index], file.filename.as_str());
         let deleted = file.status == FileStatus::Removed;
         let shown = match target

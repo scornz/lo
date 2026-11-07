@@ -121,7 +121,7 @@ impl PrTab {
     pub(super) fn focus_middle(&self, window: &mut Window, cx: &mut App) -> bool {
         match &self.middle {
             Middle::Diff => {
-                let Some(diff) = &self.diff else {
+                let Some(diff) = &self.pull.diff else {
                     return false;
                 };
                 window.focus(&diff.focus_handle(cx), cx);
@@ -145,7 +145,7 @@ impl PrTab {
 
     /// The diff, or why the pull request couldn't open.
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let diff: AnyElement = match (&self.diff, &self.status) {
+        let diff: AnyElement = match (&self.pull.diff, &self.pull.status) {
             (_, Status::Failed(error)) => v_flex()
                 .size_full()
                 .p_4()
@@ -162,7 +162,7 @@ impl PrTab {
 
     /// `tab`: side by side, moves the cursor to the diff's other side.
     fn switch_side(&mut self, _: &SwitchSide, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             shown_files::switch_side(diff, window, cx);
         }
     }
@@ -197,7 +197,7 @@ impl PrTab {
     /// Opens, loads or shows the whole of the file selected in the file list, when it has focus,
     /// or else the file the diff shows, which `e` acts on too.
     fn expand_file(&mut self, _: &ExpandFile, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff.clone() else {
+        let Some(diff) = self.pull.diff.clone() else {
             return;
         };
         let in_file_list = self.file_list_focus.contains_focused(window, cx);
@@ -260,13 +260,13 @@ impl PrTab {
 
     /// `]c` and `[c`: the next or previous change, across files. The list follows the cursor.
     fn next_change(&mut self, _: &NextChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             diff_cursor::go_to_change(diff, Direction::Next, window, cx);
         }
     }
 
     fn previous_change(&mut self, _: &PreviousChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             diff_cursor::go_to_change(diff, Direction::Prev, window, cx);
         }
     }

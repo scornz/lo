@@ -57,7 +57,7 @@ impl PrTab {
 
     /// The header's title: the pull request's, once known.
     pub fn title(&self) -> String {
-        match (&self.pull.header.title, &self.status) {
+        match (&self.pull.header.title, &self.pull.status) {
             (Some(title), _) => title.clone(),
             (None, Status::Failed(_)) => "Not opened".to_string(),
             (None, _) => "Loading…".to_string(),
@@ -174,14 +174,14 @@ impl PrTab {
     }
 
     pub(super) fn render_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let step = match &self.status {
+        let step = match &self.pull.status {
             Status::Ready => None,
             Status::Loading(step) => Some((IconName::ArrowCircle, Color::Muted, step.clone())),
             Status::Offline(why) => Some((IconName::Warning, Color::Warning, why.clone())),
             Status::Failed(error) => Some((IconName::Warning, Color::Error, error.clone())),
         };
-        let offline = matches!(self.status, Status::Offline(_));
-        let github = self.diff_source == Some(DiffSource::GitHub);
+        let offline = matches!(self.pull.status, Status::Offline(_));
+        let github = self.pull.diff_source == Some(DiffSource::GitHub);
         let whitespace = self.hide_whitespace;
         if step.is_none() && !github && !whitespace {
             return None;

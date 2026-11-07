@@ -1,8 +1,10 @@
 use super::*;
 
+use gpui::Task;
+
 /// A public pull request of `count` files on the fake GitHub, which its git server doesn't
 /// have, so its local copy fails and GitHub's diff stays.
-fn uncopyable_pull(github: &FakeGithub, repo: &str, number: u64, count: usize) {
+pub(super) fn uncopyable_pull(github: &FakeGithub, repo: &str, number: u64, count: usize) {
     let head = "d".repeat(40);
     let files = (0..count)
         .map(|index| {
@@ -320,7 +322,8 @@ fn show_local_copy(
     let (local, comparison) = (Arc::new(local), Arc::new(comparison));
     tab.update_in(cx, |tab, window, cx| {
         let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
-        cx.spawn_in(window, async move |tab, cx| {
+        let tab = tab.handle(cx);
+        cx.spawn_in(window, async move |_, cx| {
             let title = format!("{link}: Change a and b");
             pr_diff::show_local_copy(
                 tab,
@@ -573,7 +576,8 @@ fn copy_with(
     cx.update(|window, cx| window.blur(cx));
     let task = tab.update_in(cx, |tab, window, cx| {
         let link = tab.link().clone();
-        cx.spawn_in(window, async move |tab, cx| {
+        let tab = tab.handle(cx);
+        cx.spawn_in(window, async move |_, cx| {
             pr_diff::copy_with_retries(&tab, &link, copy_once, cx)
                 .await
                 .map(|_| ())

@@ -67,7 +67,7 @@ use crate::github_layer::Saved;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::{DiffSource, PrTab};
+use crate::pr_tab::{DiffSource, PullHandle};
 use crate::shown_comparison::ShownComparison;
 use crate::shown_files::{self, ShownFile, ShownFiles};
 use crate::trust;
@@ -91,7 +91,7 @@ pub enum Trust {
 /// ready, or a banner says why there's none. `launched` is when the tab opened, for timing.
 #[allow(clippy::too_many_arguments)]
 pub async fn open(
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
     pull_request: PullRequest,
@@ -144,7 +144,7 @@ pub async fn open(
 /// without them, it shows nothing. It reads only what's in the clone: no fetch, no download, no
 /// write, and no checkout or language servers.
 pub async fn open_offline(
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
     saved: &Saved,
@@ -221,7 +221,7 @@ const UNKNOWN_TRIES: usize = 5;
 /// that keeps failing for a reason Lo doesn't know stops after [`UNKNOWN_TRIES`] until the
 /// banner's button asks for another try. Any other failure is returned.
 pub(crate) async fn copy_with_retries(
-    tab: &WeakEntity<PrTab>,
+    tab: &PullHandle,
     link: &PrLink,
     mut copy_once: impl FnMut(
         mpsc::UnboundedSender<CopyProgress>,
@@ -300,7 +300,7 @@ pub(crate) fn next_wait(wait: Duration) -> Duration {
 /// time. It ends when `wait` is up on the executor's clock or the wall clock, whichever comes
 /// first: the executor's timers don't run while the Mac sleeps.
 async fn count_down(
-    tab: &WeakEntity<PrTab>,
+    tab: &PullHandle,
     why: &str,
     wait: Duration,
     cx: &mut AsyncWindowContext,
@@ -370,7 +370,7 @@ fn retry(error: &anyhow::Error) -> Option<Retry> {
 /// to the same file and line; otherwise it shows at once and fills in as files load.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn show_local_copy(
-    tab: WeakEntity<PrTab>,
+    tab: PullHandle,
     workspace: WeakEntity<Workspace>,
     link: PrLink,
     title: String,
@@ -383,7 +383,7 @@ pub(crate) async fn show_local_copy(
 ) -> anyhow::Result<()> {
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
-    let banners = tab.read_with(cx, |tab, _| tab.banners().clone())?;
+    let banners = tab.update(cx, |tab, _| tab.banners().clone())?;
     // What the banners say about this diff, once it shows.
     let show_banners = |cx: &mut AsyncWindowContext| {
         banners.update(cx, |banners, cx| {
@@ -415,7 +415,7 @@ pub(crate) async fn show_local_copy(
         })
     };
 
-    let style = tab.read_with(cx, |tab, _| tab.diff_style())?;
+    let style = tab.update(cx, |tab, _| tab.diff_style())?;
     let (multi_buffer, editor) = new_diff_editor(&tab, &workspace, &project, &title, style, cx)?;
     editor.update(cx, |editor, cx| {
         editor.rhs_editor().update(cx, |editor, _| {
@@ -612,7 +612,7 @@ pub(crate) async fn show_local_copy(
                 })?;
             }
             Swap::ToCheckout(plan) => {
-                target.hide_whitespace = tab.read_with(cx, |tab, _| tab.hides_whitespace())?;
+                target.hide_whitespace = tab.update(cx, |tab, _| tab.hides_whitespace())?;
                 if let Err(error) = target
                     .add_file(
                         positions[index],
@@ -718,7 +718,7 @@ const DECORATORS: &[NewDecorator] = &[
 /// A new, empty side-by-side or inline diff of `title` for `tab`, read-only and without the
 /// controls for staging and restoring hunks, with every feature's decorator.
 pub(crate) fn new_diff_editor(
-    tab: &WeakEntity<PrTab>,
+    tab: &PullHandle,
     workspace: &WeakEntity<Workspace>,
     project: &Entity<Project>,
     title: &str,
@@ -747,7 +747,7 @@ pub(crate) fn new_diff_editor(
                 editor.set_show_breakpoints(false, cx);
                 editor.register_addon(FileHeaders::default());
                 editor.register_addon(ShownFiles::default());
-                editor.register_addon(DiffDecorations::new(tab, DECORATORS, cx));
+                editor.register_addon(DiffDecorations::new(tab.tab(), DECORATORS, cx));
             });
             editor
         })

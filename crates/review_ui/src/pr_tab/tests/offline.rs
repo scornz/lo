@@ -987,7 +987,7 @@ async fn a_copy_stopped_behind_an_older_copy_keeps_it_and_says_so(cx: &mut TestA
     // The banner's button tries the copy again.
     tab.update(cx, |tab, cx| tab.retry_copy(cx));
     assert!(matches!(status(&tab, cx), Status::Loading(_)));
-    assert_eq!(tab.read_with(cx, |tab, _| tab.showing_copy), None);
+    assert_eq!(tab.read_with(cx, |tab, _| tab.pull.showing_copy), None);
 }
 
 #[gpui::test]

@@ -236,7 +236,8 @@ mod tests {
         let (local, comparison) = (Arc::new(local), Arc::new(comparison));
         tab.update_in(cx, |tab, window, cx| {
             let (workspace, link) = (tab.workspace().clone(), tab.link().clone());
-            cx.spawn_in(window, async move |tab, cx| {
+            let tab = tab.handle(cx);
+            cx.spawn_in(window, async move |_, cx| {
                 let title = format!("{link}: test");
                 pr_diff::show_local_copy(
                     tab,

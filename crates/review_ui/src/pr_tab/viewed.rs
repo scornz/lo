@@ -52,7 +52,7 @@ impl PrTab {
         };
         // GitHub's view didn't load, so neither would a write: the local copy shows, read-only.
         // One older than GitHub's newest head gets the newer push's refusal below.
-        let why = match self.showing_copy {
+        let why = match self.pull.showing_copy {
             Some(OlderCopy::Unreachable) => Some(format!(
                 "Lo can't reach GitHub, so it can't mark {path} viewed until it's back"
             )),
@@ -184,7 +184,9 @@ impl PrTab {
                 cx,
             )
         });
-        cx.spawn(async move |this, cx| {
+        // The mark is this pull request's, whether the tab shows it or keeps it by then.
+        let this = self.handle(cx);
+        cx.spawn(async move |_, cx| {
             let result = write.await;
             this.update(cx, |this, cx| {
                 this.viewed_written(&written, result.is_ok(), cx)

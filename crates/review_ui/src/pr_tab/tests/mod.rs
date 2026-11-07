@@ -34,6 +34,7 @@ mod offline;
 mod open;
 mod parts;
 mod read_only;
+mod swap;
 mod viewed;
 
 fn link(link: &str) -> PrLink {
@@ -222,7 +223,7 @@ fn two_hours_ago() -> SystemTime {
 }
 
 fn action(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<TabAction> {
-    tab.read_with(cx, |tab, _| tab.action)
+    tab.read_with(cx, |tab, _| tab.pull.action)
 }
 
 /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.
