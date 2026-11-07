@@ -1,0 +1,34 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/rozed-dev/playground/pulls/2/files?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"df2520046a07e87d6093719cacc2cc7db8ceb4b7dbdda7877085e4279395c901\"",
+      "last-modified": "Fri, 06 Nov 2026 08:15:08 GMT",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4984",
+      "x-ratelimit-reset": "1793976664",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "16"
+    },
+    "body": [
+      {
+        "sha": "3b21e05ae76a12d23d9faae44f57d65ec81392f0",
+        "filename": "stack-b.md",
+        "status": "added",
+        "additions": 1,
+        "deletions": 0,
+        "changes": 1,
+        "blob_url": "https://github.com/rozed-dev/playground/blob/d712aa7652cc723fee5fd9b3eba867b0480d40da/stack-b.md",
+        "raw_url": "https://github.com/rozed-dev/playground/raw/d712aa7652cc723fee5fd9b3eba867b0480d40da/stack-b.md",
+        "contents_url": "https://api.github.com/repos/rozed-dev/playground/contents/stack-b.md?ref=d712aa7652cc723fee5fd9b3eba867b0480d40da",
+        "patch": "@@ -0,0 +1 @@\n+Layer B of the rozed stack fixture."
+      }
+    ]
+  }
+}

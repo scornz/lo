@@ -1,4 +1,4 @@
-# rozed status
+# Lo status
 
 Kept current by the overseer session. A fresh session should be able to resume from this file,
 [`plan.md`](plan.md) and [`decisions.md`](decisions.md). The live copy is in the worktree

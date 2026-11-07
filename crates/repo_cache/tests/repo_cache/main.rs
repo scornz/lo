@@ -1,6 +1,9 @@
+mod attributes;
 mod checkout;
 mod cleanup;
 mod compare;
 mod fetch;
+mod offline;
 mod read;
+mod revisions;
 mod support;

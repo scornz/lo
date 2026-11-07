@@ -9,7 +9,7 @@ use super::{MergeSnapshot, Review, ReviewState, Reviewer};
 /// Approvals the base branch's rules require and the pull request doesn't have yet.
 ///
 /// GitHub decides whether approvals are missing. With `more` at 0 and no `code_owners`, GitHub
-/// requires a review rozed can't attribute, such as an approval of the latest push by someone other
+/// requires a review Lo can't attribute, such as an approval of the latest push by someone other
 /// than its pusher, or a code owner whose request was removed; the merge panel says a review is
 /// required.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn a_review_github_requires_for_a_reason_rozed_cannot_see_is_still_missing() {
+    fn a_review_github_requires_for_a_reason_lo_cannot_see_is_still_missing() {
         let snapshot = MergeSnapshot {
             reviews: vec![review("alice", ReviewState::Approved)],
             rules: requiring_code_owners(1),

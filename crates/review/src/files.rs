@@ -9,7 +9,7 @@ mod state;
 pub use generated::{Generated, generated, is_lockfile};
 pub use kind::{FileKind, kind};
 pub use order::{path_order, review_order};
-pub use state::{InitialState, LARGE_FILE_LINES, initial_state};
+pub use state::{InitialState, LARGE_FILE_BYTES, LARGE_FILE_LINES, initial_state};
 
 /// One file a pull request changes, as GitHub's changed-file list describes it, plus the
 /// `linguist-generated` attribute the caller looks up in the head revision's `.gitattributes`.
@@ -28,6 +28,8 @@ pub struct ChangedFile {
     pub deletions: u32,
     /// Whether git sees the file as binary.
     pub binary: bool,
+    /// The larger side's size in bytes, when it's known: a file of few lines can still be huge.
+    pub size: Option<u64>,
     /// The file's `linguist-generated` attribute: `Some(true)` when it's set (`linguist-generated`
     /// or `linguist-generated=true`), `Some(false)` when it's unset (`-linguist-generated` or
     /// `linguist-generated=false`), and `None` when `.gitattributes` doesn't mention it.

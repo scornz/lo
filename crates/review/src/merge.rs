@@ -105,10 +105,10 @@ pub use status::{MergeStatus, status};
 
 /// What GitHub says about a pull request's merge, and the head on screen. The GitHub layer fills
 /// it from GraphQL (field names below are `PullRequest`'s unless they say otherwise) and REST,
-/// right before rozed shows the merge status or acts.
+/// right before Lo shows the merge status or acts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MergeSnapshot {
-    /// The pull request's page on GitHub (`url`), linked when GitHub reports a block rozed can't
+    /// The pull request's page on GitHub (`url`), linked when GitHub reports a block Lo can't
     /// explain.
     pub url: String,
     /// `state`.
@@ -153,12 +153,12 @@ pub struct MergeSnapshot {
     /// Other rules on the base branch the pull request doesn't meet yet, such as required
     /// deployments or signed commits.
     pub unmet_rules: Vec<UnmetRule>,
-    /// Whether rozed sees every rule on the base branch that can block the merge: the caller read
+    /// Whether Lo sees every rule on the base branch that can block the merge: the caller read
     /// its branch protection and its rulesets' active rules (`GET
     /// /repos/{owner}/{repo}/rules/branches/{branch}`), each one maps to a field here, and no list
-    /// was cut short by paging. Rules rozed doesn't model include code scanning, required
+    /// was cut short by paging. Rules Lo doesn't model include code scanning, required
     /// workflows, reviewers required by file pattern, and the extra approval for a pull request
-    /// Copilot opened. Without this, a `BLOCKED` that rozed explains may be only partly explained
+    /// Copilot opened. Without this, a `BLOCKED` that Lo explains may be only partly explained
     /// ([`may_not_see_every_rule`]).
     pub sees_every_rule: bool,
     /// The base branch's merge queue.
@@ -168,15 +168,15 @@ pub struct MergeSnapshot {
     /// The merge methods the repository allows.
     pub methods: AllowedMethods,
     /// Whether the base branch requires signed commits (`requiresCommitSignatures`, a ruleset's
-    /// `required_signatures`). GitHub can't sign the commits a rebase merge makes, so rozed doesn't
+    /// `required_signatures`). GitHub can't sign the commits a rebase merge makes, so Lo doesn't
     /// offer rebase there.
     pub signed_commits: bool,
-    /// The method you last used in the repository, which rozed remembers: the one to pick first.
+    /// The method you last used in the repository, which Lo remembers: the one to pick first.
     pub preferred_method: Option<MergeMethod>,
     /// GitHub's default method for you (`Repository.viewerDefaultMergeMethod`): the one to pick
     /// when you haven't used one here, or the one you used is no longer allowed.
     pub default_method: Option<MergeMethod>,
-    /// The account rozed acts as.
+    /// The account Lo acts as.
     pub viewer: Viewer,
     /// The head commit GitHub has now (`headRefOid`), as a full SHA. Empty when GitHub didn't
     /// report it.
@@ -369,7 +369,7 @@ pub struct AutoMerge {
 
 /// The merge methods the repository allows (`mergeCommitAllowed`, `squashMergeAllowed`,
 /// `rebaseMergeAllowed`), narrowed by the `allowedMergeMethods` of the base branch's rulesets, and
-/// to squash and rebase when the base requires linear history. rozed itself leaves out rebase when
+/// to squash and rebase when the base requires linear history. Lo itself leaves out rebase when
 /// the base requires signed commits ([`MergeSnapshot::signed_commits`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllowedMethods {
@@ -404,7 +404,7 @@ impl AllowedMethods {
     }
 }
 
-/// The account rozed acts as, and what GitHub lets it do here.
+/// The account Lo acts as, and what GitHub lets it do here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Viewer {
     /// Its login.

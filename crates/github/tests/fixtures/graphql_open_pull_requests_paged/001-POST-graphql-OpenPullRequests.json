@@ -9,14 +9,12 @@
       "first": 1,
       "after": null
     },
-    "query_sha256": "175997f20ee70cb327adb8d0ce5187355cf6994462a92e293f38b3f196de1513"
+    "query_sha256": "62d36e4122908692f8557aa6097dbca9ac3b3430f321ad92202edb0400ab2e59"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "x-accepted-oauth-scopes": "repo",
-      "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
       "x-ratelimit-remaining": "4995",
       "x-ratelimit-reset": "1793969325",

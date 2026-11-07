@@ -1,9 +1,9 @@
 [workspace]
 members = ["crates/*"]
 exclude = [
-    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates rozed
-    # depends on by path members of rozed's workspace, and their `workspace = true` keys fail to
-    # inherit from rozed's root. Excluded, they inherit from Zed's.
+    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates Lo
+    # depends on by path members of Lo's workspace, and their `workspace = true` keys fail to
+    # inherit from Lo's root. Excluded, they inherit from Zed's.
     "third_party",
     # xtask is its own workspace, so it runs when this one can't resolve.
     "crates/xtask",
@@ -23,6 +23,7 @@ buffer_diff = { path = "third_party/zed/crates/buffer_diff" }
 client = { path = "third_party/zed/crates/client" }
 clock = { path = "third_party/zed/crates/clock" }
 command_palette = { path = "third_party/zed/crates/command_palette" }
+command_palette_hooks = { path = "third_party/zed/crates/command_palette_hooks" }
 credentials_provider = { path = "third_party/zed/crates/credentials_provider" }
 db = { path = "third_party/zed/crates/db" }
 editor = { path = "third_party/zed/crates/editor" }
@@ -52,15 +53,17 @@ theme = { path = "third_party/zed/crates/theme" }
 theme_settings = { path = "third_party/zed/crates/theme_settings" }
 ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
-# under rozed's root and panic.
+# under Lo's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
 workspace = { path = "third_party/zed/crates/workspace" }
 zed_actions = { path = "third_party/zed/crates/zed_actions" }
 zlog = { path = "third_party/zed/crates/zlog" }
 
-# rozed's crates.
+# Lo's crates.
 github = { path = "crates/github" }
 repo_cache = { path = "crates/repo_cache" }
+review = { path = "crates/review" }
+review_ui = { path = "crates/review_ui" }
 
 # Other crates. Versions match Zed's where Zed has them.
 anyhow = "1.0.86"
@@ -69,6 +72,15 @@ apollo-compiler = "1.33.1"
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 futures = "0.3.34"
 graphql_client = "0.16.0"
+# Already in the build through gpui, with these formats and more. review_ui reads an image's format
+# and dimensions from its bytes.
+image = { version = "0.25.1", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+# Already in the build through buffer_diff. review_ui aligns lines to hide whitespace changes.
+imara-diff = { version = "0.2", default-features = false }
+# Already in the build through gpui, which renders SVGs with them. review_ui renders a pull
+# request's SVGs itself, with options that read nothing from disk.
+resvg = { version = "0.46.0", default-features = false }
+usvg = { version = "0.46.0", default-features = false }
 libc = "0.2"
 log = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = "0.12.1"

@@ -6,9 +6,12 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::FutureExt as _;
 use futures::channel::oneshot;
 use gpui::BackgroundExecutor;
 use parking_lot::Mutex;
+
+use crate::client::RequestGate;
 
 /// Runs an account's requests one at a time, spacing its writes. Waiting requests take their
 /// turns first in, first out, except that a waiting write goes before every waiting read: a
@@ -115,6 +118,17 @@ impl RequestQueue {
     {
         let _turn = self.turn(false).await;
         request().await
+    }
+
+    /// A gate that waits for a read's turn before each of a client's requests, and holds it until
+    /// the answer is read ([`GithubClient::gated`](crate::GithubClient::gated)). A read made of
+    /// many requests through it lets a waiting write go between them.
+    pub fn gate(&self) -> RequestGate {
+        let queue = self.clone();
+        Arc::new(move || {
+            let queue = queue.clone();
+            async move { Box::new(queue.turn(false).await) as Box<dyn Send> }.boxed()
+        })
     }
 
     /// Makes and runs a write (a mutation) once it's the write's turn, and at least the spacing

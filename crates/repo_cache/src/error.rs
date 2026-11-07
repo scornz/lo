@@ -13,11 +13,11 @@ const INSTALL_GIT: &str =
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// No git could be found or run.
-    #[error("rozed needs git and can't find it. {INSTALL_GIT}")]
+    #[error("Lo needs git and can't find it. {INSTALL_GIT}")]
     GitMissing,
     /// The git found is older than [`GitVersion::MINIMUM`].
     #[error(
-        "rozed needs git {minimum} or newer, and {} is git {found}. {INSTALL_GIT}",
+        "Lo needs git {minimum} or newer, and {} is git {found}. {INSTALL_GIT}",
         program.display(),
         minimum = GitVersion::MINIMUM
     )]
@@ -32,7 +32,7 @@ pub enum Error {
         /// git's own message.
         message: String,
     },
-    /// A commit rozed never fetched, which GitHub no longer has: it was force-pushed away long
+    /// A commit Lo never fetched, which GitHub no longer has: it was force-pushed away long
     /// ago (design §11, "Missing revisions").
     #[error("commit {} is no longer available", oid.short(7))]
     Unavailable { oid: Oid },
@@ -56,6 +56,17 @@ pub enum Error {
     /// A name or ID that can't be used, such as a branch name git refuses.
     #[error("`{value}` isn't a valid {what}")]
     Invalid { what: &'static str, value: String },
+    /// More `.gitattributes` files apply to the paths asked about than Lo reads, so it reads
+    /// none.
+    #[error(
+        "{found} .gitattributes files apply, more than the {} Lo reads",
+        crate::attributes::MAX_ATTRIBUTE_FILES
+    )]
+    TooManyAttributeFiles { found: usize },
+    /// Fetching or checking out with a clone opened to read offline
+    /// ([`crate::RepoCache::open_offline`]), which never writes.
+    #[error("{name}'s local copy was opened to read offline, so it can't {what}")]
+    ReadOnly { name: String, what: &'static str },
     /// A git command failed for a reason none of the other variants covers.
     #[error("`{command}` failed: {message}")]
     Git { command: String, message: String },
@@ -73,12 +84,12 @@ pub enum Error {
 pub enum FetchFailure {
     /// The network failed or timed out.
     Network,
-    /// GitHub refused the token, or wanted one and rozed had none, or the account can't use it
+    /// GitHub refused the token, or wanted one and Lo had none, or the account can't use it
     /// here (single sign-on, an IP allow list).
     Auth,
     /// GitHub is limiting requests: a rate limit or an abuse limit, which wears off.
     RateLimited,
-    /// The server's certificate didn't verify, so rozed sent it nothing.
+    /// The server's certificate didn't verify, so Lo sent it nothing.
     Certificate,
     /// The repository doesn't exist, or the account can't see it.
     RepoNotFound,
@@ -94,7 +105,7 @@ impl FetchFailure {
             FetchFailure::Network => "the network failed",
             FetchFailure::RateLimited => "GitHub is limiting requests for now",
             FetchFailure::Certificate => {
-                "the server's certificate didn't verify, so rozed sent it nothing"
+                "the server's certificate didn't verify, so Lo sent it nothing"
             }
             FetchFailure::Auth => {
                 "GitHub wants an account that can see the repository; sign in with one"
@@ -115,7 +126,7 @@ impl FetchFailure {
 
 impl Error {
     /// Whether trying again later might work: a fetch that failed on the network, on a rate
-    /// limit, or for a reason rozed doesn't know.
+    /// limit, or for a reason Lo doesn't know.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -126,7 +137,7 @@ impl Error {
         )
     }
 
-    /// Wraps an I/O error with what rozed was doing. A full disk becomes [`Error::DiskFull`].
+    /// Wraps an I/O error with what Lo was doing. A full disk becomes [`Error::DiskFull`].
     pub(crate) fn io(context: impl Into<String>) -> impl FnOnce(io::Error) -> Self {
         move |source| {
             if source.kind() == io::ErrorKind::StorageFull {
@@ -163,7 +174,7 @@ impl Error {
     }
 }
 
-/// Reads why a fetch failed from git's message, which is in English (rozed runs git with
+/// Reads why a fetch failed from git's message, which is in English (Lo runs git with
 /// `LC_ALL=C`).
 fn classify_fetch(message: &str) -> FetchFailure {
     let has = |needles: &[&str]| needles.iter().any(|needle| message.contains(needle));

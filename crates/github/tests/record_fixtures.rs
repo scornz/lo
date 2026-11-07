@@ -1,5 +1,7 @@
 //! Records the cassettes in `tests/fixtures` from `rozed-dev/playground`, a private repo where PR
-//! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3.
+//! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3. The push histories
+//! come from `rozed-dev/e2e`'s revision fixtures (`script/e2e/README.md`) and from `sharkdp/fd`,
+//! read only.
 //!
 //! Each test is ignored; run them by hand, one cassette or all:
 //!
@@ -7,7 +9,7 @@
 //! cargo test -p github --test record_fixtures -- --ignored [cassette_name]
 //! ```
 //!
-//! They use rozed's own OAuth token for the test bot, read from `ROZED_FIXTURE_TOKEN_FILE`
+//! They use Lo's own OAuth token for the test bot, read from `LO_FIXTURE_TOKEN_FILE`
 //! (default `~/.config/rozed-dev/oauth-token`), the same kind of token users have. Don't run a
 //! device flow per recording: GitHub keeps 10 tokens per user, app and scope set, and revokes the
 //! oldest beyond that. The recorder refuses to write the token or anything shaped like a GitHub
@@ -19,6 +21,7 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
+use github::queries::FileViewedState;
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
@@ -26,7 +29,7 @@ use serde::de::IgnoredAny;
 const REPO: &str = "rozed-dev/playground";
 
 fn token() -> Token {
-    let path = std::env::var_os("ROZED_FIXTURE_TOKEN_FILE")
+    let path = std::env::var_os("LO_FIXTURE_TOKEN_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
@@ -43,14 +46,15 @@ fn record<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    record_with_schema(name, description, None, run);
+    record_with_schema(name, description, REPO, None, run);
 }
 
-/// [`record`], noting the GraphQL schema the queries were checked against, if any. The recorder
-/// writes `cassette.json` and checks it like every other file.
+/// [`record`] from `repo`, noting the GraphQL schema the queries were checked against, if any. The
+/// recorder writes `cassette.json` and checks it like every other file.
 fn record_with_schema<F: Future<Output = ()>>(
     name: &str,
     description: &str,
+    repo: &str,
     schema: Option<String>,
     run: impl FnOnce(GithubClient) -> F,
 ) {
@@ -74,7 +78,7 @@ fn record_with_schema<F: Future<Output = ()>>(
                 chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
-            repo: Some(REPO.into()),
+            repo: Some(repo.into()),
             schema,
         })
         .expect("finishing the cassette");
@@ -106,10 +110,26 @@ fn rest_pull_conditional() {
 
 #[test]
 #[ignore = "records from GitHub; run by hand"]
+fn rest_pull_files() {
+    record(
+        "rest_pull_files",
+        "GET /pulls/2/files: the files PR #2 changes, each with its patch",
+        |client| async move {
+            let files = client
+                .pull_files(&PullRef::new("rozed-dev", "playground", 2))
+                .await
+                .unwrap();
+            assert!(!files.is_empty());
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
 fn user() {
     record(
         "user",
-        "GET /user as rozed-bot, with the scopes of rozed's OAuth token",
+        "GET /user as rozed-bot, with the scopes of Lo's OAuth token",
         |client| async move {
             client.user().await.unwrap();
         },
@@ -150,7 +170,7 @@ fn record_graphql<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    record_with_schema(name, description, schema_commit(), run);
+    record_with_schema(name, description, REPO, schema_commit(), run);
 }
 
 #[test]
@@ -236,6 +256,98 @@ fn graphql_not_found() {
                 .pull_request("rozed-dev", "does-not-exist", 1)
                 .await
                 .unwrap_err();
+        },
+    );
+}
+
+/// PR #2's one file, the only file the recordings mark viewed. They leave it unviewed.
+const PR_2_FILE: &str = "stack-b.md";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_viewed_marks() {
+    record_graphql(
+        "graphql_viewed_marks",
+        "PR #2's one file marked viewed and its mark cleared, reading the PullRequest query \
+         before, between and after: UNVIEWED, VIEWED, UNVIEWED",
+        |client| async move {
+            let state = || async {
+                let pr = client
+                    .pull_request("rozed-dev", "playground", 2)
+                    .await
+                    .unwrap();
+                let file = pr
+                    .files
+                    .unwrap()
+                    .nodes
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .next();
+                (pr.id, file.unwrap().viewer_viewed_state)
+            };
+            let (id, before) = state().await;
+            assert_eq!(
+                before,
+                FileViewedState::UNVIEWED,
+                "start from an unviewed file"
+            );
+            client.mark_file_as_viewed(&id, PR_2_FILE).await.unwrap();
+            assert_eq!(state().await.1, FileViewedState::VIEWED);
+            client.unmark_file_as_viewed(&id, PR_2_FILE).await.unwrap();
+            assert_eq!(state().await.1, FileViewedState::UNVIEWED);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_mark_file_as_viewed_not_found() {
+    record_graphql(
+        "graphql_mark_file_as_viewed_not_found",
+        "markFileAsViewed on a pull request node ID that names nothing",
+        |client| async move {
+            client
+                .mark_file_as_viewed("PR_kwDOVk6v9M8AAAAAAAAAAA", "README.md")
+                .await
+                .unwrap_err();
+        },
+    );
+}
+
+/// A path PR #2 doesn't have.
+const NOT_IN_PR_2: &str = "not-in-this-pull-request.md";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn graphql_mark_file_as_viewed_unlisted_path() {
+    record_graphql(
+        "graphql_mark_file_as_viewed_unlisted_path",
+        "markFileAsViewed on PR #2 with a path the pull request doesn't have, reading the \
+         PullRequest query before and after; PR #2's one file stays unviewed",
+        |client| async move {
+            let state = || async {
+                let pr = client
+                    .pull_request("rozed-dev", "playground", 2)
+                    .await
+                    .unwrap();
+                let files: Vec<(String, FileViewedState)> = pr
+                    .files
+                    .unwrap()
+                    .nodes
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .map(|file| (file.path, file.viewer_viewed_state))
+                    .collect();
+                (pr.id, files)
+            };
+            let unviewed = vec![(PR_2_FILE.to_string(), FileViewedState::UNVIEWED)];
+            let (id, before) = state().await;
+            assert_eq!(before, unviewed, "start from an unviewed file");
+            let answer = client.mark_file_as_viewed(&id, NOT_IN_PR_2).await;
+            eprintln!("markFileAsViewed on {NOT_IN_PR_2}: {answer:?}");
+            assert_eq!(state().await.1, unviewed, "PR #2's one file stays unviewed");
         },
     );
 }
@@ -345,5 +457,83 @@ fn rest_pull_304_rate_limit() {
             }
             rate_limit().await.unwrap();
         },
+    );
+}
+
+/// The test bot, whose last review the push histories read.
+const BOT: &str = "rozed-bot";
+
+/// Records `owner/repo#number`'s push history twice, as a poll reads it: first from nothing, then
+/// with the first answer, asking about each page of pushes with its ETag.
+fn record_push_history(name: &str, description: &str, owner: &str, repo: &str, number: i64) {
+    let full_name = format!("{owner}/{repo}");
+    record_with_schema(
+        name,
+        description,
+        &full_name,
+        schema_commit(),
+        |client| async move {
+            let pull = PullRef::new(owner, repo, number);
+            let first = client.push_history(&pull, BOT, None).await.unwrap();
+            let again = client.push_history(&pull, BOT, Some(&first)).await.unwrap();
+            assert_eq!(
+                again, first,
+                "the push history changed while it was recorded"
+            );
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_e2e_14() {
+    record_push_history(
+        "push_history_e2e_14",
+        "rozed-dev/e2e#14's push history, twice: E1's full run, closed. r1-r4 are normal \
+         pushes with rozed-bot's COMMENT review on r2, r5 is GitHub's rebase onto a moved main \
+         (updatePullRequestBranch), and r6 a normal push after it",
+        "rozed-dev",
+        "e2e",
+        14,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_e2e_16() {
+    record_push_history(
+        "push_history_e2e_16",
+        "rozed-dev/e2e#16's push history, twice: E1 open at r3, with rozed-bot's COMMENT review \
+         on r2",
+        "rozed-dev",
+        "e2e",
+        16,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_fd_2212() {
+    record_push_history(
+        "push_history_fd_2212",
+        "sharkdp/fd#2212's push history, twice, as rozed-bot: a public pull request from the fork \
+         voidsipp/fd, two normal pushes, a maintainer's review on the first, and check suites \
+         without pushes",
+        "sharkdp",
+        "fd",
+        2212,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_fd_2202() {
+    record_push_history(
+        "push_history_fd_2202",
+        "sharkdp/fd#2202's push history, twice, as rozed-bot: a merged pull request whose fork was \
+         deleted, so its head branch's pushes can't be read",
+        "sharkdp",
+        "fd",
+        2202,
     );
 }

@@ -1,8 +1,10 @@
 //! The REST client on responses recorded from `rozed-dev/playground`.
 
 use futures::executor::block_on;
+use github::files::FileStatus;
+use github::patch::HunkLine;
 use github::replay::ReplayHttpClient;
-use github::{Conditional, GithubClient, GithubError, Token};
+use github::{Conditional, GithubClient, GithubError, PullRef, Token};
 
 const PULL: &str = "/repos/rozed-dev/playground/pulls/1";
 
@@ -55,6 +57,44 @@ fn a_304_costs_no_rate_limit() {
     let after_304s = core_used();
     assert_eq!(after_200, before + 1);
     assert_eq!(after_304s, after_200);
+}
+
+#[test]
+fn a_pull_requests_files_come_with_their_patches() {
+    let http = ReplayHttpClient::cassette("rest_pull_files");
+    let client = GithubClient::new(http.clone(), Token::new("gho_FAKE"));
+    let files = block_on(client.pull_files(&PullRef::new("rozed-dev", "playground", 2))).unwrap();
+
+    let [file] = &files[..] else {
+        panic!("expected PR #2's one file, got {files:?}");
+    };
+    assert_eq!(file.filename, "stack-b.md");
+    assert_eq!(file.status, FileStatus::Added);
+    // The head GitHub listed it at, PR #2's.
+    assert_eq!(
+        file.head(),
+        Some("d712aa7652cc723fee5fd9b3eba867b0480d40da")
+    );
+    assert_eq!((file.additions, file.deletions), (1, 0));
+    let patch = file.parsed_patch().unwrap().unwrap();
+    let [hunk] = &patch.hunks[..] else {
+        panic!("expected one hunk, got {patch:?}");
+    };
+    assert_eq!((hunk.old.clone(), hunk.new.clone()), (0..0, 0..1));
+    assert_eq!(
+        hunk.lines,
+        [HunkLine::Added(
+            "Layer B of the rozed stack fixture.".into()
+        )]
+    );
+    assert!(!patch.new_missing_newline);
+
+    let seen = http.seen();
+    assert_eq!(
+        seen[0].url,
+        "https://api.github.com/repos/rozed-dev/playground/pulls/2/files?per_page=100"
+    );
+    assert_eq!(seen[0].header("authorization"), Some("token gho_FAKE"));
 }
 
 #[test]

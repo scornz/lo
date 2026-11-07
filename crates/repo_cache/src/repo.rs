@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use sha2::{Digest as _, Sha256};
+
 use crate::cache::{GitEnv, stamp_last_used};
 use crate::cat_file::{CatFile, ReadError};
 use crate::diff::{self, ChangedFile};
-use crate::git::{GitCommand, Location, Token, failure_message};
+use crate::git::{GitCommand, GitVersion, Location, Token, failure_message};
 use crate::lock::RepoLock;
 use crate::oid::{self, Oid};
 use crate::progress::{Progress, ProgressFn};
@@ -22,15 +24,18 @@ use crate::{Error, FetchFailure};
 /// call them from a background task, one step at a time: fetch, list the changed files, read
 /// them, and check out only for a trusted repository.
 ///
-/// Everything rozed fetches goes under its own refs, keyed by pull request so that no two branch
+/// Everything Lo fetches goes under its own refs, keyed by pull request so that no two branch
 /// names can collide, and nothing fetched is ever lost to a force-push:
 ///
-/// - `refs/rozed/pull/<n>/head` and `refs/rozed/pull/<n>/base`: pull request `n`'s head and its
+/// - `refs/lo/pull/<n>/head` and `refs/lo/pull/<n>/base`: pull request `n`'s head and its
 ///   base branch's tip, as last fetched.
-/// - `refs/rozed/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
-/// - `refs/rozed/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
-/// - `refs/rozed/commits/<oid>`: commits fetched by ID.
-/// - `refs/rozed/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
+/// - `refs/lo/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
+/// - `refs/lo/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
+/// - `refs/lo/pull/<n>/branch-bases/<hash>`: the tip of each branch pull request `n` was
+///   fetched against, as last fetched, by the SHA-256 of the branch's name (any branch name fits
+///   in one ref then, and none is another's folder).
+/// - `refs/lo/commits/<oid>`: commits fetched by ID.
+/// - `refs/lo/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
 ///   while that process has the clone open (see [`crate::Comparison`]).
 #[derive(Clone)]
 pub struct Repo {
@@ -50,16 +55,27 @@ struct Shared {
     /// Held shared while this repository is open, so cleanup leaves it alone.
     _in_use: RepoLock,
     token: Option<Token>,
+    access: Access,
     cat_file: Mutex<Option<CatFile>>,
     /// The replayed trees this open clone has pinned, each once, never unpinned while it's open.
     replays: Mutex<HashSet<Oid>>,
+}
+
+/// What a [`Repo`] may do with its clone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Access {
+    /// Fetch into it, check out from it, and download what reading needs.
+    Fetch,
+    /// Read what's there, offline: no writes, no lock, and no downloads where git can be told so
+    /// ([`GitVersion::NO_LAZY_FETCH`]).
+    ReadOffline,
 }
 
 /// A pull request to fetch, as GitHub's API describes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequestRefs {
     pub number: u64,
-    /// `head.sha`: the head GitHub showed, which rozed checks the fetched head against.
+    /// `head.sha`: the head GitHub showed, which Lo checks the fetched head against.
     pub head: Option<Oid>,
     /// `base.ref`: the branch it merges into.
     pub base_branch: String,
@@ -113,6 +129,7 @@ impl fmt::Debug for Repo {
 }
 
 impl Repo {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         env: Arc<GitEnv>,
         name: String,
@@ -121,6 +138,7 @@ impl Repo {
         lock_path: PathBuf,
         in_use: RepoLock,
         token: Option<Token>,
+        access: Access,
     ) -> Self {
         Self {
             shared: Arc::new(Shared {
@@ -131,6 +149,7 @@ impl Repo {
                 lock_path,
                 _in_use: in_use,
                 token,
+                access,
                 cat_file: Mutex::new(None),
                 replays: Mutex::new(HashSet::new()),
             }),
@@ -170,15 +189,15 @@ impl Repo {
     /// Fetches a pull request's head and its base branch's tip in one fetch, and pins both.
     ///
     /// The head comes from `refs/pull/<n>/head`, which holds the head of a pull request from a
-    /// fork too. When GitHub's API reported another head, rozed fetches that one by ID and uses it,
+    /// fork too. When GitHub's API reported another head, Lo fetches that one by ID and uses it,
     /// since it's what GitHub shows; [`FetchedPull::head_source`] says which it used. When the
     /// base branch is gone, the API's base commit stands in for its tip.
     pub fn fetch_pull(&self, pull: &PullRequestRefs) -> Result<FetchedPull, Error> {
         self.check_branch_name(&pull.base_branch)?;
         let number = pull.number;
         let what = format!("pull request #{number}");
-        let head_ref = format!("refs/rozed/pull/{number}/head");
-        let base_ref = format!("refs/rozed/pull/{number}/base");
+        let head_ref = format!("refs/lo/pull/{number}/head");
+        let base_ref = format!("refs/lo/pull/{number}/base");
         let head_spec = format!("+refs/pull/{number}/head:{head_ref}");
         let branch = format!("refs/heads/{}", pull.base_branch);
 
@@ -211,10 +230,8 @@ impl Repo {
         let pull_ref = self.resolve(&head_ref)?;
         let base_tip = self.resolve(&base_ref)?;
         self.pin(&revision_ref(number, &pull_ref), &pull_ref)?;
-        self.pin(
-            &format!("refs/rozed/pull/{number}/bases/{base_tip}"),
-            &base_tip,
-        )?;
+        self.pin(&base_ref_for(number, &base_tip), &base_tip)?;
+        self.pin(&branch_base_ref(number, &pull.base_branch), &base_tip)?;
 
         let (head, head_source) = match &pull.head {
             Some(api) if *api != pull_ref => {
@@ -254,7 +271,7 @@ impl Repo {
         let output = self.run(self.git().args([
             "for-each-ref",
             "--format=%(objectname)",
-            &format!("refs/rozed/pull/{number}/revs/"),
+            &format!("refs/lo/pull/{number}/revs/"),
         ]))?;
         String::from_utf8_lossy(&output)
             .lines()
@@ -262,8 +279,92 @@ impl Repo {
             .collect()
     }
 
+    /// Whether `base` was ever fetched as the tip of pull request `number`'s base branch, so
+    /// the clone has it pinned. Reads only refs, so it works offline.
+    pub fn has_base(&self, number: u64, base: &Oid) -> Result<bool, Error> {
+        Ok(self.pinned(&base_ref_for(number, base))?.as_ref() == Some(base))
+    }
+
+    /// The tip of `branch` as last fetched as pull request `number`'s base, or `None` when the
+    /// pull request was never fetched against that branch. Reads only refs, so it works
+    /// offline.
+    pub fn branch_base(&self, number: u64, branch: &str) -> Result<Option<Oid>, Error> {
+        self.pinned(&branch_base_ref(number, branch))
+    }
+
+    /// The commit pinned at exactly `reference`, if any.
+    fn pinned(&self, reference: &str) -> Result<Option<Oid>, Error> {
+        let output =
+            self.run(
+                self.git()
+                    .args(["for-each-ref", "--format=%(objectname)", reference]),
+            )?;
+        String::from_utf8_lossy(&output)
+            .lines()
+            .next()
+            .map(str::parse)
+            .transpose()
+    }
+
+    /// Whether the clone has both sides of every file that changed from `from` to `to`, so their
+    /// diff and contents read without downloading anything. Never downloads anything itself.
+    /// Submodules aren't in this repository and don't count.
+    pub fn has_diff_contents(&self, from: &Oid, to: &Oid) -> Result<bool, Error> {
+        // Without rename detection or line counts, git compares trees alone, which a partial
+        // clone always has, and reads no file.
+        let output = self.run(self.git().args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "-z",
+            "--raw",
+            "--no-abbrev",
+            from.as_str(),
+            to.as_str(),
+            "--",
+        ]))?;
+        let blobs = raw_diff_blobs(&output)?;
+        if blobs.is_empty() {
+            return Ok(true);
+        }
+        let missing = if self.shared.env.git.version() >= GitVersion::NO_LAZY_FETCH {
+            // Told not to download, cat-file says "missing" for what isn't there.
+            let input: String = blobs.iter().map(|oid| format!("{oid}\n")).collect();
+            let output = self
+                .git()
+                .env(NO_LAZY_FETCH_VAR, "1")
+                .args(["cat-file", "--batch-check=%(objectname)"])
+                .run_with_input(Some(input.as_bytes()))?;
+            String::from_utf8_lossy(&output)
+                .lines()
+                .filter_map(|line| line.strip_suffix(" missing"))
+                .map(str::parse)
+                .collect::<Result<Vec<Oid>, _>>()?
+        } else {
+            // Older git can't be told so, but rev-list's `--missing` never downloads: it lists
+            // both trees' files, marking those the clone lacks with `?`.
+            let output = self.run(self.git().args([
+                "rev-list",
+                "--objects",
+                "--missing=print",
+                "--no-walk",
+                from.as_str(),
+                to.as_str(),
+                "--",
+            ]))?;
+            String::from_utf8_lossy(&output)
+                .lines()
+                .filter_map(|line| line.strip_prefix('?'))
+                .map(str::parse)
+                .collect::<Result<Vec<Oid>, _>>()?
+        };
+        Ok(!blobs.iter().any(|blob| missing.contains(blob)))
+    }
+
     /// Makes sure commit `oid` is in the clone, fetching it by ID if it isn't, and pins it at
-    /// `refs/rozed/commits/<oid>`. For a revision rozed knows from GitHub's API but never fetched.
+    /// `refs/lo/commits/<oid>`. For a revision Lo knows from GitHub's API but never fetched.
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.
     pub fn fetch_commit(&self, oid: &Oid) -> Result<(), Error> {
         let _lock = self.lock()?;
@@ -271,8 +372,199 @@ impl Repo {
         self.fetch_by_id_locked(
             &format!("commit {}", oid.short(7)),
             oid,
-            &format!("refs/rozed/commits/{oid}"),
+            &format!("refs/lo/commits/{oid}"),
         )
+    }
+
+    /// Makes sure every head in `heads` is in the clone and pins each at
+    /// `refs/lo/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
+    /// the clone lacks are fetched by ID in one fetch. Returns the ones GitHub no longer has
+    /// (design §11, "Missing revisions"), which are left out; any other failure fails the whole
+    /// fetch.
+    ///
+    /// GitHub stops a fetch at the first commit it doesn't have, naming it, so each lost one costs
+    /// a fetch of the rest again. The clone remembers them per pull request
+    /// ([`Self::unavailable_revisions`]), so they're never asked for again.
+    pub fn fetch_commits(&self, number: u64, heads: &[Oid]) -> Result<Vec<Oid>, Error> {
+        let _lock = self.lock()?;
+        self.stamp_used()?;
+        let mut wanted: Vec<&Oid> = Vec::new();
+        for oid in heads {
+            if !wanted.contains(&oid) {
+                wanted.push(oid);
+            }
+        }
+        let lost_before = self.remembered_unavailable(number)?;
+        let present = self.commits_present(&wanted)?;
+        let mut unavailable: Vec<Oid> = Vec::new();
+        let mut missing: Vec<Oid> = Vec::new();
+        for (oid, present) in wanted.iter().zip(&present) {
+            match (present, lost_before.contains(oid)) {
+                (true, _) => {}
+                (false, true) => unavailable.push((*oid).clone()),
+                (false, false) => missing.push((*oid).clone()),
+            }
+        }
+        let what = match missing.as_slice() {
+            [oid] => format!("pull request #{number}'s revision {}", oid.short(7)),
+            _ => format!("{} of pull request #{number}'s revisions", missing.len()),
+        };
+        let mut newly_lost = Vec::new();
+        while !missing.is_empty() {
+            let refspecs: Vec<String> = (missing.iter())
+                .map(|oid| format!("+{oid}:{}", revision_ref(number, oid)))
+                .collect();
+            let refspecs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
+            match self.fetch_locked(&what, &refspecs) {
+                Ok(()) => break,
+                Err(Error::Fetch { message, .. })
+                    if let Some(lost) =
+                        (missing.iter()).position(|oid| is_lost_commit(&message, oid)) =>
+                {
+                    newly_lost.push(missing.remove(lost));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        // Heads the clone has now, from another pull request's fetch say, aren't lost any more.
+        let still_lost: Vec<&Oid> = (lost_before.iter())
+            .filter(|oid| !wanted.contains(oid) || unavailable.contains(oid))
+            .collect();
+        let still_lost = (still_lost.iter().zip(self.commits_present(&still_lost)?))
+            .filter(|(_, present)| !present)
+            .map(|(oid, _)| (*oid).clone());
+        let lost: Vec<Oid> = still_lost.chain(newly_lost.iter().cloned()).collect();
+        if lost != lost_before {
+            self.remember_unavailable(number, &lost)?;
+        }
+        unavailable.extend(newly_lost);
+        let pins: Vec<&Oid> = (wanted.into_iter())
+            .filter(|oid| !unavailable.contains(oid))
+            .collect();
+        // Also checks each is a commit.
+        if let Some(position) = (self.commits_present(&pins)?.iter()).position(|present| !present) {
+            return Err(Error::Git {
+                command: "git fetch".into(),
+                message: format!("{} isn't a commit", pins[position]),
+            });
+        }
+        let input: String = (pins.iter())
+            .map(|oid| format!("update {} {oid}\n", revision_ref(number, oid)))
+            .collect();
+        if !input.is_empty() {
+            (self.git().args(["update-ref", "--stdin"])).run_with_input(Some(input.as_bytes()))?;
+        }
+        Ok(unavailable)
+    }
+
+    /// The heads of pull request `number` that GitHub no longer had when
+    /// [`Self::fetch_commits`] asked for them, and that the clone still lacks. Reads only the
+    /// clone, so it works offline.
+    pub fn unavailable_revisions(&self, number: u64) -> Result<Vec<Oid>, Error> {
+        let remembered = self.remembered_unavailable(number)?;
+        let remembered_refs: Vec<&Oid> = remembered.iter().collect();
+        let present = self.commits_present(&remembered_refs)?;
+        Ok((remembered.iter().zip(present))
+            .filter(|(_, present)| !present)
+            .map(|(oid, _)| oid.clone())
+            .collect())
+    }
+
+    /// The heads of pull request `number` noted as lost. A line that isn't an ID, as a write cut
+    /// short could leave, is skipped.
+    fn remembered_unavailable(&self, number: u64) -> Result<Vec<Oid>, Error> {
+        let path = self.unavailable_file(number);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::io(format!("reading {}", path.display()))(error)),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|line| match line.parse() {
+                Ok(oid) => Some(oid),
+                Err(_) => {
+                    log::warn!(
+                        "{}: skipping {line:?} in {}",
+                        self.shared.name,
+                        path.display()
+                    );
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Notes `lost` as pull request `number`'s heads GitHub no longer has, replacing the file
+    /// whole, so a reader never sees half of it. The caller holds the lock.
+    fn remember_unavailable(&self, number: u64, lost: &[Oid]) -> Result<(), Error> {
+        let path = self.unavailable_file(number);
+        let dir = path.parent().expect("the file is in a folder");
+        std::fs::create_dir_all(dir).map_err(Error::io(format!("creating {}", dir.display())))?;
+        let text: String = lost.iter().map(|oid| format!("{oid}\n")).collect();
+        let temporary = dir.join(format!(".pull-{number}.{}", std::process::id()));
+        std::fs::write(&temporary, text)
+            .map_err(Error::io(format!("writing {}", temporary.display())))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(Error::io(format!("replacing {}", path.display())))
+    }
+
+    fn unavailable_file(&self, number: u64) -> PathBuf {
+        (self.shared.git_dir)
+            .join(UNAVAILABLE_DIR)
+            .join(format!("pull-{number}"))
+    }
+
+    /// Whether each of `oids` is a commit in the clone, in one `git cat-file`, never downloading
+    /// anything. Older git can't be told not to download, so it asks one by one with `rev-list`.
+    fn commits_present(&self, oids: &[&Oid]) -> Result<Vec<bool>, Error> {
+        if oids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.shared.env.git.version() < GitVersion::NO_LAZY_FETCH {
+            return oids.iter().map(|oid| self.has_commit(oid)).collect();
+        }
+        let input: String = oids.iter().map(|oid| format!("{oid}\n")).collect();
+        let output = self
+            .git()
+            .env(NO_LAZY_FETCH_VAR, "1")
+            .args(["cat-file", "--batch-check=%(objectname) %(objecttype)"])
+            .run_with_input(Some(input.as_bytes()))?;
+        let output = String::from_utf8_lossy(&output);
+        let mut lines = output.lines();
+        Ok(oids
+            .iter()
+            .map(|oid| {
+                let line = lines.next().unwrap_or_default();
+                line.strip_prefix(oid.as_str()) == Some(" commit")
+            })
+            .collect())
+    }
+
+    /// The commits on `head` that `base` doesn't have, oldest first and each after its parents
+    /// (`git rev-list --topo-order --reverse <base>..<head>`): with its base as `base`, a pull
+    /// request's current commits, as `review::revisions::build_revisions` takes them. For a
+    /// merged pull request, that's its base as it was (`review::revisions::base_tip_at`), since
+    /// today's base branch holds every commit a merge commit or a fast-forward merged. Reads only
+    /// commits, which the clone keeps whole, so it works offline. Both must be in the clone
+    /// already: a missing one is [`Error::NotFetched`], and is never downloaded.
+    pub fn pull_commits(&self, base: &Oid, head: &Oid) -> Result<Vec<Oid>, Error> {
+        for oid in [base, head] {
+            if !self.has_commit(oid)? {
+                return Err(Error::NotFetched { oid: oid.clone() });
+            }
+        }
+        let output = self.run(self.git().args([
+            "rev-list",
+            "--topo-order",
+            "--reverse",
+            &format!("{base}..{head}"),
+            "--",
+        ]))?;
+        String::from_utf8_lossy(&output)
+            .lines()
+            .map(str::parse)
+            .collect()
     }
 
     /// Fetches commit `oid` by ID unless the clone has it, and pins it at `pin`. The caller holds
@@ -549,9 +841,26 @@ impl Repo {
         stamp_last_used(&self.shared.git_dir, SystemTime::now())
     }
 
-    /// Waits for the lock on this repository's clone and checkouts.
+    /// Waits for the lock on this repository's clone and checkouts, before writing to them. A
+    /// clone opened to read offline refuses: it never writes.
     pub(crate) fn lock(&self) -> Result<RepoLock, Error> {
+        if self.shared.access == Access::ReadOffline {
+            return Err(Error::ReadOnly {
+                name: self.shared.name.clone(),
+                what: "fetch or check out",
+            });
+        }
         RepoLock::acquire(&self.shared.lock_path)
+    }
+
+    /// Whether the clone was opened to read offline: it never writes or downloads.
+    pub(crate) fn is_offline(&self) -> bool {
+        self.shared.access == Access::ReadOffline
+    }
+
+    /// The version of the git that runs the clone's commands.
+    pub(crate) fn git_version(&self) -> crate::GitVersion {
+        self.shared.env.git.version()
     }
 
     /// A git command on the clone, signed in when the repository has a token.
@@ -560,11 +869,19 @@ impl Repo {
     }
 
     /// A git command on the repository at `location`, such as a checkout of the clone, signed in
-    /// like [`Self::git`].
+    /// like [`Self::git`]. Offline, it never downloads, where git can be told so.
     pub(crate) fn git_at(&self, location: Location<'_>) -> GitCommand {
-        self.shared
+        let command = self
+            .shared
             .env
-            .command(location, self.shared.token.as_ref())
+            .command(location, self.shared.token.as_ref());
+        if self.shared.access == Access::ReadOffline
+            && self.shared.env.git.version() >= GitVersion::NO_LAZY_FETCH
+        {
+            command.env(NO_LAZY_FETCH_VAR, "1")
+        } else {
+            command
+        }
     }
 
     /// Moves `path`, in the cache, out of the way and deletes it.
@@ -594,7 +911,63 @@ fn is_lost_commit(message: &str, oid: &Oid) -> bool {
 
 /// Where pull request `number`'s head `oid` is pinned.
 fn revision_ref(number: u64, oid: &Oid) -> String {
-    format!("refs/rozed/pull/{number}/revs/{oid}")
+    format!("refs/lo/pull/{number}/revs/{oid}")
+}
+
+/// Where pull request `number`'s base tip `oid` is pinned.
+fn base_ref_for(number: u64, oid: &Oid) -> String {
+    format!("refs/lo/pull/{number}/bases/{oid}")
+}
+
+/// Where the tip of `branch`, as last fetched as pull request `number`'s base, is pinned.
+fn branch_base_ref(number: u64, branch: &str) -> String {
+    let hash: String = Sha256::digest(branch.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("refs/lo/pull/{number}/branch-bases/{hash}")
+}
+
+/// The folder in a clone where each pull request's heads GitHub no longer has are noted, one
+/// file per pull request.
+const UNAVAILABLE_DIR: &str = "lo-unavailable";
+
+/// The variable that stops git downloading what a partial clone lacks.
+pub(crate) const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
+
+/// The blobs on either side of `git diff --raw -z --no-renames` output, without submodules'
+/// commits or the all-zero ID of a side that isn't there. Each entry is its metadata, then its
+/// path, so a path that starts with `:` is never taken for an entry.
+fn raw_diff_blobs(output: &[u8]) -> Result<Vec<Oid>, Error> {
+    let mut blobs = Vec::new();
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    while let Some(field) = fields.next() {
+        // ":<old mode> <new mode> <old oid> <new oid> <status>", then the path.
+        let _path = fields.next();
+        let Some(entry) = field.strip_prefix(b":") else {
+            return Err(Error::Git {
+                command: "git diff --raw".into(),
+                message: format!(
+                    "printed an unexpected entry {:?}",
+                    String::from_utf8_lossy(field)
+                ),
+            });
+        };
+        let entry = String::from_utf8_lossy(entry);
+        let parts: Vec<&str> = entry.split(' ').collect();
+        let [old_mode, new_mode, old_oid, new_oid, ..] = parts.as_slice() else {
+            continue;
+        };
+        for (mode, oid) in [(old_mode, old_oid), (new_mode, new_oid)] {
+            if *mode == "160000" || oid.bytes().all(|byte| byte == b'0') {
+                continue;
+            }
+            blobs.push(oid.parse()?);
+        }
+    }
+    Ok(blobs)
 }
 
 fn unexpected_ls_tree(entry: &[u8]) -> Error {
@@ -604,5 +977,138 @@ fn unexpected_ls_tree(entry: &[u8]) -> Error {
             "printed an unexpected entry {:?}",
             String::from_utf8_lossy(entry)
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{Git, PullRequestRefs, RepoCache};
+
+    /// The test's own git in `dir`, without the user's config.
+    fn plain_git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Lo test")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
+            .env("GIT_COMMITTER_NAME", "Lo test")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    /// The blobs `rev` reaches that the clone at `git_dir` hasn't downloaded.
+    fn missing(git_dir: &Path, rev: &Oid) -> Vec<String> {
+        plain_git(
+            git_dir,
+            &[
+                "rev-list",
+                "--objects",
+                "--missing=print",
+                rev.as_str(),
+                "--",
+            ],
+        )
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn older_git_checks_whats_missing_without_downloading_it() {
+        let dir = TempDir::new().unwrap();
+        let server = dir.path().join("remotes/owner/repo.git");
+        fs::create_dir_all(&server).unwrap();
+        plain_git(&server, &["init", "-q", "--bare"]);
+        plain_git(&server, &["config", "uploadpack.allowFilter", "true"]);
+        plain_git(
+            &server,
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        );
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).unwrap();
+        plain_git(&work, &["init", "-q", "-b", "trunk"]);
+        fs::write(work.join("a.txt"), "a\n").unwrap();
+        plain_git(&work, &["add", "-A"]);
+        plain_git(&work, &["commit", "-q", "-m", "base"]);
+        let server_path = server.to_str().unwrap();
+        plain_git(&work, &["push", "-q", server_path, "HEAD:refs/heads/trunk"]);
+        fs::write(work.join("a.txt"), "a2\n").unwrap();
+        fs::write(work.join("b.txt"), "b\n").unwrap();
+        plain_git(&work, &["add", "-A"]);
+        plain_git(&work, &["commit", "-q", "-m", "change"]);
+        plain_git(&work, &["push", "-q", server_path, "HEAD:refs/pull/1/head"]);
+
+        // A git that says it's 2.43, which can't be told not to download.
+        let old = GitVersion {
+            major: 2,
+            minor: 43,
+            patch: 0,
+        };
+        let git = Git::find().unwrap().with_version(old);
+        let cache = RepoCache::new(dir.path().join("cache"), git)
+            .unwrap()
+            .with_remote_base(format!("file://{}", dir.path().join("remotes").display()));
+        let repo = cache.open("owner", "repo", None).unwrap();
+        let fetched = repo
+            .fetch_pull(&PullRequestRefs {
+                number: 1,
+                head: None,
+                base_branch: "trunk".into(),
+                base: None,
+            })
+            .unwrap();
+        let base = repo
+            .merge_base(&fetched.head, &fetched.base_tip)
+            .unwrap()
+            .unwrap();
+        let git_dir = repo.git_dir().to_path_buf();
+        let before = missing(&git_dir, &fetched.head);
+        assert!(!before.is_empty());
+
+        // The server is still there, so a check that could download would.
+        let offline = cache.open_offline("owner", "repo").unwrap().unwrap();
+        assert!(!offline.has_diff_contents(&base, &fetched.head).unwrap());
+        assert_eq!(missing(&git_dir, &fetched.head), before);
+
+        // Once the diff was read online, the clone has everything it needs.
+        repo.changed_files(&base, &fetched.head).unwrap();
+        assert!(offline.has_diff_contents(&base, &fetched.head).unwrap());
+    }
+
+    #[test]
+    fn a_raw_diff_names_both_sides_blobs_but_not_submodules_or_missing_sides() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let c = "c".repeat(40);
+        let zero = "0".repeat(40);
+        // The second path starts with a colon and has spaces, as a file's name can: read as an
+        // entry, it would name blobs that aren't there.
+        let output = format!(
+            ":100644 100644 {a} {b} M\0x.rs\0:000000 100644 {zero} {c} A\0:x y z w\0\
+             :160000 160000 {a} {b} M\0sub\0"
+        );
+        let blobs: Vec<String> = raw_diff_blobs(output.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|oid| oid.to_string())
+            .collect();
+        assert_eq!(blobs, [a, b, c]);
     }
 }

@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files or the
-  # license skip the Rust job. ci-ok passes when it's skipped.
+  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files, the license
+  # or the e2e fixture scripts skip the Rust job. ci-ok passes when it's skipped.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
           rust=false
           while IFS= read -r file; do
             case "$file" in
-              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE) ;;
+              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE | script/e2e/*) ;;
               *)
                 echo "$file changed, so the Rust job runs."
                 rust=true
@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
           install_args: node pnpm
 
@@ -81,6 +81,32 @@ jobs:
       - name: Check the agent symlinks
         run: script/check-symlinks.sh
 
+  # Fails while a line still uses the project's first name outside the names the rename keeps, such
+  # as one from a branch merged without script/rename-to-lo.sh. Goes when that script does.
+  rename:
+    name: rename
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that only the kept names use the first name
+        run: script/rename-to-lo.sh --check
+
+  # The e2e fixture scripts skip the Rust job, so this is their only check. ubuntu-latest ships
+  # shellcheck.
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the e2e fixture scripts
+        run: shellcheck --version && shellcheck script/e2e/*.sh
+
   rust:
     name: rust
     needs: changes
@@ -103,7 +129,7 @@ jobs:
           persist-credentials: false
 
       # cmake, pinned in mise.toml, builds wasmtime for Zed's tree-sitter.
-      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
           install_args: cmake
 
@@ -119,7 +145,7 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
-      # xtask (crates/xtask) is its own workspace, so the steps for rozed's workspace skip it.
+      # xtask (crates/xtask) is its own workspace, so the steps for Lo's workspace skip it.
       - name: Check xtask
         run: |
           cargo fmt --check --manifest-path crates/xtask/Cargo.toml
@@ -131,7 +157,7 @@ jobs:
       - name: Check the Cargo settings copied from Zed
         run: cargo --locked xtask sync-zed --check
 
-      # Fails when the set of Zed crates linked into rozed changes; see script/zed-crates.txt.
+      # Fails when the set of Zed crates linked into Lo changes; see script/zed-crates.txt.
       - name: Check the Zed crates compiled in
         run: script/check-zed-crates.sh
 
@@ -150,7 +176,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, commitlint, symlinks, rust]
+    needs: [changes, commitlint, symlinks, rename, shellcheck, rust]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any job failed or was cancelled

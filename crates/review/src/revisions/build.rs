@@ -371,7 +371,9 @@ impl<'a> Heads<'a> {
                     head.sighted(*at);
                 }
             }
-            PushRecord::Review { commit: head, at } | PushRecord::Polled { head, at } => {
+            PushRecord::Review { commit: head, at }
+            | PushRecord::ReviewedCommit { commit: head, at }
+            | PushRecord::Polled { head, at } => {
                 if let Some(head) = self.see(head, source) {
                     head.sighted(*at);
                 }
@@ -575,6 +577,28 @@ mod tests {
 
     fn forced(revisions: &Revisions) -> Vec<Option<bool>> {
         revisions.iter().map(|revision| revision.forced).collect()
+    }
+
+    #[test]
+    fn a_reviewed_commit_that_was_never_pushed_is_a_revision_of_its_own_source() {
+        // a2 came in a3's push, and a review through the API was made on it.
+        let revisions = build(
+            &[
+                activity(None, "a1", 10, false),
+                activity(Some("a1"), "a3", 30, false),
+                PushRecord::ReviewedCommit {
+                    commit: "a2".into(),
+                    at: at(40),
+                },
+            ],
+            &["a1", "a2", "a3"],
+            "a3",
+        );
+
+        assert_eq!(heads(&revisions), ["a1", "a2", "a3"]);
+        let a2 = revisions.get("a2").unwrap();
+        assert_eq!(a2.sources, [Source::ReviewedCommit].into());
+        assert_eq!(a2.pushed_at, PushedAt::By(at(30)));
     }
 
     #[test]

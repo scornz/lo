@@ -2,7 +2,7 @@
 //!
 //! GitHub takes a line comment only on a line of the pull request's diff: a line of one of a
 //! file's hunks, on the side it's on. A removed line takes one on the left, the base's side, and
-//! an added line on the right. An unchanged line is on both sides; rozed puts its comments on the
+//! an added line on the right. An unchanged line is on both sides; Lo puts its comments on the
 //! right, as GitHub's docs advise, so they show between revisions and can suggest a change. Each
 //! end of a range must be a line of the diff, but the two may be in different hunks, and a range
 //! may start on the other side, as a range from a removed line to the added line that replaces it
@@ -11,7 +11,7 @@
 //! Checked against GitHub: its API refuses a line outside the hunks. REST answers "could not be
 //! resolved", `addPullRequestReview` "Line could not be resolved", and `addPullRequestReviewThread`
 //! returns a null thread with no error. GitHub's newer Files changed page also takes comments on
-//! unchanged lines outside the hunks of a changed file, but its API doesn't, so rozed keeps to the
+//! unchanged lines outside the hunks of a changed file, but its API doesn't, so Lo keeps to the
 //! hunks.
 
 use std::fmt;
@@ -372,9 +372,9 @@ index 3b18e51..a7c3d2f 100644
 --- a/README.md
 +++ b/README.md
 @@ -1 +1 @@
--rozed
+-Lo
 \\ No newline at end of file
-+rozed reads pull requests.
++Lo reads pull requests.
 \\ No newline at end of file
 ";
 

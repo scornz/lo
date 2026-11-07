@@ -1,4 +1,4 @@
-//! rozed's own SQLite database, `rozed.sqlite`, through Zed's `sqlez`.
+//! Lo's own SQLite database, `lo.sqlite`, through Zed's `sqlez`.
 //!
 //! It's a separate file from Zed's `db.sqlite`, and unlike Zed's it never falls back to an
 //! in-memory database: it holds durable state, such as which account to use for each owner, and
@@ -14,13 +14,13 @@ use sqlez::statement::Statement;
 use sqlez::thread_safe_connection::ThreadSafeConnection;
 use sqlez_macros::sql;
 
-/// rozed's database connection. Reads run on the calling thread; writes are queued to one
+/// Lo's database connection. Reads run on the calling thread; writes are queued to one
 /// background thread.
 #[derive(Clone)]
-pub struct RozedDb(ThreadSafeConnection);
+pub struct LoDb(ThreadSafeConnection);
 
-impl Domain for RozedDb {
-    const NAME: &str = "rozed";
+impl Domain for LoDb {
+    const NAME: &str = "lo"; // sqlez keys the migrations by it: a code name, not text.
     const MIGRATIONS: &[&str] = &[
         sql!(
             // One row per signed-in account. Tokens aren't here: they're in the token store.
@@ -50,7 +50,7 @@ impl Domain for RozedDb {
         ),
         sql!(
             // GitHub's answers, cached per account: a reopened PR shows at once, its first poll can
-            // still be a free 304, and offline rozed shows what it last saw. The only table that's
+            // still be a free 304, and offline Lo shows what it last saw. The only table that's
             // ever cleared; removing an account removes its rows.
             CREATE TABLE pr_cache(
                 host TEXT NOT NULL,
@@ -86,6 +86,73 @@ impl Domain for RozedDb {
                 PRIMARY KEY(host, owner, repo, number)
             ) STRICT;
         ),
+        sql!(
+            // Where each file was marked viewed on this Mac: the head on screen when Lo marked
+            // it, per account. Not cached data, so clearing the cache keeps it; removing the
+            // account removes its rows.
+            CREATE TABLE viewed_files(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The file's path in the pull request, as GitHub names it.
+                path TEXT NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                viewed_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, path),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
+        sql!(
+            // The account to open one repository's PRs with, when the account chosen for its
+            // owner can't see it and several others can. It wins over the owner's choice for
+            // this repository only.
+            CREATE TABLE repo_accounts(
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                login TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY(host, owner, repo),
+                FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
+        sql!(
+            // Every head an account's poller saw on a pull request, and when it first saw it: one
+            // of the sources of the pull request's revisions. Not cached data, so clearing the
+            // cache keeps them; removing the account removes its rows.
+            CREATE TABLE seen_heads(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                first_seen INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, head),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+
+            // "Last seen here": the head of the newest revision on screen when an account last
+            // left a pull request on this Mac. Kept like seen_heads.
+            CREATE TABLE last_seen(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                seen_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
     ];
 }
 
@@ -99,7 +166,7 @@ const CONNECTION_INITIALIZE_QUERY: &str = sql!(
     PRAGMA foreign_keys=TRUE;
 );
 
-/// Where rozed's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
+/// Where Lo's database lives: next to Zed's, in `0-dev` for debug builds and `0-stable` for
 /// release builds, so a debug build's accounts never mix with a release build's. Their tokens are
 /// kept apart the same way ([`crate::credentials::server_for`]).
 pub fn default_path() -> PathBuf {
@@ -109,10 +176,10 @@ pub fn default_path() -> PathBuf {
     };
     paths::database_dir()
         .join(format!("0-{scope}"))
-        .join("rozed.sqlite")
+        .join("lo.sqlite")
 }
 
-impl RozedDb {
+impl LoDb {
     /// Opens or creates the database at `path`, running its migrations.
     pub async fn open(path: &Path) -> Result<Self> {
         let dir = path.parent().context("the database path has no folder")?;
@@ -199,7 +266,8 @@ impl RozedDb {
         self.0
             .write(move |connection| {
                 connection.with_savepoint("delete_account", || {
-                    // Its owners and cached answers go with it, by their foreign keys.
+                    // Its owners, repositories and cached answers go with it, by their foreign
+                    // keys.
                     connection.exec_bound::<(String, String)>(sql!(
                         DELETE FROM accounts WHERE host = ?1 AND login = ?2
                     ))?((host.clone(), login.clone()))?;
@@ -233,12 +301,39 @@ impl RozedDb {
             })
             .await
     }
+
+    /// The account remembered for one repository, if any, which wins over its owner's.
+    pub fn repo_account(&self, host: &str, owner: &str, repo: &str) -> Result<Option<String>> {
+        self.0.select_row_bound::<(&str, &str, &str), String>(sql!(
+            SELECT login FROM repo_accounts WHERE host = ?1 AND owner = ?2 AND repo = ?3
+        ))?((host, owner, repo))
+    }
+
+    pub async fn set_repo_account(
+        &self,
+        host: String,
+        owner: String,
+        repo: String,
+        login: String,
+    ) -> Result<()> {
+        self.0
+            .write(move |connection| {
+                connection.exec_bound::<(String, String, String, String)>(sql!(
+                    INSERT INTO repo_accounts(host, owner, repo, login) VALUES (?1, ?2, ?3, ?4)
+                    ON CONFLICT(host, owner, repo) DO UPDATE SET
+                        owner = excluded.owner,
+                        repo = excluded.repo,
+                        login = excluded.login
+                ))?((host, owner, repo, login))
+            })
+            .await
+    }
 }
 
 /// How an account was added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountSource {
-    /// rozed's own sign-in, GitHub's device flow.
+    /// Lo's own sign-in, GitHub's device flow.
     DeviceFlow,
     /// Imported from the `gh` CLI.
     Gh,
@@ -348,7 +443,7 @@ mod tests {
     #[test]
     fn accounts_round_trip_and_update_in_place() {
         futures::executor::block_on(async {
-            let db = RozedDb::open_test("accounts_round_trip").await;
+            let db = LoDb::open_test("accounts_round_trip").await;
             assert_eq!(db.accounts().unwrap(), []);
             db.save_account(account("b", 2)).await.unwrap();
             db.save_account(account("a", 1)).await.unwrap();
@@ -371,7 +466,7 @@ mod tests {
     #[test]
     fn removing_an_account_forgets_its_owners() {
         futures::executor::block_on(async {
-            let db = RozedDb::open_test("owner_accounts").await;
+            let db = LoDb::open_test("owner_accounts").await;
             db.save_account(account("a", 1)).await.unwrap();
             db.save_account(account("b", 2)).await.unwrap();
             let set = |owner: &str, login: &str| {
@@ -398,11 +493,54 @@ mod tests {
     }
 
     #[test]
+    fn a_repositorys_own_account_is_kept_apart_from_its_owners() {
+        futures::executor::block_on(async {
+            let db = LoDb::open_test("repo_accounts").await;
+            db.save_account(account("a", 1)).await.unwrap();
+            db.save_account(account("b", 2)).await.unwrap();
+            db.set_owner_account("github.com".into(), "acme".into(), "a".into())
+                .await
+                .unwrap();
+            db.set_repo_account(
+                "github.com".into(),
+                "acme".into(),
+                "secret".into(),
+                "b".into(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "ACME", "Secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("b")
+            );
+            assert_eq!(db.repo_account("github.com", "acme", "app").unwrap(), None);
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+
+            db.delete_account("github.com".into(), "b".into())
+                .await
+                .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret").unwrap(),
+                None
+            );
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+        });
+    }
+
+    #[test]
     fn opens_a_file_and_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("0-dev/rozed.sqlite");
+        let path = dir.path().join("0-dev/lo.sqlite");
         futures::executor::block_on(async {
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             db.save_account(account("a", 1)).await.unwrap();
         });
         assert!(path.exists());
@@ -437,17 +575,17 @@ mod tests {
         ) STRICT;
     );
 
-    /// rozed's database as it was before the cache.
+    /// Lo's database as it was before the cache.
     struct BeforeTheCache;
 
     impl Domain for BeforeTheCache {
-        const NAME: &str = RozedDb::NAME;
+        const NAME: &str = LoDb::NAME;
         const MIGRATIONS: &[&str] = &[SHIPPED_STEP_0];
     }
 
     #[test]
     fn the_first_migration_never_changes() {
-        assert_eq!(RozedDb::MIGRATIONS[0], SHIPPED_STEP_0);
+        assert_eq!(LoDb::MIGRATIONS[0], SHIPPED_STEP_0);
     }
 
     #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -464,7 +602,7 @@ mod tests {
     #[test]
     fn upgrades_a_database_from_before_the_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         futures::executor::block_on(async {
             let old =
                 ThreadSafeConnection::builder::<BeforeTheCache>(&path.to_string_lossy(), true)
@@ -483,7 +621,7 @@ mod tests {
             .unwrap();
             drop(old);
 
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
             let cache = crate::cache::PrCache::new(db);
             let target = crate::PullRef::new("o", "r", 1).into();
@@ -498,16 +636,199 @@ mod tests {
         });
     }
 
+    /// Lo's database as it was before viewed files were recorded: the accounts and the cache.
+    struct BeforeViewedFiles;
+
+    impl Domain for BeforeViewedFiles {
+        const NAME: &str = LoDb::NAME;
+        const MIGRATIONS: &[&str] = &[LoDb::MIGRATIONS[0], LoDb::MIGRATIONS[1]];
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_viewed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lo.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeViewedFiles>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = LoDb::open(&path).await.unwrap();
+            assert_eq!(db.accounts().unwrap(), [account("a", 1)]);
+            let records = crate::viewed::ViewedRecords::new(db);
+            let pull = crate::PullRef::new("o", "r", 1);
+            records
+                .record("a", &pull, "a.rs", "h1", std::time::SystemTime::now())
+                .await
+                .unwrap();
+            assert_eq!(
+                records
+                    .heads("a", &pull)
+                    .unwrap()
+                    .get("a.rs")
+                    .map(String::as_str),
+                Some("h1")
+            );
+        });
+    }
+
+    /// Lo's database as it was before accounts per repository: with viewed files recorded.
+    struct BeforeRepoAccounts;
+
+    impl Domain for BeforeRepoAccounts {
+        const NAME: &str = LoDb::NAME;
+        // The first three steps: `[..3]`, which a constant can't index with.
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(3).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_accounts_per_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lo.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeRepoAccounts>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO owner_accounts(host, owner, login) VALUES ("github.com", "acme", "a")
+                ))?()?;
+                connection.exec(sql!(
+                    INSERT INTO viewed_files(host, account, owner, repo, number, path, head, viewed_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "a.rs", "h1", 1)
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = LoDb::open(&path).await.unwrap();
+            assert_eq!(
+                db.owner_account("github.com", "acme").unwrap().as_deref(),
+                Some("a")
+            );
+            let records = crate::viewed::ViewedRecords::new(db.clone());
+            let pull = crate::PullRef::new("o", "r", 1);
+            assert_eq!(
+                records
+                    .heads("a", &pull)
+                    .unwrap()
+                    .get("a.rs")
+                    .map(String::as_str),
+                Some("h1")
+            );
+            db.set_repo_account(
+                "github.com".into(),
+                "acme".into(),
+                "secret".into(),
+                "a".into(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("a")
+            );
+        });
+    }
+
+    /// Lo's database as it was before revision marks: with accounts per repository.
+    struct BeforeRevisionMarks;
+
+    impl Domain for BeforeRevisionMarks {
+        const NAME: &str = LoDb::NAME;
+        // The first four steps.
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(4).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_revision_marks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lo.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeRevisionMarks>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO viewed_files(host, account, owner, repo, number, path, head, viewed_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "a.rs", "h1", 1)
+                ))?()?;
+                connection.exec(sql!(
+                    INSERT INTO repo_accounts(host, owner, repo, login)
+                    VALUES ("github.com", "acme", "secret", "a")
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = LoDb::open(&path).await.unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("a")
+            );
+            let pull = crate::PullRef::new("o", "r", 1);
+            let viewed = crate::viewed::ViewedRecords::new(db.clone());
+            assert_eq!(viewed.heads("a", &pull).unwrap().len(), 1);
+            let marks = crate::revision_marks::RevisionMarks::new(db);
+            let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100);
+            marks.record_seen("a", &pull, "h1", at).await.unwrap();
+            marks.set_last_seen("a", &pull, "h1", at).await.unwrap();
+            assert_eq!(
+                marks.seen_heads(&pull).unwrap(),
+                [crate::revision_marks::SeenHead {
+                    head: "h1".into(),
+                    first_seen: at,
+                }]
+            );
+            assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
+        });
+    }
+
     #[test]
     fn refuses_to_fall_back_to_memory() {
         let dir = tempfile::tempdir().unwrap();
         // A folder where the file should be: SQLite can't open it.
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         std::fs::create_dir(&path).unwrap();
-        let Err(error) = futures::executor::block_on(RozedDb::open(&path)) else {
+        let Err(error) = futures::executor::block_on(LoDb::open(&path)) else {
             panic!("opened a folder as a database");
         };
-        // sqlez fell back to memory, and rozed's own check refused that.
+        // sqlez fell back to memory, and Lo's own check refused that.
         let message = format!("{error:#}");
         assert!(
             message.starts_with(&format!("couldn't open {}", path.display())),

@@ -1,5 +1,5 @@
-//! GitHub's answers, cached per account in rozed's database (design §3 "Local data"): a reopened
-//! PR shows at once, its first poll can still be a free `304`, and an offline rozed shows what it
+//! GitHub's answers, cached per account in Lo's database (design §3 "Local data"): a reopened
+//! PR shows at once, its first poll can still be a free `304`, and an offline Lo shows what it
 //! last saw with how old it is (design §11 "Offline").
 //!
 //! Each row is one answer about one pull request, or about a repository as a whole, fetched with
@@ -18,7 +18,7 @@ use sqlez_macros::sql;
 
 use crate::client::API_VERSION;
 use crate::credentials::HOST;
-use crate::db::RozedDb;
+use crate::db::LoDb;
 use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
@@ -30,7 +30,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     /// The name its rows are stored under.
     const NAME: &'static str;
 
-    /// Everything the shape of its stored JSON depends on: the JSON schema of a type rozed
+    /// Everything the shape of its stored JSON depends on: the JSON schema of a type Lo
     /// defines ([`schema_shape`]), the text of the GraphQL query a generated type comes from, and
     /// anything else that changes what a stored answer means.
     fn shape() -> String;
@@ -44,7 +44,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     }
 }
 
-/// The shape of a type rozed defines: its JSON schema, with keys sorted, and without
+/// The shape of a type Lo defines: its JSON schema, with keys sorted, and without
 /// documentation or type names, which change nothing that's stored.
 pub fn schema_shape<T: JsonSchema>() -> String {
     let mut schema = schemars::schema_for!(T).to_value();
@@ -192,19 +192,19 @@ pub struct Row {
     etag: Option<String>,
 }
 
-/// The cache, over rozed's database. Clones share the connection.
+/// The cache, over Lo's database. Clones share the connection.
 #[derive(Clone)]
 pub struct PrCache {
-    db: RozedDb,
+    db: LoDb,
 }
 
-fn to_secs(time: SystemTime) -> i64 {
+pub(crate) fn to_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or_default()
 }
 
-fn from_secs(secs: i64) -> SystemTime {
+pub(crate) fn from_secs(secs: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).unwrap_or_default())
 }
 
@@ -225,8 +225,12 @@ fn key<T: CacheEntry>(
 }
 
 impl PrCache {
-    pub fn new(db: RozedDb) -> Self {
+    pub fn new(db: LoDb) -> Self {
         Self { db }
+    }
+
+    pub(crate) fn db(&self) -> &LoDb {
+        &self.db
     }
 
     /// `account`'s cached answer about `target`, if there's one in the current shape.
@@ -373,6 +377,30 @@ impl PrCache {
             .await
     }
 
+    /// Replaces the value at `path` in a stored answer's JSON with the JSON `json`, and records
+    /// that GitHub confirmed the answer at `fetched_at`.
+    pub(crate) async fn update_json<T: CacheEntry>(
+        &self,
+        account: &str,
+        target: &Target,
+        path: &'static str,
+        json: String,
+        fetched_at: SystemTime,
+    ) -> Result<()> {
+        let (key, version) = (key::<T>(account, target), T::version());
+        let fetched_at = to_secs(fetched_at);
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    UPDATE pr_cache SET json = json_set(json, ?8, json(?9)), fetched_at = ?10
+                    WHERE host = ?1 AND account = ?2 AND owner = ?3 AND repo = ?4
+                        AND number = ?5 AND query = ?6 AND version = ?7
+                ))?((key, version, path.to_string(), json, fetched_at))
+            })
+            .await
+    }
+
     /// Forgets an answer.
     pub async fn remove<T: CacheEntry>(&self, account: &str, target: &Target) -> Result<()> {
         let key = key::<T>(account, target);
@@ -453,6 +481,25 @@ impl PrCache {
             )
             .collect())
     }
+
+    /// Forgets that `pull` was opened under that name, once GitHub named its repository
+    /// otherwise: after a rename or transfer, the pull request is listed once, by its name now.
+    pub async fn forget_recent(&self, pull: &PullRef) -> Result<()> {
+        let key = (
+            HOST.to_string(),
+            pull.repo.owner.clone(),
+            pull.repo.name.clone(),
+            pull.number,
+        );
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    DELETE FROM recent_prs WHERE host = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4
+                ))?(key)
+            })
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -464,7 +511,9 @@ mod tests {
     use serde::Deserialize;
 
     use crate::db::{Account, AccountSource};
+    use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
+    use crate::push_history::PushHistory;
 
     fn account(login: &str) -> Account {
         Account {
@@ -479,8 +528,8 @@ mod tests {
         }
     }
 
-    async fn cache(name: &str) -> (PrCache, RozedDb) {
-        let db = RozedDb::open_test(name).await;
+    async fn cache(name: &str) -> (PrCache, LoDb) {
+        let db = LoDb::open_test(name).await;
         db.save_account(account("bot")).await.unwrap();
         db.save_account(account("other")).await.unwrap();
         (PrCache::new(db.clone()), db)
@@ -684,9 +733,21 @@ mod tests {
 
     /// Every version, as of the last change to what the cache stores. When this fails, a stored
     /// shape changed: rows written in the old one will read as missing and be fetched again.
-    /// Check that's what the change means, then update the versions here.
+    /// Check that's what the change means, then update the versions here. A read the poller keeps
+    /// ([`crate::poll::CachedRead`]) is stored stamped. No two share a name, which would make
+    /// one read the other's rows as missing.
     #[test]
     fn versions_follow_the_stored_shapes() {
+        let names = [
+            PullSummary::NAME,
+            ListedPulls::NAME,
+            PullRequestData::NAME,
+            PullRequestCheckData::NAME,
+            OpenPullRequestList::NAME,
+            Stamped::<PushHistory>::NAME,
+        ];
+        let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+        assert_eq!(unique.len(), names.len(), "{names:?}");
         assert_eq!(
             [
                 (PullSummary::NAME, PullSummary::version()),
@@ -694,13 +755,18 @@ mod tests {
                 (PullRequestData::NAME, PullRequestData::version()),
                 (PullRequestCheckData::NAME, PullRequestCheckData::version()),
                 (OpenPullRequestList::NAME, OpenPullRequestList::version()),
+                (
+                    Stamped::<PushHistory>::NAME,
+                    Stamped::<PushHistory>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
-                ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
-                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+                ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
+                ("OpenPullRequests", "a228c23b9720c0a4".to_string()),
+                ("PushHistory", "1f9c5b1925f77e8b".to_string()),
             ]
         );
     }
@@ -748,7 +814,7 @@ mod tests {
         }
     }
 
-    async fn refuse_rows(db: &RozedDb) {
+    async fn refuse_rows(db: &LoDb) {
         db.connection()
             .write(|connection| {
                 connection.exec(
@@ -919,6 +985,41 @@ mod tests {
             // Reopening moves it to the top and keeps the title it had.
             cache.record_recent(recent(1, None, 300)).await.unwrap();
             assert_eq!(cache.recent(1).unwrap(), [recent(1, Some("one"), 300)]);
+        });
+    }
+
+    #[test]
+    fn a_pull_request_opened_by_an_old_name_can_be_forgotten_under_it() {
+        block_on(async {
+            let (cache, _) = cache("cache_recent_forget").await;
+            let recent = |repo: &str, number, opened_at| RecentPr {
+                pull: PullRef::new("rozed-dev", repo, number),
+                title: None,
+                account: "bot".into(),
+                opened_at: at(opened_at),
+            };
+            cache
+                .record_recent(recent("playground", 2, 100))
+                .await
+                .unwrap();
+            cache
+                .record_recent(recent("renamed", 2, 200))
+                .await
+                .unwrap();
+            cache
+                .record_recent(recent("playground", 3, 300))
+                .await
+                .unwrap();
+
+            cache
+                .forget_recent(&PullRef::new("Rozed-Dev", "Playground", 2))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                cache.recent(10).unwrap(),
+                [recent("playground", 3, 300), recent("renamed", 2, 200)]
+            );
         });
     }
 }

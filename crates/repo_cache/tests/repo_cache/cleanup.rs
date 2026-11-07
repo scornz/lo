@@ -75,7 +75,7 @@ fn remove_unused_once_free(cache: &RepoCache) -> Vec<String> {
 fn stamp_days_ago(dir: &Path, days: u64) {
     let then = SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
     let seconds = then.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    fs::write(dir.join("rozed-last-used"), format!("{seconds}\n")).unwrap();
+    fs::write(dir.join("lo-last-used"), format!("{seconds}\n")).unwrap();
 }
 
 /// A folder outside the cache, holding files cleanup must never touch, laid out like what it
@@ -129,11 +129,11 @@ fn clear_removes_every_clone_and_checkout() {
 }
 
 #[test]
-fn clear_leaves_a_clone_another_rozed_is_making_alone() {
+fn clear_leaves_a_clone_another_lo_is_making_alone() {
     let server = server();
     let (dir, cache) = server.cache();
     use_repo(&cache, "old");
-    // Another rozed is making a clone, in a temporary folder of its own.
+    // Another Lo is making a clone, in a temporary folder of its own.
     let making = dir.path().join("tmp/99999-0.git");
     fs::create_dir_all(&making).unwrap();
     fs::write(making.join("HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -166,7 +166,7 @@ fn removes_only_clones_unused_for_a_month_and_their_checkouts() {
     assert!(!old.exists());
     assert!(!checkouts.join("owner/old").exists());
     assert!(new.is_dir());
-    let head = git(&new, &["rev-parse", "refs/rozed/pull/1/head"]);
+    let head = git(&new, &["rev-parse", "refs/lo/pull/1/head"]);
     assert!(
         checkouts
             .join(format!("owner/new/pull-1/{head}/README.md"))
@@ -189,7 +189,7 @@ fn a_clone_being_written_to_is_kept() {
     let (dir, cache) = server.cache();
     let old = use_repo(&cache, "old");
     last_opened_days_ago(&old, 31);
-    // Another rozed holds the clone's lock.
+    // Another Lo holds the clone's lock.
     let lock = File::create(dir.path().join("locks/github.com/owner/old.lock")).unwrap();
     lock.lock().unwrap();
 
@@ -303,7 +303,7 @@ fn a_clone_still_open_is_kept() {
     let open = open_and_check_out(&cache, "old");
     last_opened_days_ago(open.git_dir(), 31);
 
-    // Another rozed's launch, while this one still shows a pull request from the clone.
+    // Another Lo's launch, while this one still shows a pull request from the clone.
     assert_eq!(
         cache.remove_unused(RepoCache::UNUSED_FOR).unwrap(),
         Vec::<String>::new()
@@ -354,7 +354,7 @@ fn removes_checkouts_unused_for_two_weeks() {
     let (_dir, cache) = server.cache();
     let repo = cache.open("owner", "old", None).unwrap();
     let head = fetch(&repo);
-    let base = git(repo.git_dir(), &["rev-parse", "refs/rozed/pull/1/base"])
+    let base = git(repo.git_dir(), &["rev-parse", "refs/lo/pull/1/base"])
         .parse()
         .unwrap();
     let stale = repo.checkout(1, &head).unwrap();

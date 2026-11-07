@@ -2,12 +2,13 @@
 //! (design §6, "Revisions" and "Viewed marks").
 //!
 //! No single GitHub source lists every push. The repository activity API does when it's available;
-//! otherwise force-push events, reviews, check suites and rozed's own poller each saw some heads.
+//! otherwise force-push events, reviews, check suites and Lo's own poller each saw some heads.
 //! [`build_revisions`] merges what they saw into one list, keyed by head SHA and ordered oldest
 //! first. Revisions are stored by head SHA and numbered r1, r2… only for display, because a source
 //! that reports late can insert one. [`default_comparison`] picks what the pull request compares
 //! when it opens, and [`viewed_file_comparison`] what a file shows once a push changed it after you
-//! marked it viewed.
+//! marked it viewed. [`base_tip_at`] says where the base branch was when a revision was pushed, for
+//! that revision's base.
 //!
 //! ```
 //! use std::time::{Duration, SystemTime};
@@ -32,6 +33,7 @@
 //! );
 //! ```
 
+mod base;
 mod build;
 mod compare;
 mod viewed;
@@ -39,6 +41,9 @@ mod viewed;
 use std::collections::{BTreeSet, HashMap};
 use std::time::SystemTime;
 
+pub use base::{
+    BaseHistory, BaseRecord, BaseTip, BaseTipSource, EVENT_LAG, Merge, Retarget, base_tip_at,
+};
 pub use build::build_revisions;
 pub use compare::{Comparison, default_comparison};
 pub use viewed::{FileComparison, ViewedState, viewed_file_comparison};
@@ -73,6 +78,12 @@ pub enum PushRecord {
     /// an older commit makes that commit one. Pending reviews have no `submittedAt` and don't
     /// count.
     Review { commit: String, at: SystemTime },
+    /// A submitted review's commit and `submittedAt`, as [`Self::Review`], where the activity
+    /// API's complete log of the head branch shows the commit was never its head, as when a
+    /// review is made through the API on an older commit. Design §6 makes each push a revision,
+    /// and this commit was no push; it's kept as a revision all the same, since your last review
+    /// can be on it, and its source ([`Source::ReviewedCommit`]) says it was never pushed.
+    ReviewedCommit { commit: String, at: SystemTime },
     /// The push that started a check suite (`CheckSuite.push`): `previousSha`, `nextSha`, and the
     /// suite's `createdAt`, up to a minute after the push. The caller drops suites whose `branch`
     /// is set and isn't the head branch; it's null once the branch is deleted. A suite whose
@@ -83,7 +94,7 @@ pub enum PushRecord {
         next: String,
         at: SystemTime,
     },
-    /// A head rozed's poller saw (`head.sha`), and when it first saw it.
+    /// A head Lo's poller saw (`head.sha`), and when it first saw it.
     Polled { head: String, at: SystemTime },
 }
 
@@ -94,6 +105,7 @@ impl PushRecord {
             Self::Activity { .. } => Source::Activity,
             Self::ForcePush { .. } => Source::ForcePush,
             Self::Review { .. } => Source::Review,
+            Self::ReviewedCommit { .. } => Source::ReviewedCommit,
             Self::CheckSuite { .. } => Source::CheckSuite,
             Self::Polled { .. } => Source::Poller,
         }
@@ -109,9 +121,12 @@ pub enum Source {
     ForcePush,
     /// A review on the commit.
     Review,
+    /// A review on a commit the complete push log shows was never the head
+    /// ([`PushRecord::ReviewedCommit`]).
+    ReviewedCommit,
     /// A check suite started by the push.
     CheckSuite,
-    /// rozed's poller.
+    /// Lo's poller.
     Poller,
     /// The pull request's current head (`headRefOid`), which is always the latest revision.
     Head,
@@ -122,7 +137,7 @@ pub enum Source {
 pub enum PushedAt {
     /// The push's time, from the activity API, or else a force-push event.
     Exact(SystemTime),
-    /// It was pushed at or before this time: the earliest a review, check suite or rozed's poller
+    /// It was pushed at or before this time: the earliest a review, check suite or Lo's poller
     /// saw the head, or a later head's push time.
     By(SystemTime),
     /// No source dates it.
@@ -147,8 +162,8 @@ pub struct Revision {
     pub pushed_at: PushedAt,
     /// The sources that saw this head.
     pub sources: BTreeSet<Source>,
-    /// Whether rozed can still get the head commit. Revisions start out available; the caller
-    /// flags one GitHub no longer has, and that rozed never fetched, with
+    /// Whether Lo can still get the head commit. Revisions start out available; the caller
+    /// flags one GitHub no longer has, and that Lo never fetched, with
     /// [`Revisions::mark_unavailable`]. It stays in the list, shown as "no longer available".
     pub available: bool,
 }
@@ -229,7 +244,7 @@ impl Revisions {
         self.positions.get(head).copied()
     }
 
-    /// The nearest revision at or before `index` that rozed can still get.
+    /// The nearest revision at or before `index` that Lo can still get.
     fn available_from(&self, index: usize) -> Option<&Revision> {
         self.list[..=index]
             .iter()
