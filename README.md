@@ -8,7 +8,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/scornz/lo/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scornz/lo/actions/workflows/ci.yml/badge.svg"></a>
+  <b>Early development · not released yet · macOS only</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/scornz/lo/actions/workflows/ci-main.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/scornz/lo/actions/workflows/ci-main.yml/badge.svg?branch=main"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
   <a href="#status"><img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
 </p>
@@ -23,7 +27,6 @@
 </p>
 
 <!-- A screenshot of a pull request open in Lo goes here, then a short demo. -->
-<p align="center"><i>A screenshot and a short demo are coming.</i></p>
 
 ## About
 
@@ -40,24 +43,25 @@ order and viewed marks today, then stacks, revisions and merging.
 Lo keeps to a few rules:
 
 - **Read-only.** Lo never edits files or pushes commits. It writes to GitHub only to review and
-  merge.
+  merge, and to change a pull request's base branch to form a stack.
 - **No AI, no backend, no telemetry.** Lo talks only to GitHub, and to language servers' official
   download sources.
-- **Never runs a repository's code.** No dependency installs or build steps, and language servers
-  run only on repositories you trust.
-- **Keyboard first.** Every action has a key.
+- **Never runs a repository's code unless you trust it.** No dependency installs or build steps.
+  Language servers run only on repositories you trust, and on a pull request from a fork only if
+  you trust that one pull request.
+- **Keyboard first.** Every action is meant to have a key.
 
 ## Features
 
 ### Works today
 
-- **Open by link.** `lo <link>` or `⌘O` opens a pull request in a tab of its own. With none open,
-  Lo lists the ones you opened recently.
+- **Open by link.** Start Lo with a pull request's link, or press `⌘O` in it, to open the pull
+  request in a tab of its own. With none open, Lo lists the ones you opened recently.
 - **Instant, then whole.** GitHub's diff shows at once while Lo copies the pull request into a
   local partial clone. Then Zed's side-by-side diff of whole files takes over, at the same file and
   line.
 - **Review order.** Each source file is followed by its tests, then come config files, then
-  generated ones. One key switches to path order.
+  generated ones. One key switches the file list to path order.
 - **Less noise.** Generated files, lockfiles and very large files start collapsed, each saying why.
   One key shows the diff inline, and another hides changes to whitespace alone.
 - **Viewed marks.** `e` sets GitHub's own viewed mark on a file and moves to the next unviewed one.
@@ -81,14 +85,15 @@ Much of the logic behind these is already on `main` and tested, waiting for its 
   index, plus types and hovers from language servers on repositories you trust.
 - **Moved code and a syntax-aware diff.** Blocks moved within or across files show as moves, and
   a view per file compares by syntax instead of by line.
-- **Links and keys.** `lo://` links, a command-line tool, link routers such as Finicky, Velja and
-  Choosy, Vim-style keys, a keymap you can change and a `?` sheet of every key.
+- **Links and keys.** An installed `lo` command, `lo://` links, link routers such as Finicky,
+  Velja and Choosy, Vim-style keys, a keymap you can change and a `?` sheet of every key.
 - **A release.** A signed, notarized download and a Homebrew cask.
 
 ## Status
 
 Lo is in early development and isn't released yet. There's no download or Homebrew cask: to try
-it, build it from source. It runs on macOS only. Expect missing pieces, and things that change.
+it, build it from source. It runs on macOS only, version 12.0 or later. Expect missing pieces,
+and things that change.
 
 The [roadmap](docs/plan.md#roadmap) lists the milestones to v1, and the
 [design](docs/design.md) describes v1 in full.
@@ -105,15 +110,25 @@ You need:
 - **[mise](https://mise.jdx.dev),** which installs the cmake, Node and pnpm pinned in
   [`mise.toml`](mise.toml). cmake builds wasmtime for Zed's tree-sitter. Node and pnpm run the git
   hooks.
+- **About 11 GB of disk** for the build output of one debug build.
 
-Then:
+Point the command-line tools at Xcode, and on Xcode 26 and later, download its Metal Toolchain,
+as [Zed's macOS build guide](https://github.com/zed-industries/zed/blob/main/docs/src/development/macos.md)
+says:
+
+```sh
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+xcodebuild -downloadComponent MetalToolchain  # Xcode 26 and later
+```
+
+If the download fails, run `xcodebuild -runFirstLaunch` and try again. Then:
 
 ```sh
 git clone https://github.com/scornz/lo.git
 cd lo
 git submodule update --init --depth 1  # Zed, one commit deep; always pass --depth 1
 mise install                           # cmake, Node and pnpm
-pnpm install                           # the git hooks, which you need to commit
 mise exec -- cargo build -p lo         # or plain cargo, if your shell activates mise
 ```
 
@@ -122,13 +137,11 @@ The first build compiles Zed's crates, so it takes a while. "Set up" in
 
 ## Usage
 
-```sh
-lo <pull-request-link>
-```
-
-From a source build, the app is `target/debug/lo`, or run it through cargo:
+There's no installed `lo` command yet; that comes with milestone 12. From a source build, run Lo
+through cargo, or run `target/debug/lo` with the same arguments:
 
 ```sh
+cargo run -p lo -- <pull-request-link>
 cargo run -p lo -- https://github.com/sharkdp/fd/pull/2212
 ```
 
@@ -142,28 +155,29 @@ cargo run -p lo -- https://github.com/sharkdp/fd/pull/2212
 - Lo keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`, `~/Library/Caches/Lo`
   and `~/Library/Logs/Lo`.
 
-Every action has a key. "Keys" in [`CLAUDE.md`](CLAUDE.md#keys) lists each key Lo binds today and
-where it works. [Design §10](docs/design.md#10-keyboard-windows-and-opening-links) has the full
-plan.
+Lo is built to be driven from the keyboard. "Keys" in [`CLAUDE.md`](CLAUDE.md#keys) lists each key
+Lo binds today and where it works, and
+[design §10](docs/design.md#10-keyboard-windows-and-opening-links) has the full plan.
 
 ## Contributing
 
 Open an [issue](https://github.com/scornz/lo/issues) for a bug or an idea. Changes land like this:
 
-1. Branch from `main`, and run `pnpm install` once so the git hooks run.
+1. Branch from `main`, and run `mise exec -- pnpm install` once so the git hooks run.
 2. Commit with [Conventional Commits](https://www.conventionalcommits.org), such as
    `feat(review_ui): mark files viewed`. commitlint checks every message, in the `commit-msg` hook
    and in CI.
 3. Run the checks in "Verify" in [`CLAUDE.md`](CLAUDE.md#verify). CI runs the same on macOS.
 4. Open a pull request with a Conventional Commits title. It's squash-merged, and its title becomes
-   the commit on `main`. To update your branch, merge `origin/main` into it; don't force-push.
+   the commit on `main`. To update your branch, merge the latest `main` into it (`upstream/main`
+   from a fork, `origin/main` otherwise); don't force-push.
 
 The docs:
 
 - [`CLAUDE.md`](CLAUDE.md) (also `AGENTS.md`): the full guide to working on Lo, for people and
   coding agents alike. It covers the layout, setup, keys, the Zed submodule and its patches, and
   the checks.
-- [`docs/design.md`](docs/design.md): the approved design.
+- [`docs/design.md`](docs/design.md): the design for v1.
 - [`docs/plan.md`](docs/plan.md): the milestones.
 - [`docs/decisions.md`](docs/decisions.md): calls made where the design is silent.
 - [`docs/spike.md`](docs/spike.md): what the first build proved, the Zed crates compiled in, and
@@ -172,13 +186,13 @@ The docs:
 
 ## Security
 
-Please don't report a security problem in a public issue. Report it privately, through
-[GitHub's private vulnerability reporting](https://github.com/scornz/lo/security/advisories/new).
+Please don't report a security problem in a public issue. [`SECURITY.md`](SECURITY.md) says how to
+report one privately, and what's in scope.
 
 ## License
 
-Lo is free software, under the [GNU General Public License, version 3 or later](LICENSE). Building
-on Zed's crates, several of which are GPL-3.0-or-later, requires it.
+Lo is free software, under the [GNU General Public License, version 3 or later](LICENSE). Most of
+the Zed crates Lo compiles in are GPL-3.0-or-later, so Lo's license has to be the GPL too.
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the code Lo includes from other projects.
 
 ## Acknowledgements

@@ -106,6 +106,16 @@ Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p lo`). mi
 fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
 `PATH`, which activation or `mise exec` provides.
 
+gpui finds the Metal compiler through the active developer directory, which must be Xcode's, and
+Xcode 26 and later download the Metal Toolchain separately. Without either, the build fails with
+`unable to find utility "metal"`. Zed's `docs/src/development/macos.md` gives the fix:
+
+```sh
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+xcodebuild -downloadComponent MetalToolchain  # Xcode 26 and later; if it fails, run
+                                              # xcodebuild -runFirstLaunch and try again
+```
+
 ## Build, test and run
 
 ```sh

@@ -65,7 +65,7 @@ The banner follows the reader's theme. From the repository's root:
 | --- | --- |
 | README header | The banner, `banner/banner-dark.svg` on dark and `banner/banner-light.svg` on light (snippet above) |
 | Other Markdown headers, such as this file's | `logo/lockup-cream.svg` on dark, `logo/lockup-ink.svg` on light (snippet below) |
-| getlo.dev header | Lockup |
+| getlo.dev header (planned) | Lockup |
 | Repo social preview | `logo/png/social-preview.png`, exported from `logo/social-preview.svg`; upload it in the repo's settings |
 | GitHub sign-in | The mark alone; GitHub shows the name beside it |
 | Menu bar | `logo/mark-black.svg` as a template image (see "To come") |
@@ -102,7 +102,7 @@ The same values are in [`tokens/brand.css`](tokens/brand.css) (CSS custom proper
 - **Host Grotesk** for text, at weights 400 to 800.
 - **Fragment Mono** for code.
 
-This is the same pairing as scornz, so the two brands feel related. Both fonts are free under the SIL Open Font License, from Google Fonts ([Host Grotesk](https://fonts.google.com/specimen/Host+Grotesk), [Fragment Mono](https://fonts.google.com/specimen/Fragment+Mono)). Use them for the README, getlo.dev and the sign-in screen. GitHub sets a README's text in its own fonts, so there the banner's wordmark carries the type. Inside the app, the system font keeps Lo feeling native.
+This is the same pairing as scornz, so the two brands feel related. Both fonts are free under the SIL Open Font License, from Google Fonts ([Host Grotesk](https://fonts.google.com/specimen/Host+Grotesk), [Fragment Mono](https://fonts.google.com/specimen/Fragment+Mono)). Use them for the README, getlo.dev (planned) and the sign-in screen. GitHub sets a README's text in its own fonts, so there the banner's wordmark carries the type. Inside the app, the system font keeps Lo feeling native.
 
 | Style | Size / line height | Weight |
 | --- | --- | --- |
