@@ -8,6 +8,11 @@ use std::path::Path;
 /// bar after its `CFBundleName`, which would otherwise be the executable's name, `lo`. It has no
 /// bundle identifier: gpui turns on bundle-only features, such as system notifications, when
 /// there is one.
+///
+/// It goes only into the `lo` binary target, though cargo links that target's unit tests with it
+/// too; with no identifier, that changes nothing for them. Milestone 13's app bundle has an
+/// `Info.plist` of its own, with the bundle ID: its build must drop this one, which nothing there
+/// would read and which would disagree with the real one.
 const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -30,7 +35,7 @@ fn main() {
         let plist = Path::new(&out_dir).join("Info.plist");
         std::fs::write(&plist, INFO_PLIST).expect("writing Info.plist");
         println!(
-            "cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+            "cargo:rustc-link-arg-bin=lo=-Wl,-sectcreate,__TEXT,__info_plist,{}",
             plist.display()
         );
     }
