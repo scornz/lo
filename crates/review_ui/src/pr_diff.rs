@@ -34,7 +34,8 @@ use futures::FutureExt as _;
 use futures::channel::{mpsc, oneshot};
 use git::status::{FileStatus, StatusCode, TrackedStatus};
 use gpui::{
-    AnyElement, App, AppContext as _, AsyncWindowContext, Entity, Task, WeakEntity, Window,
+    AnyElement, App, AppContext as _, AsyncWindowContext, Div, ElementId, Entity, Stateful, Task,
+    WeakEntity, Window,
 };
 use language::{
     Buffer, BufferId, Capability, DiskState, File, LanguageRegistry, LineEnding, Point, ReplicaId,
@@ -55,6 +56,7 @@ use repo_cache::{
 };
 
 use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
+use crate::diff_decorations::{self, Badge, BadgeStyle, DiffDecorations, NewDecorator};
 use crate::file_display::{
     Collapsed, ImageSide, Images, binary_text, initial_collapse, too_large_to_show,
     without_whitespace_changes,
@@ -65,7 +67,7 @@ use crate::github_layer::Saved;
 use crate::local_copies;
 use crate::pr_banner::BannerKind;
 use crate::pr_link::PrLink;
-use crate::pr_tab::{DiffSource, ExpandFile, PrTab};
+use crate::pr_tab::{DiffSource, PrTab};
 use crate::shown_comparison::ShownComparison;
 use crate::shown_files::{self, ShownFile, ShownFiles};
 use crate::trust;
@@ -414,7 +416,7 @@ pub(crate) async fn show_local_copy(
     };
 
     let style = tab.read_with(cx, |tab, _| tab.diff_style())?;
-    let (multi_buffer, editor) = new_diff_editor(&workspace, &project, &title, style, cx)?;
+    let (multi_buffer, editor) = new_diff_editor(&tab, &workspace, &project, &title, style, cx)?;
     editor.update(cx, |editor, cx| {
         editor.rhs_editor().update(cx, |editor, _| {
             // Keeps the clone open, so no cleanup removes it or its checkout while the tab shows
@@ -603,10 +605,11 @@ pub(crate) async fn show_local_copy(
         match swap(first, plan) {
             Swap::Keep => {}
             Swap::Warn(warning) => {
-                log::warn!("{link}: {}: {}", file.display_path(), warning.detail);
-                update_headers(&editor, cx, |headers| {
-                    headers.warnings.insert(*buffer_id, warning);
-                });
+                let path = file.display_path();
+                log::warn!("{link}: {path}: {}", warning.detail);
+                cx.update(|window, cx| {
+                    shown_files::set_warning(&editor, &path, *buffer_id, warning, window, cx)
+                })?;
             }
             Swap::ToCheckout(plan) => {
                 target.hide_whitespace = tab.read_with(cx, |tab, _| tab.hides_whitespace())?;
@@ -702,9 +705,20 @@ pub(crate) async fn load_large_file(
     Ok(())
 }
 
-/// A new, empty side-by-side or inline diff of `title`, read-only and without the controls for
-/// staging and restoring hunks.
+/// Every feature's decorator, in the order their badges show in a file's header. A feature that
+/// draws on the diff adds its own here, one line (see [`crate::diff_decorations`]).
+const DECORATORS: &[NewDecorator] = &[
+    diff_decorations::collapsed,
+    diff_decorations::change_notes,
+    diff_decorations::warnings,
+    diff_decorations::renamed_from,
+    shown_files::image_blocks,
+];
+
+/// A new, empty side-by-side or inline diff of `title` for `tab`, read-only and without the
+/// controls for staging and restoring hunks, with every feature's decorator.
 pub(crate) fn new_diff_editor(
+    tab: &WeakEntity<PrTab>,
     workspace: &WeakEntity<Workspace>,
     project: &Entity<Project>,
     title: &str,
@@ -733,6 +747,7 @@ pub(crate) fn new_diff_editor(
                 editor.set_show_breakpoints(false, cx);
                 editor.register_addon(FileHeaders::default());
                 editor.register_addon(ShownFiles::default());
+                editor.register_addon(DiffDecorations::new(tab, DECORATORS, cx));
             });
             editor
         })
@@ -960,22 +975,6 @@ fn swap(first: &FilePlan, with_checkout: FilePlan) -> Swap {
         } => Swap::Warn(warning),
         _ => Swap::Keep,
     }
-}
-
-/// Changes the file headers of `editor`'s pull request.
-fn update_headers(
-    editor: &Entity<SplittableEditor>,
-    cx: &mut AsyncWindowContext,
-    change: impl FnOnce(&mut FileHeaders),
-) {
-    editor.update(cx, |editor, cx| {
-        editor.rhs_editor().update(cx, |editor, cx| {
-            if let Some(headers) = editor.addon_mut::<FileHeaders>() {
-                change(headers);
-            }
-            cx.notify();
-        })
-    });
 }
 
 /// What the banner says when the head shown isn't the one GitHub's API reports, because GitHub
@@ -1744,6 +1743,9 @@ impl Target<'_> {
         file.rows = rows;
         file.set_images(images);
         file.collapsed = collapsed.clone();
+        file.notes = badge;
+        file.warning = warning.clone();
+        file.renamed_from = header.renamed_from;
         file.whitespace_hidden = self.hide_whitespace;
         // A file that replaces another keeps whether it was folded and shown whole, and the
         // cursor, if it was in it.
@@ -1791,17 +1793,12 @@ impl Target<'_> {
                 }
             }
         })?;
-        update_headers(self.editor, cx, |headers| {
-            headers.statuses.insert(buffer_id, header.status);
-            if let Some(badge) = badge {
-                headers.badges.insert(buffer_id, badge);
-            }
-            if let Some(warning) = warning.clone() {
-                headers.warnings.insert(buffer_id, warning);
-            }
-            if let Some(renamed_from) = header.renamed_from {
-                headers.renamed_from.insert(buffer_id, renamed_from);
-            }
+        self.editor.update(cx, |editor, cx| {
+            editor.rhs_editor().update(cx, |editor, _| {
+                if let Some(headers) = editor.addon_mut::<FileHeaders>() {
+                    headers.statuses.insert(buffer_id, header.status);
+                }
+            })
         });
         let fold = match replaced {
             Some((folded, _)) => folded,
@@ -1961,40 +1958,49 @@ fn normalized(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// What each file's header shows beyond its path: the pull request's change (added, deleted,
-/// renamed or modified) rather than its status in the checkout, which is always clean, why it's
-/// collapsed, a badge with what the status doesn't say, any warning, and a rename's old path.
+/// renamed or modified) rather than its status in the checkout, which is always clean, and the
+/// badges the diff's decorators give it (see [`crate::diff_decorations`]).
 #[derive(Default)]
 pub(crate) struct FileHeaders {
     pub(crate) statuses: HashMap<BufferId, FileStatus>,
-    pub(crate) collapsed: HashMap<BufferId, Collapsed>,
-    pub(crate) badges: HashMap<BufferId, SharedString>,
-    pub(crate) warnings: HashMap<BufferId, Warning>,
-    /// A renamed file's old path, which shows as "old →" before its new one.
-    pub(crate) renamed_from: HashMap<BufferId, SharedString>,
+    /// Each file's badges, in the order they show.
+    badges: HashMap<BufferId, Vec<Badge>>,
 }
 
 impl FileHeaders {
-    /// Says why `buffer`'s file is collapsed, or that it isn't.
-    pub(crate) fn set_collapsed(&mut self, buffer: BufferId, collapsed: Option<Collapsed>) {
-        match collapsed {
-            Some(collapsed) => self.collapsed.insert(buffer, collapsed),
-            None => self.collapsed.remove(&buffer),
-        };
+    /// `buffer`'s file's badges.
+    pub(crate) fn badges(&self, buffer: BufferId) -> &[Badge] {
+        self.badges.get(&buffer).map_or(&[], Vec::as_slice)
+    }
+
+    /// Gives `buffer`'s file `badges`, in place of the ones it had.
+    pub(crate) fn set_badges(&mut self, buffer: BufferId, badges: Vec<Badge>) {
+        if badges.is_empty() {
+            self.badges.remove(&buffer);
+        } else {
+            self.badges.insert(buffer, badges);
+        }
     }
 
     /// Forgets what `buffer`'s header shows, once another buffer replaced it.
     pub(crate) fn forget(&mut self, buffer: BufferId) {
         self.statuses.remove(&buffer);
-        self.collapsed.remove(&buffer);
         self.badges.remove(&buffer);
-        self.warnings.remove(&buffer);
-        self.renamed_from.remove(&buffer);
     }
-}
 
-/// The key that loads a large file, as the headers name it.
-fn load_key(window: &Window, cx: &App) -> String {
-    ui::text_for_action(&ExpandFile, window, cx).unwrap_or_else(|| "alt-a".to_string())
+    /// The label of `buffer`'s file's first badge in `style`.
+    #[cfg(test)]
+    pub(crate) fn badge_label(&self, buffer: BufferId, style: BadgeStyle) -> Option<String> {
+        (self.badges(buffer).iter())
+            .find(|badge| badge.style == style)
+            .map(|badge| badge.label.to_string())
+    }
+
+    /// Every file's badges.
+    #[cfg(test)]
+    pub(crate) fn all_badges(&self) -> impl Iterator<Item = &Badge> {
+        self.badges.values().flatten()
+    }
 }
 
 impl Addon for FileHeaders {
@@ -2014,66 +2020,74 @@ impl Addon for FileHeaders {
         &self,
         _: &ExcerptBoundaryInfo,
         buffer: &language::BufferSnapshot,
-        window: &Window,
+        _: &Window,
         cx: &App,
     ) -> Option<AnyElement> {
         let id = buffer.remote_id();
-        let collapsed = self.collapsed.get(&id);
-        let badge = self.badges.get(&id);
-        let warning = self.warnings.get(&id);
-        let renamed_from = self.renamed_from.get(&id);
-        if collapsed.is_none() && badge.is_none() && warning.is_none() && renamed_from.is_none() {
+        let badges = self.badges(id);
+        if badges.is_empty() {
             return None;
         }
-        let key = collapsed.map(|_| load_key(window, cx)).unwrap_or_default();
         Some(
             h_flex()
                 .flex_shrink_0()
                 .gap_2()
-                .children(collapsed.map(|collapsed| {
-                    h_flex()
-                        .id(("file-collapsed", id.to_proto()))
-                        .px_1()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(cx.theme().colors().border_variant)
-                        .child(
-                            Label::new(collapsed.label(&key))
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .tooltip(Tooltip::text(collapsed.detail(&key)))
-                }))
-                .children(badge.map(|badge| {
-                    Label::new(badge.clone())
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                }))
-                .children(warning.map(|warning| {
-                    h_flex()
-                        .id(("file-warning", id.to_proto()))
-                        .gap_1()
-                        .child(
-                            Icon::new(IconName::Warning)
-                                .size(IconSize::Small)
-                                .color(Color::Warning),
-                        )
-                        .child(
-                            Label::new(warning.label.clone())
-                                .size(LabelSize::Small)
-                                .color(Color::Warning),
-                        )
-                        .tooltip(Tooltip::text(warning.detail.clone()))
-                }))
-                // Right before the header's own path, the new one.
-                .children(renamed_from.map(|old| {
-                    h_flex()
-                        .gap_1()
-                        .child(Label::new(old.clone()).buffer_font(cx).color(Color::Muted))
-                        .child(Label::new("→").color(Color::Muted))
-                }))
+                .children(
+                    (badges.iter().enumerate())
+                        .map(|(index, badge)| render_badge(badge, (id, index), cx)),
+                )
                 .into_any_element(),
         )
+    }
+}
+
+/// `badge`, the `n`th of a buffer's.
+fn render_badge(badge: &Badge, (buffer, n): (BufferId, usize), cx: &App) -> AnyElement {
+    let id = ElementId::NamedInteger(format!("file-badge-{n}").into(), buffer.to_proto());
+    let tooltip = |element: Stateful<Div>| match &badge.detail {
+        Some(detail) => element.tooltip(Tooltip::text(detail.clone())),
+        None => element,
+    };
+    let label = || Label::new(badge.label.clone()).size(LabelSize::Small);
+    match badge.style {
+        BadgeStyle::Outlined => tooltip(
+            h_flex()
+                .id(id)
+                .px_1()
+                .rounded_sm()
+                .border_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(label().color(Color::Muted)),
+        )
+        .into_any_element(),
+        BadgeStyle::Note => match badge.detail {
+            None => label().color(Color::Muted).into_any_element(),
+            Some(_) => {
+                tooltip(h_flex().id(id).child(label().color(Color::Muted))).into_any_element()
+            }
+        },
+        BadgeStyle::Warning => tooltip(
+            h_flex()
+                .id(id)
+                .gap_1()
+                .child(
+                    Icon::new(IconName::Warning)
+                        .size(IconSize::Small)
+                        .color(Color::Warning),
+                )
+                .child(label().color(Color::Warning)),
+        )
+        .into_any_element(),
+        // Right before the header's own path, the new one.
+        BadgeStyle::RenamedFrom => h_flex()
+            .gap_1()
+            .child(
+                Label::new(badge.label.clone())
+                    .buffer_font(cx)
+                    .color(Color::Muted),
+            )
+            .child(Label::new("→").color(Color::Muted))
+            .into_any_element(),
     }
 }
 

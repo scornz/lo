@@ -36,6 +36,7 @@ use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::account_picker::{self, NotChosen};
 use crate::api_diff::{self, FilesReader, GithubDiff, thousands};
 use crate::diff_cursor;
+use crate::diff_decorations::{self, Redecorate};
 use crate::file_list::{FileEntry, FileList};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
@@ -337,8 +338,8 @@ pub struct PrTab {
     _whitespace: Option<Task<()>>,
     /// Loads large files on a key, one task a file of a diff, each until it's done.
     loading: HashMap<(EntityId, String), Task<()>>,
-    /// Keeps the diff's images right as it goes side by side and back, and stops decoding a
-    /// file's images when it folds.
+    /// Decorates the diff again as it goes side by side and back, and stops decoding a file's
+    /// images when it folds.
     _diff_watch: Vec<Subscription>,
     /// What features show in the header's slots, by [`HeaderSlot`].
     header_slots: [Option<AnyView>; HeaderSlot::ALL.len()],
@@ -1493,13 +1494,17 @@ impl PrTab {
         self.loading.retain(|(diff, _), _| *diff == shown);
         self._diff_watch = vec![
             cx.observe_in(&editor, window, |_, diff, window, cx| {
-                shown_files::sync_side_by_side(&diff, window, cx)
+                diff_decorations::sync_split(&diff, window, cx)
             }),
-            cx.subscribe_in(&editor, window, |_, diff, event: &EditorEvent, _, cx| {
-                if let EditorEvent::BufferFoldToggled { ids, folded } = event {
-                    shown_files::fold_toggled(diff, ids, *folded, cx);
-                }
-            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |_, diff, event: &EditorEvent, window, cx| {
+                    if let EditorEvent::BufferFoldToggled { ids, folded } = event {
+                        shown_files::fold_toggled(diff, ids, *folded, window, cx);
+                    }
+                },
+            ),
         ];
         let rhs = editor.read(cx).rhs_editor().clone();
         if let Some(history) = self.nav_history.clone() {
@@ -1604,6 +1609,7 @@ impl PrTab {
         if let Some(cursor) = cursor {
             pr_diff::put_cursor(&editor, &cursor, window, cx);
         }
+        diff_decorations::redecorate(&editor, Redecorate::Replaced, window, cx);
     }
 
     /// Watches the pull request with its account's poller, once GitHub confirmed it exists, and

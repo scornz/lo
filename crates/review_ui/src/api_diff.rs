@@ -103,7 +103,8 @@ pub(crate) async fn show(
         tab.read_with(cx, |tab, _| (tab.workspace().clone(), tab.diff_style()))?;
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
-    let (_, editor) = pr_diff::new_diff_editor(&workspace, &project, &source.title, style, cx)?;
+    let (_, editor) =
+        pr_diff::new_diff_editor(&tab, &workspace, &project, &source.title, style, cx)?;
     let entries = files.iter().map(file_entry).collect();
     let positions = tab.update_in(cx, |tab, window, cx| {
         tab.show_github_diff(

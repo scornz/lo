@@ -5,6 +5,7 @@ pub mod account;
 pub mod account_picker;
 pub mod api_diff;
 pub mod diff_cursor;
+mod diff_decorations;
 mod file_display;
 pub mod file_list;
 pub mod github_api;

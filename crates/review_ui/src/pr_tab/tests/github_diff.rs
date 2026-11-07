@@ -783,9 +783,9 @@ async fn a_file_whose_diff_doesnt_match_githubs_shows_githubs_patch(cx: &mut Tes
         let editor = diff.rhs_editor().read(cx);
         let headers = editor.addon::<pr_diff::FileHeaders>().unwrap();
         headers
-            .warnings
-            .values()
-            .map(|warning| warning.label.to_string())
+            .all_badges()
+            .filter(|badge| badge.style == crate::diff_decorations::BadgeStyle::Warning)
+            .map(|badge| badge.label.to_string())
             .collect()
     });
     assert_eq!(warnings, [api_diff::GITHUBS_PATCH]);

@@ -26,8 +26,10 @@ use multi_buffer::PathKey;
 use settings::DiffViewStyle;
 use ui::{Label, LabelSize, prelude::*};
 
+use crate::diff_decorations::{self, DiffDecorator, Redecorate};
 use crate::file_display::{Collapsed, ImageSide, Images, without_whitespace_changes};
-use crate::pr_diff::{Checkout, FileHeaders};
+use crate::pr_diff::{Checkout, FileHeaders, Warning};
+use crate::pr_tab::PrTab;
 use crate::shown_comparison::ShownComparison;
 use crate::{image_preview, preview_pool};
 
@@ -51,6 +53,12 @@ pub(crate) struct ShownFile {
     pub(crate) previews: Option<Arc<Previews>>,
     /// Why the file shows collapsed, if it does or did.
     pub(crate) collapsed: Option<Collapsed>,
+    /// What its header says about the change besides its status, such as a change of mode.
+    pub(crate) notes: Option<SharedString>,
+    /// What its header warns of, such as why it couldn't be shown.
+    pub(crate) warning: Option<Warning>,
+    /// The path it had before it was renamed, which its header shows before its new one.
+    pub(crate) renamed_from: Option<SharedString>,
     /// Whether the whole file shows, rather than its changes with the lines around them.
     pub(crate) whole: bool,
     /// Whether it was folded when it was added, so a fold the reviewer changed shows.
@@ -79,6 +87,9 @@ impl ShownFile {
             images: None,
             previews: None,
             collapsed: None,
+            notes: None,
+            warning: None,
+            renamed_from: None,
             whole: false,
             initial_folded: false,
             whitespace_hidden: false,
@@ -266,10 +277,12 @@ pub(crate) fn fold_toggled(
     diff: &Entity<SplittableEditor>,
     buffers: &[BufferId],
     folded: bool,
+    window: &mut Window,
     cx: &mut App,
 ) {
-    update(diff, cx, |files, headers| {
-        for file in files.files.values_mut() {
+    let opened = update(diff, cx, |files, _| {
+        let mut opened = Vec::new();
+        for (path, file) in &mut files.files {
             if !buffers.contains(&file.buffer_id) {
                 continue;
             }
@@ -279,10 +292,32 @@ pub(crate) fn fold_toggled(
                 }
             } else if let Some(Collapsed::LargePatch { generated, .. }) = &file.collapsed {
                 file.collapsed = generated.map(Collapsed::Generated);
-                headers.set_collapsed(file.buffer_id, file.collapsed.clone());
+                opened.push(path.clone());
             }
         }
-    });
+        opened
+    })
+    .unwrap_or_default();
+    diff_decorations::refresh_badges(diff, &opened, window, cx);
+}
+
+/// Gives `path`'s file a warning in its header, while it's still `buffer`'s.
+pub(crate) fn set_warning(
+    diff: &Entity<SplittableEditor>,
+    path: &str,
+    buffer: BufferId,
+    warning: Warning,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let set = update(diff, cx, |files, _| {
+        let file = files.files.get_mut(path)?;
+        (file.buffer_id == buffer).then(|| file.warning = Some(warning))
+    })
+    .flatten();
+    if set.is_some() {
+        diff_decorations::refresh_badges(diff, &[path.to_string()], window, cx);
+    }
 }
 
 /// Stops `diff`'s images decoding and lets go of the textures they were drawn with, in every
@@ -325,8 +360,6 @@ pub(crate) struct ShownFiles {
     /// Whether the diff shows side by side, for the image blocks, which show both images when it
     /// doesn't and one each side when it does.
     split: Arc<AtomicBool>,
-    /// The left-hand editor the image blocks were last added to.
-    lhs: Option<EntityId>,
 }
 
 impl Addon for ShownFiles {
@@ -346,6 +379,11 @@ impl ShownFiles {
 
     pub(crate) fn paths(&self) -> Vec<String> {
         self.files.keys().cloned().collect()
+    }
+
+    /// Each file, with its path.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &ShownFile)> {
+        self.files.iter()
     }
 }
 
@@ -379,7 +417,7 @@ fn update<R>(
     })
 }
 
-/// Adds `file`, at `path`, to `diff`'s files and shows its images, folding it when `fold` says.
+/// Adds `file`, at `path`, to `diff`'s files and decorates it, folding it when `fold` says.
 /// A file that was there before, such as the placeholder of a large file now loaded, makes way
 /// for it.
 pub(crate) fn add(
@@ -391,11 +429,9 @@ pub(crate) fn add(
     cx: &mut App,
 ) {
     let buffer_id = file.buffer_id;
-    let collapsed = file.collapsed.clone();
     let mut file = file;
     file.initial_folded = fold;
     let replaced = update(diff, cx, |files, headers| {
-        headers.set_collapsed(buffer_id, collapsed);
         let replaced = files.files.insert(path.clone(), file)?;
         if replaced.buffer_id != buffer_id {
             headers.forget(replaced.buffer_id);
@@ -418,8 +454,7 @@ pub(crate) fn add(
         let rhs = diff.read(cx).rhs_editor().clone();
         rhs.update(cx, |rhs, cx| rhs.fold_buffers([buffer_id], cx));
     }
-    // Its images decode once their block first shows.
-    show_images(diff, &path, window, cx);
+    diff_decorations::redecorate(diff, Redecorate::File(path), window, cx);
 }
 
 /// Opens or folds each of `to`'s files as the reviewer left it in `from`, the diff it replaces,
@@ -570,7 +605,7 @@ pub(crate) fn show_rows(
         })
         .ok();
     });
-    show_images(diff, path, window, cx);
+    diff_decorations::redecorate(diff, Redecorate::File(path.to_string()), window, cx);
 }
 
 /// Shows the rows a newly built file shows, as [`show_rows`] does, before it's added.
@@ -656,21 +691,31 @@ pub(crate) async fn hide_whitespace(
         .ok()
         .flatten()
         .unwrap_or_default();
+    let mut changed = false;
     for path in paths {
-        if let Err(error) = set_whitespace_hidden(&diff, &path, hide, cx).await {
-            log::warn!("{path}: can't change how whitespace changes show: {error:#}");
-            return;
+        match set_whitespace_hidden(&diff, &path, hide, cx).await {
+            Ok(changed_file) => changed |= changed_file,
+            Err(error) => {
+                log::warn!("{path}: can't change how whitespace changes show: {error:#}");
+                break;
+            }
         }
+    }
+    if changed {
+        cx.update(|window, cx| {
+            diff_decorations::redecorate(&diff, Redecorate::Whitespace, window, cx)
+        })
+        .ok();
     }
 }
 
-/// [`hide_whitespace`] for one file.
+/// [`hide_whitespace`] for one file. Returns whether it changed it.
 async fn set_whitespace_hidden(
     diff: &Entity<SplittableEditor>,
     path: &str,
     hide: bool,
     cx: &mut AsyncWindowContext,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let found = cx.update(|_, cx| {
         read(diff, cx, |files| {
             let file = files.get(path)?;
@@ -690,7 +735,7 @@ async fn set_whitespace_hidden(
         .flatten()
     })?;
     let Some((base, snapshot, file_diff, collapsed)) = found else {
-        return Ok(());
+        return Ok(false);
     };
     let head = snapshot.text();
     let compared: Arc<str> = if hide {
@@ -715,7 +760,7 @@ async fn set_whitespace_hidden(
             (Some(Collapsed::WhitespaceOnly), false) => Some(None),
             _ => None,
         };
-        let current = update(diff, cx, |files, headers| {
+        let current = update(diff, cx, |files, _| {
             let file = files.files.get_mut(path)?;
             // Loaded again since: that file follows the setting itself.
             if file.diff != file_diff {
@@ -724,18 +769,18 @@ async fn set_whitespace_hidden(
             file.whitespace_hidden = hide;
             if let Some(collapsed) = &collapse {
                 file.collapsed = collapsed.clone();
-                headers.set_collapsed(file.buffer_id, collapsed.clone());
             }
             Some(())
         })
         .flatten();
         if current.is_none() {
-            return;
+            return false;
         }
         // A file that's whitespace only folds, one that no longer is opens, and any other keeps
         // its fold.
         let fold = collapse.map(|collapsed| collapsed.is_some());
         show_rows(diff, path, fold, window, cx);
+        true
     })
 }
 
@@ -777,30 +822,32 @@ pub(crate) fn set_style(
     });
 }
 
-/// Keeps the image blocks right when the diff goes side by side or inline: one image a side, or
-/// both on the right.
-pub(crate) fn sync_side_by_side(
-    diff: &Entity<SplittableEditor>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let lhs = diff.read(cx).lhs_editor().map(|lhs| lhs.entity_id());
-    // This runs on every change to the diff, so it changes nothing unless the side changed.
-    let unchanged = read(diff, cx, |files| {
-        files.split.store(lhs.is_some(), Ordering::Relaxed);
-        files.lhs == lhs
-    });
-    if unchanged != Some(false) {
-        return;
+/// Shows each changed image's before and after under its file's last line: both on the right
+/// inline, or one a side side by side.
+pub(crate) fn image_blocks(_: &WeakEntity<PrTab>) -> Box<dyn DiffDecorator> {
+    struct ImageBlocks;
+    impl DiffDecorator for ImageBlocks {
+        fn decorate(
+            &mut self,
+            diff: &Entity<SplittableEditor>,
+            run: &Redecorate,
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            match run {
+                // Its images decode once their block first shows.
+                Redecorate::File(path) => show_images(diff, path, window, cx),
+                Redecorate::Split => {
+                    for path in read(diff, cx, ShownFiles::paths).unwrap_or_default() {
+                        show_images(diff, &path, window, cx);
+                    }
+                }
+                // Each file whose rows changed was decorated on its own.
+                Redecorate::Whitespace | Redecorate::Replaced => {}
+            }
+        }
     }
-    let paths = update(diff, cx, |files, _| {
-        files.lhs = lhs;
-        files.paths()
-    })
-    .unwrap_or_default();
-    for path in paths {
-        show_images(diff, &path, window, cx);
-    }
+    Box::new(ImageBlocks)
 }
 
 /// How tall an image block is, in lines of `line_height`, the editor's: room for its images up to
@@ -913,11 +960,9 @@ fn show_images(diff: &Entity<SplittableEditor>, path: &str, window: &mut Window,
         });
         blocks.extend(ids.into_iter().map(|id| (editor.downgrade(), id)));
     }
-    let lhs_id = lhs.map(|lhs| lhs.entity_id());
     update(diff, cx, |files, _| {
-        // What the blocks were drawn for, which `sync_side_by_side` compares with.
-        files.lhs = lhs_id;
-        files.split.store(lhs_id.is_some(), Ordering::Relaxed);
+        // What the blocks were drawn for.
+        files.split.store(lhs.is_some(), Ordering::Relaxed);
         if let Some(file) = files.files.get_mut(path) {
             file.image_blocks = blocks;
         }
@@ -1083,6 +1128,7 @@ pub(crate) mod tests {
     use util::rel_path::RelPath;
     use workspace::{MultiWorkspace, Workspace};
 
+    use crate::diff_decorations::BadgeStyle;
     use crate::file_display::tests::png;
     use crate::image_preview;
     use crate::pr_diff::tests::fixtures::{Entry, Fixture};
@@ -1121,7 +1167,7 @@ pub(crate) mod tests {
 
     /// Shows the local copy's diff of a pull request from `base` to `head` in `tab`, and returns
     /// the diff. The local copy lasts as long as what's returned.
-    fn show(
+    pub(crate) fn show(
         tab: &Entity<PrTab>,
         base: &[Entry],
         head: &[Entry],
@@ -1174,12 +1220,12 @@ pub(crate) mod tests {
     }
 
     /// `count` lines, "`name` 1" to "`name` `count`".
-    fn lines(name: &str, count: u32) -> String {
+    pub(crate) fn lines(name: &str, count: u32) -> String {
         (1..=count).map(|line| format!("{name} {line}\n")).collect()
     }
 
     /// [`lines`], with line `changed` changed.
-    fn changed(name: &str, count: u32, changed: u32) -> String {
+    pub(crate) fn changed(name: &str, count: u32, changed: u32) -> String {
         lines(name, count).replace(
             &format!("{name} {changed}\n"),
             &format!("{name} {changed} changed\n"),
@@ -1205,25 +1251,32 @@ pub(crate) mod tests {
         })
     }
 
-    /// What `path`'s header says it's collapsed for, with ⌥A as the load key.
-    fn collapsed_label(
+    /// The label of `path`'s header's first badge in `style`.
+    pub(crate) fn badge_label(
         diff: &Entity<SplittableEditor>,
         path: &str,
+        style: BadgeStyle,
         cx: &mut VisualTestContext,
     ) -> Option<String> {
         let buffer_id = file(diff, path, cx, |file, _| file.buffer_id);
         cx.update(|_, cx| {
             let rhs = diff.read(cx).rhs_editor().read(cx);
             let headers = rhs.addon::<FileHeaders>().unwrap();
-            headers
-                .collapsed
-                .get(&buffer_id)
-                .map(|collapsed| collapsed.label("⌥A"))
+            headers.badge_label(buffer_id, style)
         })
     }
 
+    /// What `path`'s header says it's collapsed for, which names the load key as the keymap has it.
+    fn collapsed_label(
+        diff: &Entity<SplittableEditor>,
+        path: &str,
+        cx: &mut VisualTestContext,
+    ) -> Option<String> {
+        badge_label(diff, path, BadgeStyle::Outlined, cx)
+    }
+
     /// Puts the diff's cursor at the start of `path`, as choosing it in the file list does.
-    fn select(diff: &Entity<SplittableEditor>, path: &str, cx: &mut VisualTestContext) {
+    pub(crate) fn select(diff: &Entity<SplittableEditor>, path: &str, cx: &mut VisualTestContext) {
         cx.update(|window, cx| put_cursor(diff, path, window, cx));
         cx.run_until_parked();
     }
@@ -1290,7 +1343,7 @@ pub(crate) mod tests {
         for (path, label) in [
             ("Cargo.lock", Some("lockfile")),
             ("api.pb.go", Some("generated")),
-            ("data/big.txt", Some("large: load with ⌥A")),
+            ("data/big.txt", Some("large: load with Option-A")),
             ("src/lib.rs", None),
             (".gitattributes", None),
         ] {
@@ -1425,7 +1478,7 @@ pub(crate) mod tests {
         let (diff, _copy) = show(&tab, &[], &[Entry::File("data.txt", long.as_bytes())], cx);
         assert_eq!(
             collapsed_label(&diff, "data.txt", cx).as_deref(),
-            Some("large: load with ⌥A")
+            Some("large: load with Option-A")
         );
 
         select(&diff, "data.txt", cx);
@@ -1517,11 +1570,11 @@ pub(crate) mod tests {
         );
         assert_eq!(
             collapsed_label(&diff, "Cargo.lock", cx).as_deref(),
-            Some("lockfile, large: open with ⌥A")
+            Some("lockfile, large: open with Option-A")
         );
         assert_eq!(
             collapsed_label(&diff, "big.txt", cx).as_deref(),
-            Some("large: open with ⌥A")
+            Some("large: open with Option-A")
         );
 
         for path in ["Cargo.lock", "big.txt"] {
@@ -1683,7 +1736,7 @@ pub(crate) mod tests {
 
     /// GitHub's entry for `path`, holding [`lines`] of `name` with line `line` changed, with
     /// three lines around it.
-    fn github_file(path: &str, name: &str, line: u32) -> github::files::PullFile {
+    pub(crate) fn github_file(path: &str, name: &str, line: u32) -> github::files::PullFile {
         let start = line - 3;
         let mut patch = format!("@@ -{start},7 +{start},7 @@");
         for unchanged in start..line {
@@ -1707,7 +1760,7 @@ pub(crate) mod tests {
     }
 
     /// Shows GitHub's diff of `files` in `tab`, and returns it.
-    fn show_github(
+    pub(crate) fn show_github(
         tab: &Entity<PrTab>,
         files: Vec<github::files::PullFile>,
         cx: &mut VisualTestContext,
@@ -1827,7 +1880,7 @@ pub(crate) mod tests {
         assert!(is_folded(&local, "huge.txt", cx));
         assert_eq!(
             collapsed_label(&local, "huge.txt", cx).as_deref(),
-            Some("large: load with ⌥A")
+            Some("large: load with Option-A")
         );
     }
 
@@ -2301,15 +2354,7 @@ pub(crate) mod tests {
             cx,
         );
         let renamed_from = |path: &str, cx: &mut VisualTestContext| {
-            let buffer_id = file(&diff, path, cx, |file, _| file.buffer_id);
-            cx.update(|_, cx| {
-                let rhs = diff.read(cx).rhs_editor().read(cx);
-                let headers = rhs.addon::<FileHeaders>().unwrap();
-                headers
-                    .renamed_from
-                    .get(&buffer_id)
-                    .map(|old| old.to_string())
-            })
+            badge_label(&diff, path, BadgeStyle::RenamedFrom, cx)
         };
         assert_eq!(renamed_from("new/a.txt", cx).as_deref(), Some("old/a.txt"));
         assert_eq!(renamed_from("new/b.txt", cx).as_deref(), Some("old/b.txt"));
