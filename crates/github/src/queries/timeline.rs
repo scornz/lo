@@ -691,7 +691,7 @@ pub async fn read_timeline(
 }
 
 /// The name GitHub gives a value of one of its enums, as the generated type serializes it.
-fn github_name<T: Serialize>(value: &T) -> String {
+pub(super) fn github_name<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(name)) => name,
         _ => String::new(),

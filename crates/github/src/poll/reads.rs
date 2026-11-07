@@ -238,7 +238,7 @@ mod tests {
     use crate::cassette::{fixtures_dir, read_cassette};
     use crate::push_history::PushHistory;
     use crate::queries::{
-        PullRequestTimeline, ReviewThreadList, StackLayerList, ViewerPendingReview,
+        MergeFacts, PullRequestTimeline, ReviewThreadList, StackLayerList, ViewerPendingReview,
     };
 
     /// PR #1's recorded check, with a thread and a pending review of yours, each with a comment.
@@ -283,6 +283,7 @@ mod tests {
             ReviewThreadList::WATCHED,
             ViewerPendingReview::WATCHED,
             PullRequestTimeline::WATCHED,
+            MergeFacts::WATCHED,
         ]
         .concat()
         {
@@ -363,6 +364,47 @@ mod tests {
             check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
         });
         assert_eq!(submitted, [true, true, true]);
+    }
+
+    #[test]
+    fn what_decides_a_merge_is_read_again_when_github_may_decide_otherwise() {
+        let before = check();
+        let changed = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut after = before.clone();
+            edit(&mut after);
+            stamp(&before, MergeFacts::WATCHED) != stamp(&after, MergeFacts::WATCHED)
+        };
+
+        // Someone mentions the pull request elsewhere, or edits its description.
+        assert!(!changed(&|check| add(
+            &mut check["timelineItems"]["totalCount"],
+            1
+        )));
+        assert!(!changed(&|check| {
+            check["lastEditedAt"] = "2026-11-07T12:00:00Z".into();
+        }));
+        for edit in [
+            // A push, or GitHub working out mergeability again.
+            &(|check: &mut serde_json::Value| {
+                check["headRefOid"] = "c7f30e9b1a5d7c3e9f1b5d7a3c9e1f5b7d3a9c62".into();
+            }) as &dyn Fn(&mut serde_json::Value),
+            &|check| check["mergeStateStatus"] = "DIRTY".into(),
+            // The base moves on, or another one is picked.
+            &|check| check["baseRefOid"] = "d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1d4c3b2a1".into(),
+            &|check| check["baseRefName"] = "release".into(),
+            // A review, a check, a thread resolved, the queue, the draft.
+            &|check| add(&mut check["submittedReviews"]["totalCount"], 1),
+            &|check| check["statusCheckRollup"] = serde_json::json!({"state": "FAILURE"}),
+            &|check| check["reviewThreads"]["nodes"][0]["isResolved"] = true.into(),
+            &|check| check["mergeQueueEntry"] = serde_json::json!({"position": 1}),
+            &|check| check["isDraft"] = true.into(),
+            // Your pending review, which approve and ship submits.
+            &|check| check["viewerPendingReview"]["nodes"] = serde_json::json!([]),
+            // A review requested, auto-merge turned on, or a comment.
+            &|check| add(&mut check["timelineEvents"]["filteredCount"], 1),
+        ] {
+            assert!(changed(edit));
+        }
     }
 
     #[test]

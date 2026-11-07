@@ -11,6 +11,9 @@ use std::collections::HashSet;
 use crate::error::GithubError;
 
 pub mod mark_file_as_viewed;
+pub mod merge_checks;
+pub mod merge_queue;
+pub mod merge_snapshot;
 pub mod merged_pull_requests;
 pub mod open_pull_requests;
 pub mod pending_review;
@@ -26,6 +29,12 @@ pub mod unmark_file_as_viewed;
 pub mod viewer;
 
 pub use mark_file_as_viewed::MarkFileAsViewed;
+pub use merge_checks::MergeChecks;
+pub use merge_queue::{MergeQueue, MergeQueueEntry, MergeQueueList};
+pub use merge_snapshot::{
+    BranchRule, BranchRules, CheckFacts, Local, MergeFacts, MergeSnapshot, Protection,
+    PullRequestFacts, RepositoryFacts,
+};
 pub use merged_pull_requests::{BranchLookup, MergedPullRequest, MergedPullRequests, StackEntry};
 pub use open_pull_requests::{OpenPullRequest, OpenPullRequestList, OpenPullRequests};
 pub use pending_review::{PendingReview, PendingReviewNode, ViewerPendingReview};
