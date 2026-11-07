@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
-use github::queries::open_pull_requests::RECENTLY_MERGED;
+use github::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use github::queries::{FileViewedState, OpenPullRequestList, PAGE_SIZE};
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
@@ -239,7 +239,11 @@ fn graphql_open_pull_requests_paged() {
         "The OpenPullRequests query for the playground, one PR a page",
         |client| async move {
             client
-                .open_pull_requests_paged("rozed-dev", "playground", 1, RECENTLY_MERGED)
+                .open_pull_requests_paged(
+                    &RepoRef::new("rozed-dev", "playground"),
+                    1,
+                    RECENTLY_UPDATED_MERGED,
+                )
                 .await
                 .unwrap();
         },
@@ -404,7 +408,7 @@ fn poll_playground() {
                     .await
                     .unwrap(),
             );
-            client.open_pull_requests(owner, name).await.unwrap();
+            client.open_pull_requests(&repo).await.unwrap();
 
             let since = open_summary.last_modified();
             let unchanged = client
@@ -541,7 +545,7 @@ fn push_history_fd_2202() {
 
 /// The node IDs of the layers of the stack `number` is in, in the order the tree walks them.
 fn stack_ids(list: &OpenPullRequestList, number: u64) -> Vec<String> {
-    let stacks = list.stacks();
+    let stacks = list.stacks(None, &[]);
     let stack = stacks.stack_of(number).expect("a layer of a stack");
     (stack.layers.iter())
         .map(|&layer| {
@@ -551,42 +555,57 @@ fn stack_ids(list: &OpenPullRequestList, number: u64) -> Vec<String> {
         .collect()
 }
 
-#[test]
-#[ignore = "records from GitHub; run by hand"]
-fn stacks_playground() {
-    record_graphql(
-        "stacks_playground",
-        "OpenPullRequests for the playground, where PR #1 (stack-a -> main) and PR #2 (stack-b \
-         -> stack-a) form stack #3, then StackLayers for both",
+/// Records what a stack's tree reads of `repo`: its open pull requests, with the merged ones
+/// looked up, its trunk rules, and the layers `layers` picks.
+fn record_stacks(
+    name: &str,
+    description: &str,
+    repo: RepoRef,
+    layers: impl FnOnce(&OpenPullRequestList) -> Vec<String>,
+) {
+    let full_name = repo.to_string();
+    record_with_schema(
+        name,
+        description,
+        &full_name,
+        schema_commit(),
         |client| async move {
-            let list = client
-                .open_pull_requests("rozed-dev", "playground")
-                .await
-                .unwrap();
-            client.stack_layers(&stack_ids(&list, 1)).await.unwrap();
+            let list = client.open_pull_requests(&repo).await.unwrap();
+            let rules = client.trunk_rules(&repo, None).await.unwrap();
+            assert_eq!(rules.unavailable, None);
+            let ids = layers(&list);
+            client.stack_layers(&repo, &ids, None).await.unwrap();
         },
     );
 }
 
-const E2E: &str = "rozed-dev/e2e";
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_playground() {
+    record_stacks(
+        "stacks_playground",
+        "OpenPullRequests and TrunkRules for the playground, where PR #1 (stack-a -> main) and PR \
+         #2 (stack-b -> stack-a) form stack #3, then StackLayers for both",
+        RepoRef::new("rozed-dev", "playground"),
+        |list| stack_ids(list, 1),
+    );
+}
 
 #[test]
 #[ignore = "records from GitHub; run by hand"]
 fn stacks_e2e() {
-    record_with_schema(
+    record_stacks(
         "stacks_e2e",
-        "OpenPullRequests for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, #4 c -> b, #5 \
-         e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 (#11 y -> e3/x, \
-         on #10 x, squash-merged, among the pull requests merged most recently); then StackLayers \
-         for E2's tree, the native stack and #11",
-        E2E,
-        schema_commit(),
-        |client| async move {
-            let list = client.open_pull_requests("rozed-dev", "e2e").await.unwrap();
-            let mut ids = stack_ids(&list, 2);
-            ids.extend(stack_ids(&list, 7));
-            ids.extend(stack_ids(&list, 11));
-            client.stack_layers(&ids).await.unwrap();
+        "OpenPullRequests and TrunkRules for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, \
+         #4 c -> b, #5 e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 \
+         (#11 y -> e3/x, on #10 x, squash-merged, among the merged pull requests updated most \
+         recently); then StackLayers for E2's tree, the native stack and #11",
+        RepoRef::new("rozed-dev", "e2e"),
+        |list| {
+            let mut ids = stack_ids(list, 2);
+            ids.extend(stack_ids(list, 7));
+            ids.extend(stack_ids(list, 11));
+            ids
         },
     );
 }
@@ -596,15 +615,18 @@ fn stacks_e2e() {
 fn stacks_e2e_looked_up() {
     record_with_schema(
         "stacks_e2e_looked_up",
-        "OpenPullRequests for rozed-dev/e2e without the pull requests merged most recently, so \
-         E3's #10 comes from looking up the merged pull requests of e3/x, the branch #11 targets",
-        E2E,
+        "OpenPullRequests for rozed-dev/e2e without the merged pull requests updated most \
+         recently, so E3's #10 comes from looking up the merged pull requests of e3/x, the branch \
+         #11 targets",
+        "rozed-dev/e2e",
         schema_commit(),
         |client| async move {
-            let list = client
-                .open_pull_requests_paged("rozed-dev", "e2e", PAGE_SIZE, 0)
+            let repo = RepoRef::new("rozed-dev", "e2e");
+            let mut list = client
+                .open_pull_requests_paged(&repo, PAGE_SIZE, 0)
                 .await
                 .unwrap();
+            client.look_up_merged(&repo, &mut list, None).await.unwrap();
             assert!(list.merged.iter().any(|pr| pr.number == 10));
         },
     );
@@ -613,20 +635,35 @@ fn stacks_e2e_looked_up() {
 #[test]
 #[ignore = "records from GitHub; run by hand"]
 fn stacks_gh_stack() {
-    record_with_schema(
+    record_stacks(
         "stacks_gh_stack",
-        "OpenPullRequests for github/gh-stack as rozed-bot, read only: the rulesets a reader \
-         sees, its organization's included, one of them on ~ALL, and merged GitHub stacks; then \
-         StackLayers for every open pull request, with their reviews and checks",
-        "github/gh-stack",
-        schema_commit(),
-        |client| async move {
-            let list = client
-                .open_pull_requests("github", "gh-stack")
-                .await
-                .unwrap();
-            let ids: Vec<String> = list.pull_requests.iter().map(|pr| pr.id.clone()).collect();
-            client.stack_layers(&ids).await.unwrap();
+        "OpenPullRequests and TrunkRules for github/gh-stack as rozed-bot, read only: the \
+         rulesets a reader sees, its organization's included, one of them for Copilot reviews on \
+         ~ALL, and merged GitHub stacks; then StackLayers for every open pull request, with their \
+         reviews and checks",
+        RepoRef::new("github", "gh-stack"),
+        |list| list.pull_requests.iter().map(|pr| pr.id.clone()).collect(),
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_cli() {
+    record_stacks(
+        "stacks_cli",
+        "OpenPullRequests and TrunkRules for cli/cli as rozed-bot, read only, which can't \
+         administer it: trunk's branch protection shows only through each pull request's base, \
+         and its one ruleset, Copilot reviews on ~ALL, gates nothing; then StackLayers for the \
+         stack of draft pull requests on williammartin-multiaccount branches",
+        RepoRef::new("cli", "cli"),
+        |list| {
+            let draft = (list.pull_requests.iter())
+                .find(|pr| {
+                    pr.head_ref_name
+                        .starts_with("williammartin-multiaccount-draft-")
+                })
+                .expect("the draft stack is open");
+            stack_ids(list, draft.number as u64)
         },
     );
 }

@@ -1,12 +1,13 @@
 # A repository's open pull requests, with what finding stacks needs (design §4): their branches,
-# recent commits and native stack membership, and what a stack's tree shows of each. With them, the
-# repository's trunks and the pull requests merged most recently, which finding stacks needs too.
+# recent commits and native stack membership, and the title and author a stack's tree shows. With
+# them, the repository's default branch, and the pull requests merged that were updated most
+# recently. Each layer's review, checks and queue state come from `StackLayers`, which keeps them
+# current; here they'd be stale until the next push.
 #
 # A page at a time, newest first: Lo reads at most 1,000, and when a repository has more, the
 # oldest are the ones to leave out. Creation time doesn't change while paging, unlike the time of
-# the last update. Only the first page asks for merged pull requests ($merged is 0 after it); the
-# trunks, which can't be left out, come again with every page. A page costs 1 point: GitHub adds
-# up the connections it may read, 144 here, and divides by 100.
+# the last update. Only the first page asks for merged pull requests ($merged is 0 after it). A page
+# costs 1 point: GitHub adds up the connections it may read, 142 here, and divides by 100.
 query OpenPullRequests(
   $owner: String!
   $name: String!
@@ -24,24 +25,6 @@ query OpenPullRequests(
   repository(owner: $owner, name: $name) {
     defaultBranchRef {
       name
-    }
-    # Only people who can administer the repository see these; for anyone else there are none.
-    branchProtectionRules(first: 100) {
-      nodes {
-        pattern
-      }
-    }
-    # Every branch ruleset that applies to the repository, its organization's included.
-    rulesets(first: 100, targets: [BRANCH]) {
-      nodes {
-        enforcement
-        conditions {
-          refName {
-            include
-            exclude
-          }
-        }
-      }
     }
     pullRequests(
       states: [OPEN]
@@ -67,16 +50,26 @@ query OpenPullRequests(
         }
         baseRefName
         baseRefOid
-        # The base branch's tip now, which baseRefOid, set when the head last moved, isn't. Null
-        # once the branch is deleted.
         baseRef {
+          # The base branch's tip now, which baseRefOid, set when the head last moved, isn't. Null
+          # once the branch is deleted.
           target {
             __typename
             oid
           }
+          # The pattern of the branch protection rule that covers it, which people who can't
+          # administer the repository see too, unlike its branchProtectionRules.
+          refUpdateRule {
+            pattern
+          }
         }
         headRefName
         headRefOid
+        headRef {
+          refUpdateRule {
+            pattern
+          }
+        }
         isCrossRepository
         headRepositoryOwner {
           __typename
@@ -90,15 +83,6 @@ query OpenPullRequests(
             }
           }
         }
-        reviewDecision
-        statusCheckRollup {
-          state
-        }
-        isInMergeQueue
-        mergeQueueEntry {
-          position
-          state
-        }
         stackEntry {
           position
           stack {
@@ -109,8 +93,9 @@ query OpenPullRequests(
         }
       }
     }
-    # The pull requests merged most recently. Their commits link the layers still open above them
-    # once their head branch is deleted, when GitHub moves those layers to the branch below.
+    # The merged pull requests updated most recently. Their commits link the layers still open
+    # above them once their head branch is deleted, when GitHub moves those layers to the branch
+    # below. Updates after the merge, such as a bot's comment, can push one out of the window.
     mergedPullRequests: pullRequests(
       states: [MERGED]
       orderBy: { field: UPDATED_AT, direction: DESC }
@@ -132,6 +117,9 @@ fragment MergedPullRequestFields on PullRequest {
     target {
       __typename
       oid
+    }
+    refUpdateRule {
+      pattern
     }
   }
   headRefName

@@ -2,14 +2,21 @@
 //! layer. They're its default branch, and the branches its branch protection rules and branch
 //! rulesets name, matched the way GitHub matches them.
 //!
-//! A rule that covers every branch says nothing about which are long-lived, so it makes no
-//! branch a trunk: a ruleset that includes `~ALL`, or a pattern made of wildcards alone, such as
-//! `*` or `refs/heads/*/**/*`. Repositories use them for policies on every branch, such as
-//! cli/cli's Copilot review ruleset (`~ALL`) or rust-lang/rust's `refs/heads/*` and
-//! `refs/heads/*/**/*`, and taken as trunks they'd keep any stack from forming.
+//! - **Branch protection rules** come from each pull request's base and head branch
+//!   (`refUpdateRule { pattern }`), which anyone who can read the repository sees. The
+//!   repository's own list (`branchProtectionRules`) is empty for anyone who can't administer it.
+//! - **Rulesets** count only when they're active and gate merging, with a rule that requires a
+//!   pull request, a merge queue, status checks or deployments, or restricts updates: branches
+//!   nobody pushes work to. A ruleset that only enforces a policy, such as signed commits, Copilot
+//!   review or no force pushes, often covers work branches too. They're read on their own
+//!   ([`crate::queries::trunk_rules`]), and without them the trunks are the default branch and the
+//!   protected branches.
+//! - **A rule that covers every branch** says nothing about which are long-lived, so it makes no
+//!   branch a trunk: an include of `~ALL` or of wildcards alone, such as `*` or
+//!   `refs/heads/*/**/*`, in a ruleset without excludes, or a protection rule's `*`. With excludes,
+//!   such a ruleset protects everything but the excluded branches, and those it covers are trunks.
 //!
-//! GitHub shows a repository's branch protection rules only to people who can administer it, so
-//! for anyone else, its trunks are its default branch and its rulesets'.
+//! A long-lived branch that nothing protects can't be told from a work branch.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,15 +29,14 @@ pub const ALL: &str = "~ALL";
 const HEADS: &str = "refs/heads/";
 
 /// What decides a repository's trunks.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Trunks {
     /// `defaultBranchRef { name }`, or `None` for an empty repository.
     pub default_branch: Option<String>,
-    /// The patterns of its branch protection rules (`branchProtectionRules { pattern }`), matched
-    /// against branch names.
+    /// The patterns of the branch protection rules that cover its pull requests' branches,
+    /// matched against branch names.
     pub protected: Vec<String>,
-    /// The ref name conditions of the branch rulesets that apply to it, its organization's
-    /// included, other than disabled ones.
+    /// The ref name conditions of the active branch rulesets that gate merging.
     pub rulesets: Vec<RefNames>,
 }
 
@@ -45,7 +51,7 @@ pub struct RefNames {
 
 impl Trunks {
     /// Whether `branch` is a trunk: the default branch, or a branch a protection rule or ruleset
-    /// names other than by covering every branch.
+    /// names, other than by covering every branch.
     pub fn contains(&self, branch: &str) -> bool {
         let default_branch = self.default_branch.as_deref();
         default_branch == Some(branch)
@@ -64,10 +70,10 @@ impl Trunks {
         let mut branches: Vec<&str> = (prs.iter().map(|pr| pr.base_ref.as_str()))
             .chain(heads)
             .filter(|branch| self.default_branch.as_deref() != Some(*branch))
-            .filter(|branch| self.contains(branch))
             .collect();
         branches.sort_unstable();
         branches.dedup();
+        branches.retain(|branch| self.contains(branch));
         (self.default_branch.iter().map(String::as_str))
             .chain(branches)
             .map(String::from)
@@ -82,11 +88,13 @@ impl RefNames {
         self.include.iter().any(matches) && !self.exclude.iter().any(matches)
     }
 
-    /// Whether the condition covers `branch` by an include that doesn't cover every branch.
+    /// Whether the condition names `branch` as a trunk: it covers it, by an include that doesn't
+    /// cover every branch, or does but comes with excludes.
     fn names(&self, branch: &str, default_branch: Option<&str>) -> bool {
         let matches = |pattern: &String| ref_matches(pattern, branch, default_branch);
+        let everything_but = !self.exclude.is_empty();
         (self.include.iter())
-            .filter(|pattern| !covers_every_branch(pattern))
+            .filter(|pattern| everything_but || !covers_every_branch(pattern))
             .any(matches)
             && !self.exclude.iter().any(matches)
     }
@@ -116,10 +124,12 @@ fn covers_every_branch(pattern: &str) -> bool {
 /// - `**/` matches any number of directories, none included; `**` anywhere else is `*`;
 /// - `[set]` matches one character in the set, which can hold ranges such as `a-z`, and `[!set]`
 ///   one character outside it;
-/// - `\` makes the next character plain.
+/// - `\` makes the next character plain, as in Ruby.
 ///
-/// GitHub doesn't support `{a,b}` (`File::FNM_EXTGLOB`) or complementing a set with `^`, so
-/// both are plain characters here. Matching is case-sensitive, as git's branch names are.
+/// GitHub doesn't support `{a,b}` (`File::FNM_EXTGLOB`), so braces are plain characters. It says
+/// a set can't be complemented with `^` and `\` can't quote, without saying what they do instead;
+/// here `^` is plain and `\` escapes. A branch's name can hold none of `\ ^ [ * ?`, so a pattern
+/// that relies on either matches nothing real. Matching is case-sensitive, as git's names are.
 pub fn fnmatch(pattern: &str, name: &str) -> bool {
     let pattern: Vec<&str> = pattern.split('/').collect();
     let name: Vec<&str> = name.split('/').collect();
@@ -358,6 +368,33 @@ mod tests {
         );
         assert!(mixed.contains("next"));
         assert!(!mixed.contains("feature"));
+    }
+
+    #[test]
+    fn a_rule_for_every_branch_but_some_names_the_rest() {
+        // Pull requests on every branch but work branches: develop and release branches are
+        // trunks, and so is anything else no rule excludes.
+        let flow = trunks(
+            "main",
+            &[],
+            vec![refs(
+                &[ALL],
+                &["refs/heads/feature/**/*", "refs/heads/users/**/*"],
+            )],
+        );
+        assert!(flow.contains("develop"));
+        assert!(flow.contains("release/2.0"));
+        assert!(!flow.contains("feature/a"));
+        assert!(!flow.contains("feature/a/b"));
+        assert!(!flow.contains("users/me/topic"));
+        // The same with wildcards for every branch.
+        let wildcards = trunks(
+            "main",
+            &[],
+            vec![refs(&["refs/heads/**/*"], &["refs/heads/feature/*"])],
+        );
+        assert!(wildcards.contains("develop"));
+        assert!(!wildcards.contains("feature/a"));
     }
 
     #[test]

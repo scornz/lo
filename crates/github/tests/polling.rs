@@ -22,7 +22,7 @@ use github::poll::{
     RateLimitState, WallClock,
 };
 use github::push_history::PushHistory;
-use github::queries::{PullRequestData, StackLayerList, pull_request};
+use github::queries::{PullRequestData, StackLayerList, TrunkRuleList, pull_request};
 use github::replay::ReplayHttpClient;
 use github::{AuthenticatedUser, GithubError, PullRef, RepoRef, Target, Token, User};
 use gpui::{AppContext as _, BackgroundExecutor, Entity, TestAppContext};
@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 
 /// The wall clock when each test starts: after every recorded rate-limit window has reset, so
 /// only the windows a test sets count.
-const START: u64 = 1_794_020_000;
+const START: u64 = 1_794_100_000;
 const LOGIN: &str = "rozed-bot";
 
 fn wall(secs: u64) -> SystemTime {
@@ -2361,4 +2361,38 @@ async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_lay
     );
     t.run_until(120);
     assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
+}
+
+#[gpui::test]
+async fn trunk_rules_are_read_with_the_open_pr_and_refreshed_every_five_minutes(
+    cx: &mut TestAppContext,
+) {
+    let r = recorded();
+    let (_, interactions) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("stacks_playground")).unwrap();
+    let (_, rules) = (interactions.into_iter())
+        .find(|(_, i)| i.request.operation.as_deref() == Some("TrunkRules"))
+        .unwrap();
+    let mut all = r.clone();
+    all.push(rules);
+    let mut t = Polling::new("trunk_rules", all, cx).await;
+    let at_once = t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        poller.trunk_rules(pr(1), cx)
+    });
+    assert_eq!(at_once, None);
+    let reads = |t: &Polling| -> Vec<u64> {
+        (t.requests().into_iter())
+            .filter(|(_, what)| what == "TrunkRules")
+            .map(|(secs, _)| secs)
+            .collect()
+    };
+    t.run();
+    assert_eq!(reads(&t), [0]);
+    let rules = t.read(|poller| poller.cached_read::<TrunkRuleList>(&pr(1)));
+    assert_eq!(rules.unwrap().value.unavailable, None);
+    t.run_until(299);
+    assert_eq!(reads(&t), Vec::<u64>::new());
+    t.run_until(301);
+    assert_eq!(reads(&t), [300]);
 }

@@ -10,36 +10,30 @@
       "after": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQwODoxNTowOFrPAAAAATUMBeQ=",
       "merged": 0
     },
-    "query_sha256": "94116bbea7c4d0e8d36757ca81ed11a47120822096ec9936d6149436cb54e5c8"
+    "query_sha256": "1988bca2b12653d0a9337df73b8b9e4796a177e2d44a0d34bff05d234ac3e88d"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4984",
-      "x-ratelimit-reset": "1794016456",
+      "x-ratelimit-remaining": "4991",
+      "x-ratelimit-reset": "1794020825",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "16"
+      "x-ratelimit-used": "9"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4984,
-          "used": 16,
-          "resetAt": "2026-11-07T01:54:16Z"
+          "remaining": 4991,
+          "used": 9,
+          "resetAt": "2026-11-07T03:07:05Z"
         },
         "repository": {
           "defaultBranchRef": {
             "name": "main"
-          },
-          "branchProtectionRules": {
-            "nodes": []
-          },
-          "rulesets": {
-            "nodes": []
           },
           "pullRequests": {
             "totalCount": 2,
@@ -65,10 +59,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "6ce218eb1930c49db64d5744c76a6739d4525e82"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "stack-a",
                 "headRefOid": "b046244d9569964088e952243e5e557312322488",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -83,10 +81,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": {
                   "position": 1,
                   "stack": {

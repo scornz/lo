@@ -6,32 +6,47 @@
     "variables": {
       "owner": "rozed-dev",
       "name": "e2e",
-      "headRefName": "e3/x",
-      "first": 10
+      "b0": "e10/base",
+      "b1": "e12/base",
+      "b2": "e3/x",
+      "b3": "e6/base",
+      "b4": "e9/base",
+      "b5": "e10/base",
+      "b6": "e10/base",
+      "b7": "e10/base",
+      "b8": "e10/base",
+      "b9": "e10/base",
+      "first": 5
     },
-    "query_sha256": "f75c378b6ef0cfb6c59395c921c7acfadea6d1f33c0e9b5314e4e677c2998aa0"
+    "query_sha256": "feccbc8aa9cf1e8c6d522dde0846b357b68c66a87c9d5b9e84008e9be191a0ff"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4962",
-      "x-ratelimit-reset": "1794016455",
+      "x-ratelimit-remaining": "4983",
+      "x-ratelimit-reset": "1794020825",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "38"
+      "x-ratelimit-used": "17"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4962,
-          "used": 38,
-          "resetAt": "2026-11-07T01:54:15Z"
+          "remaining": 4983,
+          "used": 17,
+          "resetAt": "2026-11-07T03:07:05Z"
         },
         "repository": {
-          "pullRequests": {
+          "b0": {
+            "nodes": []
+          },
+          "b1": {
+            "nodes": []
+          },
+          "b2": {
             "nodes": [
               {
                 "number": 10,
@@ -41,7 +56,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e3/x",
                 "headRefOid": "e86aa486704016ee033d555bcca81e33898c5608",
@@ -73,6 +89,27 @@
                 "stackEntry": null
               }
             ]
+          },
+          "b3": {
+            "nodes": []
+          },
+          "b4": {
+            "nodes": []
+          },
+          "b5": {
+            "nodes": []
+          },
+          "b6": {
+            "nodes": []
+          },
+          "b7": {
+            "nodes": []
+          },
+          "b8": {
+            "nodes": []
+          },
+          "b9": {
+            "nodes": []
           }
         }
       }

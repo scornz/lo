@@ -25,10 +25,12 @@ use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
 use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
 use crate::push_history::{PushHistory, read_push_history};
+use crate::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use crate::queries::stack_layers::read_stack_layers;
+use crate::queries::trunk_rules::read_trunk_rules;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
-    StackLayerList,
+    StackLayerList, TrunkRuleList,
 };
 use crate::rate_limit::RateLimits;
 use crate::revision_marks::RevisionMarks;
@@ -200,11 +202,12 @@ enum Job {
         summary: Option<Arc<PullSummary>>,
     },
     /// A watched repository: conditional GETs of its open PRs, a page at a time, then the full
-    /// list when they changed.
+    /// list when they changed, and the merged PRs its stacks link through, carried over from
+    /// `list` where their branches haven't moved.
     Repo {
         repo: RepoRef,
         listed: Option<Arc<ListedPulls>>,
-        have_list: bool,
+        list: Option<Arc<OpenPullRequestList>>,
     },
     /// A read [`Poller::read_cached`] keeps for the open PR.
     Read { pull: PullRef, read: ReadJob },
@@ -340,12 +343,14 @@ impl Job {
             Self::Repo {
                 repo,
                 listed: known,
-                have_list,
+                list,
             } => {
                 let listed = get_listed(&client, &repo, known.as_deref()).await?;
                 let changed = known.is_none_or(|known| !known.lists_the_same(&listed));
-                let list = if changed || !have_list {
-                    Some(client.open_pull_requests(&repo.owner, &repo.name).await?)
+                let list = if changed || list.is_none() {
+                    let page = PAGE_SIZE;
+                    let merged = RECENTLY_UPDATED_MERGED;
+                    Some(client.open_pull_requests_paged(&repo, page, merged).await?)
                 } else {
                     None
                 };
@@ -707,7 +712,7 @@ impl Poller {
 
     /// What the stack tree shows of the layers whose node IDs are `ids`, kept for `pull`, the
     /// layer that's open, as [`Self::read_cached`] keeps it. It's read again when the open layer's
-    /// state, head, review decision, checks or queue entry change ([`StackLayerList`]'s
+    /// state, head, review decision, checks, queue entry or retargets change ([`StackLayerList`]'s
     /// [`CachedRead::WATCHED`]), on the 5-minute refresh, and at once when the layers asked for
     /// aren't the ones it holds. Until then it returns what it holds, which may be another set of
     /// layers.
@@ -717,19 +722,32 @@ impl Poller {
         ids: Vec<String>,
         cx: &mut Context<Self>,
     ) -> Option<Cached<Arc<StackLayerList>>> {
-        let asked = ids.clone();
+        let (asked, repo) = (ids.clone(), pull.repo.clone());
         let cached = self.read_cached(
             pull.clone(),
-            move |client, _| read_stack_layers(client, asked.clone()),
+            move |client, known| read_stack_layers(client, repo.clone(), asked.clone(), known),
             cx,
         );
-        if cached
-            .as_ref()
-            .is_some_and(|cached| cached.value.ids != ids)
-        {
+        if (cached.as_ref()).is_some_and(|cached| cached.value.ids != ids) {
             self.read_again::<StackLayerList>(&pull, cx);
         }
         cached
+    }
+
+    /// The branch rulesets that name trunks in `pull`'s repository, kept for `pull`, the pull
+    /// request that's open, as [`Self::read_cached`] keeps them, read again on the 5-minute
+    /// refresh. A failure keeps what was read before, and says why.
+    pub fn trunk_rules(
+        &mut self,
+        pull: PullRef,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<TrunkRuleList>>> {
+        let repo = pull.repo.clone();
+        self.read_cached(
+            pull,
+            move |client, known| read_trunk_rules(client, repo.clone(), known),
+            cx,
+        )
     }
 
     /// Makes a read [`Self::read_cached`] keeps for `pull` due at once, whatever the fields it
@@ -964,7 +982,7 @@ impl Poller {
             consider(&state.schedule, Tier::Watched, &|| Job::Repo {
                 repo: repo.clone(),
                 listed: state.listed.as_ref().map(|l| l.value.clone()),
-                have_list: state.list.is_some(),
+                list: state.list.as_ref().map(|list| list.value.clone()),
             });
         }
         // The open PR's reads, once its check says what they watch.
@@ -1602,6 +1620,29 @@ enum Put {
     ForgetCheck,
 }
 
+/// Adds to a repository's new list of open PRs the merged PRs its stacks link through, with
+/// `known`, the list before it, to carry lookups over from.
+async fn look_up_merged(
+    client: GithubClient,
+    repo: RepoRef,
+    known: Option<Arc<OpenPullRequestList>>,
+    result: Result<Outcome, GithubError>,
+) -> Result<Outcome, GithubError> {
+    match result? {
+        Outcome::Repo {
+            listed,
+            list: Some(mut list),
+        } => {
+            (client.look_up_merged(&repo, &mut list, known.as_deref())).await?;
+            Ok(Outcome::Repo {
+                listed,
+                list: Some(list),
+            })
+        }
+        outcome => Ok(outcome),
+    }
+}
+
 /// The poll loop: runs whatever is due, one poll at a time, and sleeps until the next is due or
 /// something changes.
 async fn poll(
@@ -1643,6 +1684,17 @@ async fn poll(
                     Job::Read { .. } => {
                         let gated = client.gated(queue.gate());
                         executor.spawn((*job).clone().run(gated)).await
+                    }
+                    Job::Repo { repo, list, .. } => {
+                        let result = queue
+                            .read(|| executor.spawn((*job).clone().run(client.clone())))
+                            .await;
+                        // The merged PRs its stacks link through, a turn for each request.
+                        let (gated, repo) = (client.gated(queue.gate()), repo.clone());
+                        let known = list.clone();
+                        executor
+                            .spawn(async move { look_up_merged(gated, repo, known, result).await })
+                            .await
                     }
                     _ => {
                         queue

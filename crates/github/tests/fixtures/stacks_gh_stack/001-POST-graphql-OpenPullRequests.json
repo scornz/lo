@@ -10,131 +10,30 @@
       "after": null,
       "merged": 20
     },
-    "query_sha256": "94116bbea7c4d0e8d36757ca81ed11a47120822096ec9936d6149436cb54e5c8"
+    "query_sha256": "1988bca2b12653d0a9337df73b8b9e4796a177e2d44a0d34bff05d234ac3e88d"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4961",
-      "x-ratelimit-reset": "1794016455",
+      "x-ratelimit-remaining": "4973",
+      "x-ratelimit-reset": "1794020281",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "39"
+      "x-ratelimit-used": "27"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4961,
-          "used": 39,
-          "resetAt": "2026-11-07T01:54:15Z"
+          "remaining": 4973,
+          "used": 27,
+          "resetAt": "2026-11-07T02:58:01Z"
         },
         "repository": {
           "defaultBranchRef": {
             "name": "main"
-          },
-          "branchProtectionRules": {
-            "nodes": []
-          },
-          "rulesets": {
-            "nodes": [
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "~ALL"
-                    ],
-                    "exclude": []
-                  }
-                }
-              },
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "~DEFAULT_BRANCH"
-                    ],
-                    "exclude": []
-                  }
-                }
-              },
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "refs/heads/enterprise-2.*-release",
-                      "refs/heads/enterprise-3.[1-9]-release",
-                      "refs/heads/enterprise-3.[1-9].*-release",
-                      "refs/heads/enterprise-3.10-release",
-                      "refs/heads/enterprise-3.10.*-release",
-                      "refs/heads/enterprise-3.11-release",
-                      "refs/heads/enterprise-3.11.*-release",
-                      "refs/heads/enterprise-3.12-release",
-                      "refs/heads/enterprise-3.12.*-release",
-                      "refs/heads/enterprise-3.13-release",
-                      "refs/heads/enterprise-3.13.*-release",
-                      "refs/heads/enterprise-3.14-release",
-                      "refs/heads/enterprise-3.14.*-release",
-                      "refs/heads/enterprise-3.15-release",
-                      "refs/heads/enterprise-3.15.*-release",
-                      "refs/heads/enterprise-3.16-release",
-                      "refs/heads/enterprise-3.16.*-release",
-                      "refs/heads/enterprise-3.17-release",
-                      "refs/heads/enterprise-3.17.*-release",
-                      "refs/heads/enterprise-3.18-release",
-                      "refs/heads/enterprise-3.18.*-release"
-                    ],
-                    "exclude": []
-                  }
-                }
-              },
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "refs/heads/enterprise-*.*.*-release",
-                      "refs/heads/enterprise-*.*.*-test"
-                    ],
-                    "exclude": [
-                      "refs/heads/enterprise-*.*.*-backport-*"
-                    ]
-                  }
-                }
-              },
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "refs/heads/enterprise-*.*-release",
-                      "refs/heads/enterprise-*.*-test"
-                    ],
-                    "exclude": [
-                      "refs/heads/enterprise-*.*.*-release",
-                      "refs/heads/enterprise-*.*-backport-*",
-                      "refs/heads/enterprise-*.*.*-test"
-                    ]
-                  }
-                }
-              },
-              {
-                "enforcement": "ACTIVE",
-                "conditions": {
-                  "refName": {
-                    "include": [
-                      "~DEFAULT_BRANCH"
-                    ],
-                    "exclude": []
-                  }
-                }
-              }
-            ]
           },
           "pullRequests": {
             "totalCount": 6,
@@ -160,10 +59,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-11c2e24550",
                 "headRefOid": "8ffe14b56bf680a7237eaf81798cfcccbafb98e1",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -178,12 +81,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -203,10 +100,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/fix-rebase-upstack-head-moved",
                 "headRefOid": "51ab7fc963aea931df1c29f8801b1e702ac51f62",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -221,12 +122,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -246,10 +141,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "closed-bottom-pr-hint",
                 "headRefOid": "c4caa6a9f789d6ba815d68e5ea98a56d89ccafb9",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -279,12 +178,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -304,10 +197,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "sync-fewer-api-calls",
                 "headRefOid": "983960cb442b053a5ed226334fd0249fe1cdcb1d",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -352,12 +249,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -377,10 +268,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "resolve-default-branch",
                 "headRefOid": "eb10e763c845eb1834e9f5f6e9655fc2141fbac3",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -415,12 +310,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -440,10 +329,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/prompter-refactor",
                 "headRefOid": "d2c2be05d220bac5f91a6ac27aa88d0476e105c3",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -463,12 +356,6 @@
                     }
                   ]
                 },
-                "reviewDecision": "REVIEW_REQUIRED",
-                "statusCheckRollup": {
-                  "state": "SUCCESS"
-                },
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               }
             ]
@@ -483,7 +370,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-aac2c02551",
                 "headRefOid": "3cbe46b8c8323cb0523dd47f3bc37206c8a2ede6",
@@ -517,7 +405,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/push-atomic-default",
                 "headRefOid": "2cf4bc96a23592a849df5e25760b90ecf075d5ba",
@@ -561,7 +450,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/base-retargeting",
                 "headRefOid": "a7914a9329ffbaa9f66641f969935681313eaac4",
@@ -635,7 +525,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/brand-styling",
                 "headRefOid": "e2ea207af53edf74535b81fae1d664f4b06e9aa9",
@@ -699,7 +590,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/fix-stale-rebase",
                 "headRefOid": "d7911451140ca915641d9dcc78cb0b70decb7dce",
@@ -738,7 +630,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "ktravers/rebase-with-push-option",
                 "headRefOid": "d8282b777c1d220ebd4eb0348eedeb38dfde8ada",
@@ -792,7 +685,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/stack-links",
                 "headRefOid": "873861e242442ff0ebb9fdb3393e5130204f84b6",
@@ -915,7 +809,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/test-improvements",
                 "headRefOid": "175297de213e623a7df6d73d20de3e2eb4e00472",
@@ -964,7 +859,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/go_modules/go_modules-b0addabadf",
                 "headRefOid": "391ecb5247312c38cbb45b6fea713db43f41b1e8",
@@ -998,7 +894,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-0ea313c36a",
                 "headRefOid": "d3677de14913127cd8a33c5374a6ce2b9e100862",
@@ -1032,7 +929,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/github_actions/actions/setup-node-7.1.0",
                 "headRefOid": "3be768989e8ee516e92f62ef46a806dee58e657a",
@@ -1144,7 +1042,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/fix-unstack-partial-merge",
                 "headRefOid": "41a1c477ea3488b589d8c102692a5e758a5657ca",
@@ -1188,7 +1087,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "williammartin-vhs-demo-ssh-alias",
                 "headRefOid": "e22c78249f09af6e7c7e6fd166f07c5d996d870d",
@@ -1227,7 +1127,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-501f592bae",
                 "headRefOid": "269d1d2cc115d9ee32f6fd903fe4e3f33a1c30f5",
@@ -1261,7 +1162,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "ktravers/bump-go-gh",
                 "headRefOid": "fdcf660e08c2d5b9fda546734354c86d432af62c",
@@ -1295,7 +1197,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "skarim/cli-update-notification",
                 "headRefOid": "80dfd1f44c787d4779abd4dbbababa32366f9ac8",
@@ -1339,7 +1242,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "dependabot/github_actions/actions/setup-go-7.0.0",
                 "headRefOid": "763152a410382109cc17bbac3393c7a09cc0a65b",

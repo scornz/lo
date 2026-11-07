@@ -1,6 +1,6 @@
 {
-  "description": "OpenPullRequests for rozed-dev/e2e without the pull requests merged most recently, so E3's #10 comes from looking up the merged pull requests of e3/x, the branch #11 targets",
-  "recorded_at": "2026-11-07T01:21:43Z",
+  "description": "OpenPullRequests for rozed-dev/e2e without the merged pull requests updated most recently, so E3's #10 comes from looking up the merged pull requests of e3/x, the branch #11 targets",
+  "recorded_at": "2026-11-07T02:19:45Z",
   "repo": "rozed-dev/e2e",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

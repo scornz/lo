@@ -2,13 +2,12 @@
 //! (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3.
 
 use futures::executor::block_on;
-use github::queries::merged_pull_requests::{MAX_BRANCH_LOOKUPS, MERGED_PER_BRANCH};
-use github::queries::open_pull_requests::RECENTLY_MERGED;
+use github::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use github::queries::{
     FileViewedState, MergeStateStatus, PullRequestCheckData, PullRequestState, StatusState,
 };
 use github::replay::ReplayHttpClient;
-use github::{GithubClient, GithubError, Token};
+use github::{GithubClient, GithubError, RepoRef, Token};
 
 fn client(cassette: &str) -> (GithubClient, std::sync::Arc<ReplayHttpClient>) {
     let http = ReplayHttpClient::cassette(cassette);
@@ -139,9 +138,9 @@ fn a_check_counts_its_unresolved_threads() {
 #[test]
 fn open_pull_requests_with_their_stack() {
     let (client, http) = client("graphql_open_pull_requests_paged");
+    let playground = RepoRef::new("rozed-dev", "playground");
     let list =
-        block_on(client.open_pull_requests_paged("rozed-dev", "playground", 1, RECENTLY_MERGED))
-            .unwrap();
+        block_on(client.open_pull_requests_paged(&playground, 1, RECENTLY_UPDATED_MERGED)).unwrap();
     assert_eq!(list.total_count, 2);
     assert!(!list.is_truncated());
     assert_eq!(http.seen().len(), 2);
@@ -335,7 +334,7 @@ mod synthetic {
     use github::replay::ReplayHttpClient;
     use serde_json::{Value, json};
 
-    use super::{MERGED_PER_BRANCH, RECENTLY_MERGED};
+    use super::{RECENTLY_UPDATED_MERGED, RepoRef};
 
     pub fn replay(answers: Vec<(&str, Value, Value)>) -> Arc<ReplayHttpClient> {
         Arc::new(
@@ -384,34 +383,40 @@ mod synthetic {
         }}})
     }
 
+    pub fn repo() -> RepoRef {
+        RepoRef::new("o", "r")
+    }
+
     /// The variables of a page of one open PR after `after`. The first page also asks for the
-    /// pull requests merged most recently.
+    /// merged pull requests updated most recently.
     pub fn open_after(after: Option<&str>) -> Value {
-        let merged = if after.is_none() { RECENTLY_MERGED } else { 0 };
+        let merged = if after.is_none() {
+            RECENTLY_UPDATED_MERGED
+        } else {
+            0
+        };
         json!({"owner": "o", "name": "r", "first": 1, "after": after, "merged": merged})
     }
 
-    /// An open or merged PR's node, `head` → `base`.
-    pub fn pr_node(number: i64, base: &str, head: &str) -> Value {
-        json!({
-            "id": format!("PR_{number}"), "number": number, "title": "t", "isDraft": false,
-            "createdAt": "2026-11-06T08:15:08Z", "updatedAt": "2026-11-06T08:15:08Z",
-            "author": null, "baseRefName": base, "baseRefOid": "b".repeat(40), "baseRef": null,
-            "headRefName": head, "headRefOid": format!("{number:040}"), "isCrossRepository": false,
-            "headRepositoryOwner": null, "commits": {"nodes": []}, "reviewDecision": null,
-            "statusCheckRollup": null, "isInMergeQueue": false, "mergeQueueEntry": null,
-            "stackEntry": null, "mergeCommit": null,
-        })
-    }
-
-    /// A page of open PRs, `nodes`, in a repository whose default branch is `main`.
-    pub fn open_nodes(nodes: Vec<Value>, has_next: bool, end_cursor: Option<&str>) -> Value {
+    /// A page of open PRs, numbered `numbers`, each targeting `main`.
+    pub fn open_page(numbers: &[i64], has_next: bool, end_cursor: Option<&str>) -> Value {
+        let nodes: Vec<Value> = (numbers.iter())
+            .map(|number| {
+                json!({
+                    "id": format!("PR_{number}"), "number": number, "title": "t",
+                    "isDraft": false, "createdAt": "2026-11-06T08:15:08Z",
+                    "updatedAt": "2026-11-06T08:15:08Z", "author": null, "baseRefName": "main",
+                    "baseRefOid": "b".repeat(40), "baseRef": null,
+                    "headRefName": format!("pr-{number}"), "headRefOid": "c".repeat(40),
+                    "headRef": null, "isCrossRepository": false, "headRepositoryOwner": null,
+                    "commits": {"nodes": []}, "stackEntry": null,
+                })
+            })
+            .collect();
         json!({
             "rateLimit": null,
             "repository": {
                 "defaultBranchRef": {"name": "main"},
-                "branchProtectionRules": {"nodes": []},
-                "rulesets": null,
                 "pullRequests": {
                     "totalCount": 3,
                     "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
@@ -420,24 +425,6 @@ mod synthetic {
                 "mergedPullRequests": {"nodes": []},
             },
         })
-    }
-
-    /// The variables that look up the merged PRs from `branch`.
-    pub fn merged_from(branch: &str) -> Value {
-        json!({"owner": "o", "name": "r", "headRefName": branch, "first": MERGED_PER_BRANCH})
-    }
-
-    /// The merged PRs `nodes`.
-    pub fn merged_nodes(nodes: Vec<Value>) -> Value {
-        json!({"rateLimit": null, "repository": {"pullRequests": {"nodes": nodes}}})
-    }
-
-    /// A page of open PRs, numbered `numbers`, each targeting `main`.
-    pub fn open_page(numbers: &[i64], has_next: bool, end_cursor: Option<&str>) -> Value {
-        let nodes = (numbers.iter())
-            .map(|&number| pr_node(number, "main", &format!("pr-{number}")))
-            .collect();
-        open_nodes(nodes, has_next, end_cursor)
     }
 }
 
@@ -523,8 +510,12 @@ fn open_pull_requests_without_a_cursor_to_go_on_from_stop() {
         open_after(None),
         open_page(&[3], true, None),
     )]);
-    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1, RECENTLY_MERGED))
-        .unwrap_err();
+    let error = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap_err();
     assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
 }
 
@@ -543,8 +534,12 @@ fn open_pull_requests_that_repeat_stop_the_paging() {
             open_page(&[2], true, Some("c1")),
         ),
     ]);
-    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1, RECENTLY_MERGED))
-        .unwrap_err();
+    let error = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap_err();
     assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
     assert_eq!(http.seen().len(), 2);
 }
@@ -559,8 +554,12 @@ fn null_pull_requests_dont_make_the_list_look_capped() {
         .unwrap()
         .push(serde_json::Value::Null);
     let http = replay(vec![("OpenPullRequests", open_after(None), page)]);
-    let list =
-        block_on(client_for(&http).open_pull_requests_paged("o", "r", 1, RECENTLY_MERGED)).unwrap();
+    let list = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap();
     assert_eq!(list.pull_requests.len(), 2);
     assert!(!list.is_truncated());
 }
@@ -642,77 +641,4 @@ fn an_error_on_what_was_asked_for_is_the_error() {
         matches!(error, GithubError::OAuthAppRestricted { .. }),
         "{error:?}"
     );
-}
-
-#[test]
-fn merged_pull_requests_are_looked_up_down_to_a_trunk() {
-    use synthetic::*;
-    // #3 targets `b`, which merged into `a`, which merged into `main`.
-    let mut b = pr_node(2, "a", "b");
-    b["mergeCommit"] = serde_json::json!({"oid": "d".repeat(40), "parents": {"nodes": []}});
-    let a = pr_node(1, "main", "a");
-    // `b` hasn't moved since it merged.
-    let mut c = pr_node(3, "b", "c");
-    c["baseRef"] = serde_json::json!({"target": {"__typename": "Commit", "oid": b["headRefOid"]}});
-    let http = replay(vec![
-        (
-            "OpenPullRequests",
-            open_after(None),
-            open_nodes(vec![c], false, None),
-        ),
-        (
-            "MergedPullRequests",
-            merged_from("b"),
-            merged_nodes(vec![b]),
-        ),
-        (
-            "MergedPullRequests",
-            merged_from("a"),
-            merged_nodes(vec![a]),
-        ),
-    ]);
-    let list =
-        block_on(client_for(&http).open_pull_requests_paged("o", "r", 1, RECENTLY_MERGED)).unwrap();
-    let merged: Vec<_> = (list.merged.iter())
-        .map(|pr| (pr.number, pr.head_in_base))
-        .collect();
-    // `b` was squashed: its merge commit isn't its head, and has no parent that is.
-    assert_eq!(merged, [(2, false), (1, true)]);
-    assert!(!list.merged_truncated);
-    assert_eq!(http.seen().len(), 3);
-    let stacks = list.stacks();
-    let layer = stacks.layer(3).unwrap();
-    assert_eq!(layer.parent, stacks::Parent::Branch("main".into()));
-    assert_eq!(
-        layer.needs_rebase.as_ref().map(|needs| needs.merged),
-        Some(2)
-    );
-}
-
-#[test]
-fn merged_pull_requests_are_looked_up_for_so_many_branches() {
-    use synthetic::*;
-    let count = MAX_BRANCH_LOOKUPS as i64 + 2;
-    let nodes = (1..=count)
-        .map(|number| pr_node(number, &format!("gone-{number}"), &format!("pr-{number}")))
-        .collect();
-    let mut answers = vec![(
-        "OpenPullRequests",
-        open_after(None),
-        open_nodes(nodes, false, None),
-    )];
-    for number in 1..=count {
-        let branch = format!("gone-{number}");
-        answers.push((
-            "MergedPullRequests",
-            merged_from(&branch),
-            merged_nodes(Vec::new()),
-        ));
-    }
-    let http = replay(answers);
-    let list =
-        block_on(client_for(&http).open_pull_requests_paged("o", "r", 1, RECENTLY_MERGED)).unwrap();
-    assert!(list.merged.is_empty());
-    assert!(list.merged_truncated);
-    assert_eq!(http.seen().len(), 1 + MAX_BRANCH_LOOKUPS);
 }

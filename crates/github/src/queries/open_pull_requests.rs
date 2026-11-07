@@ -1,25 +1,25 @@
-//! `OpenPullRequests`: a repository's open pull requests, with what finding stacks needs: the
-//! repository's trunks, and the merged pull requests its stacks link through
+//! `OpenPullRequests`: a repository's open pull requests, with what finding stacks needs besides:
+//! the repository's default branch, and the merged pull requests its stacks link through
 //! ([`super::merged_pull_requests`]).
 
 use graphql_client::GraphQLQuery;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::merged_pull_requests::{MergedPullRequest, StackEntry};
-use super::pull_request_check::{MergeQueueEntryState, PullRequestReviewDecision, StatusState};
+use super::merged_pull_requests::{BranchLookup, MergedPullRequest, StackEntry};
+use super::trunk_rules::TrunkRuleList;
 use super::{DateTime, GitObjectID, MAX_OPEN_PULL_REQUESTS, PAGE_SIZE, Pager, not_found};
 use crate::client::GithubClient;
 use crate::error::GithubError;
-use crate::trunks::{RefNames, Trunks};
+use crate::pulls::RepoRef;
+use crate::trunks::Trunks;
 
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "graphql/schema.graphql",
     query_path = "graphql/open_pull_requests.graphql",
     response_derives = "Debug, Clone, PartialEq, Serialize",
-    variables_derives = "Debug, Clone",
-    extern_enums("PullRequestReviewDecision", "StatusState", "MergeQueueEntryState")
+    variables_derives = "Debug, Clone"
 )]
 pub struct OpenPullRequests;
 
@@ -28,8 +28,8 @@ pub use self::open_pull_requests::*;
 
 pub type OpenPullRequest = OpenPullRequestsRepositoryPullRequestsNodes;
 
-/// How many of the pull requests merged most recently are read with the open ones.
-pub const RECENTLY_MERGED: i64 = 20;
+/// How many of the merged pull requests updated most recently are read with the open ones.
+pub const RECENTLY_UPDATED_MERGED: i64 = 20;
 
 /// A repository's open pull requests, with what finding stacks needs besides
 /// ([`Self::stacks`]).
@@ -43,15 +43,18 @@ pub struct OpenPullRequestList {
     pub total_count: i64,
     /// Whether reading stopped at [`MAX_OPEN_PULL_REQUESTS`] with more left.
     pub truncated: bool,
-    /// What decides the repository's trunks.
-    pub trunks: Trunks,
-    /// The merged pull requests finding stacks needs, each once: the [`RECENTLY_MERGED`] merged
-    /// most recently, and those from the branches open pull requests target, followed down
-    /// (`stacks::branches_to_look_up`).
+    /// The repository's default branch, or `None` for an empty repository.
+    pub default_branch: Option<String>,
+    /// The merged pull requests finding stacks needs, each once: the
+    /// [`RECENTLY_UPDATED_MERGED`] updated most recently, and those from the branches open pull
+    /// requests target, followed down (`stacks::branches_to_look_up`).
     pub merged: Vec<MergedPullRequest>,
+    /// The branches whose merged pull requests were looked up, which the next read carries over
+    /// while their tips stay put.
+    pub lookups: Vec<BranchLookup>,
     /// Whether some branches' merged pull requests weren't looked up, past
-    /// [`super::merged_pull_requests::MAX_BRANCH_LOOKUPS`]. Layers above them sit on those
-    /// branches as roots.
+    /// [`super::merged_pull_requests::MAX_BRANCH_LOOKUPS`] or after a lookup failed. Layers
+    /// above them sit on those branches as roots.
     pub merged_truncated: bool,
 }
 
@@ -66,19 +69,70 @@ impl OpenPullRequestList {
         self.pull_requests.iter().find(|pr| pr.number == number)
     }
 
-    /// The open and merged pull requests, as [`stacks::Stacks::find`] takes them.
-    pub fn stack_pull_requests(&self) -> Vec<stacks::PullRequest> {
+    /// The open and merged pull requests, as [`stacks::Stacks::find`] takes them, with the
+    /// merged ones of `more` that the list doesn't have.
+    pub fn stack_pull_requests(&self, more: &[MergedPullRequest]) -> Vec<stacks::PullRequest> {
+        let more = (more.iter()).filter(|pr| !self.merged.iter().any(|m| m.number == pr.number));
         (self.pull_requests.iter().map(stacks::PullRequest::from))
-            .chain(self.merged.iter().map(stacks::PullRequest::from))
+            .chain(
+                self.merged
+                    .iter()
+                    .chain(more)
+                    .map(stacks::PullRequest::from),
+            )
             .collect()
     }
 
-    /// The repository's stacks.
-    pub fn stacks(&self) -> stacks::Stacks {
-        let prs = self.stack_pull_requests();
-        let trunks = self.trunks.among(&prs);
+    /// What decides the repository's trunks: its default branch, the protection rules that cover
+    /// its pull requests' branches, and the rulesets in `rules`, once they've been read.
+    pub fn trunks(&self, rules: Option<&TrunkRuleList>) -> Trunks {
+        let open = self.pull_requests.iter().flat_map(|pr| {
+            let base = (pr.base_ref.as_ref())
+                .and_then(|base| Some(&base.ref_update_rule.as_ref()?.pattern));
+            let head = (pr.head_ref.as_ref())
+                .and_then(|head| Some(&head.ref_update_rule.as_ref()?.pattern));
+            base.into_iter().chain(head)
+        });
+        let merged = self
+            .merged
+            .iter()
+            .filter_map(|pr| pr.base_protection.as_ref());
+        let mut protected: Vec<String> = open.chain(merged).cloned().collect();
+        protected.sort_unstable();
+        protected.dedup();
+        Trunks {
+            default_branch: self.default_branch.clone(),
+            protected,
+            rulesets: rules
+                .map(|rules| rules.rulesets.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The repository's stacks, with the rulesets in `rules` and the merged pull requests of
+    /// `more`, such as those below the layers GitHub moved
+    /// ([`super::stack_layers::StackLayerList::merged`]).
+    pub fn stacks(
+        &self,
+        rules: Option<&TrunkRuleList>,
+        more: &[MergedPullRequest],
+    ) -> stacks::Stacks {
+        let prs = self.stack_pull_requests(more);
+        let trunks = self.trunks(rules).among(&prs);
         let trunks: Vec<&str> = trunks.iter().map(String::as_str).collect();
         stacks::Stacks::find(&prs, &trunks)
+    }
+
+    /// `branch`'s tip, as a pull request that targets it says.
+    pub fn branch_tip(&self, branch: &str) -> Option<String> {
+        let open = (self.pull_requests.iter())
+            .filter(|pr| pr.base_ref_name == branch)
+            .find_map(|pr| Some(pr.base_ref.as_ref()?.target.as_ref()?.oid.clone()));
+        open.or_else(|| {
+            (self.merged.iter())
+                .filter(|pr| pr.base_ref == branch)
+                .find_map(|pr| pr.base_tip.clone())
+        })
     }
 }
 
@@ -106,52 +160,35 @@ impl From<&OpenPullRequest> for stacks::PullRequest {
     }
 }
 
-/// What decides the repository's trunks, from a page of the query.
-fn trunks(repository: &OpenPullRequestsRepository) -> Trunks {
-    let rules = repository.branch_protection_rules.nodes.iter().flatten();
-    let protected = rules.flatten().map(|rule| rule.pattern.clone()).collect();
-    let rulesets = (repository.rulesets.iter())
-        .flat_map(|rulesets| rulesets.nodes.iter().flatten().flatten())
-        .filter(|ruleset| ruleset.enforcement != RuleEnforcement::DISABLED)
-        .filter_map(|ruleset| ruleset.conditions.ref_name.as_ref())
-        .map(|ref_name| RefNames {
-            include: ref_name.include.clone(),
-            exclude: ref_name.exclude.clone(),
-        })
-        .collect();
-    Trunks {
-        default_branch: (repository.default_branch_ref.as_ref()).map(|branch| branch.name.clone()),
-        protected,
-        rulesets,
-    }
-}
-
 impl GithubClient {
     /// A repository's open pull requests, newest first, up to [`MAX_OPEN_PULL_REQUESTS`], with
-    /// its trunks and the merged pull requests finding stacks needs.
+    /// the merged pull requests finding stacks needs.
     pub async fn open_pull_requests(
         &self,
-        owner: &str,
-        name: &str,
+        repo: &RepoRef,
     ) -> Result<OpenPullRequestList, GithubError> {
-        (self.open_pull_requests_paged(owner, name, PAGE_SIZE, RECENTLY_MERGED)).await
+        let mut list =
+            (self.open_pull_requests_paged(repo, PAGE_SIZE, RECENTLY_UPDATED_MERGED)).await?;
+        self.look_up_merged(repo, &mut list, None).await?;
+        Ok(list)
     }
 
-    /// [`Self::open_pull_requests`], reading `page_size` open pull requests a page, and the
-    /// `recently_merged` pull requests merged most recently.
+    /// The pages of [`Self::open_pull_requests`], `page_size` open pull requests a page, with
+    /// the `recently_updated` merged pull requests updated most recently, but none of the merged
+    /// pull requests looked up by branch ([`Self::look_up_merged`]).
     pub async fn open_pull_requests_paged(
         &self,
-        owner: &str,
-        name: &str,
+        repo: &RepoRef,
         page_size: i64,
-        recently_merged: i64,
+        recently_updated: i64,
     ) -> Result<OpenPullRequestList, GithubError> {
         let mut list = OpenPullRequestList {
             pull_requests: Vec::new(),
             total_count: 0,
             truncated: false,
-            trunks: Trunks::default(),
+            default_branch: None,
             merged: Vec::new(),
+            lookups: Vec::new(),
             merged_truncated: false,
         };
         let mut pager = None;
@@ -161,19 +198,19 @@ impl GithubClient {
             let repository = self
                 .graphql_keeping_partial::<OpenPullRequests>(
                     Variables {
-                        owner: owner.to_string(),
-                        name: name.to_string(),
+                        owner: repo.owner.clone(),
+                        name: repo.name.clone(),
                         first: page_size,
                         after: after.take(),
-                        merged: if first_page { recently_merged } else { 0 },
+                        merged: if first_page { recently_updated } else { 0 },
                     },
                     2,
                 )
                 .await?
                 .repository
-                .ok_or_else(|| not_found(format!("repository {owner}/{name}")))?;
+                .ok_or_else(|| not_found(format!("repository {repo}")))?;
             if first_page {
-                list.trunks = trunks(&repository);
+                list.default_branch = (repository.default_branch_ref).map(|branch| branch.name);
                 let merged = repository.merged_pull_requests.nodes.iter().flatten();
                 list.merged = merged.flatten().map(MergedPullRequest::from).collect();
             }
@@ -189,14 +226,12 @@ impl GithubClient {
                 list.truncated = page.page_info.has_next_page
                     || list.pull_requests.len() > MAX_OPEN_PULL_REQUESTS;
                 list.pull_requests.truncate(MAX_OPEN_PULL_REQUESTS);
-                break;
+                return Ok(list);
             }
             match pager.next(page.page_info.has_next_page, page.page_info.end_cursor)? {
                 Some(cursor) => after = Some(cursor),
-                None => break,
+                None => return Ok(list),
             }
         }
-        self.look_up_merged(owner, name, &mut list).await?;
-        Ok(list)
     }
 }

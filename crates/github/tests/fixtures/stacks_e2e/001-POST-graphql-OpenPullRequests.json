@@ -10,44 +10,243 @@
       "after": null,
       "merged": 20
     },
-    "query_sha256": "94116bbea7c4d0e8d36757ca81ed11a47120822096ec9936d6149436cb54e5c8"
+    "query_sha256": "1988bca2b12653d0a9337df73b8b9e4796a177e2d44a0d34bff05d234ac3e88d"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4963",
-      "x-ratelimit-reset": "1794016455",
+      "x-ratelimit-remaining": "4986",
+      "x-ratelimit-reset": "1794020825",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "37"
+      "x-ratelimit-used": "14"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4963,
-          "used": 37,
-          "resetAt": "2026-11-07T01:54:15Z"
+          "remaining": 4986,
+          "used": 14,
+          "resetAt": "2026-11-07T03:07:05Z"
         },
         "repository": {
           "defaultBranchRef": {
             "name": "main"
           },
-          "branchProtectionRules": {
-            "nodes": []
-          },
-          "rulesets": {
-            "nodes": []
-          },
           "pullRequests": {
-            "totalCount": 10,
+            "totalCount": 15,
             "pageInfo": {
               "hasNextPage": false,
               "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxODo0NDoyNVrPAAAAATWFNWI="
             },
             "nodes": [
+              {
+                "id": "PR_kwDOVleUfc8AAAABNcuuIw",
+                "number": 22,
+                "title": "E12: extension languages",
+                "isDraft": false,
+                "createdAt": "2026-11-07T02:15:24Z",
+                "updatedAt": "2026-11-07T02:15:24Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "e12/base",
+                "baseRefOid": "cf758715a42c2af01aa50b597e342fbaad01dead",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "cf758715a42c2af01aa50b597e342fbaad01dead"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "e12/languages",
+                "headRefOid": "4d44bc003c466e0763715210369b0cbea8e931f7",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "4d44bc003c466e0763715210369b0cbea8e931f7"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDOVleUfc8AAAABNcuq0g",
+                "number": 21,
+                "title": "E10: large",
+                "isDraft": false,
+                "createdAt": "2026-11-07T02:15:18Z",
+                "updatedAt": "2026-11-07T02:15:18Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "e10/base",
+                "baseRefOid": "8cac9619c435a1a8dc70011fafa2a305b1e6c43c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "8cac9619c435a1a8dc70011fafa2a305b1e6c43c"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "e10/large",
+                "headRefOid": "1591774d738c63a9c30989764101fa648d7710f9",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1591774d738c63a9c30989764101fa648d7710f9"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDOVleUfc8AAAABNcumTw",
+                "number": 20,
+                "title": "E9: moves and syntax",
+                "isDraft": false,
+                "createdAt": "2026-11-07T02:15:09Z",
+                "updatedAt": "2026-11-07T02:15:12Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "e9/base",
+                "baseRefOid": "25c5f3458dcf714c5f9d66f6a42b1c499a85a39e",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "25c5f3458dcf714c5f9d66f6a42b1c499a85a39e"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "e9/moves",
+                "headRefOid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "243ff703bd116e43c8bb0ab65d5252dde71b2bb6"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDOVleUfc8AAAABNcujQg",
+                "number": 19,
+                "title": "E8: hostile files",
+                "isDraft": false,
+                "createdAt": "2026-11-07T02:15:03Z",
+                "updatedAt": "2026-11-07T02:15:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "a45754b66cccf1879cd0a252c781639330e6d1fa",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "e8/hostile",
+                "headRefOid": "46253d2f3d91bc6add95bbc639d2ff21a6bdf643",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "46253d2f3d91bc6add95bbc639d2ff21a6bdf643"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDOVleUfc8AAAABNcuhmw",
+                "number": 18,
+                "title": "E6: code",
+                "isDraft": false,
+                "createdAt": "2026-11-07T02:14:59Z",
+                "updatedAt": "2026-11-07T02:14:59Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "e6/base",
+                "baseRefOid": "a958353c73b64f2424ca5028ba491bd02f650df4",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "a958353c73b64f2424ca5028ba491bd02f650df4"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "e6/code",
+                "headRefOid": "e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e184ac6eb139fbe4843f4a0afa00ff2992603ed0"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
               {
                 "id": "PR_kwDOVleUfc8AAAABNa8vXg",
                 "number": 17,
@@ -65,10 +264,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e5/images",
                 "headRefOid": "627b82e9111e6b5e693b4bb221a3d91c24744cc9",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -83,10 +286,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -106,10 +305,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e1/revisions-4",
                 "headRefOid": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -134,10 +337,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -157,10 +356,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "e86aa486704016ee033d555bcca81e33898c5608"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e3/y",
                 "headRefOid": "9e01c13b86864137cb6aa6bef52b0d7f08d91977",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -175,10 +378,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -198,10 +397,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "df9d7c031b236e0c7cf4afa47ad800a7253bf41c"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/s2",
                 "headRefOid": "380001c62c797601c7486bb04d2d07a1b87c2391",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -216,10 +419,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": {
                   "position": 2,
                   "stack": {
@@ -246,10 +445,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/s1",
                 "headRefOid": "df9d7c031b236e0c7cf4afa47ad800a7253bf41c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -264,10 +467,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": {
                   "position": 1,
                   "stack": {
@@ -294,10 +493,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/d",
                 "headRefOid": "8bb8daed45b4c4ceeaa9f90c55aeb26e512f8506",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -327,10 +530,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -350,10 +549,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "fd3d9a4102c1371a42100297822828c8cd12255c"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/e",
                 "headRefOid": "b1c25057a6f94e9fe1c2eddc6458ed84c84629d3",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -368,10 +571,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -391,10 +590,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "fd3d9a4102c1371a42100297822828c8cd12255c"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/c",
                 "headRefOid": "4b18a1a61f29869e0665318e518ed79a9957fcc8",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -409,10 +612,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -432,10 +631,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "78af6b6c595b22b6a58b5d99b3bd8e2862459ced"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/b",
                 "headRefOid": "fd3d9a4102c1371a42100297822828c8cd12255c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -450,10 +653,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               },
               {
@@ -473,10 +672,14 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e2/a",
                 "headRefOid": "78af6b6c595b22b6a58b5d99b3bd8e2862459ced",
+                "headRef": {
+                  "refUpdateRule": null
+                },
                 "isCrossRepository": false,
                 "headRepositoryOwner": {
                   "__typename": "Organization",
@@ -491,10 +694,6 @@
                     }
                   ]
                 },
-                "reviewDecision": null,
-                "statusCheckRollup": null,
-                "isInMergeQueue": false,
-                "mergeQueueEntry": null,
                 "stackEntry": null
               }
             ]
@@ -509,7 +708,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e1/move-main-3",
                 "headRefOid": "90974a4b2ccd64ba5836821a4192761628f404dd",
@@ -543,7 +743,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e1/move-main",
                 "headRefOid": "37163bba78f4dd24e009dda8e27aecc9a7c4365f",
@@ -577,7 +778,8 @@
                   "target": {
                     "__typename": "Commit",
                     "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
-                  }
+                  },
+                  "refUpdateRule": null
                 },
                 "headRefName": "e3/x",
                 "headRefOid": "e86aa486704016ee033d555bcca81e33898c5608",
