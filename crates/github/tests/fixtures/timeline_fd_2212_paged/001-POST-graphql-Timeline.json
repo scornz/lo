@@ -1,0 +1,90 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2212,
+      "last": 3,
+      "before": null
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4976",
+      "x-ratelimit-reset": "1794024852",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "24"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4976,
+          "used": 24,
+          "resetAt": "2026-11-07T04:14:12Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "voidsipp"
+            },
+            "body": "Enabling use-jemalloc does nothing on some targets, including riscv64 and 32-bit musl, even when the builder has a working jemalloc setup.\n\nRemove the platform restrictions from the dependency and allocator selection so Cargo builds can opt in explicitly. The Makefile and release workflow select jemalloc for the same targets as before. CI uses FD_BUILD_FEATURES, and the helper runs with Bash.\n\nThe Makefile sources the helper in one shell and records the selected features in a stamp that changes only when the selection changes. Target overrides use Cargo's target-specific binary path, including a configured target directory, instead of forcing Cargo to run every time.\n\nAll 287 Linux unit/integration tests and all-target, all-feature Clippy pass. Real Make/Cargo checks pass for unchanged settings, switching jemalloc on and off, a target-specific build, and completion generation. Shell syntax and workflow YAML checks pass. riscv64 and 32-bit musl were checked for dependency selection, not compiled or run.\n\nWindows unit tests pass. Windows integration tests require a symlink privilege unavailable here, and Windows Clippy reports errors in unchanged upstream code.\n\nFixes #1822.\n",
+            "createdAt": "2026-11-03T07:06:59Z",
+            "lastEditedAt": "2026-11-03T10:05:53Z",
+            "timelineItems": {
+              "filteredCount": 8,
+              "pageInfo": {
+                "hasPreviousPage": true,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABobFAOrgCqzIwMjk5MTkxNzg4"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobFAOrgCqzIwMjk5MTkxNzg4",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "scornz"
+                    },
+                    "createdAt": "2026-11-06T14:25:39Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 13,
+                      "title": "feat(repo_cache): keep a partial clone of each repository",
+                      "url": "https://github.com/scornz/lo/pull/13",
+                      "repository": {
+                        "nameWithOwner": "scornz/lo"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGtBkgBqzM1MzY3NDI2MDAx",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobN6tbABqzM1NDA0Mjg5NTQz",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

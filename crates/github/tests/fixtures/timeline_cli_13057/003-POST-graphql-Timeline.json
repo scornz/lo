@@ -1,0 +1,1848 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "cli",
+      "name": "cli",
+      "number": 13057,
+      "last": 100,
+      "before": null
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4896",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "104"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4896,
+          "used": 104,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "BagToad"
+            },
+            "body": "# Add Issues 2.0 support: issue types, sub-issues, and relationships\n\nCloses #10298\nCloses #9696\nCloses #11757\nCloses #12477\nCloses #12152\n\nAdds support for GitHub's Issues 2.0 features across `gh issue create`, `edit`, `view`, and `list`.\n\n## New flags\n\n### `gh issue create`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--parent 100` | Add as a sub-issue of the specified parent (number or URL) |\n| `--blocked-by 200,201` | Mark as blocked by these issues |\n| `--blocking 300` | Mark as blocking these issues |\n\nInteractive mode prompts for issue type when the repo has types configured.\n\n### `gh issue edit`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--set-parent 100` | Set or replace the parent issue |\n| `--remove-parent` | Remove the parent issue |\n| `--add-sub-issue 123,124` | Add sub-issues |\n| `--remove-sub-issue 123` | Remove a sub-issue |\n| `--add-blocked-by 200` | Add blocked-by relationship |\n| `--remove-blocked-by 201` | Remove blocked-by relationship |\n| `--add-blocking 300,301` | Add blocking relationships |\n| `--remove-blocking 300` | Remove blocking relationship |\n\nInteractive mode adds Type and Parent to the field picker. Batch editing\nsupported for `--type` across multiple issues.\n\n### `gh issue view`\n\nTTY output now displays:\n- Issue type on the state line (e.g., `Bug · Open`)\n- Type, Parent, Blocked by, Blocking metadata rows\n- Sub-issues section with completion progress (e.g., `Sub-issues · 3/5 (60%)`)\n\nJSON output supports new fields: `issueType`, `parent`, `subIssues`,\n`subIssuesSummary`, `blockedBy`, `blocking`. The `subIssues`, `blockedBy`,\nand `blocking` fields are objects of the shape `{ \"nodes\": [...], \"totalCount\": N }`\n(rather than flat arrays) so consumers can detect when the truncation\nlimit is reached. Each node and the `parent` object include the canonical\n`id`.\n\n### `gh issue list`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Filter issues by type |\n\n## GHES compatibility\n\n- **Issue types and sub-issues**: GA on all supported GHES versions (3.17+). No feature detection needed.\n- **Relationships** (blocked-by/blocking): Requires GHES 3.19+. Feature detection via `__type` schema introspection for the `blockedBy` field on the Issue type. Unsupported GHES versions receive a clear error message. Gated with `// TODO IssueRelationshipsCleanup` for cleanup when GHES 3.18 support ends.\n\n## Implementation details\n\n- Post-creation mutations for type, parent, and relationships (same pattern as projectV2 and assignee mutations)\n- `--blocking` and `--add-blocking` swap API arguments: calls `addBlockedBy(issueId=OTHER, blockingIssueId=THIS)`\n- Cross-repo references supported via URL for `--parent`, `--blocked-by`, `--blocking`, and sub-issue flags\n- Shared helpers extracted to `pkg/cmd/issue/shared/resolve.go` (`ResolveIssueRef`, `ResolveIssueTypeName`)\n- Issue-only fields (Type, Parent) gated behind `Allowed` in the Editable pattern to prevent leaking into `gh pr edit`\n- Issue type names with spaces are quoted in search queries (`type:\"Bug Report\"`)\n\n## Testing\n\n- **34 new flag parsing tests** across create, edit, and list\n- **18 new HTTP mock behavior tests** covering mutations, error cases, and GHES unsupported paths\n- **5 new view tests** (TTY rendering, JSON export)\n- **2 regression tests** (issue-only fields don't leak into PR edit, no-new-fields view unchanged)\n\n## Changes\n\n17 files changed, 2105 insertions(+), 18 deletions(-)\n\n| File | Change |\n|------|--------|\n| `api/queries_issue.go` | New types, Issue struct fields, mutation functions, helpers |\n| `api/query_builder.go` | GraphQL fragment cases, `issueOnlyFields` |\n| `api/export_pr.go` | ExportData cases for new fields |\n| `internal/featuredetection/` | `IssueRelationshipsSupported` detection |\n| `pkg/cmd/issue/create/create.go` | New flags, post-creation mutations, interactive type picker |\n| `pkg/cmd/issue/edit/edit.go` | New flags, mutations, interactive Type/Parent picker |\n| `pkg/cmd/issue/view/view.go` | TTY rendering, conditional relationship fields |\n| `pkg/cmd/issue/list/list.go` | `--type` filter via search path |\n| `pkg/cmd/issue/shared/resolve.go` | Shared `ResolveIssueRef`, `ResolveIssueTypeName` |\n| `pkg/cmd/pr/shared/editable.go` | `IssueType`/`Parent` fields, `Allowed` gating |\n| `pkg/cmd/pr/shared/params.go` | `IssueType` in `FilterOptions` and search query |\n\n## Key notes for reviewers\n\n- **`--blocking` arg swap**: The GitHub API only has `addBlockedBy(issueId, blockingIssueId)`. To support `--blocking`, we swap the arguments — the OTHER issue becomes `issueId` and THIS issue becomes `blockingIssueId`. Same for `--remove-blocking`.\n- **Editable `Allowed` gating**: `IssueType` and `Parent` are added to the shared `Editable` struct but gated behind `Allowed = true`, which only the issue edit command sets. This prevents these issue-only fields from leaking into `gh pr edit`'s interactive picker. Regression test in `survey_test.go`.\n- **View relationship fields are GHES-gated**: `blockedBy` and `blocking` are only added to the GraphQL query when `IssueRelationshipsSupported` is true. Without this, `gh issue view` would break on GHES 3.17–3.18 where these fields don't exist.\n- **Batch edit type resolution**: When editing multiple issues with `--type`, the type name is resolved to an ID once before the loop rather than per-issue, avoiding N-1 redundant `RepoIssueTypes` API calls.\n\n## Manual test results\n\nAll scenarios tested against on github.com.\n\n\n<b>24/24 scenarios passing</b> (click to expand)\n\n### Issue types\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 1 | `create-with-type` | `gh issue create --title \"...\" --type Bug` | ✅ [#1](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/1) created, type=Bug verified |\n| 2 | `create-error-invalid-type` | `gh issue create --title \"Oops\" --type Bugz` | ✅ Error: `type \"Bugz\" not found; available types: Task, Bug, Feature` |\n| 3 | `edit-change-type` | `gh issue edit 1 --type Feature` | ✅ Type changed to Feature verified |\n| 4 | `create-interactive-type` | `gh issue create` (interactive) | ✅ [#21](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/21) Type picker shown, Bug selected and set |\n\n### Sub-issues\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 5 | `create-with-parent` | `gh issue create --title \"...\" --parent 3` | ✅ [#4](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/4) created as sub-issue of #3 |\n| 6 | `edit-set-parent` | `gh issue edit 5 --set-parent 3` | ✅ Parent set, verified via `--json parent` |\n| 7 | `edit-remove-parent` | `gh issue edit 5 --remove-parent` | ✅ Parent removed, verified null |\n| 8 | `edit-add-sub-issues` | `gh issue edit 3 --add-sub-issue 6,7` | ✅ Sub-issues added, verified via `--json subIssues` |\n| 9 | `edit-remove-sub-issue` | `gh issue edit 3 --remove-sub-issue 6` | ✅ Sub-issue removed |\n| 10 | `edit-error-mutual-parent` | `gh issue edit 5 --set-parent 1 --remove-parent` | ✅ Error: `specify only one of --set-parent or --remove-parent` |\n\n### Relationships\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 11 | `create-with-relationships` | `gh issue create --blocked-by 8 --blocking 9` | ✅ [#11](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/11) blockedBy=#8, blocking=#9 verified |\n| 12 | `edit-add-remove-blocked-by` | `gh issue edit 14 --add-blocked-by 12 --remove-blocked-by 13` | ✅ Relationships updated |\n| 13 | `edit-add-blocking` | `gh issue edit 14 --add-blocking 15,16` | ✅ Blocking relationships added (swapped args verified) |\n\n### View\n\n| # | Scenario | Verification | Result |\n|---|----------|-------------|--------|\n| 14 | `view-with-type` | TTY shows `Bug · Open` on state line, `Type: Bug` row | ✅ |\n| 15 | `view-parent-sub-issues` | TTY shows Parent row, Sub-issues section with progress | ✅ |\n| 16 | `view-child-parent` | TTY shows parent reference for child issue | ✅ |\n| 17 | `view-relationships` | TTY shows Blocked by and Blocking rows | ✅ |\n| 18 | `view-json-issueType` | `--json issueType` returns id, name, description, color | ✅ |\n| 19 | `view-json-parent-subIssues` | `--json parent,subIssues,subIssuesSummary` returns structured data | ✅ |\n| 20 | `view-json-relationships` | `--json blockedBy,blocking` returns `{ nodes: [...], totalCount: N }` with id, number, title, url, state | ✅ |\n\n### List\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 21 | `list-filter-by-type` | `gh issue list --type Bug` | ✅ Filtered results returned |\n\n### Combined\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 22 | `create-all-flags` | `gh issue create --type Task --parent 3 --blocked-by 8 --blocking 9` | ✅ [#17](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/17) all fields set |\n| 23 | `edit-batch-type` | `gh issue edit 18 19 20 --type Bug` | ✅ All 3 issues updated to Bug |\n| 24 | `edit-interactive` | `gh issue edit 21` (interactive) | ✅ Picker shows Type and Parent fields |\n\n\n\n**TODO**: GHES-specific scenarios (`create-error-ghes-relationships`), but GHES feature detection does have unit test coverage with mock introspection responses.\n\n",
+            "createdAt": "2026-03-30T00:42:33Z",
+            "lastEditedAt": "2026-05-06T21:08:32Z",
+            "timelineItems": {
+              "filteredCount": 112,
+              "pageInfo": {
+                "hasPreviousPage": true,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "c00bc6a9b4999e4fd35e1457b37be20788b9e94c",
+                      "messageHeadline": "fix: address code review findings from multi-model review",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDozZjFkZjUxM2M1MzBjMDMwNWZiMTBjZmMzZmIyYTIxNTMwY2ZlYTk2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "3f1df513c530c0305fb10cfc3fb2a21530cfea96",
+                      "messageHeadline": "test: add missing --type flag tests for issue list",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpiNmYyOWIwMzc2ODE0NjBiZjYwZjIxYjIwNTNmMmIzYjliNTdmMTIy",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "b6f29b037681460bf60f21b2053f2b3b9b57f122",
+                      "messageHeadline": "feat: add --remove-blocking flag to issue edit",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDoyYTcyYTU5Zjc2Yjc0OWZkY2M3YmUwYTY1MTkxZmZjMmU5YWUyYjVj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "2a72a59f76b749fdcc7be0a65191ffc2e9ae2b5c",
+                      "messageHeadline": "fix: address round 2 code review findings",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo0YTE5NmRkZjFkOTQ0Zjc1N2NkMzFiODA5YTQzZjY5MTJmZGJhZWQy",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "4a196ddf1d944f757cd31b809a43f6912fdbaed2",
+                      "messageHeadline": "test: add regression test for issue-only fields in FieldsToEditSurvey",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDplM2IwZDlkZWMzYTgxOTY0ZTBkYmFjYTY1NzU0ZjU4Mjc2N2I0MGZj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "e3b0d9dec3a81964e0dbaca65754f582767b40fc",
+                      "messageHeadline": "fix: restore displaced TODO comment, add GHES edit relationship test",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo2ZTc2ZjExZGVjNjA2N2I3Y2IyNmI3MDg3NWNhZjc5NjE0NWMzNjQw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640",
+                      "messageHeadline": "fix: correct GraphQL field name in AddBlockedBy/RemoveBlockedBy mutat…",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7eAygBqzI1MDM5MDQ0OTIx",
+                  "node": {
+                    "__typename": "HeadRefForcePushedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-04-30T14:49:45Z",
+                    "beforeCommit": {
+                      "oid": "cea0e576f674d817a024e3bbe3b7233f44ac57af"
+                    },
+                    "afterCommit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7eCvgBqzI1MDM5MDQ2MTU1",
+                  "node": {
+                    "__typename": "ReadyForReviewEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-04-30T14:49:47Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7eDuABqzI1MDM5MDQ2OTUy",
+                  "node": {
+                    "__typename": "ReviewRequestedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-04-30T14:49:48Z",
+                    "requestedReviewer": null
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7eEsgBqzI1MDM5MDQ3NDAx",
+                  "node": {
+                    "__typename": "ReviewRequestedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-04-30T14:49:49Z",
+                    "requestedReviewer": {
+                      "__typename": "User",
+                      "login": "williammartin"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7ohpAFqjQyMDYyMTUyNTE=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc76tcBT",
+                    "author": {
+                      "__typename": "User",
+                      "login": "camchenry"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-04-30T15:01:14Z",
+                    "submittedAt": "2026-04-30T15:01:14Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4206215251",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnfgybuABqzI1MTc2NDI0MTEw",
+                  "node": {
+                    "__typename": "ReviewRequestedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-05-05T12:52:28Z",
+                    "requestedReviewer": {
+                      "__typename": "User",
+                      "login": "babakks"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf1X9AgFqjQyMzQ0MDk1MTg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc78Y_Yu",
+                    "author": {
+                      "__typename": "User",
+                      "login": "babakks"
+                    },
+                    "body": "Thanks for the PR, @BagToad! 🙏 \n\nI went through most of the changes (except `list` and `view`) commands. And found these items.",
+                    "state": "CHANGES_REQUESTED",
+                    "createdAt": "2026-05-06T08:20:43Z",
+                    "submittedAt": "2026-05-06T12:51:33Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4234409518",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640"
+                    },
+                    "comments": {
+                      "totalCount": 20
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf2YLXAFqjQyMzY2MTQ0Njg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc78hZtE",
+                    "author": {
+                      "__typename": "User",
+                      "login": "babakks"
+                    },
+                    "body": "Here are my comments re `list` and `view`.",
+                    "state": "CHANGES_REQUESTED",
+                    "createdAt": "2026-05-06T13:49:16Z",
+                    "submittedAt": "2026-05-06T14:01:42Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4236614468",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640"
+                    },
+                    "comments": {
+                      "totalCount": 3
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf8eZ-ABqzI1MjM2Mjk1NjQ5",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf8lcKgBqzI1MjM2NTQ2NDY0",
+                  "node": {
+                    "__typename": "HeadRefForcePushedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-05-06T21:15:37Z",
+                    "beforeCommit": {
+                      "oid": "5b08d35bd9e2e48492bfc9446c9e5bd65dd22873"
+                    },
+                    "afterCommit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9AiigH2gAzMzQ2MzU4MjYzMDplM2NlN2U1MjI1NzM0MGZmM2Q5MDBhMzIwYTNhMjU4OTMzMjJmMjFk",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "e3ce7e52257340ff3d900a320a3a25893322f21d",
+                      "messageHeadline": "Add json tags to SubIssues and LinkedIssueConnection",
+                      "committedDate": "2026-05-06T21:45:13Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9HEggH2gAzMzQ2MzU4MjYzMDo0Njk0MzhlYmM1NTgxNDNlZDU2Y2JjZjk4MWU5YjdkZWExY2M5ZGUw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "469438ebc558143ed56cbcf981e9b7dea1cc9de0",
+                      "messageHeadline": "Remove redundant nil check in IssueNodeID",
+                      "committedDate": "2026-05-06T21:52:21Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9JLRgH2gAzMzQ2MzU4MjYzMDoyMDEwNWVkYmNiNzEyYTQ1OWI5NThhNjc5ZjkyYjE5N2VjMTg1Yzlk",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "20105edbcb712a459b958a679f92b197ec185c9d",
+                      "messageHeadline": "Include id in linked-issue JSON exports",
+                      "committedDate": "2026-05-06T21:54:39Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9SwjgH2gAzMzQ2MzU4MjYzMDphNzhiZWRiNzcyZTY3OTNkODhhOGI5YTkzNjA5NDFhZmJiM2I3ODU4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "a78bedb772e6793d88a8b9a9360941afbb3b7858",
+                      "messageHeadline": "Wrap relationship JSON output in {nodes, totalCount}, fetch full pages",
+                      "committedDate": "2026-05-06T22:05:07Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9ekagH2gAzMzQ2MzU4MjYzMDo1OTg3Y2IzYmU0MmM4MTI4MTBiN2Y1MzM1ZWYwNjUzY2I2MmJiNmE3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "5987cb3be42c812810b7f5335ef0653cb62bb6a7",
+                      "messageHeadline": "Add Issue.ExportData tests for Issues 2.0 fields",
+                      "committedDate": "2026-05-06T22:18:01Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9i5wgH2gAzMzQ2MzU4MjYzMDoyMDFlYjdlYzVlZjk0OTdhODM5NDlmODc0NmE1ZmE4YmU0Yjg2ZTE3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "201eb7ec5ef9497a83949f8746a5fa8be4b86e17",
+                      "messageHeadline": "Merge issuesV2Flags cases into TestNewCmdCreate",
+                      "committedDate": "2026-05-06T22:22:45Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9nIRAH2gAzMzQ2MzU4MjYzMDphMDQ0MzhjMjJjNDM0NjIxNGIzOGU3MDhiOTdiZTRiN2UzMTgwYzM4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "a04438c22c4346214b38e708b97be4b7e3180c38",
+                      "messageHeadline": "Merge createRun_issuesV2 cases into Test_createRun",
+                      "committedDate": "2026-05-06T22:27:22Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf9qfHAH2gAzMzQ2MzU4MjYzMDo4NWVlMDRkMGZkMWY0OTI0Mzc5MWEwZWI1YTQzZDUwOWZmMWI5YTk2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "85ee04d0fd1f49243791a0eb5a43d509ff1b9a96",
+                      "messageHeadline": "Exercise loop in blocked-by/blocking createRun test",
+                      "committedDate": "2026-05-06T22:31:02Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf91E2AH2gAzMzQ2MzU4MjYzMDplOWYxMDJlOGJlNGM5YmI2ZjQ1YjhjZDZlYWFlYWU0YmQ5OTNkZWNj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "e9f102e8be4c9bb6f45b8cd6eaaeae4bd993decc",
+                      "messageHeadline": "Test interactive issue-type prompt in createRun",
+                      "committedDate": "2026-05-06T22:42:36Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf-Qb0gH2gAzMzQ2MzU4MjYzMDowYzQ4YmQwOTgxOTcxOWRlNzkwN2Q1ODBkZjZlMDAyZjYzNmUyZjIw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "0c48bd09819719de7907d580df6e002f636e2f20",
+                      "messageHeadline": "Cache issue-type name->ID map and use it in issue edit",
+                      "committedDate": "2026-05-06T23:12:29Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf-jqSgH2gAzMzQ2MzU4MjYzMDplZmY5ZDQ4ZjZlNTdjMTBlMDU2OTE0OWIwMzZlODdmOTZmMzc3NGU1",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "eff9d48f6e57c10e0569149b036e87f96f3774e5",
+                      "messageHeadline": "Replace em-dashes with hyphens in code comments",
+                      "committedDate": "2026-05-06T23:33:29Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnf_AVQAH2gAzMzQ2MzU4MjYzMDo2MjgzMjU5MjBkNmZmN2Q0MTFmMDZiYzA2Yjk4MDljZGFjMmIzODQz",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "628325920d6ff7d411f06bc06b9809cdac2b3843",
+                      "messageHeadline": "Reject cross-host issue refs in ResolveIssueRef",
+                      "committedDate": "2026-05-07T00:04:48Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABngOSQKgH2gAzMzQ2MzU4MjYzMDpkMTM2M2E5ZTViMjE0YzJiY2IwYzc3NTM0MWZmZTQzMTg4OGNhZjE3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "d1363a9e5b214c2bcb0c775341ffe431888caf17",
+                      "messageHeadline": "Use strongly-typed githubv4 form for new issue mutations",
+                      "committedDate": "2026-05-07T17:52:57Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnhr_y8ACqjY1NDU2ODU5ODE=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "github-actions"
+                    },
+                    "createdAt": "2026-05-12T07:03:52Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 2,
+                      "title": "Testing ChatOps",
+                      "url": "https://github.com/joshshiu/agentic-workflows-workshop/issues/2",
+                      "repository": {
+                        "nameWithOwner": "joshshiu/agentic-workflows-workshop"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh3MNhgH2gAzMzQ2MzU4MjYzMDoxYTIyOTNiNmUwMGEwNzRmNjI2MGJkNzRhNTcwMDQ1MzIxMDdmNDgw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "1a2293b6e00a074f6260bd74a57004532107f480",
+                      "messageHeadline": "Show Issues 2.0 fields in non-tty view output",
+                      "committedDate": "2026-05-12T20:06:23Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh3VG3AH2gAzMzQ2MzU4MjYzMDplZDM1NWE0NzRmZWE0M2E3NGI5ZGFiODY3Y2YyM2ZmZjA4NWZkYjM0",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "ed355a474fea43a74b9dab867cf23fff085fdb34",
+                      "messageHeadline": "Reject --add-sub-issue when editing multiple issues",
+                      "committedDate": "2026-05-12T20:16:06Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh3noaAH2gAzMzQ2MzU4MjYzMDo4ZjkwNjliMjc1NGU3YTgzNjg1MjM1OTc4NDk0ZTE5OWQ0ODcwZjhi",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "8f9069b2754e7a83685235978494e199d4870f8b",
+                      "messageHeadline": "Hoist issue-type ID lookup out of the per-issue edit loop",
+                      "committedDate": "2026-05-12T20:36:20Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh38SrAH2gAzMzQ2MzU4MjYzMDozMTVkYWZiZjc0YjU4NDY0NTk5ZWQyN2I3YTMyN2RkNzU1MzEyMTU5",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "315dafbf74b58464599ed27b7a327dd755312159",
+                      "messageHeadline": "Drop client-side feature detection for issue relationships",
+                      "committedDate": "2026-05-12T20:58:54Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh78p5gH2gAzMzQ2MzU4MjYzMDowMjQ1NzQ4MmE1ODk3NjBjYzEwYzQ2NjExYjYwMGM0MGZjZjBlMTM5",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "02457482a589760cc10c46611b600c40fcf0e139",
+                      "messageHeadline": "Apply deferred update mutations in parallel for gh issue edit",
+                      "committedDate": "2026-05-13T01:38:55Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh8M-0gH2gAzMzQ2MzU4MjYzMDplODdjY2M1ZmNhYzJlOWNiZjBjMTgzOWExZTA5MDE0N2UzY2EyMTQ3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "e87ccc5fcac2e9cbf0c1839a1e090147e3ca2147",
+                      "messageHeadline": "Drop interactive Parent prompt and move Parent off Editable",
+                      "committedDate": "2026-05-13T01:56:45Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh8V-BAH2gAzMzQ2MzU4MjYzMDo1Yzc4M2EyMjliNWQxYzRmNDcyNmEzOGUzNjk0YjczZGU2YmU1ZjY4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "5c783a229b5d1c4f4726a38e3694b73de6be5f68",
+                      "messageHeadline": "Rename --set-parent to --parent for milestone-style symmetry",
+                      "committedDate": "2026-05-13T02:06:34Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh8hPsgH2gAzMzQ2MzU4MjYzMDplYjczOTc2OTVmM2M2NDkwOWNkOTU1MDgzMjE1MDgwMGEzYjhkOTJl",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "eb7397695f3c64909cd9550832150800a3b8d92e",
+                      "messageHeadline": "Apply deferred update mutations in parallel for gh issue create",
+                      "committedDate": "2026-05-13T02:18:53Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh8qckAH2gAzMzQ2MzU4MjYzMDo2YmJlNmU1YmFjY2YyZmRjMjg2OTlkNDE0ODQ0ZGI0YjVmNTQ1NzNj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "6bbe6e5baccf2fdc28699d414844db4b5f54573c",
+                      "messageHeadline": "Add --remove-type flag to gh issue edit",
+                      "committedDate": "2026-05-13T02:28:56Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh80m9AH2gAzMzQ2MzU4MjYzMDo3Mjg1OTIzN2UyNjQzOWNmYzIzYmU5ZmIyYTgxNDRkYzQ0MWEwODI2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "72859237e26439cfc23be9fb2a8144dc441a0826",
+                      "messageHeadline": "Move --type into the search Qualifiers",
+                      "committedDate": "2026-05-13T02:40:02Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh9AtXgCqjY1NzAxMTk0Njc=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-05-13T02:53:15Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 13411,
+                      "title": "Issues 2.0: review feedback round",
+                      "url": "https://github.com/cli/cli/pull/13411",
+                      "repository": {
+                        "nameWithOwner": "cli/cli"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh9XpJAH2gAzMzQ2MzU4MjYzMDo2MTA2YmQzMDc2NGIxN2NhYWM1NmZhNTc4NzZmZjlmNTUzNjA5M2Q0",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "6106bd30764b17caac56fa57876ff9f5536093d4",
+                      "messageHeadline": "Rename Editable.Allowed to Selectable",
+                      "committedDate": "2026-05-13T03:18:18Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh9YIZACqjY1NzA2ODUzNDE=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-05-13T03:18:50Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 13412,
+                      "title": "Rename Editable.Allowed to Selectable",
+                      "url": "https://github.com/cli/cli/pull/13412",
+                      "repository": {
+                        "nameWithOwner": "cli/cli"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh9nsfAH2gAzMzQ2MzU4MjYzMDpkYmU4ZTM0MTIxYzk3MDY1NzkyNTA4ZDMwYjEyMGU5NWI2MTU3YTE2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "dbe8e34121c97065792508d30b120e95b6157a16",
+                      "messageHeadline": "Overwrite existing parent on --add-sub-issue",
+                      "committedDate": "2026-05-13T03:35:50Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnh92PJgH2gAzMzQ2MzU4MjYzMDo0ZTk3NWZlNGFhMmQxMmIzN2RjNTk4MGY1NjM2Njk2NTQ1NjNlZmRj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "4e975fe4aa2d12b37dc5980f563669654563efdc",
+                      "messageHeadline": "Add acceptance tests for non-interactive Issues 2.0 flows",
+                      "committedDate": "2026-05-13T03:51:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnmVlVAAH2gAzMzQ2MzU4MjYzMDpmOTNmY2JmNmQyOTFjZTNiZWM3NGMzNTUzODAzZjI5YjNiYjllMjg4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "f93fcbf6d291ce3bec74c3553803f29b3bb9e288",
+                      "messageHeadline": "test(acceptance): add sleep to avoid fetching too early",
+                      "committedDate": "2026-05-26T17:46:40Z",
+                      "author": {
+                        "name": "Babak K. Shandiz",
+                        "user": {
+                          "login": "babakks"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnmV9MWAFqjQzNjYzMTU3ODA=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc8AAAABBECxBA",
+                    "author": {
+                      "__typename": "User",
+                      "login": "babakks"
+                    },
+                    "body": "As we discussed in sync and reviewed the follow up PRs, we can ship this now! 🚢 ",
+                    "state": "APPROVED",
+                    "createdAt": "2026-05-26T18:12:44Z",
+                    "submittedAt": "2026-05-26T18:12:44Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4366315780",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "d1363a9e5b214c2bcb0c775341ffe431888caf17"
+                    },
+                    "comments": {
+                      "totalCount": 0
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABno_91rAH2gAzMzQ2MzU4MjYzMDplZTk5NTc3ZGM2OGIyM2JjOTU0YzMyNjJhMGM0ZTZjOGJjMjliNWVi",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "ee99577dc68b23bc954c3262a0c4e6c8bc29b5eb",
+                      "messageHeadline": "Merge pull request #13414 from cli/kw/issues-2.0-acceptance-tests",
+                      "committedDate": "2026-06-04T00:17:18Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABno_95lAH2gAzMzQ2MzU4MjYzMDpiMDg1MDMzNjgyMDI5MDFiYmMxYjZmYzc5MzZkZmY2NTBlYjMyMDEy",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "b08503368202901bbc1b6fc7936dff650eb32012",
+                      "messageHeadline": "Merge pull request #13413 from cli/kw/issues-2.0-overwrite-parent-on-…",
+                      "committedDate": "2026-06-04T00:17:22Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABno_-NHAH2gAzMzQ2MzU4MjYzMDoyNTAzZGNmZDc5ZTM3MmJmYWRlOGY0MWQwNWEyZmJhZTU3ZGExZTI2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "2503dcfd79e372bfade8f41d05a2fbae57da1e26",
+                      "messageHeadline": "Merge pull request #13412 from cli/kw/issues-2.0-rename-allowed",
+                      "committedDate": "2026-06-04T00:17:42Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABno_-dtgH2gAzMzQ2MzU4MjYzMDo5NTExYmI5YTVhOGMyZDZmZDZiNDI4ZDY2YjRjMWEwNWRmZWRiY2Vh",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "9511bb9a5a8c2d6fd6b428d66b4c1a05dfedbcea",
+                      "messageHeadline": "Merge pull request #13411 from cli/kw/issues-2.0-feedback",
+                      "committedDate": "2026-06-04T00:17:59Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpABhBgBqzI2MzEzOTExMTM5",
+                  "node": {
+                    "__typename": "AutoMergeEnabledEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:21:19Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAB7ZABqzI2MzEzOTIxNDk3",
+                  "node": {
+                    "__typename": "AutoMergeDisabledEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:21:46Z",
+                    "reason": "Manually disabled by user"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpACejABqzI2MzEzOTM1MTIw",
+                  "node": {
+                    "__typename": "AutoSquashEnabledEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:22:22Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAC9zABqzI2MzEzOTQ2Njk1",
+                  "node": {
+                    "__typename": "AutoMergeDisabledEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:22:54Z",
+                    "reason": "Manually disabled by user"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpADJhABqzI2MzEzOTUxMDIx",
+                  "node": {
+                    "__typename": "AutoSquashEnabledEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:23:06Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAG4xgBqzI2MzE0MDQ3NTQ3",
+                  "node": {
+                    "__typename": "MergedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:27:11Z",
+                    "commit": {
+                      "oid": "20147bf81fed534faf1b5c9be12638983b8e5e82"
+                    },
+                    "mergeRefName": "trunk"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAG5wABqzI2MzE0MDQ3NTk3",
+                  "node": {
+                    "__typename": "ClosedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:27:12Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAG6ugBqzI2MzE0MDQ4MDc2",
+                  "node": {
+                    "__typename": "HeadRefDeletedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAJc1gCqjcxNDAzNTA0MjA=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:29:59Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 10318,
+                      "title": "Make `gh issue view 1`  show tasks sub-issues' titles",
+                      "url": "https://github.com/cli/cli/issues/10318",
+                      "repository": {
+                        "nameWithOwner": "cli/cli"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnpAJfxACqjcxNDAzNTEwNTA=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-06-04T00:30:02Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 13120,
+                      "title": "[Design] RFC Advanced Issue Support",
+                      "url": "https://github.com/cli/cli/issues/13120",
+                      "repository": {
+                        "nameWithOwner": "cli/cli"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnrPnwzgCqjczMTk5MDc0NzY=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BrewTestBot"
+                    },
+                    "createdAt": "2026-06-10T23:39:31Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 287368,
+                      "title": "gh 2.94.0",
+                      "url": "https://github.com/Homebrew/homebrew-core/pull/287368",
+                      "repository": {
+                        "nameWithOwner": "Homebrew/homebrew-core"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnrbm6dgBqzI2NjI3OTIzNzQ3",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnreT5wACqjczNDQ1MjE2NDg=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-06-11T16:46:24Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 1315,
+                      "title": "chore: fix stale label guidance, add issue-type policy",
+                      "url": "https://github.com/NVIDIA/aicr/pull/1315",
+                      "repository": {
+                        "nameWithOwner": "NVIDIA/aicr"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnwQ-mJgBqzI3MjQ5MzE5NDcz",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnwfGxVgCqjc3ODQwMzg0ODQ=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "gastrodon"
+                    },
+                    "createdAt": "2026-06-27T06:31:35Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 14,
+                      "title": "[backport] Issue dependency read/write tools (upstream main)",
+                      "url": "https://github.com/auto-patcher/github-mcp-server/issues/14",
+                      "repository": {
+                        "nameWithOwner": "auto-patcher/github-mcp-server"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnwfj5mABqzI3Mjc0MjI3MDI5",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnzIkiPgCqjgwMDk3Mzk2NTA=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-05T11:58:03Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 46,
+                      "title": "skills: add to-prd (copy-in from mattpocock/skills)",
+                      "url": "https://github.com/kanade0404/skills/pull/46",
+                      "repository": {
+                        "nameWithOwner": "kanade0404/skills"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnzfWDfgCqjgwNDQxNDc0OTY=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "LangLangBart"
+                    },
+                    "createdAt": "2026-07-06T14:30:03Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 13804,
+                      "title": "`gh issue create` errors after successful creation when issue type can't be set",
+                      "url": "https://github.com/cli/cli/issues/13804",
+                      "repository": {
+                        "nameWithOwner": "cli/cli"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn0cnwwACqjgxNjE4NDgxMzk=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "gwennlbh"
+                    },
+                    "createdAt": "2026-07-09T13:53:36Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 150,
+                      "title": "migrate to non-api commands and flags for gh cli",
+                      "url": "https://github.com/gwennlbh/issurge/issues/150",
+                      "repository": {
+                        "nameWithOwner": "gwennlbh/issurge"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn1aWqLACqjgyNTU4ODYwMDI=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-12T13:49:02Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 93,
+                      "title": "feat(skills): Issue依存関係を blockedBy/blocking で明示 + answer-issue-questions の Issue作成削除 (v0.2.8)",
+                      "url": "https://github.com/getty104/claude-task-worker/pull/93",
+                      "repository": {
+                        "nameWithOwner": "getty104/claude-task-worker"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn2ILnKACqjgzNDkwMzQ1NTQ=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-14T19:12:36Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 254,
+                      "title": "chore(tooling): Reconfigure agent skills setup",
+                      "url": "https://github.com/0Calories/hibana/pull/254",
+                      "repository": {
+                        "nameWithOwner": "0Calories/hibana"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn2N81CgCqjgzNjE2NDUzNjg=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-15T01:55:53Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 2,
+                      "title": "ARCH-001: Tech stack decision and IAM/RBAC design",
+                      "url": "https://github.com/johnnnys3/hr-management-system/pull/2",
+                      "repository": {
+                        "nameWithOwner": "johnnnys3/hr-management-system"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn47cvbgCqjg3MDQ4Mjc4MzU=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-23T12:04:19Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 108,
+                      "title": "feat(skills): reconcile parent issues in to-pr",
+                      "url": "https://github.com/treflebonbon/dotfiles/pull/108",
+                      "repository": {
+                        "nameWithOwner": "treflebonbon/dotfiles"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn5TFsiACqjg3NTc0ODc5ODg=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-24T15:36:52Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 1,
+                      "title": "Configure agent engineering skills",
+                      "url": "https://github.com/AyushJ1001/omachess/pull/1",
+                      "repository": {
+                        "nameWithOwner": "AyushJ1001/omachess"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn6br3BgCqjg4OTIyNjQ1MDA=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "andrewduckett"
+                    },
+                    "createdAt": "2026-07-28T04:11:43Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 212,
+                      "title": "chore: add GitHub Issues feature/bug workflow",
+                      "url": "https://github.com/sidereal-io/sidereal/pull/212",
+                      "repository": {
+                        "nameWithOwner": "sidereal-io/sidereal"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn7QcnVACqjkwMzc0Mzg4OTQ=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-30T17:40:02Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 173,
+                      "title": "docs: document agent workflows and repository conventions",
+                      "url": "https://github.com/ionalexandru99/rebase-git/pull/173",
+                      "repository": {
+                        "nameWithOwner": "ionalexandru99/rebase-git"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn7cG_4gCqjkwNjc1NTI5MjM=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-07-31T07:15:17Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 701,
+                      "title": "Require an epic issue when a split produces three or more ordered issues #699",
+                      "url": "https://github.com/joshuafolkken/kit/pull/701",
+                      "repository": {
+                        "nameWithOwner": "joshuafolkken/kit"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn8aid2ACqjkxODc0MTgwMTU=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-03T07:59:24Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 32,
+                      "title": "chore: add agent skills configuration",
+                      "url": "https://github.com/autobrr/go-bdinfo/pull/32",
+                      "repository": {
+                        "nameWithOwner": "autobrr/go-bdinfo"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn8kRAngCqjkyMTg4MjcwNTM=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-03T19:19:23Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 492,
+                      "title": "docs: rework",
+                      "url": "https://github.com/rombolshak/ahlcg/pull/492",
+                      "repository": {
+                        "nameWithOwner": "rombolshak/ahlcg"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn9OspZgCqjkzNDI2MDc2NTM=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "xuelongmu"
+                    },
+                    "createdAt": "2026-08-05T20:45:35Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 244,
+                      "title": "docs: adopt native gh blocked-by/blocking issue edges (gh >= 2.94.0)",
+                      "url": "https://github.com/xuelongmu/agent-orchestrator/pull/244",
+                      "repository": {
+                        "nameWithOwner": "xuelongmu/agent-orchestrator"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn9dNetgCqjkzODIyOTM2OTE=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-06T13:40:07Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 22,
+                      "title": "Document GitHub issue tracking and domain guidance for agents",
+                      "url": "https://github.com/howie1329/Slate/pull/22",
+                      "repository": {
+                        "nameWithOwner": "howie1329/Slate"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn_Kk2rACqjk2NDc4NjI1Njc=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "chrislacey89"
+                    },
+                    "createdAt": "2026-08-11T21:05:18Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 205,
+                      "title": "[improve-pipeline] Retire the hand-rolled dependency REST path for gh's native flags, and wire /qa (finishes #168)",
+                      "url": "https://github.com/chrislacey89/skills/issues/205",
+                      "repository": {
+                        "nameWithOwner": "chrislacey89/skills"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABn_ZHB7ACqjk2OTIzODg5MTI=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-12T14:01:18Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 190,
+                      "title": "fix(worker): 起動直前に blockedBy を実体確認してブロック中Issueの実行を防ぐ",
+                      "url": "https://github.com/getty104/claude-task-worker/pull/190",
+                      "repository": {
+                        "nameWithOwner": "getty104/claude-task-worker"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoBYim9ACqzEwMDQwOTk4MDky",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-18T18:29:22Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 29,
+                      "title": "Project initation",
+                      "url": "https://github.com/BasuruK/Nuron/pull/29",
+                      "repository": {
+                        "nameWithOwner": "BasuruK/Nuron"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoBZ7K7ACqzEwMDQ2MDcyNDIw",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "alimanfoo"
+                    },
+                    "createdAt": "2026-08-18T20:06:06Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 905,
+                      "title": "Also read a cited issue's parent",
+                      "url": "https://github.com/alimanfoo/dream/pull/905",
+                      "repository": {
+                        "nameWithOwner": "alimanfoo/dream"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoCOBgYgCqzEwMjE5ODUwODcz",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "Bot",
+                      "login": "coderabbitai"
+                    },
+                    "createdAt": "2026-08-21T08:48:05Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 101,
+                      "title": "feat(agents): configure this repo for the engineering skills",
+                      "url": "https://github.com/nisavid/dotfiles/pull/101",
+                      "repository": {
+                        "nameWithOwner": "nisavid/dotfiles"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoEoK5JgBqzMwMTg2MzY3NzU5",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoHAfv6ACqzExMjMxNjYzOTYy",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "panghy"
+                    },
+                    "createdAt": "2026-09-05T05:52:04Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 4427,
+                      "title": "feat(triage): classify issues by the Type field and retire the bug/enhancement labels",
+                      "url": "https://github.com/intent-hq/intent/pull/4427",
+                      "repository": {
+                        "nameWithOwner": "intent-hq/intent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoIgXpLACqzExNjE2ODk1Mzg4",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "jmcvetta"
+                    },
+                    "createdAt": "2026-09-09T21:34:06Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 133,
+                      "title": "fix(issue-deps): pick the client by environment, gh 2.94.0 first",
+                      "url": "https://github.com/jmcvetta/daily-driver/pull/133",
+                      "repository": {
+                        "nameWithOwner": "jmcvetta/daily-driver"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoIggxKABqzMwODYwODg5MDc5",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoKNhh2gCqzEyMDU0MzI2NDYw",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "shinyaoguri"
+                    },
+                    "createdAt": "2026-09-15T04:44:33Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 1235,
+                      "title": "fix(scripts): ready-queue.sh の読み取り失敗が、在庫切れと同じ終了コード 1 で返る",
+                      "url": "https://github.com/mokume-metal/mokume/issues/1235",
+                      "repository": {
+                        "nameWithOwner": "mokume-metal/mokume"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoPD1ptACqzEzNTc4MjMzMzkw",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "massu2002"
+                    },
+                    "createdAt": "2026-09-30T06:17:06Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 38,
+                      "title": "Issue Form と /issue が Issue の種別を付ける",
+                      "url": "https://github.com/MirumeAI/.github/pull/38",
+                      "repository": {
+                        "nameWithOwner": "MirumeAI/.github"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoPD8E1gBqzMyMTQwMTQxNzQz",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoPPjyfgBqzMyMTk2NzU5MjI5",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoPPj0cgCqzEzNjY0Mjc0NDg0",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "lsimons"
+                    },
+                    "createdAt": "2026-09-30T19:56:29Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 579,
+                      "title": "Use GitHub issue relationships (blocked by, blocking, parent, sub-issue) and issue to PR links",
+                      "url": "https://github.com/schubergphilis/ai-training/issues/579",
+                      "repository": {
+                        "nameWithOwner": "schubergphilis/ai-training"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoPQGztABqzMyMTk5MjM3MTAx",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoQdCRRACqzE0MTQzNzY2Njk0",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "AtsutoNakayama"
+                    },
+                    "createdAt": "2026-10-04T14:12:26Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 203,
+                      "title": "gh の最低版を、サブ Issue を gh issue で扱える 2.94.0 に上げる",
+                      "url": "https://github.com/nakayama-labs/agent-plugins/issues/203",
+                      "repository": {
+                        "nameWithOwner": "nakayama-labs/agent-plugins"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoUqCTcACqzE2Mjc2MzUzNjU3",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "junwonkim07"
+                    },
+                    "createdAt": "2026-10-17T15:36:56Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 113,
+                      "title": "[infra] ship.py에 작업 이슈를 상위 PRD의 sub-issue로 잇는 link 명령 추가",
+                      "url": "https://github.com/COSMOS-Aero-Engineering/COSMOS-TVC-Hopper/pull/113",
+                      "repository": {
+                        "nameWithOwner": "COSMOS-Aero-Engineering/COSMOS-TVC-Hopper"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

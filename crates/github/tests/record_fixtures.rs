@@ -743,3 +743,79 @@ fn review_threads_e2e_20() {
         },
     );
 }
+
+/// The time the timeline recordings are read at.
+fn recorded_now() -> std::time::SystemTime {
+    std::time::SystemTime::now()
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn timeline_fd_2212_paged() {
+    record_repo(
+        "timeline_fd_2212_paged",
+        "sharkdp/fd#2212's timeline as rozed-bot, read only, three items a page: read in full, \
+         newest page first, then again with what the first read gave, which asks for the newest \
+         page alone",
+        "sharkdp/fd",
+        |client| async move {
+            let pull = PullRef::new("sharkdp", "fd", 2212);
+            let now = recorded_now();
+            let first = client.timeline_paged(&pull, None, now, 3).await.unwrap();
+            let again = (client.timeline_paged(&pull, Some(&first), now, 3))
+                .await
+                .unwrap();
+            assert_eq!(again, first, "the timeline changed while it was recorded");
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn timeline_cli_13057() {
+    record_repo(
+        "timeline_cli_13057",
+        "cli/cli#13057's timeline as rozed-bot, read only: a merged pull request with commits, \
+         force-pushes, reviews, review requests, cross-references, auto-merge and its merge, two \
+         pages newest first, the second repeating items pushed at the same second as the first's \
+         oldest; then again with what that read gave, which asks for the newest page alone",
+        "cli/cli",
+        |client| async move {
+            let pull = PullRef::new("cli", "cli", 13057);
+            let now = recorded_now();
+            let first = client.timeline(&pull, None, now).await.unwrap();
+            let again = client.timeline(&pull, Some(&first), now).await.unwrap();
+            assert_eq!(again, first, "the timeline changed while it was recorded");
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn timeline_playground_4() {
+    record_graphql(
+        "timeline_playground_4",
+        "The playground's PR #4's timeline (review checks, closed): its commits, reviews and close",
+        |client| async move {
+            let pull = PullRef::new("rozed-dev", "playground", 4);
+            client.timeline(&pull, None, recorded_now()).await.unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn timeline_e2e() {
+    record_repo(
+        "timeline_e2e",
+        "rozed-dev/e2e's timelines of #14 (E1's full run: force-pushed by GitHub's rebase, \
+         reviewed, closed) and #19 (E8, whose base the fixtures script changed)",
+        "rozed-dev/e2e",
+        |client| async move {
+            for number in [14, 19] {
+                let pull = PullRef::new("rozed-dev", "e2e", number);
+                client.timeline(&pull, None, recorded_now()).await.unwrap();
+            }
+        },
+    );
+}

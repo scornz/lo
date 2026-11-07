@@ -29,9 +29,10 @@ use crate::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use crate::queries::pending_review::read_pending_review;
 use crate::queries::review_threads::read_review_threads;
 use crate::queries::stack_layers::read_stack_layers;
+use crate::queries::timeline::read_timeline;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
-    ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview,
+    PullRequestTimeline, ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview,
 };
 use crate::rate_limit::RateLimits;
 use crate::revision_marks::RevisionMarks;
@@ -786,6 +787,24 @@ impl Poller {
         self.read_cached(
             pull,
             move |client, known| read_pending_review(client, target.clone(), login.clone(), known),
+            cx,
+        )
+    }
+
+    /// `pull`'s timeline, as [`Self::read_cached`] keeps it, read as this account. It's read
+    /// again when an item it shows is added, edited or deleted, the latest commit's checks change
+    /// or the description is edited ([`PullRequestTimeline`]'s [`CachedRead::WATCHED`]), and on
+    /// the 5-minute refresh: each time only its newest page, and in full at most hourly.
+    pub fn timeline(
+        &mut self,
+        pull: PullRef,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<PullRequestTimeline>>> {
+        let target = pull.clone();
+        let clock = self.config.wall_clock.clone();
+        self.read_cached(
+            pull,
+            move |client, known| read_timeline(client, target.clone(), known, clock.now()),
             cx,
         )
     }

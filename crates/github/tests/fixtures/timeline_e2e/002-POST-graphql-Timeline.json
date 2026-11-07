@@ -1,0 +1,133 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 19,
+      "last": 100,
+      "before": null
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4893",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "107"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4893,
+          "used": 107,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot"
+            },
+            "body": "**A test fixture for Lo's trust handling, not code to run or merge.**\n\nIts files try to run code, or steer a language server, when the pull request is checked out and opened:\n\n- `.cargo/config.toml` sets a `rustc-wrapper`;\n- `.zed/settings.json` points rust-analyzer, gopls, vtsls and basedpyright at another binary;\n- `node_modules/typescript/lib/tsserver.js` is a workspace TypeScript server;\n- `.venv/`, which `pyrightconfig.json` names, is a virtual environment whose interpreter is a script;\n- `e8/pinned/rust-toolchain.toml` and `go.mod` name toolchains that don't exist.\n\nThe only script any of them would run is `e8/evil.sh`, which creates one empty marker file, `$TMPDIR/lo-e8-<name>`, and nothing else: no network, no deletes, no reads. Lo passes while no marker appears. The toolchain files can only make rustup or go try a download, so they leave no marker; `e8/README.md` lists each file and its marker, and says how a check sees the toolchains.\n\nIt targets `e8/base`, which holds only what `main` held when E8 was made, so merging it can't put these files on `main`.\n\nMade by `script/e2e/fixtures.sh` in scornz/lo.",
+            "createdAt": "2026-11-07T02:15:03Z",
+            "lastEditedAt": "2026-11-07T02:53:24Z",
+            "timelineItems": {
+              "filteredCount": 5,
+              "pageInfo": {
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABobPJrIgH2gAzNTE5NzUwNTM0Njo0NjI1M2QyZjNkOTFiYzZhZGQ5NWJiYzYzOWQyZmYyMWE2YmRmNjQz"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobPJrIgH2gAzNTE5NzUwNTM0Njo0NjI1M2QyZjNkOTFiYzZhZGQ5NWJiYzYzOWQyZmYyMWE2YmRmNjQz",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "46253d2f3d91bc6add95bbc639d2ff21a6bdf643",
+                      "messageHeadline": "test(e8): add files that try to run code when opened",
+                      "committedDate": "2026-11-07T02:15:01Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobPQBYgCqzIwNDE5OTM0MTEw",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "scornz"
+                    },
+                    "createdAt": "2026-11-07T02:21:57Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 36,
+                      "title": "test: script the code, moves and large-PR fixtures on rozed-dev/e2e",
+                      "url": "https://github.com/scornz/lo/pull/36",
+                      "repository": {
+                        "nameWithOwner": "scornz/lo"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobPswQAH2gAzNTE5NzUwNTM0NjphMzVlZGNmZTkzMzIzY2RkMWJlM2ExNTNiOWUyNzY1Y2UyOGUzZTgz",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "a35edcfe93323cdd1be3a153b9e2765ce28e3e83",
+                      "messageHeadline": "test(e8): bring the hostile files up to date",
+                      "committedDate": "2026-11-07T02:53:20Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobPszLgBqzM1NDA5OTI0NTIz",
+                  "node": {
+                    "__typename": "BaseRefChangedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "createdAt": "2026-11-07T02:53:23Z",
+                    "previousRefName": "main",
+                    "currentRefName": "e8/base"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobPv7YABqzM1NDEwMDUyODc3",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

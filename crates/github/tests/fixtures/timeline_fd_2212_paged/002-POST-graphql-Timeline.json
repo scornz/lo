@@ -1,0 +1,103 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2212,
+      "last": 3,
+      "before": "Y3Vyc29yOnYyOpPPAAABobGtBkgBqzM1MzY3NDI2MDAx"
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4999",
+      "x-ratelimit-reset": "1794028315",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "1"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4999,
+          "used": 1,
+          "resetAt": "2026-11-07T05:11:55Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "voidsipp"
+            },
+            "body": "Enabling use-jemalloc does nothing on some targets, including riscv64 and 32-bit musl, even when the builder has a working jemalloc setup.\n\nRemove the platform restrictions from the dependency and allocator selection so Cargo builds can opt in explicitly. The Makefile and release workflow select jemalloc for the same targets as before. CI uses FD_BUILD_FEATURES, and the helper runs with Bash.\n\nThe Makefile sources the helper in one shell and records the selected features in a stamp that changes only when the selection changes. Target overrides use Cargo's target-specific binary path, including a configured target directory, instead of forcing Cargo to run every time.\n\nAll 287 Linux unit/integration tests and all-target, all-feature Clippy pass. Real Make/Cargo checks pass for unchanged settings, switching jemalloc on and off, a target-specific build, and completion generation. Shell syntax and workflow YAML checks pass. riscv64 and 32-bit musl were checked for dependency selection, not compiled or run.\n\nWindows unit tests pass. Windows integration tests require a symlink privilege unavailable here, and Windows Clippy reports errors in unchanged upstream code.\n\nFixes #1822.\n",
+            "createdAt": "2026-11-03T07:06:59Z",
+            "lastEditedAt": "2026-11-03T10:05:53Z",
+            "timelineItems": {
+              "filteredCount": 6,
+              "pageInfo": {
+                "hasPreviousPage": true,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABoaDfW7gAqjY2MDA3MzI5MjM="
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoaDfW7gAqjY2MDA3MzI5MjM=",
+                  "node": {
+                    "__typename": "IssueComment",
+                    "id": "IC_kwDOBWllys8AAAABiW8w-w",
+                    "author": {
+                      "__typename": "User",
+                      "login": "voidsipp"
+                    },
+                    "body": "Renamed the CI variable to FD_BUILD_FEATURES, switched the helper to Bash and merged the duplicate case block. The Makefile now sources it in one shell.\n\nRemoved the redundant shell test and the unconditional rebuild. A stamp changes only when the selected features change, and target overrides use the correct Cargo output path. I also checked command-line target overrides on GNU Make 4.3; the target has to be passed into the selector explicitly there.\n\nAll 287 Linux tests and all-target, all-feature Clippy pass. Real Make builds pass when switching jemalloc on and off, leave unchanged settings alone, and generate completions from the target-specific binary. The Windows validation limits are recorded in the PR description.\n",
+                    "createdAt": "2026-11-03T10:05:55Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/sharkdp/fd/pull/2212#issuecomment-6600732923",
+                    "isMinimized": false,
+                    "minimizedReason": null,
+                    "viewerCanUpdate": false,
+                    "viewerCanDelete": false
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobDePMgBqzM1MzQ3NjI2OTYy",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobFAOrgCqzIwMjk5MTkxNzg4",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "scornz"
+                    },
+                    "createdAt": "2026-11-06T14:25:39Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 13,
+                      "title": "feat(repo_cache): keep a partial clone of each repository",
+                      "url": "https://github.com/scornz/lo/pull/13",
+                      "repository": {
+                        "nameWithOwner": "scornz/lo"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

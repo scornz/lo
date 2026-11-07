@@ -1,0 +1,101 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "sharkdp",
+      "name": "fd",
+      "number": 2212,
+      "last": 3,
+      "before": "Y3Vyc29yOnYyOpPPAAABoaDfU-gH2gAzNTEzMzI2ODM1ODoyMmM3MGFjYzY5OTJjMGM1MWNiNjg1MjdiODdhZGYxMTRkMDFhY2Jj"
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4997",
+      "x-ratelimit-reset": "1794028315",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "3"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4997,
+          "used": 3,
+          "resetAt": "2026-11-07T05:11:55Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "voidsipp"
+            },
+            "body": "Enabling use-jemalloc does nothing on some targets, including riscv64 and 32-bit musl, even when the builder has a working jemalloc setup.\n\nRemove the platform restrictions from the dependency and allocator selection so Cargo builds can opt in explicitly. The Makefile and release workflow select jemalloc for the same targets as before. CI uses FD_BUILD_FEATURES, and the helper runs with Bash.\n\nThe Makefile sources the helper in one shell and records the selected features in a stamp that changes only when the selection changes. Target overrides use Cargo's target-specific binary path, including a configured target directory, instead of forcing Cargo to run every time.\n\nAll 287 Linux unit/integration tests and all-target, all-feature Clippy pass. Real Make/Cargo checks pass for unchanged settings, switching jemalloc on and off, a target-specific build, and completion generation. Shell syntax and workflow YAML checks pass. riscv64 and 32-bit musl were checked for dependency selection, not compiled or run.\n\nWindows unit tests pass. Windows integration tests require a symlink privilege unavailable here, and Windows Clippy reports errors in unchanged upstream code.\n\nFixes #1822.\n",
+            "createdAt": "2026-11-03T07:06:59Z",
+            "lastEditedAt": "2026-11-03T10:05:53Z",
+            "timelineItems": {
+              "filteredCount": 2,
+              "pageInfo": {
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABoaA7V3AH2gAzNTEzMzI2ODM1ODoxNTYzNWQ2NmJhN2ZmM2QyZGEwZTUwMzkyZmJjZDM3YzkwZDgzZGU1"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoaA7V3AH2gAzNTEzMzI2ODM1ODoxNTYzNWQ2NmJhN2ZmM2QyZGEwZTUwMzkyZmJjZDM3YzkwZDgzZGU1",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5",
+                      "messageHeadline": "Honor explicit use-jemalloc requests",
+                      "committedDate": "2026-11-03T07:06:46Z",
+                      "author": {
+                        "name": "voidsip",
+                        "user": {
+                          "login": "voidsipp"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "SUCCESS"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABoaCkaeAFqjU3NDkwNjAwNTk=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOBWllys8AAAABVqux2w",
+                    "author": {
+                      "__typename": "User",
+                      "login": "tmccombs"
+                    },
+                    "body": "",
+                    "state": "CHANGES_REQUESTED",
+                    "createdAt": "2026-11-03T08:26:10Z",
+                    "submittedAt": "2026-11-03T09:01:32Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/sharkdp/fd/pull/2212#pullrequestreview-5749060059",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "15635d66ba7ff3d2da0e50392fbcd37c90d83de5"
+                    },
+                    "comments": {
+                      "totalCount": 7
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

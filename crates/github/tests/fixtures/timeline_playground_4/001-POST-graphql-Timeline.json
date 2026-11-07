@@ -1,0 +1,314 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 4,
+      "last": 100,
+      "before": null
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4895",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "105"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4895,
+          "used": 105,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot"
+            },
+            "body": "Throwaway PR for checking GitHub's review API behaviour for rozed. Will be closed, not merged.",
+            "createdAt": "2026-11-06T16:20:29Z",
+            "lastEditedAt": null,
+            "timelineItems": {
+              "filteredCount": 12,
+              "pageInfo": {
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABobGpNbgH2gAzNTE5MDk5NTEwOTpmYzBmNGI0YjQyYmJjMTVkYjk5NjI5MjcxMzYxNTg5MTEwODg1YzU2"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGpNbgH2gAzNTE5MDk5NTEwOTpmYzBmNGI0YjQyYmJjMTVkYjk5NjI5MjcxMzYxNTg5MTEwODg1YzU2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56",
+                      "messageHeadline": "test: change lines 10, 11, 30 and 50",
+                      "committedDate": "2026-11-06T16:20:19Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGp4ZgFqjU4MDMzMTgyMjg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWeeb1A",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:21:03Z",
+                    "submittedAt": "2026-11-06T16:21:03Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803318228",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGp_PAFqjU4MDMzMjAzNDg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWeekHA",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:21:10Z",
+                    "submittedAt": "2026-11-06T16:21:10Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803320348",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGq-tgH2gAzNTE5MDk5NTEwOToyMTA0YTNjODUwMzg3ZWEzNzM4MGI5NTBkZDllZmQ3N2ExMzEzOTRi",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "2104a3c850387ea37380b950dd9efd77a131394b",
+                      "messageHeadline": "test: change line 10 again",
+                      "committedDate": "2026-11-06T16:22:15Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGrvigFqjU4MDMzMzI1NDU=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWefTwQ",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "Check 1: submitting R1 (started on c2) after push of c3",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:21:52Z",
+                    "submittedAt": "2026-11-06T16:23:05Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803332545",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                    },
+                    "comments": {
+                      "totalCount": 5
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGsI7gFqjU4MDMzNTU4NzM=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWegu4Q",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "Check 6: ranges",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:23:25Z",
+                    "submittedAt": "2026-11-06T16:23:31Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803355873",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                    },
+                    "comments": {
+                      "totalCount": 4
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGsaggFqjU4MDMzNjE4MTk=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWehGGw",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:23:49Z",
+                    "submittedAt": "2026-11-06T16:23:49Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803361819",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGsbfAFqjU4MDMzNjIwNzg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWehHHg",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:23:50Z",
+                    "submittedAt": "2026-11-06T16:23:50Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803362078",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGsdcAFqjU4MDMzNjI0NjY=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWehIog",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:23:52Z",
+                    "submittedAt": "2026-11-06T16:23:52Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803362466",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGshWAFqjU4MDMzNjI4MDg=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVk6v9M8AAAABWehJ-A",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T16:23:53Z",
+                    "submittedAt": "2026-11-06T16:23:56Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/playground/pull/4#pullrequestreview-5803362808",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                    },
+                    "comments": {
+                      "totalCount": 2
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGtufgH2gAzNTE5MDk5NTEwOTpiNDA1YmZjNmUyYmY3ZTk1MGMyZWMwYTA3Yzg1ZjhhODNkY2ZmNjZk",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d",
+                      "messageHeadline": "test: change line 55",
+                      "committedDate": "2026-11-06T16:25:15Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobGuPsgBqzM1MzY3NTQ3OTg1",
+                  "node": {
+                    "__typename": "ClosedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "createdAt": "2026-11-06T16:25:49Z"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

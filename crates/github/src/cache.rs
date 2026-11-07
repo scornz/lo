@@ -519,7 +519,9 @@ mod tests {
     use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
     use crate::push_history::PushHistory;
-    use crate::queries::{ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview};
+    use crate::queries::{
+        PullRequestTimeline, ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview,
+    };
 
     fn account(login: &str) -> Account {
         Account {
@@ -755,6 +757,7 @@ mod tests {
             TrunkRuleList::NAME,
             Stamped::<ReviewThreadList>::NAME,
             Stamped::<ViewerPendingReview>::NAME,
+            Stamped::<PullRequestTimeline>::NAME,
         ];
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "{names:?}");
@@ -782,6 +785,10 @@ mod tests {
                     Stamped::<ViewerPendingReview>::NAME,
                     Stamped::<ViewerPendingReview>::version()
                 ),
+                (
+                    Stamped::<PullRequestTimeline>::NAME,
+                    Stamped::<PullRequestTimeline>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
@@ -794,6 +801,7 @@ mod tests {
                 ("TrunkRules", "22f61a7701923aef".to_string()),
                 ("ReviewThreads", "e735a4e6c6730245".to_string()),
                 ("PendingReview", "e545a53a4fa554b7".to_string()),
+                ("Timeline", "00daaf3cf66b1033".to_string()),
             ]
         );
     }

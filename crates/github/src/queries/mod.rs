@@ -20,6 +20,7 @@ pub mod pull_request_revisions;
 pub mod review_thread_comments;
 pub mod review_threads;
 pub mod stack_layers;
+pub mod timeline;
 pub mod trunk_rules;
 pub mod unmark_file_as_viewed;
 pub mod viewer;
@@ -39,6 +40,7 @@ pub use pull_request_revisions::{PullRequestRevisions, PullRequestRevisionsData}
 pub use review_thread_comments::ReviewThreadComments;
 pub use review_threads::{ReviewThread, ReviewThreadList, ReviewThreads};
 pub use stack_layers::{StackLayer, StackLayerList, StackLayers, ViewedFiles};
+pub use timeline::{PullRequestTimeline, Timeline, TimelineEntry, TimelineItem};
 pub use trunk_rules::{TrunkRuleList, TrunkRules};
 pub use unmark_file_as_viewed::UnmarkFileAsViewed;
 pub use viewer::{Viewer, ViewerData};

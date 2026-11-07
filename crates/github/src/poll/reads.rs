@@ -235,6 +235,126 @@ impl fmt::Debug for ReadJob {
 mod tests {
     use super::*;
 
+    use crate::cassette::{fixtures_dir, read_cassette};
+    use crate::push_history::PushHistory;
+    use crate::queries::{
+        PullRequestTimeline, ReviewThreadList, StackLayerList, ViewerPendingReview,
+    };
+
+    /// PR #1's recorded check, with a thread and a pending review of yours, each with a comment.
+    fn check() -> serde_json::Value {
+        let (_, interactions) =
+            read_cassette(&fixtures_dir().join("graphql_pull_request_check_1")).unwrap();
+        let body = interactions[0].1.response.body.clone().unwrap();
+        let mut check = body["data"]["repository"]["pullRequest"].clone();
+        check["reviewThreads"] = serde_json::json!({
+            "totalCount": 1,
+            "nodes": [{"isResolved": false, "comments": {"totalCount": 1}}]
+        });
+        check["viewerPendingReview"] =
+            serde_json::json!({"nodes": [{"comments": {"totalCount": 1}}]});
+        check
+    }
+
+    /// Which of the review threads, your pending review and the timeline `edit` reads again.
+    fn read_again(edit: impl FnOnce(&mut serde_json::Value)) -> [bool; 3] {
+        let before = check();
+        let mut after = before.clone();
+        edit(&mut after);
+        let changed = |watched: &[&str]| stamp(&before, watched) != stamp(&after, watched);
+        [
+            changed(ReviewThreadList::WATCHED),
+            changed(ViewerPendingReview::WATCHED),
+            changed(PullRequestTimeline::WATCHED),
+        ]
+    }
+
+    fn add(value: &mut serde_json::Value, by: i64) {
+        *value = (value.as_i64().unwrap() + by).into();
+    }
+
+    #[test]
+    fn every_kept_read_watches_fields_the_check_has() {
+        let check = check();
+        for pointer in [
+            PushHistory::WATCHED,
+            StackLayerList::WATCHED,
+            ReviewThreadList::WATCHED,
+            ViewerPendingReview::WATCHED,
+            PullRequestTimeline::WATCHED,
+        ]
+        .concat()
+        {
+            assert!(check.pointer(pointer).is_some(), "{pointer}");
+        }
+    }
+
+    #[test]
+    fn threads_your_pending_review_and_the_timeline_are_read_again_only_when_they_change() {
+        // Someone mentions the pull request elsewhere: only the whole timeline moves.
+        let mentioned = read_again(|check| {
+            check["timelineItems"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
+            add(&mut check["timelineItems"]["totalCount"], 1);
+        });
+        assert_eq!(mentioned, [false, false, false]);
+        // A comment on the pull request, or a label.
+        let commented = read_again(|check| {
+            add(&mut check["comments"]["totalCount"], 1);
+            add(&mut check["timelineEvents"]["filteredCount"], 1);
+            check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(commented, [false, false, true]);
+        // A comment edited: the timeline's items' latest time moves.
+        let edited = read_again(|check| {
+            check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(edited, [false, false, true]);
+        // Checks start on the latest commit, and the description is edited.
+        let checks = read_again(|check| {
+            check["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});
+        });
+        assert_eq!(checks, [false, false, true]);
+        let described = read_again(|check| {
+            check["lastEditedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(described, [false, false, true]);
+        // A reply, posted at once: a review of its own, in the timeline too.
+        let replied = read_again(|check| {
+            add(
+                &mut check["reviewThreads"]["nodes"][0]["comments"]["totalCount"],
+                1,
+            );
+            add(&mut check["reviews"]["totalCount"], 1);
+            add(&mut check["submittedReviews"]["totalCount"], 1);
+            add(&mut check["timelineEvents"]["filteredCount"], 1);
+            check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(replied, [true, false, true]);
+        // A thread resolved, or a push.
+        let resolved = read_again(|check| {
+            check["reviewThreads"]["nodes"][0]["isResolved"] = true.into();
+        });
+        assert_eq!(resolved, [true, false, false]);
+        let pushed = read_again(|check| {
+            check["headRefOid"] = "c7f30e9b1a5d7c3e9f1b5d7a3c9e1f5b7d3a9c62".into();
+            add(&mut check["timelineEvents"]["filteredCount"], 1);
+        });
+        assert_eq!(pushed, [true, false, true]);
+        // You add to your pending review, from Lo or from GitHub's web pages.
+        let pending = read_again(|check| {
+            add(
+                &mut check["viewerPendingReview"]["nodes"][0]["comments"]["totalCount"],
+                1,
+            );
+        });
+        assert_eq!(pending, [false, true, false]);
+        // You delete it.
+        let deleted = read_again(|check| {
+            check["viewerPendingReview"]["nodes"] = serde_json::json!([]);
+        });
+        assert_eq!(deleted, [false, true, false]);
+    }
+
     #[test]
     fn a_stamp_holds_the_watched_fields_values() {
         let check = serde_json::json!({

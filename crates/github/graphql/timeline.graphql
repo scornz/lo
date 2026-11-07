@@ -1,0 +1,432 @@
+# A pull request's timeline (design §8, "Timeline"), newest first, $last items a page: its
+# description, and each item the timeline shows with what it shows of it. Every other item is
+# read by its __typename alone, so a page's items line up with the timeline's and its count.
+# Edges carry each item's cursor, which a later read uses to tell which items it has.
+query Timeline(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $last: Int!
+  $before: String
+) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      author {
+        __typename
+        login
+      }
+      body
+      createdAt
+      lastEditedAt
+      timelineItems(last: $last, before: $before) {
+        # The items before $before, or all of them; totalCount counts items GitHub doesn't list.
+        filteredCount
+        pageInfo {
+          hasPreviousPage
+          startCursor
+        }
+        edges {
+          cursor
+          node {
+            __typename
+            ... on IssueComment {
+              id
+              author {
+                __typename
+                login
+              }
+              body
+              createdAt
+              lastEditedAt
+              url
+              isMinimized
+              minimizedReason
+              viewerCanUpdate
+              viewerCanDelete
+            }
+            ... on PullRequestReview {
+              id
+              author {
+                __typename
+                login
+              }
+              body
+              state
+              createdAt
+              submittedAt
+              lastEditedAt
+              url
+              isMinimized
+              commit {
+                oid
+              }
+              comments {
+                totalCount
+              }
+            }
+            ... on PullRequestCommit {
+              # Aliased: a review's commit is nullable, so the two can't share a name.
+              gitCommit: commit {
+                oid
+                messageHeadline
+                committedDate
+                author {
+                  name
+                  user {
+                    login
+                  }
+                }
+                statusCheckRollup {
+                  state
+                }
+              }
+            }
+            ... on HeadRefForcePushedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              beforeCommit {
+                oid
+              }
+              afterCommit {
+                oid
+              }
+            }
+            ... on BaseRefForcePushedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              beforeCommit {
+                oid
+              }
+              afterCommit {
+                oid
+              }
+            }
+            ... on LabeledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              label {
+                name
+                color
+              }
+            }
+            ... on UnlabeledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              label {
+                name
+                color
+              }
+            }
+            ... on AssignedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              assignee {
+                __typename
+                ... on User {
+                  login
+                }
+                ... on Bot {
+                  login
+                }
+                ... on Mannequin {
+                  login
+                }
+                ... on Organization {
+                  login
+                }
+              }
+            }
+            ... on UnassignedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              assignee {
+                __typename
+                ... on User {
+                  login
+                }
+                ... on Bot {
+                  login
+                }
+                ... on Mannequin {
+                  login
+                }
+                ... on Organization {
+                  login
+                }
+              }
+            }
+            ... on ReviewRequestedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              requestedReviewer {
+                __typename
+                ... on User {
+                  login
+                }
+                ... on Bot {
+                  login
+                }
+                ... on Mannequin {
+                  login
+                }
+                ... on Team {
+                  combinedSlug
+                }
+                ... on EnterpriseTeam {
+                  slug
+                }
+              }
+            }
+            ... on ReviewRequestRemovedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              requestedReviewer {
+                __typename
+                ... on User {
+                  login
+                }
+                ... on Bot {
+                  login
+                }
+                ... on Mannequin {
+                  login
+                }
+                ... on Team {
+                  combinedSlug
+                }
+                ... on EnterpriseTeam {
+                  slug
+                }
+              }
+            }
+            ... on CrossReferencedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              willCloseTarget
+              source {
+                __typename
+                ... on Issue {
+                  number
+                  title
+                  url
+                  repository {
+                    nameWithOwner
+                  }
+                }
+                ... on PullRequest {
+                  number
+                  title
+                  url
+                  repository {
+                    nameWithOwner
+                  }
+                }
+              }
+            }
+            ... on MergedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              commit {
+                oid
+              }
+              mergeRefName
+            }
+            ... on AddedToMergeQueueEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on RemovedFromMergeQueueEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              reason
+            }
+            ... on DeployedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              deployment {
+                environment
+                latestStatus {
+                  state
+                }
+              }
+            }
+            ... on DeploymentEnvironmentChangedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              deploymentStatus {
+                state
+                deployment {
+                  environment
+                }
+              }
+            }
+            ... on ConvertToDraftEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on ReadyForReviewEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on ClosedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on ReopenedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on BaseRefChangedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              previousRefName
+              currentRefName
+            }
+            ... on AutomaticBaseChangeSucceededEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              oldBase
+              newBase
+            }
+            ... on AutomaticBaseChangeFailedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              oldBase
+              newBase
+            }
+            ... on ReviewDismissedEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              dismissalMessage
+              previousReviewState
+              review {
+                author {
+                  __typename
+                  login
+                }
+              }
+            }
+            ... on AutoMergeEnabledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on AutoMergeDisabledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              reason
+            }
+            ... on AutoRebaseEnabledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on AutoSquashEnabledEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+            }
+            ... on AddedToStackEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              stackNumber
+            }
+            ... on RemovedFromStackEvent {
+              actor {
+                __typename
+                login
+              }
+              createdAt
+              stackNumber
+            }
+          }
+        }
+      }
+    }
+  }
+}

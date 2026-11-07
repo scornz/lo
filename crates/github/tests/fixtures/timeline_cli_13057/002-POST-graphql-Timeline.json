@@ -1,0 +1,412 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "cli",
+      "name": "cli",
+      "number": 13057,
+      "last": 100,
+      "before": "Y3Vyc29yOnYyOpPPAAABnd7eAygBqzI1MDM5MDQ0OTIx"
+    },
+    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4897",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "103"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4897,
+          "used": 103,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "BagToad"
+            },
+            "body": "# Add Issues 2.0 support: issue types, sub-issues, and relationships\n\nCloses #10298\nCloses #9696\nCloses #11757\nCloses #12477\nCloses #12152\n\nAdds support for GitHub's Issues 2.0 features across `gh issue create`, `edit`, `view`, and `list`.\n\n## New flags\n\n### `gh issue create`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--parent 100` | Add as a sub-issue of the specified parent (number or URL) |\n| `--blocked-by 200,201` | Mark as blocked by these issues |\n| `--blocking 300` | Mark as blocking these issues |\n\nInteractive mode prompts for issue type when the repo has types configured.\n\n### `gh issue edit`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--set-parent 100` | Set or replace the parent issue |\n| `--remove-parent` | Remove the parent issue |\n| `--add-sub-issue 123,124` | Add sub-issues |\n| `--remove-sub-issue 123` | Remove a sub-issue |\n| `--add-blocked-by 200` | Add blocked-by relationship |\n| `--remove-blocked-by 201` | Remove blocked-by relationship |\n| `--add-blocking 300,301` | Add blocking relationships |\n| `--remove-blocking 300` | Remove blocking relationship |\n\nInteractive mode adds Type and Parent to the field picker. Batch editing\nsupported for `--type` across multiple issues.\n\n### `gh issue view`\n\nTTY output now displays:\n- Issue type on the state line (e.g., `Bug · Open`)\n- Type, Parent, Blocked by, Blocking metadata rows\n- Sub-issues section with completion progress (e.g., `Sub-issues · 3/5 (60%)`)\n\nJSON output supports new fields: `issueType`, `parent`, `subIssues`,\n`subIssuesSummary`, `blockedBy`, `blocking`. The `subIssues`, `blockedBy`,\nand `blocking` fields are objects of the shape `{ \"nodes\": [...], \"totalCount\": N }`\n(rather than flat arrays) so consumers can detect when the truncation\nlimit is reached. Each node and the `parent` object include the canonical\n`id`.\n\n### `gh issue list`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Filter issues by type |\n\n## GHES compatibility\n\n- **Issue types and sub-issues**: GA on all supported GHES versions (3.17+). No feature detection needed.\n- **Relationships** (blocked-by/blocking): Requires GHES 3.19+. Feature detection via `__type` schema introspection for the `blockedBy` field on the Issue type. Unsupported GHES versions receive a clear error message. Gated with `// TODO IssueRelationshipsCleanup` for cleanup when GHES 3.18 support ends.\n\n## Implementation details\n\n- Post-creation mutations for type, parent, and relationships (same pattern as projectV2 and assignee mutations)\n- `--blocking` and `--add-blocking` swap API arguments: calls `addBlockedBy(issueId=OTHER, blockingIssueId=THIS)`\n- Cross-repo references supported via URL for `--parent`, `--blocked-by`, `--blocking`, and sub-issue flags\n- Shared helpers extracted to `pkg/cmd/issue/shared/resolve.go` (`ResolveIssueRef`, `ResolveIssueTypeName`)\n- Issue-only fields (Type, Parent) gated behind `Allowed` in the Editable pattern to prevent leaking into `gh pr edit`\n- Issue type names with spaces are quoted in search queries (`type:\"Bug Report\"`)\n\n## Testing\n\n- **34 new flag parsing tests** across create, edit, and list\n- **18 new HTTP mock behavior tests** covering mutations, error cases, and GHES unsupported paths\n- **5 new view tests** (TTY rendering, JSON export)\n- **2 regression tests** (issue-only fields don't leak into PR edit, no-new-fields view unchanged)\n\n## Changes\n\n17 files changed, 2105 insertions(+), 18 deletions(-)\n\n| File | Change |\n|------|--------|\n| `api/queries_issue.go` | New types, Issue struct fields, mutation functions, helpers |\n| `api/query_builder.go` | GraphQL fragment cases, `issueOnlyFields` |\n| `api/export_pr.go` | ExportData cases for new fields |\n| `internal/featuredetection/` | `IssueRelationshipsSupported` detection |\n| `pkg/cmd/issue/create/create.go` | New flags, post-creation mutations, interactive type picker |\n| `pkg/cmd/issue/edit/edit.go` | New flags, mutations, interactive Type/Parent picker |\n| `pkg/cmd/issue/view/view.go` | TTY rendering, conditional relationship fields |\n| `pkg/cmd/issue/list/list.go` | `--type` filter via search path |\n| `pkg/cmd/issue/shared/resolve.go` | Shared `ResolveIssueRef`, `ResolveIssueTypeName` |\n| `pkg/cmd/pr/shared/editable.go` | `IssueType`/`Parent` fields, `Allowed` gating |\n| `pkg/cmd/pr/shared/params.go` | `IssueType` in `FilterOptions` and search query |\n\n## Key notes for reviewers\n\n- **`--blocking` arg swap**: The GitHub API only has `addBlockedBy(issueId, blockingIssueId)`. To support `--blocking`, we swap the arguments — the OTHER issue becomes `issueId` and THIS issue becomes `blockingIssueId`. Same for `--remove-blocking`.\n- **Editable `Allowed` gating**: `IssueType` and `Parent` are added to the shared `Editable` struct but gated behind `Allowed = true`, which only the issue edit command sets. This prevents these issue-only fields from leaking into `gh pr edit`'s interactive picker. Regression test in `survey_test.go`.\n- **View relationship fields are GHES-gated**: `blockedBy` and `blocking` are only added to the GraphQL query when `IssueRelationshipsSupported` is true. Without this, `gh issue view` would break on GHES 3.17–3.18 where these fields don't exist.\n- **Batch edit type resolution**: When editing multiple issues with `--type`, the type name is resolved to an ID once before the loop rather than per-issue, avoiding N-1 redundant `RepoIssueTypes` API calls.\n\n## Manual test results\n\nAll scenarios tested against on github.com.\n\n\n<b>24/24 scenarios passing</b> (click to expand)\n\n### Issue types\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 1 | `create-with-type` | `gh issue create --title \"...\" --type Bug` | ✅ [#1](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/1) created, type=Bug verified |\n| 2 | `create-error-invalid-type` | `gh issue create --title \"Oops\" --type Bugz` | ✅ Error: `type \"Bugz\" not found; available types: Task, Bug, Feature` |\n| 3 | `edit-change-type` | `gh issue edit 1 --type Feature` | ✅ Type changed to Feature verified |\n| 4 | `create-interactive-type` | `gh issue create` (interactive) | ✅ [#21](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/21) Type picker shown, Bug selected and set |\n\n### Sub-issues\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 5 | `create-with-parent` | `gh issue create --title \"...\" --parent 3` | ✅ [#4](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/4) created as sub-issue of #3 |\n| 6 | `edit-set-parent` | `gh issue edit 5 --set-parent 3` | ✅ Parent set, verified via `--json parent` |\n| 7 | `edit-remove-parent` | `gh issue edit 5 --remove-parent` | ✅ Parent removed, verified null |\n| 8 | `edit-add-sub-issues` | `gh issue edit 3 --add-sub-issue 6,7` | ✅ Sub-issues added, verified via `--json subIssues` |\n| 9 | `edit-remove-sub-issue` | `gh issue edit 3 --remove-sub-issue 6` | ✅ Sub-issue removed |\n| 10 | `edit-error-mutual-parent` | `gh issue edit 5 --set-parent 1 --remove-parent` | ✅ Error: `specify only one of --set-parent or --remove-parent` |\n\n### Relationships\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 11 | `create-with-relationships` | `gh issue create --blocked-by 8 --blocking 9` | ✅ [#11](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/11) blockedBy=#8, blocking=#9 verified |\n| 12 | `edit-add-remove-blocked-by` | `gh issue edit 14 --add-blocked-by 12 --remove-blocked-by 13` | ✅ Relationships updated |\n| 13 | `edit-add-blocking` | `gh issue edit 14 --add-blocking 15,16` | ✅ Blocking relationships added (swapped args verified) |\n\n### View\n\n| # | Scenario | Verification | Result |\n|---|----------|-------------|--------|\n| 14 | `view-with-type` | TTY shows `Bug · Open` on state line, `Type: Bug` row | ✅ |\n| 15 | `view-parent-sub-issues` | TTY shows Parent row, Sub-issues section with progress | ✅ |\n| 16 | `view-child-parent` | TTY shows parent reference for child issue | ✅ |\n| 17 | `view-relationships` | TTY shows Blocked by and Blocking rows | ✅ |\n| 18 | `view-json-issueType` | `--json issueType` returns id, name, description, color | ✅ |\n| 19 | `view-json-parent-subIssues` | `--json parent,subIssues,subIssuesSummary` returns structured data | ✅ |\n| 20 | `view-json-relationships` | `--json blockedBy,blocking` returns `{ nodes: [...], totalCount: N }` with id, number, title, url, state | ✅ |\n\n### List\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 21 | `list-filter-by-type` | `gh issue list --type Bug` | ✅ Filtered results returned |\n\n### Combined\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 22 | `create-all-flags` | `gh issue create --type Task --parent 3 --blocked-by 8 --blocking 9` | ✅ [#17](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/17) all fields set |\n| 23 | `edit-batch-type` | `gh issue edit 18 19 20 --type Bug` | ✅ All 3 issues updated to Bug |\n| 24 | `edit-interactive` | `gh issue edit 21` (interactive) | ✅ Picker shows Type and Parent fields |\n\n\n\n**TODO**: GHES-specific scenarios (`create-error-ghes-relationships`), but GHES feature detection does have unit test coverage with mock introspection responses.\n\n",
+            "createdAt": "2026-03-30T00:42:33Z",
+            "lastEditedAt": "2026-05-06T21:08:32Z",
+            "timelineItems": {
+              "filteredCount": 19,
+              "pageInfo": {
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABnTw0uzABqzI0MDE3MDAzMjQ2"
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnTw0uzABqzI0MDE3MDAzMjQ2",
+                  "node": {
+                    "__typename": "ReviewRequestedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-03-30T00:46:22Z",
+                    "requestedReviewer": {
+                      "__typename": "Bot",
+                      "login": "copilot-pull-request-reviewer"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnTw4h9gFqjQwMjc1NTEzNDY=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc7wD45y",
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "copilot-pull-request-reviewer"
+                    },
+                    "body": "## Pull request overview\n\nAdds support for GitHub Issues 2.0 capabilities (issue types, sub-issues, and blocked-by/blocking relationships) across `gh issue` create/edit/view/list, including GHES feature detection for relationships.\n\n**Changes:**\n- Adds new GraphQL fields/types and mutations for issue types, sub-issues, and relationships; exports these via `--json`.\n- Extends issue create/edit/list/view commands with new flags, interactive prompts, and TTY rendering for Issues 2.0 metadata.\n- Introduces GHES relationship feature detection via schema introspection and adds/updates tests for flags and behaviors.\n\n### Reviewed changes\n\nCopilot reviewed 17 out of 17 changed files in this pull request and generated 6 comments.\n\n<details>\n<summary>Show a summary per file</summary>\n\n| File | Description |\r\n| ---- | ----------- |\r\n| pkg/cmd/pr/shared/survey_test.go | Regression test ensuring issue-only editable fields don’t appear unless explicitly allowed. |\r\n| pkg/cmd/pr/shared/params.go | Adds IssueType filtering into search query building. |\r\n| pkg/cmd/pr/shared/editable.go | Adds IssueType/Parent editable fields, survey prompts, and option fetching. |\r\n| pkg/cmd/issue/view/view_test.go | Adds TTY and JSON tests for Issues 2.0 fields in `gh issue view`. |\r\n| pkg/cmd/issue/view/view.go | Adds default fields and TTY rendering for issue type/parent/sub-issues/relationships; GHES-gates relationship query fields. |\r\n| pkg/cmd/issue/shared/resolve.go | Adds shared helpers to resolve issue refs and type names. |\r\n| pkg/cmd/issue/list/list_test.go | Adds tests for `--type` flag parsing and query behavior. |\r\n| pkg/cmd/issue/list/list.go | Adds `--type` filter support to issue list search path. |\r\n| pkg/cmd/issue/edit/edit_test.go | Adds flag parsing and behavior tests for type/parent/sub-issues/relationships including GHES unsupported path. |\r\n| pkg/cmd/issue/edit/edit.go | Implements new edit flags and mutations for type/parent/sub-issues/relationships, plus interactive picker integration. |\r\n| pkg/cmd/issue/create/create_test.go | Adds flag parsing and behavior tests for type/parent/relationships including GHES unsupported path. |\r\n| pkg/cmd/issue/create/create.go | Implements create flags, interactive type selection, and post-create mutations for Issues 2.0 fields. |\r\n| internal/featuredetection/feature_detection_test.go | Adds tests for relationship support detection via schema introspection. |\r\n| internal/featuredetection/feature_detection.go | Adds `IssueRelationshipsSupported` detection and plumbing. |\r\n| api/query_builder.go | Adds GraphQL fragment cases and issue-only fields for Issues 2.0 fields. |\r\n| api/queries_issue.go | Adds Issue struct fields/types plus mutations and helper queries for issue types/refs/relationships. |\r\n| api/export_pr.go | Extends JSON export mapping for new issue fields (type, parent, sub-issues, relationships). |\n</details>\n\n\n\n\n\n\n---\n\n💡 <a href=\"/cli/cli/new/trunk?filename=.github/instructions/*.instructions.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add Copilot custom instructions</a> for smarter, more guided reviews. <a href=\"https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn how to get started</a>.",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-03-30T00:50:29Z",
+                    "submittedAt": "2026-03-30T00:50:31Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4027551346",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "6235f6cd9ee49a200f7d865212a19e9cf724f217"
+                    },
+                    "comments": {
+                      "totalCount": 6
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnTxkGDAFqjQwMjc2MTgxNDE=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDODKw3uc7wEJNd",
+                    "author": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "body": "",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-03-30T01:38:06Z",
+                    "submittedAt": "2026-03-30T01:38:06Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/cli/cli/pull/13057#pullrequestreview-4027618141",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "6235f6cd9ee49a200f7d865212a19e9cf724f217"
+                    },
+                    "comments": {
+                      "totalCount": 1
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnW4pABABqzI0MzA1MjUwOTcy",
+                  "node": {
+                    "__typename": "HeadRefForcePushedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "BagToad"
+                    },
+                    "createdAt": "2026-04-08T17:34:34Z",
+                    "beforeCommit": {
+                      "oid": "6235f6cd9ee49a200f7d865212a19e9cf724f217"
+                    },
+                    "afterCommit": {
+                      "oid": "cea0e576f674d817a024e3bbe3b7233f44ac57af"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnctD3qACqjYyMjQ1NTI5Nzg=",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "ladislas"
+                    },
+                    "createdAt": "2026-04-26T19:28:36Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "Issue",
+                      "number": 121,
+                      "title": "📝 docs(skill): Document issue linking via GraphQL in pac-github-issue-create",
+                      "url": "https://github.com/ladislas/mypac/issues/121",
+                      "repository": {
+                        "nameWithOwner": "ladislas/mypac"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDAyNTczODZlODgxODY4MjQ2MTE5OTIyYjFmNzEzYzkxNmZjNjkw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "c00257386e881868246119922b1f713c916fc690",
+                      "messageHeadline": "feat: add Issues 2.0 API types, mutations, and feature detection",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo3ZGFlODgyYzlkZTc5Y2E5ZTk0ZmUwZDY0NzJiZDZjMDgwMzNiNWQ3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "7dae882c9de79ca9e94fe0d6472bd6c08033b5d7",
+                      "messageHeadline": "feat: add Issues 2.0 fields to issue view",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo0NGU5ZjRiZDUwNjQ3YWJhNmZhYTU5M2VhNjViYzVhMGRmZTY2YmM4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "44e9f4bd50647aba6faa593ea65bc5a0dfe66bc8",
+                      "messageHeadline": "feat: add --type, --parent, --blocked-by, --blocking to issue create",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpiN2VlMzFkNzkxOTdhZDI1MzU0YmYyYzdlODZjMTNlYTg0YjZkOTQ5",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "b7ee31d79197ad25354bf2c7e86c13ea84b6d949",
+                      "messageHeadline": "feat: add Issues 2.0 flags to issue edit",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo2N2Y2M2ExMDk2YTFlMzEzZmU5ZTYxM2UzMGI2MGQxYmY4MjMzMzJl",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "67f63a1096a1e313fe9e613e30b60d1bf823332e",
+                      "messageHeadline": "feat: add --type filter flag to issue list",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo0YzEyMzkzYjg4YWQ0MGVjYWM2MjRmOWRhYzdiMTFhMGM1MmM2MTgw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "4c12393b88ad40ecac624f9dac7b11a0c52c6180",
+                      "messageHeadline": "test: add comprehensive tests for Issues 2.0 features",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpkZGIyZmNlMDdiMGZiZjczZjM4YzQzYTNiYTBjZjY1ZmMzZmNlZjA4",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "ddb2fce07b0fbf73f38c43a3ba0cf65fc3fcef08",
+                      "messageHeadline": "refactor: extract shared helpers for issue ref resolution and type lo…",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "c00bc6a9b4999e4fd35e1457b37be20788b9e94c",
+                      "messageHeadline": "fix: address code review findings from multi-model review",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDozZjFkZjUxM2M1MzBjMDMwNWZiMTBjZmMzZmIyYTIxNTMwY2ZlYTk2",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "3f1df513c530c0305fb10cfc3fb2a21530cfea96",
+                      "messageHeadline": "test: add missing --type flag tests for issue list",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpiNmYyOWIwMzc2ODE0NjBiZjYwZjIxYjIwNTNmMmIzYjliNTdmMTIy",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "b6f29b037681460bf60f21b2053f2b3b9b57f122",
+                      "messageHeadline": "feat: add --remove-blocking flag to issue edit",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDoyYTcyYTU5Zjc2Yjc0OWZkY2M3YmUwYTY1MTkxZmZjMmU5YWUyYjVj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "2a72a59f76b749fdcc7be0a65191ffc2e9ae2b5c",
+                      "messageHeadline": "fix: address round 2 code review findings",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo0YTE5NmRkZjFkOTQ0Zjc1N2NkMzFiODA5YTQzZjY5MTJmZGJhZWQy",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "4a196ddf1d944f757cd31b809a43f6912fdbaed2",
+                      "messageHeadline": "test: add regression test for issue-only fields in FieldsToEditSurvey",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDplM2IwZDlkZWMzYTgxOTY0ZTBkYmFjYTY1NzU0ZjU4Mjc2N2I0MGZj",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "e3b0d9dec3a81964e0dbaca65754f582767b40fc",
+                      "messageHeadline": "fix: restore displaced TODO comment, add GHES edit relationship test",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDo2ZTc2ZjExZGVjNjA2N2I3Y2IyNmI3MDg3NWNhZjc5NjE0NWMzNjQw",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "6e76f11dec6067b7cb26b70875caf796145c3640",
+                      "messageHeadline": "fix: correct GraphQL field name in AddBlockedBy/RemoveBlockedBy mutat…",
+                      "committedDate": "2026-04-30T14:49:43Z",
+                      "author": {
+                        "name": "Kynan Ware",
+                        "user": {
+                          "login": "BagToad"
+                        }
+                      },
+                      "statusCheckRollup": {
+                        "state": "FAILURE"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
