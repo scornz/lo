@@ -1140,9 +1140,10 @@ mod tests {
         Arc::new(ReplayHttpClient::from_interactions("sign_in", interactions).unwrap())
     }
 
-    /// Each of Lo's keys does one thing in the Accounts modal, read from a window showing it: no
-    /// two of Lo's bindings, this crate's and `review_ui`'s, hold there with the same keystrokes,
-    /// or with one's starting the other's. `review_ui` checks the rest of the window the same way.
+    /// Each of Lo's keys does one thing in the Accounts modal, read from a window showing it: this
+    /// crate's bindings all hold there, and no two of Lo's bindings, this crate's and
+    /// `review_ui`'s, hold there with the same keystrokes, or with one's starting the other's.
+    /// `review_ui` checks the rest of the window the same way.
     #[gpui::test]
     async fn no_two_of_los_bindings_fight_in_the_accounts_modal(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -1167,18 +1168,21 @@ mod tests {
             "{stack:?}"
         );
 
+        let places = [review_ui::key_clashes::Place {
+            name: "the Accounts modal".into(),
+            stack,
+        }];
         cx.update(|_, cx| {
-            // Lo's bindings alone.
+            // This crate's bindings hold in the modal, which `review_ui`'s test doesn't have.
             cx.clear_key_bindings();
-            review_ui::bind_keys(cx);
             bind_keys(cx);
             let keymap = cx.key_bindings();
+            let unplaced = review_ui::key_clashes::unplaced(keymap.borrow().bindings(), &places);
+            assert!(unplaced.is_empty(), "{unplaced:#?}");
+            // With `review_ui`'s, Lo's bindings alone.
+            review_ui::bind_keys(cx);
             let keymap = keymap.borrow();
-            let place = review_ui::key_clashes::Place {
-                name: "the Accounts modal".into(),
-                stack,
-            };
-            let clashes = review_ui::key_clashes::clashes(keymap.bindings(), &[place]);
+            let clashes = review_ui::key_clashes::clashes(keymap.bindings(), &places);
             assert!(clashes.is_empty(), "{clashes:#?}");
         });
     }
