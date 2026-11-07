@@ -732,14 +732,34 @@ impl Repo {
     /// no file there. A folder or a submodule there is an error.
     pub fn read_file(&self, rev: &Oid, path: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         let shown = String::from_utf8_lossy(path);
+        let Some(entry) = self.tree_entry(rev, path)? else {
+            return Ok(None);
+        };
+        if !entry.is_blob() {
+            let what = if entry.mode == "160000" {
+                "submodule"
+            } else {
+                entry.kind.as_str()
+            };
+            return Err(Error::Git {
+                command: format!("git ls-tree {rev} -- {shown}"),
+                message: format!("{shown} is a {what}, not a file"),
+            });
+        }
+        self.read_blob(&entry.oid)
+    }
+
+    /// What's at `path` in `rev`, a commit or a tree, or `None` when nothing is. It reads only
+    /// trees, which a partial clone has, so it downloads nothing, and it tells a submodule (a
+    /// commit in another repository, which must never be fetched from this one) from a file.
+    fn tree_entry(&self, rev: &Oid, path: &[u8]) -> Result<Option<TreeEntry>, Error> {
+        let shown = String::from_utf8_lossy(path);
         if path.is_empty() || path.contains(&0) {
             return Err(Error::Invalid {
                 what: "path",
                 value: shown.into_owned(),
             });
         }
-        // ls-tree reads only trees, which a partial clone has, so it tells a submodule (a commit
-        // in another repository, which must never be fetched from this one) from a file.
         let output = self.run(
             self.git()
                 .args(["ls-tree", "-z", rev.as_str(), "--"])
@@ -761,14 +781,71 @@ impl Repo {
         let (Some(mode), Some(kind), Some(oid)) = (info.next(), info.next(), info.next()) else {
             return Err(unexpected_ls_tree(entry));
         };
-        if mode == "160000" || kind != "blob" {
-            let what = if mode == "160000" { "submodule" } else { kind };
-            return Err(Error::Git {
-                command: format!("git ls-tree {rev} -- {shown}"),
-                message: format!("{shown} is a {what}, not a file"),
-            });
+        Ok(Some(TreeEntry {
+            mode: mode.to_string(),
+            kind: kind.to_string(),
+            oid: oid.parse()?,
+        }))
+    }
+
+    /// The unified diff of the file at `path` from `base` to `head`, with three lines of context,
+    /// as GitHub gives a pull request's changed file as its `patch`: the lines of its hunks are
+    /// the ones GitHub takes comments on (`review::threads::Hunk::parse` reads it, through
+    /// `String::from_utf8_lossy`). For a file whose patch GitHub leaves out, and for a revision
+    /// other than the latest, whose patch GitHub doesn't give.
+    ///
+    /// - `base` is where the diff starts: for a revision's whole diff, its merge base with the
+    ///   base branch, as GitHub diffs a pull request.
+    /// - `old_path` is the file's path in `base` when it was renamed, as `changed_files` and
+    ///   GitHub's `previous_filename` give it. Its two versions are diffed whatever their
+    ///   similarity, and the diff's header names them by blob.
+    /// - It's git's myers diff, with the indent heuristic, as git diffs by default, and with no
+    ///   diff settings but these: not the user's (no git Lo runs reads them), and not any the
+    ///   clone has. No external diff, no text conversion, no color.
+    ///
+    /// It downloads the file's two versions, if they aren't here. It's empty when the file is
+    /// the same on both sides, or in neither. A binary file has no hunks: git says only that it
+    /// differs. A submodule's two commits show as `Subproject commit` lines, as GitHub's do.
+    pub fn patch(
+        &self,
+        base: &Oid,
+        head: &Oid,
+        path: &[u8],
+        old_path: Option<&[u8]>,
+    ) -> Result<Vec<u8>, Error> {
+        let command = self.git().args([
+            // The one diff setting without an option to override it: a blank unchanged line
+            // keeps its space.
+            "-c",
+            "diff.suppressBlankEmpty=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "--submodule=short",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--unified=3",
+            "--inter-hunk-context=0",
+            "--diff-algorithm=myers",
+            "--indent-heuristic",
+        ]);
+        if let Some(old_path) = old_path.filter(|old_path| *old_path != path) {
+            let old = self.tree_entry(base, old_path)?;
+            let new = self.tree_entry(head, path)?;
+            if let (Some(old), Some(new)) = (&old, &new)
+                && old.is_blob()
+                && new.is_blob()
+            {
+                return self.run(command.args([old.oid.as_str(), new.oid.as_str()]));
+            }
         }
-        self.read_blob(&oid.parse()?)
+        self.run(
+            command
+                .args([base.as_str(), head.as_str(), "--"])
+                .arg(OsStr::from_bytes(path)),
+        )
     }
 
     /// Fails unless `name` is a branch name git accepts, which also keeps it from changing what
@@ -968,6 +1045,22 @@ fn raw_diff_blobs(output: &[u8]) -> Result<Vec<Oid>, Error> {
         }
     }
     Ok(blobs)
+}
+
+/// An entry of a tree, as `git ls-tree` lists it.
+struct TreeEntry {
+    /// Such as `100644`, or `160000` for a submodule.
+    mode: String,
+    /// `blob`, `tree` or `commit`.
+    kind: String,
+    oid: Oid,
+}
+
+impl TreeEntry {
+    /// Whether it's a file in this repository: a blob, and not a submodule.
+    fn is_blob(&self) -> bool {
+        self.kind == "blob" && self.mode != "160000"
+    }
 }
 
 fn unexpected_ls_tree(entry: &[u8]) -> Error {
