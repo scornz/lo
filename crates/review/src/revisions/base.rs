@@ -139,7 +139,8 @@ pub enum BaseTipSource {
     Seen,
     /// The branch's tip now, or the pull request's base branch's when that isn't known, though
     /// the branch was force-pushed after the revision, or now holds the pull request's commits,
-    /// and nothing says where it was then. Its base can be wrong, so the caller says so.
+    /// and nothing says where it was then; or a tip that holds the revision's head. Its base can
+    /// be wrong, so the caller says so.
     Uncertain,
 }
 
@@ -158,7 +159,26 @@ pub enum BaseTipSource {
 ///   the pull request no longer targets, that's its latest push the activity API read.
 /// - **Otherwise,** the latest force-push event or tip rozed saw at or before the push, and failing
 ///   those, the branch's tip now, flagged [`BaseTipSource::Uncertain`].
-pub fn base_tip_at(history: &BaseHistory, pushed_at: PushedAt) -> Option<BaseTip> {
+/// - **Never one holding the revision.** `contains(tip, head)` says whether commit `tip` has the
+///   revision's head, `head`, in its history (`Repo::is_ancestor(head, tip)` in the local copy).
+///   A tip that does is no base for the revision: its branch took in the pull request's commits,
+///   as when git-flow merges `main` back into `develop` after a pull request retargeted from
+///   `develop` merged into `main`. It's flagged [`BaseTipSource::Uncertain`].
+pub fn base_tip_at(
+    history: &BaseHistory,
+    pushed_at: PushedAt,
+    head: &str,
+    contains: impl Fn(&str, &str) -> bool,
+) -> Option<BaseTip> {
+    let mut tip = tip_at(history, pushed_at)?;
+    if contains(&tip.commit, head) {
+        tip.source = BaseTipSource::Uncertain;
+    }
+    Some(tip)
+}
+
+/// [`base_tip_at`], before the check that the tip doesn't hold the revision.
+fn tip_at(history: &BaseHistory, pushed_at: PushedAt) -> Option<BaseTip> {
     let at = match pushed_at {
         PushedAt::Exact(at) | PushedAt::By(at) => Some(at),
         PushedAt::Unknown => None,
@@ -381,8 +401,14 @@ mod tests {
         }
     }
 
+    /// The tip for a revision whose head no tip holds.
     fn found(history: &BaseHistory, pushed_at: PushedAt) -> Option<(String, BaseTipSource)> {
-        base_tip_at(history, pushed_at).map(|tip| (tip.commit, tip.source))
+        base_tip_at(history, pushed_at, "h1", |_, _| false).map(|tip| (tip.commit, tip.source))
+    }
+
+    /// `minute` minutes and `second` seconds into the day.
+    fn at_second(minute: u64, second: u64) -> SystemTime {
+        at(minute) + Duration::from_secs(second)
     }
 
     fn tip(commit: &str, source: BaseTipSource) -> Option<(String, BaseTipSource)> {
@@ -682,6 +708,58 @@ mod tests {
             found(&history, pushed(20)),
             tip("e1", BaseTipSource::Uncertain)
         );
+    }
+
+    #[test]
+    fn an_old_base_that_took_in_the_pull_request_later_is_uncertain() {
+        // Opened against `develop`, retargeted to `main` at minute 100 and merged there; `main`
+        // was then merged back into `develop`, whose tip now holds the pull request's head h1.
+        let mut history = into_main(vec![push("develop", "d1", "d9", 150)]);
+        history.retargets = vec![retarget("develop", "main", 100)];
+        let holds_h1 = |tip: &str, head: &str| tip == "d9" && head == "h1";
+
+        let tip = base_tip_at(&history, pushed(20), "h1", holds_h1).unwrap();
+        assert_eq!(
+            (tip.commit.as_str(), tip.source),
+            ("d9", BaseTipSource::Uncertain)
+        );
+        // A tip that doesn't hold the head stands.
+        let tip = base_tip_at(&history, pushed(20), "h0", holds_h1).unwrap();
+        assert_eq!(
+            (tip.commit.as_str(), tip.source),
+            ("d9", BaseTipSource::Now)
+        );
+    }
+
+    #[test]
+    fn a_force_push_event_counts_from_a_few_seconds_before_it() {
+        // The layer below was force-pushed to l2 at about 10:00:00; GitHub made its event at
+        // 10:00:05, and this layer was pushed onto it at 10:00:02. A later push moved the base on.
+        let history = BaseHistory {
+            branch: "lower".into(),
+            tip: Some("l3".into()),
+            records: vec![
+                BaseRecord::ForcePush {
+                    after: Some("l2".into()),
+                    at: at_second(10, 5),
+                },
+                BaseRecord::ForcePush {
+                    after: Some("l3".into()),
+                    at: at_second(20, 0),
+                },
+            ],
+            ..BaseHistory::default()
+        };
+        let found_at = |second| found(&history, PushedAt::Exact(at_second(10, second)));
+
+        assert_eq!(found_at(2), tip("l2", BaseTipSource::ForcePush));
+        // Exactly the lag before the event counts; a second earlier doesn't.
+        assert_eq!(found_at(0), tip("l2", BaseTipSource::ForcePush));
+        assert_eq!(
+            found(&history, PushedAt::Exact(at(10) - Duration::from_secs(1))),
+            tip("l3", BaseTipSource::Uncertain)
+        );
+        assert_eq!(EVENT_LAG, Duration::from_secs(5));
     }
 
     #[test]

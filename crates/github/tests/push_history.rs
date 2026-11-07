@@ -69,6 +69,11 @@ fn revisions(history: &PushHistory, seen: &[SeenHead]) -> Revisions {
     )
 }
 
+/// For `base_tip_at` without a local copy to ask: no base tip holds a revision's head.
+fn no_tip_holds(_tip: &str, _head: &str) -> bool {
+    false
+}
+
 fn e2e(number: i64) -> PullRef {
     PullRef::new("rozed-dev", "e2e", number)
 }
@@ -143,7 +148,7 @@ fn e1s_bases_follow_main_as_it_moved() {
     let bases: Vec<(String, BaseTipSource)> = revisions
         .iter()
         .map(|revision| {
-            let tip = base_tip_at(&base, revision.pushed_at).unwrap();
+            let tip = base_tip_at(&base, revision.pushed_at, &revision.head, no_tip_holds).unwrap();
             (tip.commit[..7].to_string(), tip.source)
         })
         .collect();
@@ -261,7 +266,7 @@ fn a_pull_request_from_a_fork_reads_the_forks_branch() {
     assert!(master.pages[0].next.is_some() && !master.truncated);
     let base = history.base_history(Some(&entries.last().unwrap().after));
     let r1 = &revisions.as_slice()[0];
-    let tip = base_tip_at(&base, r1.pushed_at).unwrap();
+    let tip = base_tip_at(&base, r1.pushed_at, &r1.head, no_tip_holds).unwrap();
     assert_eq!(
         (&tip.commit[..7], tip.source),
         ("cc4e40f", BaseTipSource::Activity)
@@ -295,7 +300,7 @@ fn a_merged_pull_request_whose_fork_is_gone_has_no_pushes_but_its_reviews_and_ch
     assert_eq!(merge.parents.len(), 2);
     let base = history.base_history(None);
     for revision in revisions.iter() {
-        let tip = base_tip_at(&base, revision.pushed_at).unwrap();
+        let tip = base_tip_at(&base, revision.pushed_at, &revision.head, no_tip_holds).unwrap();
         assert_eq!(tip.commit, merge.parents[0]);
         assert_eq!(tip.source, BaseTipSource::MergeParent);
     }
@@ -765,7 +770,8 @@ fn merges_without_a_merge_commit_take_master_as_it_was() {
         revisions(history, &[])
             .iter()
             .map(|revision| {
-                let tip = base_tip_at(&base, revision.pushed_at).unwrap();
+                let tip =
+                    base_tip_at(&base, revision.pushed_at, &revision.head, no_tip_holds).unwrap();
                 (tip.commit[..7].to_string(), tip.source)
             })
             .collect()
@@ -1126,5 +1132,10 @@ fn every_branch_the_pull_request_targeted_is_read_back_to_its_first_revision() {
     // r1 targeted the old base, at its tip then.
     let base = history.base_history(None);
     let r1 = revisions(&history, &[]).as_slice()[0].clone();
-    assert_eq!(base_tip_at(&base, r1.pushed_at).unwrap().commit, sha(2));
+    assert_eq!(
+        base_tip_at(&base, r1.pushed_at, &r1.head, no_tip_holds)
+            .unwrap()
+            .commit,
+        sha(2)
+    );
 }
