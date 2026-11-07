@@ -497,7 +497,7 @@ fn flutters_merge_queue_lists_its_entries_and_the_pull_request_in_it() {
 }
 
 #[test]
-fn e2e_16_is_rozed_bots_own_and_merges_as_it_likes() {
+fn e2e_16_is_the_bots_own_and_merges_as_it_likes() {
     let facts = read("merge_e2e_16", "rozed-dev", "e2e", &[16]).remove(0);
     let snapshot = facts.snapshot(&Local {
         head_on_screen: facts.pull_request.head.clone(),
