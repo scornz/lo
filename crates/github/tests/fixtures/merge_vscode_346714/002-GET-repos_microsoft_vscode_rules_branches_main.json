@@ -1,0 +1,69 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/microsoft/vscode/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"7c5ceda40501a35b351b51f8b631edab671688214b9a0ff022f7686e9c7c0d14\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4970",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "30"
+    },
+    "body": [
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "microsoft",
+        "ruleset_id": 5351760
+      },
+      {
+        "type": "non_fast_forward",
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "microsoft",
+        "ruleset_id": 5351760
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 1,
+          "dismiss_stale_reviews_on_push": false,
+          "required_reviewers": [],
+          "require_code_owner_review": true,
+          "require_last_push_approval": true,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "merge",
+            "squash",
+            "rebase"
+          ]
+        },
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "microsoft",
+        "ruleset_id": 5351760
+      },
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "microsoft/vscode",
+        "ruleset_id": 7988222
+      },
+      {
+        "type": "copilot_code_review",
+        "parameters": {
+          "review_on_push": false,
+          "review_draft_pull_requests": true
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "microsoft/vscode",
+        "ruleset_id": 7988222
+      }
+    ]
+  }
+}

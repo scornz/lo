@@ -1,0 +1,1059 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "pnpm",
+      "name": "pnpm",
+      "number": 17816,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4841",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "159"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4841,
+          "used": 159,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": false,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": true,
+          "viewerDefaultMergeMethod": "SQUASH",
+          "pullRequest": {
+            "url": "https://github.com/pnpm/pnpm/pull/17816",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "headRefOid": "2e6d58540e96c1ef77044c9af3a082e96c654b73",
+            "baseRefName": "main",
+            "author": {
+              "__typename": "User",
+              "login": "kairosci"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "3600b05d0069990995ef418079eb5b8a0cfb00de"
+              },
+              "refUpdateRule": {
+                "requiredApprovingReviewCount": 1,
+                "requiredStatusCheckContexts": [
+                  "Rust CI / Success",
+                  "TS CI / Compile & Lint",
+                  "TS CI / Success"
+                ],
+                "requiresCodeOwnerReviews": true,
+                "requiresConversationResolution": false,
+                "requiresLinearHistory": true,
+                "requiresSignatures": false,
+                "viewerCanPush": false
+              },
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": true,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": {
+              "configuration": null
+            },
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "author": {
+                    "__typename": "Bot",
+                    "login": "coderabbitai"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "2e6d58540e96c1ef77044c9af3a082e96c654b73"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                },
+                {
+                  "author": {
+                    "__typename": "Bot",
+                    "login": "greptile-apps"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "2e6d58540e96c1ef77044c9af3a082e96c654b73"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                }
+              ]
+            },
+            "reviewRequests": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "asCodeOwner": true,
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "zkochan"
+                  }
+                }
+              ]
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 21,
+              "nodes": [
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                }
+              ]
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 69,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 0
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 11
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 58
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 0
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "Njk"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324699813/job/128257171308",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257171308",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324703329/job/128257182136",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257182136",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324706723/job/128257193230",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257193230",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324710602/job/128257238814",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257238814",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324763109/job/128257408335",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257408335",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324968722/job/128258020284",
+                    "url": "https://github.com/pnpm/pnpm/runs/128258020284",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42325468850/job/128259608966",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259608966",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Audit dependencies",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690376/job/128257139818",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257139818",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Analyze (javascript)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690465/job/128257140455",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140455",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690407/job/128257140471",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140471",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor latest via PyPI",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690309/job/128257139669",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257139669",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42325145805/job/128258581384",
+                    "url": "https://github.com/pnpm/pnpm/runs/128258581384",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Code Coverage",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690349/job/128257139775",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257139775",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Resolve benchmark revisions",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128257214344",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257214344",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Run benchmark on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690468/job/128257140437",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140437",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "vale",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690565/job/128257140669",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140669",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Detect Changes",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257140562",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140562",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Detect Changes",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257140245",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257140245",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Build and run pnpm in WebContainers",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690362/job/128257139907",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257139907",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Upload coverage file",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690349/job/128262255087",
+                    "url": "https://github.com/pnpm/pnpm/runs/128262255087",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Build HEAD on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128257294329",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257294329",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Compare Benchmarks",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690468/job/128260129382",
+                    "url": "https://github.com/pnpm/pnpm/runs/128260129382",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Change Check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179804",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179804",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Compile & Lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257174119",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257174119",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Build main on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128257294253",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257294253",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Build pnpr",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257176248",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257176248",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Build benchmark executor",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128257294252",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257294252",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Test / windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179920",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179920",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Test / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179854",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179854",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Test / macos",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179976",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179976",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Build pnpr",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257176442",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257176442",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-restore.cold-cache.cold-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009225",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009225",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Peer Convergence v11+v12",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179792",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179792",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-restore.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009324",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009324",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.repeat-install.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009216",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009216",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.repeat-install.cold-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009277",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009277",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-install.cold-cache.cold-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009242",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009242",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-install.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009497",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009497",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-install.cold-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009306",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009306",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-resolve.hot-cache.offline on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009505",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009505",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.peer-heavy-resolve.hot-cache.offline on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009645",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009645",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.linked-workspace-resolve.hot-cache.offline on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009563",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009563",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.injected-workspace-repeat-install.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009535",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009535",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "isolated-linker.fresh-restore.cold-cache.cold-store.cold-pnpr on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009523",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009523",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "gvs-linker.fresh-restore.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009530",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009530",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "store-only.unlocked-direct-deps.cold-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009585",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009585",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "cargo.repeat-install.hot-cache.hot-store on blacksmith-8vcpu-ubuntu-2404",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128259009631",
+                    "url": "https://github.com/pnpm/pnpm/runs/128259009631",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Test / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257728952",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257728952",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Combine benchmark results",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690473/job/128260488102",
+                    "url": "https://github.com/pnpm/pnpm/runs/128260488102",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Clippy / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179808",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179808",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Clippy / windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179916",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179916",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Test / windows ${{ matrix.test_chunk }}/5",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257729077",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257729077",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Doc / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179819",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179819",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Doc / windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179818",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179818",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / npm Wrapper / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179868",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179868",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "TS CI / Success",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690419/job/128257728125",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257728125",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / npm Wrapper / macos",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179904",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179904",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / npm Wrapper / windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179967",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179967",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Spell Check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179871",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179871",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Cargo Deny",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179927",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179927",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Crate Layers",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179914",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179914",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Format",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179945",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179945",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Dylint / ubuntu",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179968",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179968",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Dylint / windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128257179965",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257179965",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Rust CI / Success",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/actions/runs/42324690548/job/128262272201",
+                    "url": "https://github.com/pnpm/pnpm/runs/128262272201",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "CodeQL",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/runs/128257419591",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257419591",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "CodeRabbit",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://app.coderabbit.ai/change-stack/pnpm/pnpm/pull/17816?scope=ghh_OusAJGA4HG8ljoOV0wJvVx8NmnZIjc2DdjmxOu0xZWA",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257327132",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Bencher Report (pnpm's project)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pnpm/pnpm/runs/128260632582",
+                    "url": "https://github.com/pnpm/pnpm/runs/128260632582",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Greptile Review",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://app.greptile.com/-/switch-tenant?tenant=pnpm&next=%2Fpnpm%2Fpnpm%2Fpull%2F17816",
+                    "url": "https://github.com/pnpm/pnpm/runs/128257153095",
+                    "isRequired": false
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "2e6d58540e96c1ef77044c9af3a082e96c654b73",
+                    "checkSuites": {
+                      "totalCount": 22,
+                      "nodes": [
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690309
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690349
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690362
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690376
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690407
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690468
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690419
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690473
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690465
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690548
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324690565
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324699813
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324703329
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324706723
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324710602
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324763109
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42324968722
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42325145805
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42325468850
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

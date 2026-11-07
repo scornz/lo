@@ -1,0 +1,523 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "flutter",
+      "name": "flutter",
+      "number": 196160,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4837",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "163"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4837,
+          "used": 163,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": false,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": false,
+          "viewerDefaultMergeMethod": "SQUASH",
+          "pullRequest": {
+            "url": "https://github.com/flutter/flutter/pull/196160",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "headRefOid": "49198b7e82f2b6b9a63099fdb105d627e9c708aa",
+            "baseRefName": "master",
+            "author": {
+              "__typename": "User",
+              "login": "engine-flutter-autoroll"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "208e10f65dedf30d9f69930cfb5f2418391610c4"
+              },
+              "refUpdateRule": {
+                "requiredApprovingReviewCount": 1,
+                "requiredStatusCheckContexts": [
+                  "Merge Queue Guard",
+                  "Check Code Freeze",
+                  "Google testing"
+                ],
+                "requiresCodeOwnerReviews": false,
+                "requiresConversationResolution": false,
+                "requiresLinearHistory": true,
+                "requiresSignatures": false,
+                "viewerCanPush": false
+              },
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": true,
+            "isInMergeQueue": true,
+            "mergeQueueEntry": {
+              "position": 1
+            },
+            "mergeQueue": {
+              "configuration": null
+            },
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "author": {
+                    "__typename": "User",
+                    "login": "fluttergithubbot"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "49198b7e82f2b6b9a63099fdb105d627e9c708aa"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                }
+              ]
+            },
+            "reviewRequests": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 24,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 0
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 10
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 12
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 2
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "MjQ"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Record cherry-pick request",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194708/job/128321307857",
+                    "url": "https://github.com/flutter/flutter/runs/128321307857",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Record cherry-pick request",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345197002/job/128321314634",
+                    "url": "https://github.com/flutter/flutter/runs/128321314634",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "reject-main-prs",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194051/job/128321306358",
+                    "url": "https://github.com/flutter/flutter/runs/128321306358",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Record revert request",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194662/job/128321307821",
+                    "url": "https://github.com/flutter/flutter/runs/128321307821",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Record revert request",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345197103/job/128321315120",
+                    "url": "https://github.com/flutter/flutter/runs/128321315120",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-changes",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345193678/job/128321304705",
+                    "url": "https://github.com/flutter/flutter/runs/128321304705",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-engine-changes",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194075/job/128321305025",
+                    "url": "https://github.com/flutter/flutter/runs/128321305025",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Check Code Freeze",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194200/job/128321305175",
+                    "url": "https://github.com/flutter/flutter/runs/128321305175",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Check Code Freeze",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194718/job/128321306602",
+                    "url": "https://github.com/flutter/flutter/runs/128321306602",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Check Code Freeze",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345196966/job/128321313565",
+                    "url": "https://github.com/flutter/flutter/runs/128321313565",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Record PR for labeling",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194030/job/128321304919",
+                    "url": "https://github.com/flutter/flutter/runs/128321304919",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Tree_analyze",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194168/job/128321305240",
+                    "url": "https://github.com/flutter/flutter/runs/128321305240",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor-config",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345193678/job/128321437288",
+                    "url": "https://github.com/flutter/flutter/runs/128321437288",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Mac_arm64_verify_binaries",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345194075/job/128321423084",
+                    "url": "https://github.com/flutter/flutter/runs/128321423084",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor-scan",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345193678/job/128321437146",
+                    "url": "https://github.com/flutter/flutter/runs/128321437146",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor-upload",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345193678/job/128321437742",
+                    "url": "https://github.com/flutter/flutter/runs/128321437742",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor-output",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/flutter/flutter/actions/runs/42345193678/job/128321437595",
+                    "url": "https://github.com/flutter/flutter/runs/128321437595",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Google testing",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "http://go/frob_pr/196160",
+                    "url": "https://github.com/flutter/flutter/runs/128321301865",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Dashboard Checks",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://flutter-dashboard.appspot.com/#/presubmit?repo=flutter&sha=49198b7e82f2b6b9a63099fdb105d627e9c708aa",
+                    "url": "https://github.com/flutter/flutter/runs/128321303858",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Merge Queue Guard",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://flutter-dashboard.appspot.com",
+                    "url": "https://github.com/flutter/flutter/runs/128321302630",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "ci.yaml validation",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://flutter-dashboard.appspot.com",
+                    "url": "https://github.com/flutter/flutter/runs/128321304883",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "cla/google",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://cla.developers.google.com/about",
+                    "url": "https://github.com/flutter/flutter/runs/128321300393",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "flutter-gold",
+                    "state": "SUCCESS",
+                    "targetUrl": "https://flutter-gold.skia.org/cl/github/196160",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "tree-status",
+                    "state": "SUCCESS",
+                    "targetUrl": "https://flutter-dashboard.appspot.com/#/build?repo=flutter",
+                    "isRequired": false
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "49198b7e82f2b6b9a63099fdb105d627e9c708aa",
+                    "checkSuites": {
+                      "totalCount": 15,
+                      "nodes": [
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345193678
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194030
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194051
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194075
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194168
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194200
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194662
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194708
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345194718
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345196966
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345197002
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345197103
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

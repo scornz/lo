@@ -1,0 +1,6 @@
+{
+  "description": "microsoft/vscode#346714 as rozed-bot, read only: main's classic protection requires an approval, a code owner's, five checks and every conversation resolved, and a ruleset requires the latest push approved by someone else. One required check is running, two haven't reported, and two conversations are unresolved",
+  "recorded_at": "2026-11-07T07:35:42Z",
+  "repo": "microsoft/vscode",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

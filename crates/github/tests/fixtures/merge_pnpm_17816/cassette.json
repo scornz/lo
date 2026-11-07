@@ -1,0 +1,6 @@
+{
+  "description": "pnpm/pnpm#17816 as rozed-bot, read only: main's classic protection requires an approval and a code owner's, and its code owner, a user, hasn't reviewed",
+  "recorded_at": "2026-11-07T07:35:44Z",
+  "repo": "pnpm/pnpm",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

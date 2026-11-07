@@ -1,0 +1,6 @@
+{
+  "description": "Two of zed-industries/zed's pull requests into main as rozed-bot, read only. main has rulesets only: a merge queue, squash merges, code owners and two required checks. #66631: a first-time contributor's, whose required checks never reported. #66650: ready for the queue. Then #66650 again, with its rules' ETag, answered 304",
+  "recorded_at": "2026-11-07T07:35:54Z",
+  "repo": "zed-industries/zed",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

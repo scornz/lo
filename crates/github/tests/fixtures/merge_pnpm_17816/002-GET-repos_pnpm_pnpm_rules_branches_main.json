@@ -1,0 +1,67 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/pnpm/pnpm/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"0b6e40874e459066e3a45fe27c5864d68d38f3e2f288c0d83dd96d91a98ef2e8\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4969",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "31"
+    },
+    "body": [
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pnpm/pnpm",
+        "ruleset_id": 10912959
+      },
+      {
+        "type": "non_fast_forward",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pnpm/pnpm",
+        "ruleset_id": 10912959
+      },
+      {
+        "type": "copilot_code_review",
+        "parameters": {
+          "review_on_push": true,
+          "review_draft_pull_requests": false
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pnpm/pnpm",
+        "ruleset_id": 10912959
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "dismiss_stale_reviews_on_push": false,
+          "required_reviewers": [],
+          "require_code_owner_review": false,
+          "dismissal_restriction": {
+            "enabled": false,
+            "allowed_actors": []
+          },
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "merge",
+            "squash",
+            "rebase"
+          ]
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pnpm/pnpm",
+        "ruleset_id": 10912959
+      }
+    ]
+  }
+}

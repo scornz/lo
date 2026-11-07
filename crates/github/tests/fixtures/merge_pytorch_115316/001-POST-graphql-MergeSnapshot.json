@@ -1,0 +1,1183 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "pytorch",
+      "name": "pytorch",
+      "number": 115316,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4835",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "165"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4835,
+          "used": 165,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": false,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": true,
+          "viewerDefaultMergeMethod": "SQUASH",
+          "pullRequest": {
+            "url": "https://github.com/pytorch/pytorch/pull/115316",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "APPROVED",
+            "headRefOid": "a945fba0f857934623a85ef6acb521911aa3ade7",
+            "baseRefName": "main",
+            "author": {
+              "__typename": "User",
+              "login": "facebook-github-bot"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "398b4e5d029bf56d39a29c8f046c84917bbebf52"
+              },
+              "refUpdateRule": null,
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": false,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": null,
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "author": {
+                    "__typename": "User",
+                    "login": "malfet"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "8f5327addbcd24722bb59f8d85650b2c6ca1e0b9"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                }
+              ]
+            },
+            "reviewRequests": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 144,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 1
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 0
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 1
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 5
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 136
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 1
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 0
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": true,
+                  "endCursor": "MTAw"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "capture",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346282928/job/128324626684",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324626684",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-ci / check-ci",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284576/job/128324631232",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324631232",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-ci / check-ci",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284568/job/128324632320",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324632320",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "get-label-type / runner-determinator",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324631657",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324631657",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "get-label-type / runner-determinator",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284585/job/128324631490",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324631490",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "before-test / get-label-type / runner-determinator",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333589251",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333589251",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bc_linter",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284576/job/128324660789",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324660789",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Create Release",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284568/job/128324652896",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324652896",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Get changed files / get-changed-files",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677910",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677910",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284585/job/128324692620",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324692620",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "before-test / llm-retrieval",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568962",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568962",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Upload source code to S3 for release tags",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284568/job/128326079393",
+                    "url": "https://github.com/pytorch/pytorch/runs/128326079393",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "quick-checks / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324678056",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324678056",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-docs / build-docs-cpp-false",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284585/job/128326795969",
+                    "url": "https://github.com/pytorch/pytorch/runs/128326795969",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "get-label-type / runner-determinator",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333567967",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333567967",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-docs / build-docs-python-false",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284585/job/128326795934",
+                    "url": "https://github.com/pytorch/pytorch/runs/128326795934",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "pr-sanity-checks",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677886",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677886",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-docs / memory-viz-tests",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284585/job/128326795930",
+                    "url": "https://github.com/pytorch/pytorch/runs/128326795930",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "before-test / get-label-type / runner-determinator",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569207",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569207",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "workflow-checks / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677938",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677938",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "before-test / target-determination",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570051",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570051",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "toc / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677920",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677920",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "job-filter / compute",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568590",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568590",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Test tools / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677932",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677932",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-aarch64-py3.11-clang21 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568640",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568640",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Test collect_env (with_torch, linux.24_04.4x)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677939",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677939",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568695",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568695",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Test collect_env (without_torch, linux.24_04.4x)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677916",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677916",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Test collect_env (older_python_version, linux.24_04.4x)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677935",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677935",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Link checks / lint-urls / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677985",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677985",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "dynamo-cpython-build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568770",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568770",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Link checks / lint-xrefs / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677984",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677984",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569275",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569275",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-aarch64-py3.11 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333568364",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333568364",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "doc-redirects-check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324677875",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324677875",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "lintrunner-clang-partial",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324709457",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324709457",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11-no-ops / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569543",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569543",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "lintrunner-pyrefly-partial",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324709817",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324709817",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569714",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569714",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "lintrunner-noclang-partial / lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284603/job/128324708514",
+                    "url": "https://github.com/pytorch/pytorch/runs/128324708514",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569185",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569185",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14-clang21 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569220",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569220",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-cuda13.2-cudnn9-py3.11-clang20 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569167",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569167",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11-mobile-lightweight-dispatch-build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569463",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569463",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-rocm-py3.11 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569928",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569928",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-noble-xpu-n-py3.11 / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569406",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569406",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 1, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570491",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570491",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 2, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570513",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570513",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 3, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570516",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570516",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 4, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571019",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571019",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 5, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571074",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571074",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 6, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570929",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570929",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 7, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570926",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570926",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 8, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571035",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571035",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 9, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570962",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570962",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 10, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570954",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570954",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (default, 11, 11, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571625",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571625",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 1, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571246",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571246",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 2, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571356",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571356",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 3, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571540",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571540",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 4, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571685",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571685",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 5, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571507",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571507",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 6, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571666",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571666",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 7, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571746",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571746",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (dynamo_wrapped, 8, 8, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571877",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571877",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (einops, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571928",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571928",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.14t-clang21 / test (openreg, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571959",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571959",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "dynamo-cpython-test / test (dynamo_cpython, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333569475",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333569475",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 1, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570515",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570515",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 2, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570326",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570326",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 3, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570355",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570355",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 4, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571166",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571166",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 5, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570976",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570976",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 6, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570534",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570534",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 7, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571092",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571092",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 8, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571109",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571109",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 9, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571050",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571050",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (default, 10, 10, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570847",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570847",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (docs_test, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570959",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570959",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (jit_legacy, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571387",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571387",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (backwards_compat, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571300",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571300",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 1, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571351",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571351",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 2, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571702",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571702",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 3, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571644",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571644",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 4, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571930",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571930",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 5, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571865",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571865",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 6, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333572063",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333572063",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 7, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333572182",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333572182",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (distributed, 8, 8, mt-l-x86iamx-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571943",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571943",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (numpy_2_x, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571816",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571816",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (libtorch_agnostic_targetting, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333572232",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333572232",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-gcc11 / test (openreg, 1, 1, mt-l-x86iavx512-8-64)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571920",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571920",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-aarch64-py3.11",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128334468278",
+                    "url": "https://github.com/pytorch/pytorch/runs/128334468278",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 1, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570340",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570340",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 2, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571075",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571075",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 3, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570750",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570750",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 4, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570925",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570925",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 5, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570564",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570564",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 6, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333571130",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333571130",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-jammy-py3.11-clang21-asan / test (default, 7, 18, mt-l-x86iavx512-16-128)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/pytorch/pytorch/actions/runs/42346284611/job/128333570645",
+                    "url": "https://github.com/pytorch/pytorch/runs/128333570645",
+                    "isRequired": false
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "a945fba0f857934623a85ef6acb521911aa3ade7",
+                    "checkSuites": {
+                      "totalCount": 15,
+                      "nodes": [
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346282928
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346284576
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346284568
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346284585
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346284611
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42346284603
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

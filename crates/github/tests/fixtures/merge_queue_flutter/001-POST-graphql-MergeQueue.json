@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeQueue",
+    "variables": {
+      "owner": "flutter",
+      "name": "flutter",
+      "branch": "master"
+    },
+    "query_sha256": "f126ddd1008de7b41e3e4c3354dc77a41f06db2044b7fe80762217dca5c83853"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4979",
+      "x-ratelimit-reset": "1794038585",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "21"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4979,
+          "used": 21,
+          "resetAt": "2026-11-07T08:03:05Z"
+        },
+        "repository": {
+          "mergeQueue": {
+            "id": "MQ_kwDOAeUeuM374g",
+            "url": "https://github.com/flutter/flutter/queue/master",
+            "nextEntryEstimatedTimeToMerge": 2208,
+            "configuration": null,
+            "entries": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "id": "MQE_lQDOAeUeuM8AAAABNeHqls374s4DzLUV",
+                  "position": 1,
+                  "state": "AWAITING_CHECKS",
+                  "enqueuedAt": "2026-11-07T07:02:24Z",
+                  "estimatedTimeToMerge": 2208,
+                  "jump": false,
+                  "solo": false,
+                  "enqueuer": {
+                    "__typename": "Bot",
+                    "login": "auto-submit"
+                  },
+                  "baseCommit": {
+                    "oid": "208e10f65dedf30d9f69930cfb5f2418391610c4"
+                  },
+                  "headCommit": {
+                    "oid": "e36b37012875b78fd8636d46b2ca68747d3b5800"
+                  },
+                  "pullRequest": {
+                    "id": "PR_kwDOAeUeuM8AAAABNeHqlg",
+                    "number": 196160,
+                    "title": "Roll Fuchsia Linux SDK from KIc0XZbhLmvDpTluZ... to Sf2yvdTiFXAKkfLkD...",
+                    "url": "https://github.com/flutter/flutter/pull/196160",
+                    "headRefOid": "49198b7e82f2b6b9a63099fdb105d627e9c708aa",
+                    "viewerDidAuthor": false,
+                    "author": {
+                      "__typename": "User",
+                      "login": "engine-flutter-autoroll"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

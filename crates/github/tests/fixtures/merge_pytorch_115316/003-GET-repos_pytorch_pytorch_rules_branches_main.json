@@ -1,0 +1,45 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/pytorch/pytorch/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"7f7f1d6ea89db345ed3f6c514c1cd7d631f141c31197fe2a9f093ae36d7bd7fb\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4963",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "37"
+    },
+    "body": [
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pytorch/pytorch",
+        "ruleset_id": 24146319
+      },
+      {
+        "type": "non_fast_forward",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pytorch/pytorch",
+        "ruleset_id": 24146319
+      },
+      {
+        "type": "required_linear_history",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pytorch/pytorch",
+        "ruleset_id": 24146319
+      },
+      {
+        "type": "update",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "pytorch/pytorch",
+        "ruleset_id": 24146320
+      }
+    ]
+  }
+}
