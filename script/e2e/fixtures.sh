@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Sets up the GitHub fixtures in rozed-dev/e2e that rozed's revisions and stacks features are
+# Sets up the GitHub fixtures in rozed-dev/e2e that Lo's revisions and stacks features are
 # checked against, as rozed-bot. README.md beside this script has the fixture map.
 #
 # Usage: script/e2e/fixtures.sh <setup | status [--json] | push-r4 | rebase-r5 | push-r6 | reset-e1>
 #
-# Needs rozed-bot's token in ROZED_BOT_TOKEN. gh runs from ROZED_E2E_GH (default
+# Needs rozed-bot's token in ROZED_BOT_TOKEN. gh runs from LO_E2E_GH (default
 # /opt/homebrew/bin/gh) with its own empty config, so it never picks up another account. Git runs
 # in a scratch clone in a temporary folder, with none of your git config or GIT_* variables, and
 # pushes over HTTPS with a credential helper that reads the token from the environment, so the
@@ -29,8 +29,9 @@ readonly OWNER=rozed-dev NAME=e2e
 readonly REPO=$OWNER/$NAME
 readonly BOT=rozed-bot
 readonly BOT_EMAIL=353226052+rozed-bot@users.noreply.github.com
-GH=${ROZED_E2E_GH:-/opt/homebrew/bin/gh}
+GH=${LO_E2E_GH:-/opt/homebrew/bin/gh}
 
+# setup and status find the bot's review by this text, so it keeps the project's first name.
 readonly E1_REVIEW="rozed-bot's review of r2. Fixture E1 checks that rozed marks this revision as your last review."
 readonly E2_LAYERS="a b c e d s1 s2"
 # Maps a compare response's commits to {"r1": sha, …} by E1's commit subjects.
@@ -78,11 +79,11 @@ gh_api() { GH_TOKEN=$ROZED_BOT_TOKEN "$GH" api -H 'X-GitHub-Api-Version: 2022-11
 prepare() {
   local tool login
   [[ -n ${ROZED_BOT_TOKEN:+set} ]] || die "ROZED_BOT_TOKEN isn't set (see --help)"
-  [[ -x $GH ]] || die "no gh at $GH (set ROZED_E2E_GH)"
+  [[ -x $GH ]] || die "no gh at $GH (set LO_E2E_GH)"
   for tool in git jq awk; do
     command -v "$tool" >/dev/null || die "needs $tool"
   done
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/rozed-e2e.XXXXXX")
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/lo-e2e.XXXXXX")
   trap 'rm -rf "$tmp"' EXIT
   # The credential helper reads ROZED_BOT_TOKEN, so git's children need it.
   export ROZED_BOT_TOKEN GH_CONFIG_DIR=$tmp/gh GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1
@@ -178,7 +179,7 @@ open_pr() {
   done
   CHANGED=$((CHANGED + 1))
   say "opened #$PR: $1 -> $2"
-  # rozed orders a layer's children by createdAt, which has one-second resolution.
+  # Lo orders a layer's children by createdAt, which has one-second resolution.
   sleep 1
 }
 
@@ -349,7 +350,7 @@ e1_setup() {
   fi
   e1_push 1 "$branch"
   if [[ -z $pr ]]; then
-    open_pr "$branch" main "E1: revisions" "Fixture E1 (revisions). Three normal pushes, r1 to r3, each changing \`e1/a.txt\` or \`e1/b.txt\`, and rozed-bot's COMMENT review on r2. \`push-r4\` adds r4, touching both files, \`rebase-r5\` moves \`main\` and rebases this PR on GitHub, and \`push-r6\` adds r6 after the rebase. Made by \`script/e2e/fixtures.sh\` in scornz/rozed."
+    open_pr "$branch" main "E1: revisions" "Fixture E1 (revisions). Three normal pushes, r1 to r3, each changing \`e1/a.txt\` or \`e1/b.txt\`, and rozed-bot's COMMENT review on r2. \`push-r4\` adds r4, touching both files, \`rebase-r5\` moves \`main\` and rebases this PR on GitHub, and \`push-r6\` adds r6 after the rebase. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
     pr=$PR
   fi
   e1_push 2 "$branch" "$pr"
@@ -428,7 +429,7 @@ cmd_rebase_r5() {
       push "$move"
       say "pushed $move"
     fi
-    open_pr "$move" main "$title" "Moves \`main\` one commit, so fixture E1's server-side rebase (r5) has a base that moved. Touches only \`e1/base.txt\`, which E1 never changes. Made by \`script/e2e/fixtures.sh\` in scornz/rozed."
+    open_pr "$move" main "$title" "Moves \`main\` one commit, so fixture E1's server-side rebase (r5) has a base that moved. Touches only \`e1/base.txt\`, which E1 never changes. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
     pr=$PR
   fi
   merge_pr "$pr" main "$title"
@@ -508,7 +509,7 @@ e2_body() {
     s2) what="the top of a native GitHub stack" ;;
     *) die "E2 has no layer $1" ;;
   esac
-  echo "Fixture E2 (stack tree), layer $1: $what. Made by \`script/e2e/fixtures.sh\` in scornz/rozed."
+  echo "Fixture E2 (stack tree), layer $1: $what. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
 }
 
 e2_setup() {
@@ -569,12 +570,12 @@ e3_setup() {
   fi
   x=$(pr_number e3/x)
   if [[ -z $x ]]; then
-    open_pr e3/x main "E3: x" "Fixture E3 (needs rebase), the lower layer: two commits, squash-merged into main. Its branch is kept. Made by \`script/e2e/fixtures.sh\` in scornz/rozed."
+    open_pr e3/x main "E3: x" "Fixture E3 (needs rebase), the lower layer: two commits, squash-merged into main. Its branch is kept. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
     x=$PR
   fi
   y=$(pr_number e3/y)
   if [[ -z $y ]]; then
-    open_pr e3/y e3/x "E3: y" "Fixture E3 (needs rebase), the upper layer: one commit on top of e3/x, which was squash-merged, so this layer needs a rebase. Made by \`script/e2e/fixtures.sh\` in scornz/rozed."
+    open_pr e3/y e3/x "E3: y" "Fixture E3 (needs rebase), the upper layer: one commit on top of e3/x, which was squash-merged, so this layer needs a rebase. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
     y=$PR
   fi
   state=$(pr_state "$x")

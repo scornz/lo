@@ -17,12 +17,12 @@ pub enum Blocker {
     Draft,
     /// It conflicts with the base branch.
     Conflicts,
-    /// The base branch's rules require it to be up to date with the base, and it isn't. rozed
+    /// The base branch's rules require it to be up to date with the base, and it isn't. Lo
     /// doesn't offer GitHub's "Update branch", which adds a commit: the author updates it.
     OutOfDate,
     /// Reviewers with write access whose latest review requests changes, by login. Each one's
     /// approval, or the review's dismissal, clears theirs. Empty when GitHub says changes are
-    /// requested but rozed can't see by whom: the review is past the page fetched, or its author
+    /// requested but Lo can't see by whom: the review is past the page fetched, or its author
     /// lost write access or was deleted. The merge panel then says the reviewer isn't visible and
     /// links to the pull request on GitHub.
     ChangesRequested { by: Vec<String> },
@@ -176,10 +176,10 @@ pub fn blockers(snapshot: &MergeSnapshot) -> Vec<Blocker> {
     blockers
 }
 
-/// Whether rozed may not see every rule behind GitHub's block: GitHub says `BLOCKED`, the
-/// snapshot explains it at least in part, and the caller couldn't confirm rozed sees every rule
+/// Whether Lo may not see every rule behind GitHub's block: GitHub says `BLOCKED`, the
+/// snapshot explains it at least in part, and the caller couldn't confirm Lo sees every rule
 /// on the base branch ([`MergeSnapshot::sees_every_rule`]). The merge panel and the status then
-/// note "rozed may not see every rule" and link to the pull request on GitHub, since what
+/// note "Lo may not see every rule" and link to the pull request on GitHub, since what
 /// [`blockers`] lists may be only part of why. A block nothing explains is already
 /// [`Blocker::Unexplained`].
 pub fn may_not_see_every_rule(snapshot: &MergeSnapshot) -> bool {
@@ -600,8 +600,8 @@ mod tests {
     }
 
     #[test]
-    fn rozed_may_not_see_every_rule_behind_a_block_it_explains_in_part() {
-        // An unsigned commit or a required workflow rozed wasn't told about, beside a running
+    fn lo_may_not_see_every_rule_behind_a_block_it_explains_in_part() {
+        // An unsigned commit or a required workflow Lo wasn't told about, beside a running
         // check: the running check is only part of why.
         let snapshot = MergeSnapshot {
             required_checks: vec![check("test", CheckState::Running)],
@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn rozed_sees_every_rule_when_the_caller_says_so_or_github_does_not_block() {
+    fn lo_sees_every_rule_when_the_caller_says_so_or_github_does_not_block() {
         let seen = MergeSnapshot {
             required_checks: vec![check("test", CheckState::Running)],
             sees_every_rule: true,

@@ -5,14 +5,14 @@ use repo_cache::{Error, Oid};
 use crate::fetch::{fetch, pull_request};
 use crate::support::{Server, git, packs};
 
-/// What `refs/rozed/pull/<number>/revs/` pins, sorted.
+/// What `refs/lo/pull/<number>/revs/` pins, sorted.
 fn pinned_revisions(git_dir: &std::path::Path, number: u64) -> Vec<String> {
     let output = git(
         git_dir,
         &[
             "for-each-ref",
             "--format=%(refname:lstrip=5) %(objectname)",
-            &format!("refs/rozed/pull/{number}/revs/"),
+            &format!("refs/lo/pull/{number}/revs/"),
         ],
     );
     let mut pins: Vec<String> = output.lines().map(str::to_string).collect();
@@ -140,10 +140,10 @@ fn heads_the_clone_kept_are_pinned_without_the_server() {
     let r1 = fetch(&repo, 1).head;
     let ForcePushed { r3, .. } = force_pushed(&pr);
     assert_eq!(fetch(&repo, 1).head, r3);
-    // The clone's pins went, as an older rozed's would never have made them; its commits stay.
+    // The clone's pins went, as an older Lo's would never have made them; its commits stay.
     git(
         repo.git_dir(),
-        &["update-ref", "-d", &format!("refs/rozed/pull/1/revs/{r1}")],
+        &["update-ref", "-d", &format!("refs/lo/pull/1/revs/{r1}")],
     );
     pr.remote.forget_unreachable();
     let before = packs(repo.git_dir());
@@ -280,7 +280,7 @@ fn heads_noted_as_lost_that_the_clone_has_now_or_that_dont_parse_are_left_out() 
         lost
     );
     // A write cut short, and a head the clone got since, from another pull request's fetch.
-    let file = repo.git_dir().join("rozed-unavailable/pull-1");
+    let file = repo.git_dir().join("lo-unavailable/pull-1");
     let noted = std::fs::read_to_string(&file).unwrap();
     std::fs::write(&file, format!("{noted}{}\n12ab", pr.base)).unwrap();
 

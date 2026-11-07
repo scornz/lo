@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::pr_link::PrLink;
 
-/// The parts of GitHub's pull request object rozed reads.
+/// The parts of GitHub's pull request object Lo reads.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PullRequest {
     pub title: String,
@@ -89,7 +89,7 @@ pub async fn fetch_as(
     }
 }
 
-/// Whether rozed can sign in to GitHub, which it can't when it couldn't read its accounts.
+/// Whether Lo can sign in to GitHub, which it can't when it couldn't read its accounts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CanSignIn {
     Yes,
@@ -187,7 +187,7 @@ fn check_status(
         match can_sign_in {
             CanSignIn::Yes => bail!(
                 "GitHub's limit of 60 requests an hour without signing in is used up; sign in \
-                 from Accounts… in the rozed menu, or try again later"
+                 from Accounts… in the Lo menu, or try again later"
             ),
             CanSignIn::No => bail!(
                 "GitHub's limit of 60 requests an hour without signing in is used up; try again \
@@ -198,11 +198,11 @@ fn check_status(
     if status == StatusCode::NOT_FOUND {
         match can_sign_in {
             CanSignIn::Yes => bail!(
-                "GitHub has no public pull request {link}, and no account rozed is signed in to \
-                 can see it. Sign in from Accounts… in the rozed menu"
+                "GitHub has no public pull request {link}, and no account Lo is signed in to \
+                 can see it. Sign in from Accounts… in the Lo menu"
             ),
             CanSignIn::No => bail!(
-                "GitHub has no public pull request {link}, and rozed couldn't read its accounts \
+                "GitHub has no public pull request {link}, and Lo couldn't read its accounts \
                  to sign in"
             ),
         }
@@ -239,7 +239,7 @@ mod tests {
     use http_client::http::HeaderValue;
     use http_client::{AsyncBody, RedirectPolicy, Request, Response, Url};
 
-    /// GitHub's answer for sharkdp/fd#2212, trimmed to the fields rozed reads and a few around
+    /// GitHub's answer for sharkdp/fd#2212, trimmed to the fields Lo reads and a few around
     /// them.
     const FD_2212: &str = r#"{
       "number": 2212,
@@ -425,7 +425,7 @@ mod tests {
         let error = fetch(Canned::new(404, r#"{"message":"Not Found"}"#)).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "GitHub has no public pull request sharkdp/fd#2212, and rozed couldn't read its \
+            "GitHub has no public pull request sharkdp/fd#2212, and Lo couldn't read its \
              accounts to sign in"
         );
         let rate_limited = Canned::with_headers(

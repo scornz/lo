@@ -24,7 +24,7 @@ const SUBMODULE_AFTER: &str = "2222222222222222222222222222222222222222";
 /// - `link`, a symlink, replaced by a file;
 /// - `vendor/lib`, a submodule, moved to another commit.
 ///
-/// Every commit has a `.gitattributes` calling `*.txt` binary, which rozed ignores.
+/// Every commit has a `.gitattributes` calling `*.txt` binary, which Lo ignores.
 struct Fixture {
     server: Server,
     remote: Remote,
@@ -137,7 +137,7 @@ fn lists_what_changed_with_renames_binary_files_modes_and_submodules() {
             path: "vendor/lib".into(),
             oid: oid.parse().unwrap(),
             mode: FileMode::Submodule,
-            // A commit in another repository, which rozed never reads.
+            // A commit in another repository, which Lo never reads.
             size: None,
         })
     };
@@ -413,7 +413,7 @@ fn the_clones_own_config_cant_turn_attributes_on() {
     // attributes from, as `attr.tree` does, would apply it.
     git(
         f.repo.git_dir(),
-        &["config", "attr.tree", "refs/rozed/pull/1/head"],
+        &["config", "attr.tree", "refs/lo/pull/1/head"],
     );
 
     let files = f.repo.changed_files(&f.base, &f.head).unwrap();

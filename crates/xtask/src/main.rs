@@ -1,4 +1,4 @@
-//! rozed's repo tasks, run as `cargo xtask <task>` (an alias in `.cargo/config.toml`).
+//! Lo's repo tasks, run as `cargo xtask <task>` (an alias in `.cargo/config.toml`).
 
 mod sync_zed;
 
@@ -8,7 +8,7 @@ const USAGE: &str = "\
 usage: cargo xtask <task>
 
 Tasks:
-  sync-zed   copy the Cargo settings rozed needs from third_party/zed (--help for more)";
+  sync-zed   copy the Cargo settings Lo needs from third_party/zed (--help for more)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

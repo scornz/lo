@@ -246,7 +246,7 @@ fn checkouts_at_once_all_succeed() {
     f.push_r2();
     let cache = Arc::new(f.cache);
 
-    // Two rozed windows on one pull request, one still on r1, check it out at once.
+    // Two Lo windows on one pull request, one still on r1, check it out at once.
     let threads: Vec<_> = (0..8)
         .map(|i| {
             let cache = cache.clone();
@@ -454,7 +454,7 @@ fn names_a_disk_folds_together_never_both_hash_to_their_blobs() {
             "{path:?}"
         );
     }
-    let base = git(f.repo.git_dir(), &["rev-parse", "refs/rozed/pull/1/base"]);
+    let base = git(f.repo.git_dir(), &["rev-parse", "refs/lo/pull/1/base"]);
     let files = f.repo.changed_files(&base.parse().unwrap(), &head).unwrap();
 
     let dir = f.repo.checkout(1, &head).unwrap();

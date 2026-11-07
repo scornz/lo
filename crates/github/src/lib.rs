@@ -1,4 +1,4 @@
-//! rozed's GitHub layer: signing in, storing accounts and calling GitHub's REST and GraphQL APIs
+//! Lo's GitHub layer: signing in, storing accounts and calling GitHub's REST and GraphQL APIs
 //! (design §3).
 //!
 //! Everything goes through an [`http_client::HttpClient`]: in the app, the shared client that

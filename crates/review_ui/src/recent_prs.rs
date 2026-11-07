@@ -126,7 +126,7 @@ impl Row {
 enum Loaded {
     Not,
     Yes,
-    /// rozed's database couldn't be opened, so there's nothing to read.
+    /// Lo's database couldn't be opened, so there's nothing to read.
     NoDatabase,
 }
 
@@ -157,7 +157,7 @@ impl RecentPrs {
             let layer = ready.await;
             this.update(cx, |this, cx| {
                 let Some(layer) = layer else {
-                    // Without rozed's database, nothing was recorded.
+                    // Without Lo's database, nothing was recorded.
                     this.loaded = Loaded::NoDatabase;
                     cx.notify();
                     return;
@@ -195,7 +195,7 @@ impl RecentPrs {
         }
     }
 
-    /// Reads the list again from rozed's database, keeping the selected pull request selected.
+    /// Reads the list again from Lo's database, keeping the selected pull request selected.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let Some(layer) = github_layer::loaded(cx) else {
             return;
@@ -382,7 +382,7 @@ impl RecentPrs {
             Loaded::Not => "Loading…",
             Loaded::Yes => "No pull requests opened yet. Open one from its link.",
             Loaded::NoDatabase => {
-                "rozed couldn't open its database, so it can't list the pull requests opened \
+                "Lo couldn't open its database, so it can't list the pull requests opened \
                  before. Open one from its link."
             }
         };
@@ -665,7 +665,7 @@ mod tests {
             ]
         );
         assert_eq!(selected(&list, cx).as_deref(), Some("acme/app#1"));
-        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+        assert_eq!(cx.window_title().as_deref(), Some("Lo"));
         let in_list = list.read_with(cx, |list, _| list.focus_handle.clone());
         assert!(cx.update(|window, cx| in_list.contains_focused(window, cx)));
 
@@ -739,7 +739,7 @@ mod tests {
         );
         let in_list = list.read_with(cx, |list, _| list.focus_handle.clone());
         assert!(cx.update(|window, cx| in_list.contains_focused(window, cx)));
-        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+        assert_eq!(cx.window_title().as_deref(), Some("Lo"));
     }
 
     #[gpui::test]
@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn without_rozeds_database_the_list_says_so(cx: &mut TestAppContext) {
+    async fn without_los_database_the_list_says_so(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         workspace.update_in(cx, show);
         cx.run_until_parked();

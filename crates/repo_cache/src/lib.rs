@@ -1,7 +1,7 @@
-//! rozed's local copy of each repository it shows, built on the git CLI (design §3, "Local
+//! Lo's local copy of each repository it shows, built on the git CLI (design §3, "Local
 //! data", and §11, "The local copy").
 //!
-//! [`Git`] finds git and runs it in an environment of rozed's own, so the user's git config is
+//! [`Git`] finds git and runs it in an environment of Lo's own, so the user's git config is
 //! never read or written. [`RepoCache`] keeps a bare partial clone of each repository, and
 //! [`Repo`] fetches pull requests, branches and commits into one and reads diffs and files from
 //! it. [`Repo::compare_revisions`] compares two revisions of a pull request across a rebase.
@@ -9,7 +9,7 @@
 //! ```no_run
 //! use repo_cache::{Git, PullRequestRefs, RepoCache};
 //!
-//! let cache = RepoCache::new("/Users/me/Library/Caches/rozed", Git::find()?)?;
+//! let cache = RepoCache::new("/Users/me/Library/Caches/Lo", Git::find()?)?;
 //! let repo = cache.open("sharkdp", "fd", None)?;
 //! let pull = repo.fetch_pull(&PullRequestRefs {
 //!     number: 2212,

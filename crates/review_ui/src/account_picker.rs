@@ -2,7 +2,7 @@
 //! none of them was chosen for it (design §3 "Which account").
 //!
 //! Tabs' questions wait in one queue, and the picker shows one question at a time, for the active
-//! tab: which account rozed should use for an owner, or for one repository whose owner's account
+//! tab: which account Lo should use for an owner, or for one repository whose owner's account
 //! can't see it. A question from another tab waits until that tab is active, so a tab loading in
 //! the background never puts the picker over other work. The answer is remembered for that owner
 //! or that repository alone, and goes to every tab waiting on the same question whose accounts
@@ -50,7 +50,7 @@ pub struct Question {
     /// The repository's owner and name, as GitHub names them now.
     pub owner: String,
     pub repo: String,
-    /// The account rozed uses for the owner, which can't see `repo`: the answer is then for
+    /// The account Lo uses for the owner, which can't see `repo`: the answer is then for
     /// `repo` alone, and the owner keeps it.
     pub owners_account: Option<String>,
     /// The accounts that can see `repo`, to choose from.
@@ -485,7 +485,7 @@ impl Questions {
         let subject = question.subject();
         let write = cx.spawn(async move |this, cx| {
             match remember.await {
-                Ok(()) => log::info!("rozed uses {login} for {subject}"),
+                Ok(()) => log::info!("Lo uses {login} for {subject}"),
                 Err(error) => log::warn!("remembering {login} for {subject}: {error:#}"),
             }
             this.update(cx, |this, cx| {
@@ -732,12 +732,12 @@ impl Render for AccountPicker {
         let subject = self.question.subject();
         let explanation = match owners_account {
             None => format!(
-                "More than one of your accounts can see {owner}/{repo}. rozed uses the one you \
+                "More than one of your accounts can see {owner}/{repo}. Lo uses the one you \
                  choose for every {owner} repository."
             ),
             Some(owners_account) => format!(
-                "{owners_account}, the account rozed uses for {owner}, can't see {owner}/{repo}. \
-                 rozed uses the one you choose for {owner}/{repo} only, and {owners_account} for \
+                "{owners_account}, the account Lo uses for {owner}, can't see {owner}/{repo}. \
+                 Lo uses the one you choose for {owner}/{repo} only, and {owners_account} for \
                  {owner}'s other repositories."
             ),
         };
@@ -758,7 +758,7 @@ impl Render for AccountPicker {
                     .pb_1()
                     .gap_0p5()
                     .child(Label::new(format!(
-                        "Which account should rozed use for {subject}?"
+                        "Which account should Lo use for {subject}?"
                     )))
                     .child(
                         Label::new(explanation)

@@ -1,6 +1,6 @@
-# rozed handoff
+# Lo handoff
 
-Written 2026-11-06 by the session that designed rozed with the user. Read this, then
+Written 2026-11-06 by the session that designed Lo with the user. Read this, then
 [`design.md`](design.md), before anything else. The design is approved: build it as written, and don't
 reopen decisions in it. Where it's silent, decide, write the decision down, and keep going.
 
@@ -64,7 +64,7 @@ is merged and verified.
 - **Conventional Commits** for every commit and PR title, enforced locally (commitlint via lefthook)
   and in CI, like srcs.
 - **PR descriptions** follow the `pr-writing` skill. Copy it from srcs
-  (`~/src/ash-mac/.claude/skills/pr-writing/`, including `references/examples.md`) into rozed's
+  (`~/src/ash-mac/.claude/skills/pr-writing/`, including `references/examples.md`) into Lo's
   `.claude/skills/pr-writing/`.
 - **No AI attribution** in commits or PRs (no Co-Authored-By, no "Generated with").
 - **One set of rules for every agent:**
@@ -84,16 +84,16 @@ The `ash-mac` Mac devbox on `scornz-mini` has 64 GB of memory, 18 cores and abou
   Homebrew isn't writable by this user.
 - **Zed fork.** `scornz/zed` is a public fork with all tags, cloned blobless at `~/src/zed` and checked
   out at `v1.27.0` (latest stable, 2026-11-04). Use it to read Zed's source. It's the submodule source
-  in the design (`third_party/zed`), and rozed's patch branch goes on it.
+  in the design (`third_party/zed`), and Lo's patch branch goes on it.
 - **Xcode 27.2** is selected, with the Metal compiler. git is at `/usr/bin/git`.
 - **gh** is signed in as `scornz` through the Coder GitHub App, with access to all of the user's repos.
   Its token has no OAuth scopes, because it's a GitHub App user token.
-- **The rozed clone** is at `~/src/rozed`, on `main`. It holds the user's README commit plus these two
+- **The Lo clone** is at `~/src/rozed`, on `main`. It holds the user's README commit plus these two
   uncommitted docs. Commit them in the bootstrap PR.
 
 ## GitHub
 
-- **`scornz/rozed`** is public. Its `main` has the user's README commit.
+- **`scornz/lo`** is public. Its `main` has the user's README commit.
 - **The `protect-main` ruleset** is active:
   - PRs only, merged by squash, with linear history
   - no force-pushes and no deleting `main`
@@ -125,7 +125,7 @@ The `ash-mac` Mac devbox on `scornz-mini` has 64 GB of memory, 18 cores and abou
 Copy srcs's conventions, adapted to a Rust repo:
 
 - `CLAUDE.md` and the symlinks above. Include the rules in this doc, the read-only and no-AI
-  principles, and how to build, test and run rozed.
+  principles, and how to build, test and run Lo.
 - `.claude/settings.json`: attribution off, plus deny rules for pushing `main`, force-pushing and
   `--no-verify`, as in srcs.
 - `lefthook.yml`:
@@ -159,12 +159,12 @@ really behave. A suggested order:
    with a language server running.
    - Write `docs/spike.md` listing which Zed crates get compiled in, and confirm nothing contacts Zed's
      servers.
-   - Check whether GitHub accepts rozed's OAuth token for attachment uploads (design section 8).
+   - Check whether GitHub accepts Lo's OAuth token for attachment uploads (design section 8).
    - Read `crates/zed/src/main.rs`, Zed's split diff (`SplittableEditor`) and `git_ui`'s commit view
      first.
 3. **GitHub layer:** device-flow sign-in, importing `gh` accounts, several accounts, typed GraphQL, REST,
    polling and the SQLite cache.
-4. **Local copy:** partial clones, PR refs, keeping fetched revisions under rozed's own refs, and the
+4. **Local copy:** partial clones, PR refs, keeping fetched revisions under Lo's own refs, and the
    git check at launch.
 5. **The PR tab:** the diff from the local copy, file list in review order, generated files, binaries
    and viewed marks.
@@ -175,7 +175,7 @@ really behave. A suggested order:
    GitHub stacks.
 10. **Code features:** the syntax index served as a language server, trust, language servers and peek.
 11. **Moved code and the syntax-aware view.**
-12. **Opening links** (`⌘O`, link routers, `rozed://`, the CLI), the keymap and `?`, and settings.
+12. **Opening links** (`⌘O`, link routers, `lo://`, the CLI), the keymap and `?`, and settings.
 13. **End-to-end tests** on `rozed-dev`, the network allowlist check, performance, and the release
     workflow.
 
@@ -187,10 +187,10 @@ work is done. Its work was deliberately discarded. Start fresh, but keep what it
 - **The approach works.** It reached a window showing a real PR's diff (`sharkdp/fd#2212`) in Zed's
   side-by-side view, with rust-analyzer downloaded and running.
 - **Cargo reads some settings only from the root workspace.** It ignores a dependency's `[patch]` and
-  `[profile]` sections and its `.cargo/config.toml`. rozed needs copies of Zed's, kept in sync by a
+  `[profile]` sections and its `.cargo/config.toml`. Lo needs copies of Zed's, kept in sync by a
   script that CI checks. Zed's `.cargo/config.toml` sets `--cfg tokio_unstable`,
   `-C symbol-mangling-version=v0` and `MACOSX_DEPLOYMENT_TARGET=12.0`.
-- **Zed's `paths` crate hardcodes Zed's data, config and cache folders.** rozed needs a patch on its
+- **Zed's `paths` crate hardcodes Zed's data, config and cache folders.** Lo needs a patch on its
   Zed patch branch so it uses its own.
 - **Some GitHub admin calls get blocked.** The auto-mode permission classifier blocked a repo-settings
   `PATCH` and a remote branch delete. If that happens, record it under "Waiting on the user" and
@@ -206,7 +206,7 @@ work is done. Its work was deliberately discarded. Start fresh, but keep what it
 ## Notes from the design session
 
 - **Keychain prompts.** Unsigned rebuilds change the code signature, so macOS asks for Keychain access
-  on every rebuild. Debug builds may keep tokens in a file under `~/.config/rozed/` with mode 600.
+  on every rebuild. Debug builds may keep tokens in a file under `~/.config/lo/` with mode 600.
   Release builds use the Keychain.
 - **Stacked PRs** are in public preview. Check that `GET /repos/{owner}/{repo}/stacks` works on a
   `rozed-dev` repo. If GitHub needs an opt-in, add it to "Waiting on the user."

@@ -2,8 +2,8 @@
 //!
 //! A pull request's images are untrusted: a few hundred bytes can declare a huge canvas, an SVG can
 //! point an `<image>` at any file on disk, and an SVG's nesting, patterns, layers and filters can
-//! take gigabytes, overflow a stack or run for hours however small its canvas. So rozed decodes
-//! every preview in a helper process, `rozed --render-preview`, which [`crate::preview_pool`]
+//! take gigabytes, overflow a stack or run for hours however small its canvas. So Lo decodes
+//! every preview in a helper process, `lo --render-preview`, which [`crate::preview_pool`]
 //! starts, watches and kills when it runs too long or grows too large. The helper reads the
 //! image's format, the size it should fit and its bytes on stdin, and writes the preview, or why
 //! there's none, on stdout.
@@ -19,10 +19,10 @@ use std::sync::{Arc, LazyLock};
 use gpui::ImageFormat;
 use image::{DynamicImage, ImageDecoder as _, ImageReader, Limits, RgbaImage};
 
-/// The longest side rozed decodes, in pixels.
+/// The longest side Lo decodes, in pixels.
 pub(crate) const MAX_SIDE: u32 = 8192;
 
-/// The most pixels rozed decodes.
+/// The most pixels Lo decodes.
 pub(crate) const MAX_PIXELS: u64 = 40_000_000;
 
 /// The most a decoded image may take before it's scaled down: refuses, say, 40 megapixels at 16
@@ -39,11 +39,11 @@ pub(crate) const PREVIEW_SIDE: u32 = 1024;
 /// The most bytes the helper reads as an image.
 pub(crate) const MAX_INPUT: usize = 64 * 1024 * 1024;
 
-/// The flag that runs rozed as the helper.
+/// The flag that runs Lo as the helper.
 pub const HELPER_FLAG: &str = "--render-preview";
 
 /// What starts the helper's reply on stdout, so anything printed before it is skipped.
-pub(crate) const REPLY_MAGIC: &[u8] = b"\nROZED-PREVIEW-REPLY 1\n";
+pub(crate) const REPLY_MAGIC: &[u8] = b"\nLO-PREVIEW-REPLY 1\n";
 
 /// The stack the helper decodes on: usvg and resvg recurse once a nesting level.
 const DECODE_STACK: usize = 64 * 1024 * 1024;
@@ -94,7 +94,7 @@ pub(crate) fn request_header(format: ImageFormat, fit: (u32, u32)) -> Option<Str
 }
 
 /// Decodes `bytes`, an image of `format`, to a preview that fits `fit`, in pixels. This is what
-/// the helper runs; rozed itself never calls it on a pull request's image.
+/// the helper runs; Lo itself never calls it on a pull request's image.
 pub(crate) fn render(
     format: ImageFormat,
     bytes: &[u8],
@@ -279,7 +279,7 @@ fn to_bgra(mut image: RgbaImage) -> Preview {
     image
 }
 
-/// Runs rozed as the preview helper, [`HELPER_FLAG`]: reads a request on stdin, writes the
+/// Runs Lo as the preview helper, [`HELPER_FLAG`]: reads a request on stdin, writes the
 /// preview or why there's none on stdout, and exits. It never starts the app.
 pub fn serve_helper() -> ! {
     let reply = match read_request() {

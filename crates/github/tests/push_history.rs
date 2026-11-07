@@ -309,7 +309,7 @@ fn a_merged_pull_request_whose_fork_is_gone_has_no_pushes_but_its_reviews_and_ch
 #[test]
 fn heads_the_poller_saw_are_revisions_too() {
     let (history, _, _) = read("push_history_fd_2202", &PullRef::new("sharkdp", "fd", 2202));
-    // A push between the two reviewed heads that only rozed saw.
+    // A push between the two reviewed heads that only Lo saw.
     let seen = [SeenHead {
         head: "5eed000000000000000000000000000000000000".into(),
         first_seen: time("2026-10-29T06:20:00Z"),
@@ -723,7 +723,7 @@ fn a_long_lived_head_branch_is_read_back_to_when_the_pull_request_opened() {
 }
 
 #[test]
-fn a_head_branch_with_more_pushes_since_it_opened_than_rozed_reads_is_truncated() {
+fn a_head_branch_with_more_pushes_since_it_opened_than_lo_reads_is_truncated() {
     let (interactions, opened) = long_lived(3, 1100);
     let http = Arc::new(ReplayHttpClient::from_interactions("truncated", interactions).unwrap());
 

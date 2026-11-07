@@ -2,7 +2,7 @@
 # recent commits and native stack membership, and what a stack's tree shows of each. With them, the
 # repository's trunks and the pull requests merged most recently, which finding stacks needs too.
 #
-# A page at a time, newest first: rozed reads at most 1,000, and when a repository has more, the
+# A page at a time, newest first: Lo reads at most 1,000, and when a repository has more, the
 # oldest are the ones to leave out. Creation time doesn't change while paging, unlike the time of
 # the last update. Only the first page asks for merged pull requests ($merged is 0 after it); the
 # trunks, which can't be left out, come again with every page. A page costs 1 point: GitHub adds

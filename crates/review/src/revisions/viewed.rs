@@ -37,7 +37,7 @@ pub enum FileComparison {
 /// - Without a usable record, the file was marked viewed elsewhere: compare from your last review,
 ///   unless that's on the latest revision too.
 /// - With neither, it's the file's whole diff.
-/// - As in [`default_comparison`](super::default_comparison), a marker on a revision rozed can no
+/// - As in [`default_comparison`](super::default_comparison), a marker on a revision Lo can no
 ///   longer get compares from the nearest earlier one it can, or shows the whole diff when there's
 ///   none, rather than falling back to a later marker that could hide changes.
 pub fn viewed_file_comparison(

@@ -13,7 +13,7 @@
 //!
 //! Where the design is silent, the index:
 //!
-//! - Runs each grammar's own tags query and then rozed's additions for what it leaves out
+//! - Runs each grammar's own tags query and then Lo's additions for what it leaves out
 //!   ([`queries`]). It passes no locals query, since none of these tags queries consults one.
 //! - Treats a Rust `impl` block as no definition, as tree-sitter-rust's query does, so a method in
 //!   one has no parent.

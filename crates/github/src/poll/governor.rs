@@ -1,4 +1,4 @@
-//! How often to poll: by tier, by whether rozed is in the foreground, and by how much of GitHub's
+//! How often to poll: by tier, by whether Lo is in the foreground, and by how much of GitHub's
 //! rate limit is left (design §3 "Rate limit", research §7 "Recommended scheme").
 
 use std::fmt;
@@ -15,13 +15,13 @@ const RESOURCES: [&str; 2] = ["core", "graphql"];
 /// The polling schedule and the rate-limit governor's thresholds.
 #[derive(Clone, Debug)]
 pub struct PollConfig {
-    /// The open PR, while rozed is in the foreground. Design §3 asks for 15–30 s.
+    /// The open PR, while Lo is in the foreground. Design §3 asks for 15–30 s.
     pub open_interval: Duration,
     /// Every other watched PR, and the open PRs of each watched repository, in the foreground.
     pub watched_interval: Duration,
-    /// Everything, while rozed is in the background.
+    /// Everything, while Lo is in the background.
     pub background_interval: Duration,
-    /// The longest the open PR's details go without being fetched in full while rozed is in the
+    /// The longest the open PR's details go without being fetched in full while Lo is in the
     /// foreground. Viewed marks set elsewhere change nothing a cheaper poll sees.
     pub details_max_age: Duration,
     /// Below this share of a rate limit left, every interval doubles.

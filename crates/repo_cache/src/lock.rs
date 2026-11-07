@@ -1,8 +1,8 @@
 //! Locks per repository copy: one held while writing to it, and one held shared while it's open.
 //!
-//! Two rozed processes, or two threads of one, can work on one repository at once, such as when
+//! Two Lo processes, or two threads of one, can work on one repository at once, such as when
 //! opening two pull requests of a stack. git locks single refs and files, but not a sequence of
-//! commands (fetch, then pin; remove a checkout, then add it again), so rozed holds the write lock
+//! commands (fetch, then pin; remove a checkout, then add it again), so Lo holds the write lock
 //! for each such sequence. Every open [`crate::Repo`] holds the in-use lock shared, and cleanup
 //! needs it exclusively, so nothing removes a clone or checkout a window still shows. Each is an
 //! advisory `flock` on a file of its own outside the clone, so removing a clone never removes a

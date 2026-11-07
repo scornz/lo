@@ -1,21 +1,70 @@
-# rozed
+# Lo
 
-rozed ("read-only Zed") is a native macOS app for reviewing GitHub pull requests, built on Zed's
+Lo (as in "lo and behold") is a native macOS app for reviewing GitHub pull requests, built on Zed's
 crates as libraries. It's for people who read far more code than they write. It talks to GitHub
 directly and has no backend. [`docs/design.md`](docs/design.md) is the approved design: build it as
 written. Where it's silent, decide, record the call in [`docs/decisions.md`](docs/decisions.md) with
 a line of reasoning, and keep going. [`docs/plan.md`](docs/plan.md) has the milestones and
 [`docs/status.md`](docs/status.md) where they stand.
 
+## The name
+
+Text a person reads says "Lo", with a capital L, even mid-sentence: menus, window titles, messages,
+logs, comments and docs. A lowercase l reads as a capital I in sans-serif fonts. Lowercase `lo` is
+only for names that are code: the crate, binary and command, the repository (`scornz/lo`), git refs
+(`refs/lo/`), the URL schemes (`lo://`, and `lo-dev://` in debug builds), `~/.config/lo`, the user
+agent and environment variables (`LO_*`). `crates/lo/tests/visible_name.rs` fails on a string
+literal that says lowercase `lo` as a word. The test org `rozed-dev`, its bot `rozed-bot` and the
+Zed fork's first patch branch, `rozed/v1.27.0`, keep the project's first name.
+
+`script/rename-to-lo.sh` renames a branch from before the rename: merge `origin/main`, run it,
+then fix by hand the lines it lists, and the Markdown lines it says it changed. On a branch that
+changes only docs, run it with `--list` and edit by hand instead: docs about the rename use both
+names, and the rewrite can't tell those lines apart. A line that has to say the first name, such as one about
+the rename, ends in `<!-- rename:keep -->`. CI runs the script with `--check`, which fails while
+any other line outside the kept names says it.
+
+Dev state from before the rename stays in the first name's folders, which Lo never reads. Delete
+them and sign in again, or move them with these commands, in bash, with every copy of the app quit.
+Release builds' Keychain items under the old `rozed://` scheme stay behind. <!-- rename:keep -->
+Delete them in Keychain Access.
+
+```sh
+mv ~/.config/rozed ~/.config/lo # rename:keep
+mv ~/Library/Application\ Support/rozed ~/Library/Application\ Support/Lo # rename:keep
+mv ~/Library/Caches/rozed ~/Library/Caches/Lo # rename:keep
+# The database's file, and the key sqlez stores its migrations under.
+for db in ~/Library/Application\ Support/Lo/db/0-*/rozed.sqlite; do # rename:keep
+  [ -f "$db" ] || continue
+  sqlite3 "$db" 'PRAGMA wal_checkpoint(TRUNCATE)' "UPDATE migrations SET domain = 'lo' WHERE domain = 'rozed'" # rename:keep
+  for f in "$db"*; do mv "$f" "${f/rozed.sqlite/lo.sqlite}"; done # rename:keep
+done
+# The clones' pins and files, and the --trust checkouts' links to their clone.
+for repo in ~/Library/Caches/Lo/repos/github.com/*/*.git; do
+  [ -d "$repo" ] || continue
+  git --git-dir="$repo" for-each-ref --format='create refs/lo/%(refname:strip=2) %(objectname)%0adelete %(refname) %(objectname)' refs/rozed/ | git --git-dir="$repo" update-ref --stdin # rename:keep
+  for name in last-used unavailable; do
+    if [ -e "$repo/rozed-$name" ]; then mv "$repo/rozed-$name" "$repo/lo-$name"; fi # rename:keep
+  done
+done
+for checkout in ~/Library/Caches/Lo/checkouts/github.com/*/*/pull-*; do
+  [ -d "$checkout" ] || continue
+  repo=${checkout%/pull-*}
+  git --git-dir="${repo/checkouts/repos}.git" worktree repair "$checkout"
+done
+# The debug token store, re-keyed without printing a token.
+(cd ~/.config/lo && umask 077 && jq 'with_entries(.key |= sub("^rozed-dev://"; "lo-dev://"))' credentials.json > credentials.json.new && mv credentials.json.new credentials.json) # rename:keep
+```
+
 ## Principles
 
 These bind every change (design §1).
 
-- **Read-only.** rozed never edits files or pushes commits. It writes to GitHub only to review and
+- **Read-only.** Lo never edits files or pushes commits. It writes to GitHub only to review and
   merge: comments and their attachments, reviews, viewed marks, merges, queue and auto-merge changes,
   and changing a PR's base branch to form a stack.
 - **No AI.** No AI features, and none of Zed's AI, agent or model crates.
-- **No backend, no telemetry.** rozed talks only to GitHub and to language servers' official download
+- **No backend, no telemetry.** Lo talks only to GitHub and to language servers' official download
   sources. Never configure a Zed endpoint or start Zed's account, telemetry or auto-update code.
 - **Never runs a repo's code.** No dependency installs or build steps. Language servers run only on
   repos the user trusts.
@@ -23,11 +72,11 @@ These bind every change (design §1).
 
 ## Layout
 
-- `crates/<name>/`: rozed's crates, one Cargo workspace. `rozed` is the app. Design §2 lists the
+- `crates/<name>/`: Lo's crates, one Cargo workspace. `lo` is the app. Design §2 lists the
   rest (`github`, `repo_cache`, `stacks`, `review`, `diff_extras`, `review_ui`), plus
   `symbol_index`, the syntax-based symbol index (design §7).
 - `crates/xtask/`: repo tasks, run as `cargo xtask <task>` from the repository's root. It's its own
-  Cargo workspace, with its own `Cargo.lock`, so it runs even when rozed's workspace can't resolve
+  Cargo workspace, with its own `Cargo.lock`, so it runs even when Lo's workspace can't resolve
   (an empty `third_party/zed`, or a Zed update that needs a new patch).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
@@ -50,29 +99,29 @@ Zed.
 
 Building needs Xcode (not just the Command Line Tools), because gpui compiles Metal shaders, and
 cmake, because Zed's tree-sitter builds wasmtime. If your shell doesn't activate mise, run cargo,
-Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p rozed`). mise's cmake shim
+Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p lo`). mise's cmake shim
 fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
 `PATH`, which activation or `mise exec` provides.
 
 ## Build, test and run
 
 ```sh
-cargo build -p rozed
-cargo run -p rozed -- https://github.com/sharkdp/fd/pull/2212           # a public pull request
-cargo run -p rozed -- --trust https://github.com/sharkdp/fd/pull/2212   # with rust-analyzer
+cargo build -p lo
+cargo run -p lo -- https://github.com/sharkdp/fd/pull/2212           # a public pull request
+cargo run -p lo -- --trust https://github.com/sharkdp/fd/pull/2212   # with rust-analyzer
 cargo test --workspace
 ```
 
-`rozed <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
+`lo <pull request link>` shows GitHub's diff of the pull request at once, changed lines only,
 while it copies the pull request into a partial clone per repository under
-`~/Library/Caches/rozed/repos/`. Then the copy's diff of whole files replaces it in Zed's
+`~/Library/Caches/Lo/repos/`. Then the copy's diff of whole files replaces it in Zed's
 side-by-side diff, at the same file and line, both sides read from git, with no language server. `--trust` also checks the head out under `checkouts/` and runs
 rust-analyzer there. rust-analyzer runs cargo and rustc in the checkout, which a repository can
 point at its own programs, so only pass `--trust` for a pull request whose code you'd run (see
 `docs/spike.md`, "Trust risks"). Without `--trust`, no language server can start at all. Milestone
 10's trust prompt replaces the flag. Each pull request opens in its own tab; `cmd-o` opens another
 from its link. With none open, the window lists the pull requests opened recently, where enter
-opens one, and rozed starts there without a link.
+opens one, and Lo starts there without a link.
 
 In the diff, generated files, lockfiles and files over 5,000 changed lines or 1 MiB start collapsed,
 each header saying why. `alt-a` opens or loads the file at the cursor and switches it between its
@@ -83,15 +132,15 @@ The local copy is the `repo_cache` crate, which runs git with an environment of 
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
 repository ("Accounts…" in the app menu signs in or imports from `gh`), whose token also signs git
 in, and without signing in when none can and GitHub gave no other reason, which works for public
-repositories. When several accounts can see it, rozed asks once per owner which to use, or for that
+repositories. When several accounts can see it, Lo asks once per owner which to use, or for that
 repository alone when the owner's account can't see it. Offline, a pull request whose saved head and
 base the local copy has shows its diff from the copy, read without downloading, and the tab loads
 from GitHub by itself once it answers again.
 
-rozed keeps its files in `~/.config/rozed`, `~/Library/Application Support/rozed`,
-`~/Library/Caches/rozed` and `~/Library/Logs/rozed`, never Zed's. It logs to
-`~/Library/Logs/rozed/rozed.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
-`RUST_LOG=info,rozed=debug` also logs the host and path of every HTTP request and redirect.
+Lo keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`,
+`~/Library/Caches/Lo` and `~/Library/Logs/Lo`, never Zed's. It logs to
+`~/Library/Logs/Lo/Lo.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
+`RUST_LOG=info,lo=debug` also logs the host and path of every HTTP request and redirect.
 
 ## Verify
 
@@ -106,7 +155,7 @@ script/check-symlinks.sh
 script/check-zed-crates.sh
 ```
 
-`script/check-zed-crates.sh` fails when the set of Zed crates compiled into rozed changes. If the
+`script/check-zed-crates.sh` fails when the set of Zed crates compiled into Lo changes. If the
 change is intended, run it with `--update`, update the crate list in `docs/spike.md`, and commit
 both.
 
@@ -121,61 +170,65 @@ cargo test --manifest-path crates/xtask/Cargo.toml
 ## Zed submodule
 
 `third_party/zed` is Zed, pinned to branch `rozed/v1.27.0` of
-[`scornz/zed`](https://github.com/scornz/zed): Zed's release tag `v1.27.0` plus rozed's patches, one
-commit each. rozed's crates depend on Zed's by path. Don't edit files in `third_party/zed`; change a
+[`scornz/zed`](https://github.com/scornz/zed): Zed's release tag `v1.27.0` plus Lo's patches, one
+commit each. Lo's crates depend on Zed's by path. Don't edit files in `third_party/zed`; change a
 patch on the branch instead.
 
 Fetch it with `git submodule update --init --depth 1`, which fetches only the pinned commit (32 MB,
 about 7 seconds). Always pass `--depth 1`. `.gitmodules` sets `shallow = true`, but git still
 fetches all of Zed's history (400 MB, about a minute) when the pinned commit isn't on the fork's
-default branch, and rozed's patch commits never are.
+default branch, and Lo's patch commits never are.
 
 ### Patches
 
 On top of `v1.27.0`, in order. To change, reorder or drop one, make a new branch (see "Updating
 Zed").
 
-1. `paths: use rozed's folders`. Sets `APP_NAME` to `"rozed"` in `crates/paths/src/paths.rs`, so
-   rozed uses `~/.config/rozed`, `~/Library/Application Support/rozed`, `~/Library/Caches/rozed`
-   and `~/Library/Logs/rozed`, never Zed's folders.
+1. `paths: use rozed's folders`. Sets `APP_NAME` in `crates/paths/src/paths.rs` to the <!-- rename:keep -->
+   project's first name, which patch 5 changes to `"Lo"`, so Lo uses `~/.config/lo`,
+   `~/Library/Application Support/Lo`, `~/Library/Caches/Lo` and `~/Library/Logs/Lo`, never Zed's
+   folders. A new branch makes patches 1 and 5 one commit, `paths: use Lo's folders`.
 2. `project: let an app ignore worktrees' own settings files`. Adds
-   `SettingsObserver::ignore_worktree_settings_files` and `Project::settings_observer`. rozed calls
+   `SettingsObserver::ignore_worktree_settings_files` and `Project::settings_observer`. Lo calls
    it on every project, so a repository's `.zed/settings.json`, `.zed/tasks.json`,
    `.zed/debug.json`, `.vscode/tasks.json` and `.vscode/launch.json` never apply, trusted or not.
 3. `project: let an app keep worktrees out of Recent Items`. Adds
-   `WorktreeStore::keep_out_of_recent_documents`, so rozed's checkouts never reach macOS's Recent
-   Items. Adding them there also kept rozed from quitting on some desktops.
+   `WorktreeStore::keep_out_of_recent_documents`, so Lo's checkouts never reach macOS's Recent
+   Items. Adding them there also kept Lo from quitting on some desktops.
 4. `editor: keep a split diff's expand buttons hidden when it splits again`. Adds
    `SplittableEditor::disable_expand_excerpt_buttons`, which also hides them on the left editor
    that `split()` makes when the diff widens or its style changes, and
    `Editor::expand_excerpt_buttons_disabled`. GitHub's diff of a pull request shows hunks only,
    and its excerpts must never expand.
+5. `paths: name the app Lo`. Sets `APP_NAME` to `"Lo"`, renaming the folders patch 1 set. Only
+   `rozed/v1.27.0` has it; see patch 1. Both change the same line, so a Zed release that changes
+   it fails patches 1 and 5 together, for one cause.
 
 ### Cargo settings copied from Zed
 
-Cargo ignores a dependency's `[patch]` sections, profiles and `.cargo/config.toml`, so rozed keeps
+Cargo ignores a dependency's `[patch]` sections, profiles and `.cargo/config.toml`, so Lo keeps
 copies of Zed's. `cargo xtask sync-zed` (`crates/xtask`) writes them between `BEGIN generated` and
 `END generated` markers; don't edit inside the markers.
 
 - `Cargo.toml`: Zed's `[patch.*]` sections, with `path` entries pointed into `third_party/zed`, and
   its `[profile.*]` sections. Patches and per-package profile settings for crates that aren't in
-  rozed's `Cargo.lock` are left out, because cargo warns about each one on every build.
+  Lo's `Cargo.lock` are left out, because cargo warns about each one on every build.
 - `.cargo/config.toml`: the macOS parts of Zed's, its `rustflags` and `MACOSX_DEPLOYMENT_TARGET`.
 - `rust-toolchain.toml`: Zed's toolchain channel.
 
 `cargo xtask sync-zed --check` changes nothing and fails, naming each stale section; CI runs it.
-`cargo xtask sync-zed --seed-lock` first merges Zed's `Cargo.lock` into rozed's: Zed's entries
-for every package in Zed's lockfile, rozed's own entries for the rest. Packages Zed uses then
-resolve to the versions Zed tested, and rozed's other dependencies keep their versions. Then it
+`cargo xtask sync-zed --seed-lock` first merges Zed's `Cargo.lock` into Lo's: Zed's entries
+for every package in Zed's lockfile, Lo's own entries for the rest. Packages Zed uses then
+resolve to the versions Zed tested, and Lo's other dependencies keep their versions. Then it
 lets cargo prune the lockfile and syncs. Run it after updating Zed or adding a dependency on
 another Zed crate, and review the `Cargo.lock` diff.
 
 ### Updating Zed
 
-Each Zed release gets its own branch, `rozed/v<version>`. Patch branches are append-only: never
-force-push or delete one, because older rozed commits pin commits on it. To rewrite a patch on the
-same Zed release, push a new branch with a suffix, such as `rozed/v1.27.0-2`, and point the
-submodule at it as in step 2.
+Each Zed release gets its own branch, `lo/v<version>`; the first, `rozed/v1.27.0`, predates the
+name. Patch branches are append-only: never force-push or delete one, because older commits here
+pin commits on it. To rewrite a patch on the same Zed release, push a new branch with a suffix,
+such as `lo/v1.28.0-2`, and point the submodule at it as in step 2.
 
 To see what a release breaks first, run `script/zed-latest.sh --tag v<version>` (under `mise exec
 --`). In a worktree of its own, it replays the patches onto the release, then runs `cargo xtask
@@ -183,15 +236,15 @@ sync-zed --seed-lock`, `rustup toolchain install`, `cargo fetch`, `cargo fmt --c
 build`, `cargo clippy` and `cargo test`. It reports each patch that no longer applies and each
 failing step's first errors, and pushes nothing. The `weekly-zed` workflow runs it against Zed's
 latest release every week and keeps one issue labelled `zed-update` open, with the latest report,
-while that release breaks rozed.
+while that release breaks Lo.
 
-1. In a full Zed clone, branch `rozed/v<version>` from tag `v<version>`, cherry-pick the patches
-   above in order, and push the branch to `scornz/zed`.
+1. In a full Zed clone, branch `lo/v<version>` from tag `v<version>`, cherry-pick the patches
+   above in order, with patches 1 and 5 as one commit, and push the branch to `scornz/zed`.
 2. Point the submodule at it:
 
    ```sh
-   git config -f .gitmodules submodule.third_party/zed.branch rozed/v<version>
-   git -C third_party/zed fetch --depth 1 origin rozed/v<version>
+   git config -f .gitmodules submodule.third_party/zed.branch lo/v<version>
+   git -C third_party/zed fetch --depth 1 origin lo/v<version>
    git -C third_party/zed checkout FETCH_HEAD
    ```
 

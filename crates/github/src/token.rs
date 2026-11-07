@@ -44,7 +44,7 @@ impl fmt::Debug for Token {
 /// ([GitHub's token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenKind {
-    /// `gho_`: an OAuth app's token, which is what rozed's own sign-in and `gh` produce.
+    /// `gho_`: an OAuth app's token, which is what Lo's own sign-in and `gh` produce.
     OAuth,
     /// `ghp_`: a classic personal access token.
     Personal,

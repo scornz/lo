@@ -1,5 +1,5 @@
 [package]
-name = "rozed"
+name = "lo"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -54,6 +54,8 @@ project = { workspace = true, features = ["test-support"] }
 semver.workspace = true
 settings = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
 # project's test-support turns on remote's, which adds a variant workspace only matches with its
 # own test-support.
 workspace = { workspace = true, features = ["test-support"] }

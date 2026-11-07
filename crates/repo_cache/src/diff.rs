@@ -12,7 +12,7 @@ pub struct ChangedFile {
     pub old: Option<FileVersion>,
     /// The file after. `None` when it was deleted.
     pub new: Option<FileVersion>,
-    /// Whether git considers either side binary, from its content. rozed applies no
+    /// Whether git considers either side binary, from its content. Lo applies no
     /// `.gitattributes`, so a repository can't mark a file binary or text.
     pub binary: bool,
     /// Lines added and deleted. `None` for a binary file or a submodule.

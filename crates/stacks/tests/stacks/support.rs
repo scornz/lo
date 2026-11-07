@@ -1,5 +1,5 @@
 //! Builders for pull requests and text renderings of the forest and of plans, so tests read as
-//! trees and as the confirmations rozed shows.
+//! trees and as the confirmations Lo shows.
 
 use std::time::{Duration, SystemTime};
 

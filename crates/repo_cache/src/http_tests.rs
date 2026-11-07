@@ -118,7 +118,7 @@ fn base64_decode(text: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// git, as if rozed's environment held only `PATH` and `vars`.
+/// git, as if Lo's environment held only `PATH` and `vars`.
 fn git_with_env(vars: &[(&str, &str)]) -> Git {
     let program: PathBuf = Git::find().unwrap().program().to_path_buf();
     let env = std::iter::once(("PATH", "/usr/bin:/bin"))

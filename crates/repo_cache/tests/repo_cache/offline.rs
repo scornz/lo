@@ -1,5 +1,5 @@
 //! Reading a clone offline: only what's there, without the server, without downloading anything,
-//! and without waiting for another rozed's fetch.
+//! and without waiting for another Lo's fetch.
 
 use std::fs::File;
 use std::sync::{Arc, mpsc};
@@ -114,14 +114,14 @@ fn each_base_branch_keeps_the_tip_it_was_last_fetched_at() {
 }
 
 #[test]
-fn opening_offline_doesnt_wait_for_another_rozeds_fetch() {
+fn opening_offline_doesnt_wait_for_another_los_fetch() {
     let server = Server::new();
     pull_request(&server);
     let (_dir, cache) = server.cache();
     let repo = cache.open("owner", "repo", None).unwrap();
     fetch(&repo, 1);
     drop(repo);
-    // Another rozed holds the clone's lock, as it does while fetching.
+    // Another Lo holds the clone's lock, as it does while fetching.
     let lock = File::options()
         .write(true)
         .open(cache.root().join("locks/github.com/owner/repo.lock"))

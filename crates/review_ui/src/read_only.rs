@@ -1,4 +1,4 @@
-//! Keeps rozed's window read-only where Zed's workspace would offer to open, create or edit files:
+//! Keeps Lo's window read-only where Zed's workspace would offer to open, create or edit files:
 //! no welcome page and no "+" menu in a pane, none of [`FileActions`] from anywhere, nothing
 //! opened from files dropped on the window, and any editor the workspace opens, such as the one a
 //! file header's "Open File" opens, is read-only.
@@ -15,13 +15,13 @@ use workspace::{Pane, Workspace};
 /// captured, hidden from the command palette and left out of the keymap.
 macro_rules! file_actions {
     ($($action:path),* $(,)?) => {
-        /// The actions rozed never runs, because they open, create or write files, or open a
+        /// The actions Lo never runs, because they open, create or write files, or open a
         /// window (design §1 "Read-only", §10 "One window").
         ///
         /// No key is bound to them ([`crate::keymap`]), the command palette doesn't list them,
         /// and the window captures them before any handler, so neither a menu, a click (a double
         /// click in the tab bar or an empty pane sends `workspace::NewFile`) nor anything else
-        /// that dispatches one runs it. Only actions compiled into rozed can be listed; add an
+        /// that dispatches one runs it. Only actions compiled into Lo can be listed; add an
         /// action's crate, and its file actions go here.
         pub struct FileActions;
 
@@ -60,7 +60,7 @@ file_actions![
     workspace::welcome::OpenRecentProject,
     // Opens whatever path the text under the cursor names (Vim's `gf`).
     editor::actions::OpenSelectedFilename,
-    // Opening settings, keymap and task files, rozed's own or the repository's `.zed/`, to edit.
+    // Opening settings, keymap and task files, Lo's own or the repository's `.zed/`, to edit.
     zed_actions::OpenSettings,
     zed_actions::OpenSettingsFile,
     zed_actions::OpenProjectSettings,
@@ -142,11 +142,11 @@ pub(crate) fn configure_workspace(workspace: &mut Workspace, cx: &mut Context<Wo
     workspace.register_action_renderer(|div, _, _, _| {
         FileActions::capture(div)
             // A pane opens files and folders dropped on it, as a worktree Zed trusts to run
-            // language servers in. rozed never opens a path it didn't create, so a drag from
+            // language servers in. Lo never opens a path it didn't create, so a drag from
             // Finder ends as soon as it enters the window, before any pane can take the drop.
             .on_drag_move::<ExternalPaths>(|_, window, cx| {
                 if cx.stop_active_drag(window) {
-                    log::info!("not opening files dragged onto rozed's window");
+                    log::info!("not opening files dragged onto Lo's window");
                 }
             })
     });

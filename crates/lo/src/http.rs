@@ -1,10 +1,10 @@
-//! The one HTTP client every part of rozed and Zed's crates share.
+//! The one HTTP client every part of Lo and Zed's crates share.
 //!
-//! rozed never contacts Zed's servers (design §1). Settings turn off the Zed features that would,
+//! Lo never contacts Zed's servers (design §1). Settings turn off the Zed features that would,
 //! and this client refuses any request to Zed's hosts that gets through anyway, logging it at
 //! `warn`. It follows redirects itself, so every hop gets the same check. Every request and
 //! redirect is logged at `debug` by host and path, never by query, which can hold tokens, so a run
-//! with `RUST_LOG=rozed=debug` lists everything rozed contacted.
+//! with `RUST_LOG=lo=debug` lists everything Lo contacted.
 
 use std::sync::Arc;
 
@@ -17,10 +17,10 @@ use http_client::{AsyncBody, HttpClient, Inner, RedirectPolicy, Request, Respons
 /// Zed's own domain. It and every subdomain are refused.
 const ZED_DOMAIN: &str = "zed.dev";
 
-/// The placeholder rozed sets as Zed's `server_url`, so every URL Zed's crates build for a Zed
+/// The placeholder Lo sets as Zed's `server_url`, so every URL Zed's crates build for a Zed
 /// service points here instead. `.invalid` never resolves (RFC 6761), and this client refuses it
 /// before trying, so a request here shows up in the log.
-pub const ZED_SERVICES_PLACEHOLDER: &str = "rozed.invalid";
+pub const ZED_SERVICES_PLACEHOLDER: &str = "lo.invalid";
 
 /// How many redirects a request without a [`RedirectPolicy`] follows: reqwest's default, which
 /// Zed's client used.
@@ -53,7 +53,7 @@ pub fn is_refused_host(host: &str) -> bool {
         .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
-/// A URI as rozed logs it: host and path, without the scheme, query or fragment.
+/// A URI as Lo logs it: host and path, without the scheme, query or fragment.
 fn loggable(uri: &Uri) -> String {
     format!("{}{}", uri.host().unwrap_or_default(), uri.path())
 }
@@ -194,7 +194,7 @@ fn refuse_zed_hosts(method: &Method, uri: &Uri) -> anyhow::Result<()> {
             "refused a request to a Zed host: {method} {}",
             loggable(uri)
         );
-        bail!("rozed refuses requests to Zed's hosts ({host})");
+        bail!("Lo refuses requests to Zed's hosts ({host})");
     }
     Ok(())
 }
@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn refuses_the_zed_services_placeholder() {
-        assert!(is_refused_host("rozed.invalid"));
-        assert!(is_refused_host("api.rozed.invalid"));
+        assert!(is_refused_host("lo.invalid"));
+        assert!(is_refused_host("api.lo.invalid"));
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
             "zed.dev.example.com",
             "zeddev.com",
             "zed.devs",
-            "rozed.dev",
+            "lo.dev",
             "127.0.0.1",
             "",
         ] {
