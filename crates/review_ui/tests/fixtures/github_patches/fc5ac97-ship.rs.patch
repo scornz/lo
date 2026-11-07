@@ -3,12 +3,12 @@
  /// - It does nothing more when auto-merge is on.
  /// - It merges with the preferred method, or joins the queue on a branch that requires one, only
 -///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`) and
--///   nothing Lo sees blocks it. Those are the states in which GitHub's rules are met, so approve
+-///   nothing rozed sees blocks it. Those are the states in which GitHub's rules are met, so approve
 +///   when GitHub reports the pull request can merge (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, or `BEHIND`
-+///   on a queue branch) and nothing Lo sees blocks it. Those are the states in which GitHub's rules are met, so approve
++///   on a queue branch) and nothing rozed sees blocks it. Those are the states in which GitHub's rules are met, so approve
  ///   and ship never merges past a rule, even for an admin GitHub would let bypass one.
  /// - Otherwise only things waiting will fix block it, and it turns on auto-merge, or merge when
- ///   ready on a queue branch. When Lo's explanation of a `BLOCKED` is only partial, auto-merge
+ ///   ready on a queue branch. When rozed's explanation of a `BLOCKED` is only partial, auto-merge
 @@ -397,12 +397,18 @@ fn ship(snapshot: &MergeSnapshot) -> Ship {
  }
  
@@ -32,7 +32,7 @@
 +    }
  }
  
- /// The snapshot as Lo expects GitHub to report it after you approve the head on screen. It's
+ /// The snapshot as rozed expects GitHub to report it after you approve the head on screen. It's
 @@ -1515,6 +1521,14 @@ mod tests {
          assert_eq!(after_approving(&after, &the_plan(&snapshot)), Ship::Enqueue);
      }
@@ -46,5 +46,5 @@
 +    }
 +
      #[test]
-     fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_lo_cannot_see() {
+     fn it_turns_on_auto_merge_when_github_still_blocks_for_a_rule_rozed_cannot_see() {
          // Copilot opened it, or a ruleset requires a reviewer for these files: GitHub still needs
