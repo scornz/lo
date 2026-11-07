@@ -808,10 +808,12 @@ impl Poller {
     }
 
     /// `pull`'s timeline, as [`Self::read_cached`] keeps it, read as this account. It's read
-    /// again when an item it shows is added or deleted, the latest commit's checks change or the
-    /// description is edited ([`PullRequestTimeline`]'s [`CachedRead::WATCHED`]), and on the
-    /// 5-minute refresh: each time only its newest page, and in full at most hourly, or after Lo
-    /// edits or deletes a comment ([`Self::edit_comment`], [`Self::delete_comment`]).
+    /// again when an item it shows is added or deleted, the pull request is updated (as by an
+    /// edited comment), the latest commit's checks change or the description is edited
+    /// ([`PullRequestTimeline`]'s [`CachedRead::WATCHED`]), and on the 5-minute refresh: each time
+    /// only its newest page. So a change to an older item shows at the hourly full read, unless
+    /// Lo made it: an edit or a deletion of Lo's reads it in full ([`Self::edit_comment`],
+    /// [`Self::delete_comment`]).
     pub fn timeline(
         &mut self,
         pull: PullRef,

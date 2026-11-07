@@ -308,12 +308,16 @@ mod tests {
             check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
         });
         assert_eq!(commented, [false, false, true]);
-        // The newest item's time moves alone: an item added as another was deleted. (An edit
-        // moves nothing here: the write that edits reads the timeline again itself.)
+        // The newest item's time moves alone: an item added as another was deleted.
         let replaced = read_again(|check| {
             check["timelineEvents"]["updatedAt"] = "2026-11-07T12:00:00Z".into();
         });
         assert_eq!(replaced, [false, false, true]);
+        // A comment edited: only the pull request's own time moves.
+        let edited = read_again(|check| {
+            check["updatedAt"] = "2026-11-07T12:00:00Z".into();
+        });
+        assert_eq!(edited, [false, false, true]);
         // Checks start on the latest commit, and the description is edited.
         let checks = read_again(|check| {
             check["statusCheckRollup"] = serde_json::json!({"state": "PENDING"});

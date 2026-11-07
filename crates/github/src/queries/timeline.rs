@@ -8,8 +8,9 @@
 //! when an older item may have changed:
 //!
 //! - the page doesn't join what Lo has, or the counts don't move together, as after a deletion;
-//! - the time of the latest change to the items it shows moved, but nothing on the page changed,
-//!   as after an older comment is edited or hidden;
+//! - the time of the newest item it shows moved, but nothing on the page changed, as when an
+//!   item is added while an older one is deleted. An edit doesn't move that time (checked live),
+//!   so an older comment's edit by someone else shows at the next full read;
 //! - the page has a new dismissal of a review it doesn't hold, or a new force-push to a commit it
 //!   doesn't hold, which changes or replaces older items;
 //! - and at least every [`READ_IN_FULL_EVERY`], for what none of those show, such as checks run
@@ -534,11 +535,23 @@ impl CacheEntry for PullRequestTimeline {
 impl CachedRead for PullRequestTimeline {
     /// The check counts the items the timeline shows and holds when the newest was made; so an
     /// item added or deleted changes them, and a mention or a subscription doesn't. An edit
-    /// changes neither (checked live): Lo's own edits read the timeline again themselves
-    /// ([`crate::poll::Poller::edit_comment`]), and others' show on the 5-minute refresh. With
-    /// them, the latest commit's checks, and when the description was last edited.
-    const WATCHED: &'static [&'static str] =
-        &["/timelineEvents", "/statusCheckRollup", "/lastEditedAt"];
+    /// changes neither (checked live), but it moves the pull request's own `updatedAt`, which a
+    /// new title and other changes move too: reading the newest page again then is cheap, and it
+    /// shows an edit there at the next poll. It never reads in full on that alone, which could
+    /// cost 10 pages for each edit, so an edit of an older item by someone else shows at the next
+    /// full read, within the hour; Lo's own edits read it in full themselves
+    /// ([`crate::poll::Poller::edit_comment`]). With them, the latest commit's checks, and when
+    /// the description was last edited.
+    ///
+    /// (`pull_request_check.graphql`'s comment on `timelineEvents` still says an edit moves its
+    /// time. Changing it changes the query's hash, so it waits for the next change to that query,
+    /// which re-records its cassettes anyway.)
+    const WATCHED: &'static [&'static str] = &[
+        "/timelineEvents",
+        "/statusCheckRollup",
+        "/lastEditedAt",
+        "/updatedAt",
+    ];
 }
 
 impl GithubClient {
@@ -1168,7 +1181,8 @@ mod tests {
         let mut items = plain(&["a", "b", "c", "d"]);
         items[0].1 = comment("Old");
         let known = timeline(&items, 0, 4);
-        // An older comment edited or hidden: the time moved, but the page is as it was.
+        // The newest item's time moved, but the page is as it was: an item came and an older one
+        // went.
         assert!(
             known
                 .joined(&page(&plain(&["c", "d"]), 4, 1), 100)
