@@ -320,6 +320,7 @@ async fn sign_in_bot(
 ) -> SignedIn {
     let github = FakeGithub::default();
     github.answer_unhandled(Answer::new(503, "{}"));
+    github.answer_viewed_marks();
     let db = github::db::LoDb::open_test(name).await;
     let store =
         std::sync::Arc::new(credentials_provider::test_support::FakeCredentialsProvider::default());

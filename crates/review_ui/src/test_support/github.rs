@@ -233,9 +233,15 @@ impl FakeGithub {
         self.0.lock().unhandled = Some(answer);
     }
 
-    /// Runs `f` on a feature's own data ([`State::get`]).
+    /// Runs `f` on a feature's own data ([`State::get`]), which starts as its `Default`. Each
+    /// feature's data is found by its type, so a feature stores a type of its own. The data is
+    /// taken out while `f` runs, without holding the fake's lock, so `f` can call the fake; a call
+    /// from inside it for the same data sees a fresh `T`.
     pub fn with<T: Any + Default + Send, R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        f(self.0.lock().get())
+        let mut data = std::mem::take(self.0.lock().get::<T>());
+        let result = f(&mut data);
+        *self.0.lock().get::<T>() = data;
+        result
     }
 
     fn respond(&self, asked: &Asked) -> anyhow::Result<Answer> {
@@ -317,6 +323,8 @@ struct Asked {
     query: String,
     /// The token it came with, `""` for none.
     token: String,
+    /// What it sent, as a REST write or GraphQL does.
+    body: Vec<u8>,
     /// The operation and its variables, for a GraphQL request.
     graphql: Option<GraphQl>,
 }
@@ -328,8 +336,8 @@ struct GraphQl {
 }
 
 impl Asked {
-    /// `request`'s method, path, query and token, and for a GraphQL request, the operation and
-    /// variables in its body.
+    /// `request`'s method, path, query, token and body, and for a GraphQL request, the operation
+    /// and variables in its body.
     fn read(request: Request<AsyncBody>) -> Self {
         let token = request
             .headers()
@@ -345,27 +353,44 @@ impl Asked {
         let (path, query) = target.split_once('?').unwrap_or((&target, ""));
         let (path, query) = (path.to_string(), query.to_string());
         let method = request.method().to_string();
-        let graphql = (path == "/graphql").then(|| {
+        let mut body = Vec::new();
+        {
             use futures::AsyncReadExt as _;
-            let mut body = Vec::new();
             futures::executor::block_on(request.into_body().read_to_end(&mut body)).unwrap();
-            let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            GraphQl {
-                operation: body["operationName"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                variables: body["variables"].clone(),
-            }
-        });
-        Self {
+        }
+        let mut asked = Self {
             method,
             target,
             path,
             query,
             token,
-            graphql,
+            body,
+            graphql: None,
+        };
+        if asked.path == "/graphql" {
+            let json = asked.json();
+            let operation = json["operationName"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a GraphQL request without an operation name: {json}"));
+            asked.graphql = Some(GraphQl {
+                operation: operation.to_string(),
+                variables: json["variables"].clone(),
+            });
         }
+        asked
+    }
+
+    /// The body, as JSON, or null when there's none.
+    fn json(&self) -> serde_json::Value {
+        if self.body.is_empty() {
+            return serde_json::Value::Null;
+        }
+        serde_json::from_slice(&self.body).unwrap_or_else(|error| {
+            panic!(
+                "{} {}: the body isn't JSON: {error}",
+                self.method, self.target
+            )
+        })
     }
 
     /// `graphql:<Operation>`, for a GraphQL request.
