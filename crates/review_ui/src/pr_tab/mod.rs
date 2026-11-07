@@ -1517,6 +1517,9 @@ impl PrTab {
     /// Every file is in the local copy's diff.
     pub(crate) fn diff_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_status(Status::Ready, cx);
+        if let Some(diff) = &self.pull.diff {
+            diff_decorations::redecorate(diff, Redecorate::Loaded, window, cx);
+        }
         // A file added while the whitespace key was pressed may show the other way.
         self.sync_whitespace(window, cx);
     }

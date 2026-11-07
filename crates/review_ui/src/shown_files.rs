@@ -26,10 +26,9 @@ use multi_buffer::PathKey;
 use settings::DiffViewStyle;
 use ui::{Label, LabelSize, prelude::*};
 
-use crate::diff_decorations::{self, DiffDecorator, Redecorate};
+use crate::diff_decorations::{self, DiffContext, DiffDecorator, Redecorate};
 use crate::file_display::{Collapsed, ImageSide, Images, without_whitespace_changes};
 use crate::pr_diff::{Checkout, FileHeaders, Warning};
-use crate::pr_tab::PrTab;
 use crate::shown_comparison::ShownComparison;
 use crate::{image_preview, preview_pool};
 
@@ -373,6 +372,14 @@ impl Addon for ShownFiles {
 }
 
 impl ShownFiles {
+    /// No files yet, of the local copy's diff of `comparison`, or GitHub's without one.
+    pub(crate) fn of(comparison: Option<Arc<ShownComparison>>) -> Self {
+        Self {
+            comparison,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn get(&self, path: &str) -> Option<&ShownFile> {
         self.files.get(path)
     }
@@ -824,7 +831,7 @@ pub(crate) fn set_style(
 
 /// Shows each changed image's before and after under its file's last line: both on the right
 /// inline, or one a side side by side.
-pub(crate) fn image_blocks(_: &WeakEntity<PrTab>) -> Box<dyn DiffDecorator> {
+pub(crate) fn image_blocks(_: &DiffContext, _: &mut App) -> Box<dyn DiffDecorator> {
     struct ImageBlocks;
     impl DiffDecorator for ImageBlocks {
         fn decorate(
@@ -843,7 +850,10 @@ pub(crate) fn image_blocks(_: &WeakEntity<PrTab>) -> Box<dyn DiffDecorator> {
                     }
                 }
                 // Each file whose rows changed was decorated on its own.
-                Redecorate::Whitespace | Redecorate::Replaced => {}
+                Redecorate::Whitespace
+                | Redecorate::Replaced
+                | Redecorate::Loaded
+                | Redecorate::Refresh => {}
             }
         }
     }

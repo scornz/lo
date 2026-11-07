@@ -56,7 +56,9 @@ use repo_cache::{
 };
 
 use crate::api_diff::{self, HunkRows, OutsideGithubsHunks};
-use crate::diff_decorations::{self, Badge, BadgeStyle, DiffDecorations, NewDecorator};
+use crate::diff_decorations::{
+    self, Badge, BadgeStyle, DiffContext, DiffDecorations, NewDecorator,
+};
 use crate::file_display::{
     Collapsed, ImageSide, Images, binary_text, initial_collapse, too_large_to_show,
     without_whitespace_changes,
@@ -491,16 +493,15 @@ async fn show(
     };
 
     let style = tab.update(cx, |tab, _| tab.diff_style())?;
-    let (multi_buffer, editor) = new_diff_editor(&tab, &workspace, &project, &title, style, cx)?;
-    editor.update(cx, |editor, cx| {
-        editor.rhs_editor().update(cx, |editor, _| {
-            // Keeps the clone open, so no cleanup removes it or its checkout while the tab shows
-            // it, and lets a large file load on a key.
-            if let Some(files) = editor.addon_mut::<ShownFiles>() {
-                files.comparison = Some(comparison.clone());
-            }
-        })
-    });
+    let (multi_buffer, editor) = new_diff_editor(
+        &tab,
+        Some(comparison.clone()),
+        &workspace,
+        &project,
+        &title,
+        style,
+        cx,
+    )?;
     // The tab lists the files and says where each goes in the diff, at once, or with a diff on
     // screen, once this one replaces it, so the list always matches the diff shown.
     let entries = comparison.entries();
@@ -825,10 +826,12 @@ const DECORATORS: &[NewDecorator] = &[
     shown_files::image_blocks,
 ];
 
-/// A new, empty side-by-side or inline diff of `title` for `tab`, read-only and without the
-/// controls for staging and restoring hunks, with every feature's decorator.
+/// A new, empty side-by-side or inline diff of `title` for `tab`'s pull request, read-only and
+/// without the controls for staging and restoring hunks, with every feature's decorator: the
+/// local copy's of `comparison`, or GitHub's without one.
 pub(crate) fn new_diff_editor(
     tab: &PullHandle,
+    comparison: Option<Arc<ShownComparison>>,
     workspace: &WeakEntity<Workspace>,
     project: &Entity<Project>,
     title: &str,
@@ -856,8 +859,14 @@ pub(crate) fn new_diff_editor(
                 editor.set_show_bookmarks(false, cx);
                 editor.set_show_breakpoints(false, cx);
                 editor.register_addon(FileHeaders::default());
-                editor.register_addon(ShownFiles::default());
-                editor.register_addon(DiffDecorations::new(tab.tab(), DECORATORS, cx));
+                // Keeps the clone open, so no cleanup removes it or its checkout while the tab
+                // shows it, and lets a large file load on a key.
+                editor.register_addon(ShownFiles::of(comparison.clone()));
+                let context = DiffContext {
+                    pull: tab.clone(),
+                    comparison,
+                };
+                editor.register_addon(DiffDecorations::new(&context, DECORATORS, cx));
             });
             editor
         })

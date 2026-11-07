@@ -22,6 +22,7 @@ use gpui::{AppContext as _, AsyncWindowContext};
 use language::{BufferSnapshot, Point};
 use ui::SharedString;
 
+use crate::diff_decorations::Redecorate;
 use crate::file_display::{Collapsed, initial_collapse};
 use crate::file_list::{FileChange, FileEntry};
 use crate::pr_diff::{self, FileHeader, FilePlan, NewSide, Target, Warning};
@@ -104,7 +105,7 @@ pub(crate) async fn show(
     let project = workspace.update(cx, |workspace, _| workspace.project().clone())?;
     let languages = project.read_with(cx, |project, _| project.languages().clone());
     let (_, editor) =
-        pr_diff::new_diff_editor(&tab, &workspace, &project, &source.title, style, cx)?;
+        pr_diff::new_diff_editor(&tab, None, &workspace, &project, &source.title, style, cx)?;
     let entries = files.iter().map(file_entry).collect();
     let positions = tab.update_in(cx, |tab, window, cx| {
         tab.show_github_diff(
@@ -163,6 +164,9 @@ pub(crate) async fn show(
     }
     // A file added while the whitespace key was pressed may show the other way.
     tab.update_in(cx, |tab, window, cx| tab.sync_whitespace(window, cx))?;
+    cx.update(|window, cx| {
+        crate::diff_decorations::redecorate(&editor, Redecorate::Loaded, window, cx)
+    })?;
     log::info!(
         "{link}: GitHub's diff of {} files shown {:?} after launch",
         files.len(),
