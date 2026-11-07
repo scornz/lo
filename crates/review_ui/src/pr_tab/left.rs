@@ -3,12 +3,12 @@
 
 use std::ops::Range;
 
-use gpui::{AnyElement, AnyView, App, Context, Div, KeyBinding, Window, actions, px, uniform_list};
+use gpui::{AnyElement, App, Context, Div, KeyBinding, Window, actions, px, uniform_list};
 use review::revisions::ViewedState;
 use ui::{ListItem, ListItemSpacing, Tooltip, prelude::*};
 
-use super::PrTab;
-use super::keys::{FILE_LIST_CONTEXT, KEY_CONTEXT, READING_CONTEXT};
+use super::keys::{FILE_LIST_CONTEXT, KEY_CONTEXT, reading};
+use super::{PartView, PrTab};
 use crate::file_list::{FileChange, FileOrder};
 
 actions!(
@@ -25,8 +25,6 @@ actions!(
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-b", ToggleFileList, Some(KEY_CONTEXT)),
-        // alt-o types ø.
-        KeyBinding::new("alt-o", ToggleFileOrder, Some(READING_CONTEXT)),
         KeyBinding::new("o", ToggleFileOrder, Some(FILE_LIST_CONTEXT)),
         // The workspace binds escape to stop following a collaborator.
         KeyBinding::new("escape", menu::Cancel, Some(FILE_LIST_CONTEXT)),
@@ -34,25 +32,49 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("j", menu::SelectNext, Some(FILE_LIST_CONTEXT)),
         KeyBinding::new("k", menu::SelectPrevious, Some(FILE_LIST_CONTEXT)),
     ]);
+    // alt-o types ø.
+    cx.bind_keys(reading("alt-o", ToggleFileOrder));
 }
 
 /// The tab runs the file list's actions wherever their keys work.
-pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
-    tab.on_action(cx.listener(PrTab::toggle_file_list))
+pub(super) fn on_actions(root: Div, _: &PrTab, cx: &Context<PrTab>) -> Div {
+    root.on_action(cx.listener(PrTab::toggle_file_list))
         .on_action(cx.listener(PrTab::toggle_file_order))
 }
 
 impl PrTab {
-    /// Shows `tree`, the pull request's stack tree, above the file list, or takes it away.
-    pub fn set_stack_tree(&mut self, tree: Option<AnyView>, cx: &mut Context<Self>) {
+    /// Puts `tree`, the pull request's stack tree, above the file list, or takes it away.
+    pub fn set_stack_tree(&mut self, tree: Option<PartView>, cx: &mut Context<Self>) {
         self.stack_tree = tree;
         cx.notify();
     }
 
-    /// The tab's left side, unless it's empty: the stack tree, if there is one, above the file
-    /// list while it's shown.
+    /// Whether the stack tree shows: there is one, and it isn't hidden.
+    pub fn is_stack_tree_shown(&self) -> bool {
+        self.stack_tree.is_some() && self.show_stack_tree
+    }
+
+    /// Shows the stack tree and focuses it, or, when it has focus, hides it and focuses the
+    /// middle. Does nothing without a tree.
+    pub fn toggle_stack_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tree) = &self.stack_tree else {
+            return;
+        };
+        if self.show_stack_tree && tree.focus.contains_focused(window, cx) {
+            self.show_stack_tree = false;
+            self.focus_diff(window, cx);
+        } else {
+            self.show_stack_tree = true;
+            window.focus(&tree.focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// The tab's left side, unless it's empty: the stack tree, while it shows, above the file
+    /// list, while it's shown.
     pub(super) fn render_left(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if self.stack_tree.is_none() && !self.show_file_list {
+        let tree = self.stack_tree.as_ref().filter(|_| self.show_stack_tree);
+        if tree.is_none() && !self.show_file_list {
             return None;
         }
         let colors = cx.theme().colors();
@@ -64,7 +86,7 @@ impl PrTab {
                 .border_r_1()
                 .border_color(colors.border)
                 .bg(colors.panel_background)
-                .children(self.stack_tree.clone())
+                .children(tree.map(|tree| tree.view.clone()))
                 .when(self.show_file_list, |this| {
                     this.child(self.render_file_list(cx))
                 }),

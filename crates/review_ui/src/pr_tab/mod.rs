@@ -48,7 +48,7 @@ use crate::viewed_marks::ViewedMarks;
 use crate::window_title;
 
 mod header;
-mod keys;
+pub(crate) mod keys;
 mod left;
 mod middle;
 mod right;
@@ -231,6 +231,27 @@ impl Status {
     }
 }
 
+/// A feature's view in one of the tab's parts, with the focus handle that takes keys to it.
+pub struct PartView {
+    view: AnyView,
+    focus: FocusHandle,
+}
+
+impl PartView {
+    /// `view`, which the part shows, and focuses to use it.
+    pub fn new<V: Render + Focusable>(view: &Entity<V>, cx: &App) -> Self {
+        Self {
+            view: view.clone().into(),
+            focus: view.read(cx).focus_handle(cx),
+        }
+    }
+
+    /// Whether this is `entity`'s view.
+    pub fn shows(&self, entity: EntityId) -> bool {
+        self.view.entity_id() == entity
+    }
+}
+
 /// Where the diff the tab shows comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffSource {
@@ -319,11 +340,13 @@ pub struct PrTab {
     /// What features show in the header's slots, by [`HeaderSlot`].
     header_slots: [Option<AnyView>; HeaderSlot::ALL.len()],
     /// The pull request's stack tree, above the file list.
-    stack_tree: Option<AnyView>,
+    stack_tree: Option<PartView>,
+    /// Whether the stack tree shows, when there is one.
+    show_stack_tree: bool,
     /// What the middle of the tab shows.
     middle: Middle,
     /// The threads panel, on the right.
-    threads_panel: Option<AnyView>,
+    threads_panel: Option<PartView>,
     show_file_list: bool,
     show_threads: bool,
     /// The account's poller and the pull request it watches for this tab, until the tab closes.
@@ -371,11 +394,10 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        // Focusing the tab focuses its diff, where the keys for reading it work.
+        // Focusing the tab focuses its diff, where the keys for reading it work, or the view in
+        // the diff's place.
         let on_focus = cx.on_focus(&focus_handle, window, |this, window, cx| {
-            if let Some(diff) = &this.diff {
-                window.focus(&diff.focus_handle(cx), cx);
-            }
+            this.focus_middle(window, cx);
         });
         // Moving the tab to another pane removes it from one pane and adds it to another, so
         // only closing it, which releases it, lets go of what it holds.
@@ -433,6 +455,7 @@ impl PrTab {
             _diff_watch: Vec::new(),
             header_slots: Default::default(),
             stack_tree: None,
+            show_stack_tree: true,
             middle: Middle::default(),
             threads_panel: None,
             show_file_list: true,
@@ -1850,10 +1873,10 @@ impl PrTab {
         }
     }
 
+    /// Focuses what the middle shows, or the tab until the diff exists.
     fn focus_diff(&self, window: &mut Window, cx: &mut App) {
-        match &self.diff {
-            Some(diff) => window.focus(&diff.focus_handle(cx), cx),
-            None => window.focus(&self.focus_handle, cx),
+        if !self.focus_middle(window, cx) {
+            window.focus(&self.focus_handle, cx);
         }
     }
 
@@ -2533,7 +2556,7 @@ impl Render for PrTab {
                     |_: &editor::actions::ExpandExcerptsDown, _, cx| cx.stop_propagation(),
                 )
             })
-            .map(|this| keys::on_actions(this, cx))
+            .map(|this| keys::on_actions(this, self, cx))
             .size_full()
             .bg(background)
             .child(self.render_header(cx))

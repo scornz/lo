@@ -6,14 +6,14 @@ use std::time::SystemTime;
 use github::viewed::ViewedRecords;
 use github::{GithubClient, GithubError, PullRef};
 use gpui::{
-    App, AsyncApp, Context, Div, ElementId, EntityId, InteractiveElement as _, KeyBinding,
-    WeakEntity, Window, actions,
+    App, AsyncApp, Context, Div, ElementId, EntityId, InteractiveElement as _, WeakEntity, Window,
+    actions, prelude::FluentBuilder as _,
 };
 use review::revisions::ViewedState;
 use workspace::notifications::NotificationId;
 use workspace::{Toast, Workspace};
 
-use super::keys::READING_CONTEXT;
+use super::keys::reading;
 use super::{OlderCopy, PrTab, reopen};
 use crate::viewed_marks::{Toggle, write_failed};
 
@@ -28,12 +28,15 @@ actions!(
 
 /// The key that marks files viewed.
 pub(super) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("e", ToggleViewed, Some(READING_CONTEXT))]);
+    cx.bind_keys(reading("e", ToggleViewed));
 }
 
-/// The tab runs the viewed mark's action wherever its key works.
-pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
-    tab.on_action(cx.listener(PrTab::toggle_viewed))
+/// The tab runs the viewed mark's action wherever its key works, while the diff, whose current
+/// file it marks, shows.
+pub(super) fn on_actions(root: Div, tab: &PrTab, cx: &Context<PrTab>) -> Div {
+    root.when(tab.middle.shows_diff(), |root| {
+        root.on_action(cx.listener(PrTab::toggle_viewed))
+    })
 }
 
 impl PrTab {

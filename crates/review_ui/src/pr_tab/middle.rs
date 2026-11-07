@@ -2,13 +2,13 @@
 //! move through the diff and change how it shows (design §5 "The diff view", §10 "Window").
 
 use editor::Direction;
-use gpui::{AnyElement, App, Context, Div, KeyBinding, Window, actions};
+use gpui::{AnyElement, App, Context, Div, Focusable as _, KeyBinding, Window, actions};
 use review::revisions::Revisions;
 use settings::DiffViewStyle;
 use ui::prelude::*;
 
-use super::keys::{DIFF_CONTEXT, FILE_LIST_CONTEXT, KEY_CONTEXT, READING_CONTEXT};
-use super::{PrTab, Status};
+use super::keys::{DIFF_CONTEXT, FILE_LIST_CONTEXT, KEY_CONTEXT, reading};
+use super::{PartView, PrTab, Status};
 use crate::diff_cursor;
 use crate::shown_files::{self, Expanded};
 use crate::viewed_marks::changed_since_viewed;
@@ -36,12 +36,22 @@ actions!(
     ]
 );
 
-/// What the middle of the tab shows. Other views take the diff's place here, and give it back.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What the middle of the tab shows: the diff, or a view in its place, such as the timeline, until
+/// it gives the place back. The diff's keys act on it only while it shows.
+#[derive(Default)]
 pub enum Middle {
     /// The pull request's diff.
     #[default]
     Diff,
+    /// A view in the diff's place, which takes focus when it shows.
+    View(PartView),
+}
+
+impl Middle {
+    /// Whether the middle shows the diff.
+    pub fn shows_diff(&self) -> bool {
+        matches!(self, Self::Diff)
+    }
 }
 
 /// The diff's keys.
@@ -56,27 +66,34 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-w", ToggleWhitespace, Some(FILE_LIST_CONTEXT)),
         KeyBinding::new("alt-a", ExpandFile, Some(DIFF_CONTEXT)),
         KeyBinding::new("alt-a", ExpandFile, Some(FILE_LIST_CONTEXT)),
-        KeyBinding::new("] f", NextFile, Some(READING_CONTEXT)),
-        KeyBinding::new("[ f", PreviousFile, Some(READING_CONTEXT)),
-        KeyBinding::new("] c", NextChange, Some(READING_CONTEXT)),
-        KeyBinding::new("[ c", PreviousChange, Some(READING_CONTEXT)),
         // Back and forward through where the diff's cursor has been (design §10), beside Zed's
         // ctrl-- and ctrl-_.
         KeyBinding::new("ctrl-o", workspace::pane::GoBack, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-i", workspace::pane::GoForward, Some(KEY_CONTEXT)),
     ]);
+    cx.bind_keys(
+        [
+            reading("] f", NextFile),
+            reading("[ f", PreviousFile),
+            reading("] c", NextChange),
+            reading("[ c", PreviousChange),
+        ]
+        .concat(),
+    );
 }
 
-/// The tab runs the diff's actions wherever their keys work.
-pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
-    tab.on_action(cx.listener(PrTab::switch_side))
-        .on_action(cx.listener(PrTab::toggle_diff_layout))
-        .on_action(cx.listener(PrTab::toggle_whitespace))
-        .on_action(cx.listener(PrTab::expand_file))
-        .on_action(cx.listener(PrTab::next_file))
-        .on_action(cx.listener(PrTab::previous_file))
-        .on_action(cx.listener(PrTab::next_change))
-        .on_action(cx.listener(PrTab::previous_change))
+/// The tab runs the diff's actions wherever their keys work, while the diff shows.
+pub(super) fn on_actions(root: Div, tab: &PrTab, cx: &Context<PrTab>) -> Div {
+    root.when(tab.middle.shows_diff(), |root| {
+        root.on_action(cx.listener(PrTab::switch_side))
+            .on_action(cx.listener(PrTab::toggle_diff_layout))
+            .on_action(cx.listener(PrTab::toggle_whitespace))
+            .on_action(cx.listener(PrTab::expand_file))
+            .on_action(cx.listener(PrTab::next_file))
+            .on_action(cx.listener(PrTab::previous_file))
+            .on_action(cx.listener(PrTab::next_change))
+            .on_action(cx.listener(PrTab::previous_change))
+    })
 }
 
 impl PrTab {
@@ -85,20 +102,41 @@ impl PrTab {
         &self.middle
     }
 
-    /// Shows `middle` in the middle of the tab, in place of what it showed.
-    pub fn show_middle(&mut self, middle: Middle, cx: &mut Context<Self>) {
+    /// Shows `middle` in the middle of the tab, in place of what it showed. When anything in the
+    /// tab has focus, focus moves to what now shows.
+    pub fn show_middle(&mut self, middle: Middle, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focus_handle.contains_focused(window, cx);
         self.middle = middle;
+        if focused {
+            self.focus_middle(window, cx);
+        }
         cx.notify();
+    }
+
+    /// Focuses what the middle shows: the diff, once there is one, or the view in its place.
+    /// Returns whether anything took focus.
+    pub(super) fn focus_middle(&self, window: &mut Window, cx: &mut App) -> bool {
+        match &self.middle {
+            Middle::Diff => {
+                let Some(diff) = &self.diff else {
+                    return false;
+                };
+                window.focus(&diff.focus_handle(cx), cx);
+            }
+            Middle::View(view) => window.focus(&view.focus, cx),
+        }
+        true
     }
 
     /// The middle of the tab, between the file list and the threads panel: what
     /// [`Self::middle`] says.
     pub(super) fn render_middle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let middle = v_flex().flex_1().min_w_0().h_full();
-        match self.middle {
+        match &self.middle {
             Middle::Diff => middle
                 .children(self.render_changed_since_viewed(cx))
                 .child(self.render_diff(cx)),
+            Middle::View(view) => middle.child(view.view.clone()),
         }
     }
 

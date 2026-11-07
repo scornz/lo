@@ -1,10 +1,10 @@
 //! The tab's right side, which hosts the threads panel (design §8 "Threads panel", §10 "Window").
 
-use gpui::{AnyView, App, Context, Div, KeyBinding, Window, actions, px};
+use gpui::{App, Context, Div, KeyBinding, Window, actions, px};
 use ui::prelude::*;
 
-use super::PrTab;
 use super::keys::KEY_CONTEXT;
+use super::{PartView, PrTab};
 
 actions!(
     review_ui,
@@ -23,8 +23,8 @@ pub(super) fn bind_keys(cx: &mut App) {
 }
 
 /// The tab runs the threads panel's actions wherever their keys work.
-pub(super) fn on_actions(tab: Div, cx: &Context<PrTab>) -> Div {
-    tab.on_action(cx.listener(PrTab::toggle_threads))
+pub(super) fn on_actions(root: Div, _: &PrTab, cx: &Context<PrTab>) -> Div {
+    root.on_action(cx.listener(PrTab::toggle_threads))
 }
 
 impl PrTab {
@@ -33,8 +33,9 @@ impl PrTab {
         cx.notify();
     }
 
-    /// Shows `panel`, the threads panel, on the tab's right side, or takes it away.
-    pub fn set_threads_panel(&mut self, panel: Option<AnyView>, cx: &mut Context<Self>) {
+    /// Puts `panel`, the threads panel, on the tab's right side, or takes it away. The panel draws
+    /// all of itself, its heading included.
+    pub fn set_threads_panel(&mut self, panel: Option<PartView>, cx: &mut Context<Self>) {
         self.threads_panel = panel;
         cx.notify();
     }
@@ -52,23 +53,24 @@ impl PrTab {
             .w(px(280.))
             .h_full()
             .flex_shrink_0()
-            .p_2()
-            .gap_1()
             .border_l_1()
             .border_color(colors.border)
             .bg(colors.panel_background)
-            .child(
-                Label::new("Threads")
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-            .map(|this| match self.threads_panel.clone() {
-                Some(panel) => this.child(panel),
-                None => this.child(
-                    Label::new("No threads yet")
-                        .size(LabelSize::Small)
-                        .color(Color::Disabled),
-                ),
+            .map(|this| match &self.threads_panel {
+                Some(panel) => this.child(panel.view.clone()),
+                None => this
+                    .p_2()
+                    .gap_1()
+                    .child(
+                        Label::new("Threads")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("No threads yet")
+                            .size(LabelSize::Small)
+                            .color(Color::Disabled),
+                    ),
             })
     }
 }
