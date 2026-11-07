@@ -3,9 +3,11 @@
 `fixtures.sh` sets up the pull requests in [`rozed-dev/e2e`](https://github.com/rozed-dev/e2e) that
 Lo is checked against: image previews (milestone 5), revisions (6), stacks (7), code features and
 trust (10), moved code and the syntax-aware view (11), the file picker (12), and the nightly suite,
-performance budgets and app check (13). It
-runs as `rozed-bot` and builds nothing. `trees.sh` writes the files of E6 onwards. It reads no
-network or token, and writes the same bytes on any machine.
+performance budgets and app check (13). It runs as `rozed-bot` and builds nothing.
+
+`trees.sh` writes the files of E6 onwards. It reads no network or token, and writes the same bytes
+each time. Its awk is checked on macOS's awk only so far, though it uses nothing gawk or mawk
+would read differently.
 
 ```sh
 (set -a; . ~/.config/rozed-dev/bot.env; set +a; script/e2e/fixtures.sh setup)
@@ -13,8 +15,8 @@ network or token, and writes the same bytes on any machine.
 
 | Command | What it does |
 |---|---|
-| `setup` | Creates any fixture that's missing. Run twice, the second run changes nothing. |
-| `status [--json]` | Prints each fixture's PR numbers, branches and heads. From E6 on, also its base branch's head and changed files, each with the SHA-256 of its path that GitHub's `#diff-<hash>` links use; E9 adds its review and comment IDs, and E10 its size. Tests read `--json`. |
+| `setup` | Creates any fixture that's missing, and brings E8 up to date. Run twice, the second run changes nothing. |
+| `status [--json]` | Prints each fixture's PR numbers, branches and heads. For E6 onwards and #17, also the head of the branch its PR targets (`base_head`) and, except for E10, its changed files, each with the SHA-256 of its path that GitHub's `#diff-<hash>` links use. E9 adds its review and comment IDs, and E10 its size instead of its files. Tests read `--json`. |
 | `push-r4` | Pushes E1's r4, a normal push touching `e1/a.txt` and `e1/b.txt`. |
 | `rebase-r5` | Moves `main` one commit, then rebases E1's PR on GitHub (`updatePullRequestBranch`, `REBASE`). |
 | `push-r6` | Pushes E1's r6 after the rebase, a normal push changing line 3 of `e1/a.txt`. |
@@ -24,28 +26,37 @@ network or token, and writes the same bytes on any machine.
   `rozed-bot` before doing anything.
   - It runs `/opt/homebrew/bin/gh` (or `LO_E2E_GH`) with an empty config, and gives gh the token
     on each call.
-  - Git runs in a scratch clone, deleted on exit, without your git config or `GIT_*` variables.
-    It pushes over HTTPS through a credential helper that reads the token from the environment.
+  - Git runs in a scratch clone, deleted on exit, without your git config or `GIT_*` variables,
+    and with a `HOME` of its own, so your global ignore and attributes files and `~/.netrc` don't
+    apply. It pushes over HTTPS through a credential helper that reads the token from the
+    environment.
+  - A commit that leaves any file out stops the script, so an ignore rule can't drop a fixture's
+    file.
   - It refuses to run under `bash -x`, which would print the token.
 - **What it writes,** only to `rozed-dev/e2e`:
   - branches under `e1/`, `e2/`, `e3/`, `e5/`, `e6/`, `e8/`, `e9/`, `e10/` and `e12/`, and their
     PRs;
   - E1's review, and E9's review with its two threads;
   - E2's native stack;
-  - squash merges of `e3/x` and `e1/move-main*`.
+  - squash merges of `e3/x` and `e1/move-main*`;
+  - E8's updates: a new commit on `e8/hostile`, and its PR's base and description.
 - **What it never does:** push to `main`, force-push or delete a branch. `main` moves only through
   PRs it opened, which it checks by author, base and title before merging.
 - **Base branches.** E6, E9, E10 and E12 change files that have to exist first, so each has a base
-  branch, `e<n>/base`, that adds their base side to `main`, and its PR targets that branch. `main`
-  never moves for them, so E1's base still moves only under `rebase-r5`. E8 and #17 only add files,
-  so their PRs target `main`.
+  branch, `e<n>/base`, that adds their base side to `main`, and its PR targets that branch. E8 has
+  one too, `e8/base`, holding only what `main` held when E8 was made, so merging E8 can't put its
+  baits on `main`. `main` never moves for any of them, so E1's base still moves only under
+  `rebase-r5`. #17 only adds harmless files, so it targets `main`.
+- **E8 is kept up to date.** Its baits follow Lo's hardening, so when `trees.sh` changes them,
+  `setup` pushes the change to `e8/hostile` as a new commit, a normal push, and sets the PR's base
+  and description to match. It stops if E8 was ever merged into anything but `e8/base`.
 - **Finding what exists.** It finds fixtures by branch, PR, commit subject and review text, and
   counts only rozed-bot's PRs from `rozed-dev/e2e` itself, never a fork's. A failed GitHub request
   stops it before it writes anything.
 - **If `reset-e1` fails partway,** finish it with `setup`. Running `reset-e1` again starts yet
   another E1.
 - **E2, E3 and E6 onwards have no reset.** `setup` accepts their PRs in any state, so once a later
-  test merges or closes them, they're not rebuilt.
+  test merges or closes them, they're not rebuilt. E8 is the exception, as above.
 - **Not yet:**
   - **E4** (merge states, rulesets, merge queue). Its protected bases will be separate branches:
     `gated` (required checks, an approval and CODEOWNERS) and `queued` (the merge queue). `main`
@@ -75,7 +86,7 @@ The numbers are from 2026-11-06. `reset-e1` gives E1 a new number, so tests read
 | **E3** needs rebase | #10 | `e3/x` → `main` | Two commits, head `e86aa48`, squash-merged into `main` as `04bdf22`. Its branch is kept. |
 | | #11 | `e3/y` → `e3/x` | One commit on x. It still targets `e3/x`, because GitHub retargets only when the base branch is deleted. `setup` fails if that changes, so "Automatically delete head branches" must stay off. It shows "needs rebase" and compares against x's head, `e86aa48`, not the squash commit, so only y's change shows. |
 | **E6** code | #18 | `e6/code` → `e6/base` | Milestones 10 and 13; [below](#e6-code). **Untrusted:** `gd` on `parse` lists both definitions, same folder first, and `enter` jumps into the diff (10d); `g r` lists both and their callers (10f); the left side's `g f` shows the base version (10e). **Trust (10g):** the banner; trusting checks it out and starts rust-analyzer, the trust survives a relaunch, and removing E6 from the list stops it. **Trusted (10h):** `gd`, `g r` and `K` come from servers in all four languages, labelled "syntax" until they're ready, and `gd` on `Deserialize` shows its `use` line. **13d** drives `gd` and `g r` untrusted; **13f** opens it untrusted, trusts it and waits for rust-analyzer, vtsls and basedpyright. |
-| **E8** hostile files | #19 | `e8/hostile` → `main` | Milestone 10 (10h's hardening, behind 10g's trust); [below](#e8-hostile-files). Trusted, after 2 minutes of scrolling and hovering, no `$TMPDIR/lo-e8-*` marker exists. |
+| **E8** hostile files | #19 | `e8/hostile` → `e8/base` | Milestone 10 (10h's hardening, behind 10g's trust); [below](#e8-hostile-files). Trusted, after 2 minutes of scrolling and hovering, no marker exists: `lo-e8-rustc-wrapper` (`.cargo/config.toml`), `lo-e8-rust-analyzer`, `-gopls`, `-vtsls` and `-basedpyright` (`.zed/settings.json`), `lo-e8-tsserver` (`node_modules/typescript`) and `lo-e8-python` (`.venv/`). The two toolchain baits, `e8/pinned/rust-toolchain.toml` and `go.mod`, leave none, so the check reads the servers' environments instead. |
 | **E9** moves and syntax | #20 | `e9/moves` → `e9/base` | Milestones 11 and 13; [below](#e9-moves-and-syntax). **11a:** the cross-file move shows both links, only its edited line has word highlights, `g m` round-trips, the within-file move works and the 2-line block isn't a move. **11b:** the renamed variable highlights only the name; the reordered arguments; the wrapped block marks only the `if`; the JSON reorder; the parse error and the 1.2 MB file fall back. **11c:** the thread on a moved line sits under the same line in both views. **13d** drives the moves and the syntax view. |
 | **E10** large | #21 | `e10/large` → `e10/base` | Milestones 10, 12 and 13; [below](#e10-large). **10b:** the debug log shows both trees indexed with their times, and reopening reuses blobs. **12f:** ⌘P filters its 300 files at once. **13e:** the budgets for the first file (1.5 s warm) and all files (6 s), moved-code detection (200 ms), and memory with `fd#2212` open too (1 GB). |
 | **E12** extension languages | #22 | `e12/languages` → `e12/base` | Milestones 10 (10i) and 13 (13f). One file each in Swift, Kotlin, Terraform, Ruby, Java, C#, PHP, Elixir, TOML, HTML, a Dockerfile and a Makefile, each changed. **Untrusted:** every file is highlighted on both sides, and the debug log shows no request at launch. **Trusted:** the Terraform server downloads from `releases.hashicorp.com`. |
@@ -124,19 +135,33 @@ rebase and r6 changes line 3 of `a.txt`.
 
 ### E8 hostile files
 
-#19, head `46253d2`. Every file below leads only to `e8/evil.sh`, which creates one empty marker
-file, `$TMPDIR/lo-e8-<name>`, and does nothing else: no network, no deletes, no reads. The config
-files sit at the repository's root, where each tool looks for them, and `e8/` holds a small Rust,
+#19, head `a35edcf`, on `e8/base` at `a45754b`, which is where `main` was when E8 was made. It
+adds 18 files. Each bait that can run something runs only `e8/evil.sh`, which creates one empty
+marker file, `$TMPDIR/lo-e8-<name>`, and does nothing else: no network, no deletes, no reads. It
+refuses a marker that's already there, so it can't write through a planted link. The config files
+sit where each tool looks for them, mostly at the repository's root, and `e8/` holds a small Rust,
 TypeScript, Python and Go project, so each server has something to open.
 
-| File | What it tries | Marker |
+| Bait | What it tries | Marker |
 |---|---|---|
-| `.cargo/config.toml` | `rustc-wrapper = "e8/evil.sh"`, so cargo runs it in place of rustc | `lo-e8-rustc-wrapper` |
-| `rust-toolchain.toml` | toolchain `1.999.0`, which doesn't exist, so rustup tries to download it | none |
-| `.zed/settings.json` | points rust-analyzer's binary at `e8/evil.sh` | `lo-e8-rust-analyzer` |
-| `node_modules/typescript/lib/tsserver.js` | a workspace TypeScript whose server runs `e8/evil.sh` | `lo-e8-tsserver` |
-| `pyrightconfig.json` | a virtual environment, `e8/venv`, whose `bin/python` runs `e8/evil.sh` | `lo-e8-python` |
-| `go.mod` | `toolchain go1.99`, which doesn't exist, so go tries to download it | none |
+| `.cargo/config.toml` | `rustc-wrapper = "e8/evil.sh"`, so cargo runs it in place of rustc, in `e8/rust/` and `e8/pinned/` | `lo-e8-rustc-wrapper` |
+| `.zed/settings.json` | points rust-analyzer, gopls, vtsls and basedpyright at `e8/evil.sh` | `lo-e8-rust-analyzer`, `lo-e8-gopls`, `lo-e8-vtsls`, `lo-e8-basedpyright` |
+| `node_modules/typescript/lib/tsserver.js` | a workspace TypeScript, which Zed's vtsls adapter uses whenever it exists, whose server runs `e8/evil.sh` | `lo-e8-tsserver` |
+| `.venv/` and `pyrightconfig.json` | a virtual environment whose `bin/python` runs `e8/evil.sh`. pet, Zed's environment finder, looks for `.venv` in the worktree's root and takes a folder with a `pyvenv.cfg`; Zed hands it to basedpyright as its interpreter | `lo-e8-python` |
+| `e8/pinned/rust-toolchain.toml` | toolchain `1.999.0`, which doesn't exist, so rustup tries to download it from `static.rust-lang.org` | none |
+| `go.mod` | `toolchain go1.99`, which doesn't exist, so go tries to download it from `proxy.golang.org` | none |
+
+The check: trusted, after 2 minutes of scrolling and hovering, no `$TMPDIR/lo-e8-*` marker exists,
+and the two toolchain baits show in the servers' environments (`ps -E -p <pid>`) and the network:
+
+- rust-analyzer's environment has `RUSTUP_TOOLCHAIN` set and `RUSTUP_AUTO_INSTALL=0`;
+- gopls's has `GOTOOLCHAIN=local` and `GOPROXY=off`;
+- nothing connects to `static.rust-lang.org` or `proxy.golang.org`.
+
+The toolchain baits can't leave a marker. rustup refuses a toolchain `path` relative to its file
+(rustup 1.29.3 says "relative path toolchain"), and a checkout has no fixed absolute path. go runs
+only a toolchain it downloads or finds on `PATH`. The toolchain file has a crate of its own,
+`e8/pinned/`, so it can't stop cargo in `e8/rust/` before cargo reaches the wrapper.
 
 ### E9 moves and syntax
 
@@ -153,8 +178,8 @@ TypeScript, Python and Go project, so each server has something to open.
 - **Syntax cases,** in `e9/syntax/`: `rename.rs` renames `total` to `sum`, `args.ts` reorders
   `clamp`'s arguments in its signature and at its call, `wrap.py` wraps a block in a new `if`, and
   `config.json` reorders keys at two levels.
-- **Fallbacks:** `e9/broken.ts` gains a parse error, and `e9/large.ts` is 1,229,048 bytes on both
-  sides, past `diff_extras`'s 1,000,000-byte limit and 1 MiB.
+- **Fallbacks:** `e9/broken.ts` gains a parse error, and `e9/large.ts` is 1,229,024 bytes on the
+  left and 1,229,048 on the right, both past `diff_extras`'s 1,000,000-byte limit and 1 MiB.
 - **Threads:** rozed-bot's COMMENT review (`e9.review` in `status --json`) has two threads:
   - on a moved line, `e9/api/names.ts:10` on the right (`const middle = …`);
   - on a line only the old side has, `e9/api/user.ts:26` on the left, in `legacyName`, which the PR
@@ -166,8 +191,9 @@ TypeScript, Python and Go project, so each server has something to open.
 `trees.sh` generates it from fixed seeds, so it's the same each time.
 
 - **298 files** of TypeScript, TypeScript tests, Rust, Python, Go and TOML, under `e10/src`,
-  `e10/rust`, `e10/py`, `e10/go` and `e10/config`. 254 are changed, 30 added and 16 deleted. Every
+  `e10/rust`, `e10/py`, `e10/go` and `e10/config`. 253 are changed, 29 added and 16 deleted. Every
   ninth file moves its first function to its end, and a few move one to a file of the same language.
+  With the two files below, the PR changes 254 files, adds 30 and deletes 16.
 - **`e10/src/big/catalog.ts`:** added, 6,000 lines, over the 5,000 changed lines past which Lo
   collapses a file.
 - **`e10/package-lock.json`:** a lockfile of 450 packages, collapsed as generated. The PR bumps every

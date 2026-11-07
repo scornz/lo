@@ -5,7 +5,7 @@
 # replacing what's there:
 #
 #   e6_tree, e9_tree, e10_tree, e12_tree <base | head> <folder>
-#   e8_tree, images_tree <folder>      (their PRs add files to main, so they have no base side)
+#   e8_tree, images_tree <folder>      (their PRs only add files, so they have no base side)
 #
 # Nothing here reads the network or the token, and every file comes out byte for byte the same
 # each time, on any machine, so a tree can be written and looked at anywhere:
@@ -41,7 +41,7 @@ check_side() {
 # - calls functions in files it changes (render/parse.rs, user.ts, util.py, util.go) and in files
 #   it doesn't (parse.rs's `count`, names.ts's `initials`).
 e6_tree() {
-  local side=$1 dir=$2/e6
+  local side=$1 dir=${2:?}/e6
   check_side "$side" || return 1
   rm -rf "$dir"
 
@@ -290,44 +290,55 @@ EOF
 
 # --- E8: hostile files ----------------------------------------------------------------------------
 
-# Files that try to run code, or steer a language server, when the PR is checked out. Every one
-# leads to e8/evil.sh, which only creates an empty marker file, $TMPDIR/lo-e8-<name>: no network,
-# no deletes and no reads. The config files sit at the repository's root, where cargo, rustup,
-# Zed, vtsls, basedpyright and go look for them, and e8/ holds a small project in each language,
-# so each server has something to open.
+# Files that try to run code, or steer a language server, when the PR is checked out. Each one that
+# can run something runs only e8/evil.sh, which creates an empty marker file, $TMPDIR/lo-e8-<name>:
+# no network, no deletes and no reads. The two toolchain files can only make rustup or go try to
+# download a toolchain that doesn't exist, so they leave no marker; e8/README.md says how a check
+# sees them. The config files sit where each tool looks for them, mostly at the repository's root,
+# and e8/ holds a small project in each language, so each server has something to open.
 e8_tree() {
-  local root=$1
-  rm -rf "${root:?}/e8" "$root/.cargo" "$root/.zed" "$root/node_modules"
+  local root=${1:?}
+  rm -rf "$root/e8" "$root/.cargo" "$root/.zed" "$root/.venv" "$root/node_modules"
   rm -f "$root/rust-toolchain.toml" "$root/pyrightconfig.json" "$root/go.mod"
 
   put "$root/e8/README.md" <<'EOF'
 # Fixture E8: hostile files
 
 A test fixture for Lo's trust handling, not real code. The files in this pull request try to run
-code, or to steer a language server, when the repository is checked out and opened. Each one leads
-to `e8/evil.sh`, which only creates an empty marker file, `$TMPDIR/lo-e8-<name>`. It uses no
-network, deletes nothing and reads nothing. Lo passes while no marker appears.
+code, or to steer a language server, when the repository is checked out and opened. Each one that
+can run something runs only `e8/evil.sh`, which creates an empty marker file,
+`$TMPDIR/lo-e8-<name>`. It uses no network, deletes nothing and reads nothing. Lo passes while no
+marker appears.
 
 | File | What it tries | Marker |
 |---|---|---|
-| `.cargo/config.toml` | `rustc-wrapper = "e8/evil.sh"`, so cargo runs it in place of rustc | `lo-e8-rustc-wrapper` |
-| `rust-toolchain.toml` | a toolchain that doesn't exist, so rustup tries to download it | none |
-| `.zed/settings.json` | points rust-analyzer's binary at `e8/evil.sh` | `lo-e8-rust-analyzer` |
+| `.cargo/config.toml` | `rustc-wrapper = "e8/evil.sh"`, so cargo runs it in place of rustc in `e8/rust/` and `e8/pinned/` | `lo-e8-rustc-wrapper` |
+| `.zed/settings.json` | points rust-analyzer, gopls, vtsls and basedpyright at `e8/evil.sh` | `lo-e8-rust-analyzer`, `lo-e8-gopls`, `lo-e8-vtsls`, `lo-e8-basedpyright` |
 | `node_modules/typescript/lib/tsserver.js` | a workspace TypeScript whose server runs `e8/evil.sh` | `lo-e8-tsserver` |
-| `pyrightconfig.json` | a virtual environment whose interpreter, `e8/venv/bin/python`, runs `e8/evil.sh` | `lo-e8-python` |
-| `go.mod` | `toolchain go1.99`, a Go toolchain that doesn't exist, so go tries to download it | none |
+| `.venv/`, `pyrightconfig.json` | a virtual environment at the root, where Zed finds it and hands it to basedpyright, whose `bin/python` runs `e8/evil.sh` | `lo-e8-python` |
+| `e8/pinned/rust-toolchain.toml` | toolchain 1.999.0, which doesn't exist, so rustup tries to download it from `static.rust-lang.org` | none |
+| `go.mod` | `toolchain go1.99`, which doesn't exist, so go tries to download it from `proxy.golang.org` | none |
+
+The two toolchain files can't run anything here: rustup refuses a toolchain `path` relative to its
+file, and go only runs a toolchain it downloads or finds on `PATH`. A check sees them in the
+servers' environments instead (`ps -E -p <pid>`): rust-analyzer's has `RUSTUP_TOOLCHAIN` set and
+`RUSTUP_AUTO_INSTALL=0`, and gopls's has `GOTOOLCHAIN=local` and `GOPROXY=off`. No connection goes
+to `static.rust-lang.org` or `proxy.golang.org`. The toolchain file has its own crate, so it can't
+stop cargo in `e8/rust/` before cargo reaches the wrapper.
 EOF
 
   put "$root/e8/evil.sh" <<'EOF'
 #!/bin/sh
 # Fixture E8 for Lo's trust handling. If this runs, a file in the pull request ran it. It creates
 # one empty marker file, $TMPDIR/lo-e8-<name>, where <name> says which file ran it, and does
-# nothing else: no network, no deletes, no reads.
+# nothing else: no network, no deletes, no reads. set -C refuses a file or link that's already
+# there, so it never writes through a planted link; a marker that's there already is enough.
+set -C
 case ${1-} in
-  rust-analyzer | tsserver | python) name=$1 ;;
+  rust-analyzer | gopls | vtsls | basedpyright | tsserver | python) name=$1 ;;
   *) name=rustc-wrapper ;; # cargo runs a rustc wrapper with rustc's path first
 esac
-: >"${TMPDIR:-/tmp}/lo-e8-$name"
+{ true >"${TMPDIR:-/tmp}/lo-e8-$name"; } 2>/dev/null || true
 EOF
   chmod 755 "$root/e8/evil.sh"
 
@@ -338,24 +349,15 @@ EOF
 rustc-wrapper = "e8/evil.sh"
 EOF
 
-  put "$root/rust-toolchain.toml" <<'EOF'
-# Fixture E8 for Lo's trust handling: a toolchain that doesn't exist, so rustup would try to
-# download it.
-[toolchain]
-channel = "1.999.0"
-EOF
-
   put "$root/.zed/settings.json" <<'EOF'
-// Fixture E8 for Lo's trust handling: points rust-analyzer at e8/evil.sh, which only creates the
-// empty marker file $TMPDIR/lo-e8-rust-analyzer.
+// Fixture E8 for Lo's trust handling: points each language server at e8/evil.sh, which only
+// creates the empty marker file $TMPDIR/lo-e8-<server>.
 {
   "lsp": {
-    "rust-analyzer": {
-      "binary": {
-        "path": "e8/evil.sh",
-        "arguments": ["rust-analyzer"]
-      }
-    }
+    "rust-analyzer": { "binary": { "path": "e8/evil.sh", "arguments": ["rust-analyzer"] } },
+    "gopls": { "binary": { "path": "e8/evil.sh", "arguments": ["gopls"] } },
+    "vtsls": { "binary": { "path": "e8/evil.sh", "arguments": ["vtsls"] } },
+    "basedpyright": { "binary": { "path": "e8/evil.sh", "arguments": ["basedpyright"] } }
   }
 }
 EOF
@@ -375,25 +377,34 @@ const path = require("path");
 require("child_process").execFileSync(path.join(__dirname, "..", "..", "..", "e8", "evil.sh"), ["tsserver"]);
 EOF
 
+  # Zed's environment finder, pet, looks for a .venv in the worktree's root, and takes a folder with
+  # a pyvenv.cfg for a virtual environment. Zed hands the one it picks to basedpyright as its
+  # interpreter.
   put "$root/pyrightconfig.json" <<'EOF'
-// Fixture E8 for Lo's trust handling: a virtual environment whose interpreter,
-// e8/venv/bin/python, only runs e8/evil.sh, which creates $TMPDIR/lo-e8-python.
+// Fixture E8 for Lo's trust handling: the virtual environment .venv, whose bin/python only runs
+// e8/evil.sh, which creates the empty marker file $TMPDIR/lo-e8-python.
 {
-  "venvPath": "e8",
-  "venv": "venv"
+  "venvPath": ".",
+  "venv": ".venv"
 }
 EOF
 
-  put "$root/e8/venv/bin/python" <<'EOF'
+  put "$root/.venv/pyvenv.cfg" <<'EOF'
+home = /usr/bin
+include-system-site-packages = false
+version = 3.12.0
+EOF
+
+  put "$root/.venv/bin/python" <<'EOF'
 #!/bin/sh
 # Fixture E8 for Lo's trust handling: an interpreter that only runs e8/evil.sh.
-exec "$(dirname "$0")/../../evil.sh" python
+exec "$(dirname "$0")/../../e8/evil.sh" python
 EOF
-  chmod 755 "$root/e8/venv/bin/python"
+  chmod 755 "$root/.venv/bin/python"
 
   put "$root/go.mod" <<'EOF'
 // Fixture E8 for Lo's trust handling: a Go toolchain that doesn't exist, so go would try to
-// download it.
+// download it from proxy.golang.org. Nothing here can run; e8/README.md says how a check sees it.
 module example.com/e8
 
 go 1.21
@@ -412,6 +423,32 @@ EOF
 
   put "$root/e8/rust/src/lib.rs" <<'EOF'
 //! Fixture E8: a Rust crate, so rust-analyzer has something to open.
+
+pub fn answer() -> u32 {
+    42
+}
+EOF
+
+  put "$root/e8/pinned/Cargo.toml" <<'EOF'
+# Fixture E8: a crate of its own for the toolchain file, so it can't stop cargo in e8/rust/ before
+# cargo reaches the rustc wrapper.
+[package]
+name = "e8-pinned"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+
+  put "$root/e8/pinned/rust-toolchain.toml" <<'EOF'
+# Fixture E8 for Lo's trust handling: a toolchain that doesn't exist, so rustup would try to
+# download it from static.rust-lang.org. Nothing here can run; e8/README.md says how a check sees it.
+[toolchain]
+channel = "1.999.0"
+EOF
+
+  put "$root/e8/pinned/src/lib.rs" <<'EOF'
+//! Fixture E8: a crate whose rust-toolchain.toml names a toolchain that doesn't exist.
 
 pub fn answer() -> u32 {
     42
@@ -458,7 +495,7 @@ EOF
 #   a block in a new if, and syntax/config.json reorders keys;
 # - broken.ts gains a parse error, and large.ts is 1.2 MB on both sides.
 e9_tree() {
-  local side=$1 dir=$2/e9
+  local side=$1 dir=${2:?}/e9
   check_side "$side" || return 1
   rm -rf "$dir"
 
@@ -792,11 +829,11 @@ EOF
 
 # 300 files and about 25,000 changed lines:
 # - 298 files of TypeScript, TypeScript tests, Rust, Python, Go and TOML. The head side changes
-#   254, adds 30 and deletes 16, and moves functions within files and between them;
+#   253, adds 29 and deletes 16, and moves functions within files and between them;
 # - e10/src/big/catalog.ts, 6,000 lines, which the head side adds;
-# - e10/package-lock.json, a lockfile.
+# - e10/package-lock.json, a lockfile the head side changes.
 e10_tree() {
-  local side=$1 dir=$2/e10
+  local side=$1 dir=${2:?}/e10
   check_side "$side" || return 1
   rm -rf "$dir"
   mkdir -p "$dir"/{src,rust,py,go,config}/m{0,1,2,3,4,5,6,7,8,9,10,11} "$dir/src/big"
@@ -1030,7 +1067,7 @@ e10_tree() {
 # and a Makefile, each changed by the head side. None is part of a project a language server would
 # build: no Package.swift, Gradle, mix.exs or the like.
 e12_tree() {
-  local side=$1 dir=$2/e12
+  local side=$1 dir=${2:?}/e12
   check_side "$side" || return 1
   rm -rf "$dir"
 
@@ -1291,7 +1328,7 @@ readonly FIRST_NAME=rozed # rename:keep
 # rozed-dev/e2e#17's files, byte for byte: SVGs whose <image>s point at files on the reviewer's
 # disk and at /dev/zero, a 316-byte pattern bomb with a 20000 x 20000 tile, and a 48 x 48 PNG.
 images_tree() {
-  local dir=$1/e5
+  local dir=${1:?}/e5
   rm -rf "$dir"
   mkdir -p "$dir"
 

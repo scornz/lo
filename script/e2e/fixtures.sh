@@ -118,7 +118,13 @@ clone() {
   # Nothing from the caller steers git: no repository, config, askpass, ssh command or tracing.
   for var in $(compgen -v GIT_ || true); do unset "$var"; done
   unset SSH_ASKPASS
-  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+  # A home of its own, so git reads none of yours: not the ignore and attributes files under
+  # ~/.config/git, which apply whatever the config says, and not ~/.netrc, which curl would answer
+  # GitHub's 401 with before git asks the credential helper. gh keeps its own config folder.
+  mkdir -p "$tmp/home"
+  export HOME=$tmp/home
+  unset XDG_CONFIG_HOME
   export GIT_AUTHOR_NAME=$BOT GIT_AUTHOR_EMAIL=$BOT_EMAIL
   export GIT_COMMITTER_NAME=$BOT GIT_COMMITTER_EMAIL=$BOT_EMAIL
   work=$tmp/e2e
@@ -148,9 +154,14 @@ has_branch() { g rev-parse --verify --quiet "refs/remotes/origin/$1" >/dev/null;
 tip() { g rev-parse "refs/remotes/origin/$1"; }
 start_at() { g checkout --quiet --detach "refs/remotes/origin/$1"; }
 
+# Commits every file in the scratch clone, and stops if anything was left out: an ignored file
+# would mean a fixture pushed without it.
 commit() {
+  local left
   g add --all
   g commit --quiet --message "$1"
+  left=$(g status --porcelain --ignored)
+  [[ -z $left ]] || die "these files weren't committed: $left"
 }
 
 # Replaces line <n> of <file> in the scratch clone.
@@ -607,9 +618,10 @@ e3_setup() {
 #
 # trees.sh writes their files. E6, E9, E10 and E12 change code that has to exist first, so each has
 # a base branch, e<n>/base, that adds its base side to main, and its PR targets that branch, not
-# main. main never moves for them, so E1's base still moves only under rebase-r5. E8 and #17 only
-# add files, so their PRs target main. Like E2 and E3, they have no reset: setup accepts their PRs
-# in any state.
+# main. E8 has one too, holding only main, so merging it can't put its baits on main. main never
+# moves for them, so E1's base still moves only under rebase-r5. #17 only adds harmless files, so it
+# targets main. Like E2 and E3, they have no reset: setup accepts their PRs in any state, and
+# builds only what's missing, except that it keeps E8 up to date (see e8_setup).
 
 # Builds what's missing of a fixture whose PR changes files: <base> from main with the files' base
 # side, <branch> from <base> with their head side, then the PR from <branch> into <base>. trees.sh's
@@ -634,7 +646,7 @@ changed_tree_setup() {
   if [[ -z $PR ]]; then open_pr "$branch" "$base" "$title" "$body"; fi
 }
 
-# Builds what's missing of a fixture whose PR only adds files: <branch> from main, then the PR into
+# Builds what's missing of #17, whose PR only adds files: <branch> from main, then the PR into
 # main. Sets PR.
 added_tree_setup() {
   local fixture=$1 branch=$2 subject=$3 title=$4 body=$5
@@ -671,26 +683,81 @@ e6_setup() {
     "E6: code" "Fixture E6 (code, to trust): Rust, TypeScript, Python and Go under \`e6/\`, for Lo's code navigation, language servers and trust. \`e6/rust/src/render/parse.rs\` adds a second \`parse\`, colliding with \`e6/rust/src/parse.rs\`'s; \`lib.rs\` imports serde, which is never installed; and \`summarize\` becomes \`describe\`, so the old name still resolves on the left. The PR calls functions in files it changes and in files it doesn't. It targets \`e6/base\`, which adds the files it changes to \`main\`. Made by \`script/e2e/fixtures.sh\` in scornz/lo."
 }
 
+# E8 targets e8/base, which holds only what main held when E8 was made, so no merge of E8 can put
+# its baits on main. Unlike the other fixtures, setup keeps E8 up to date, because its baits follow
+# Lo's hardening: when trees.sh changes them, it pushes the change to e8/hostile as a new commit, a
+# normal push, and brings the PR's base and description into line.
 e8_setup() {
-  local body
+  local body at info state base current
   IFS= read -r -d '' body <<'EOF' || true
 **A test fixture for Lo's trust handling, not code to run or merge.**
 
 Its files try to run code, or steer a language server, when the pull request is checked out and opened:
 
 - `.cargo/config.toml` sets a `rustc-wrapper`;
-- `rust-toolchain.toml` names a toolchain that doesn't exist;
-- `.zed/settings.json` points rust-analyzer at another binary;
+- `.zed/settings.json` points rust-analyzer, gopls, vtsls and basedpyright at another binary;
 - `node_modules/typescript/lib/tsserver.js` is a workspace TypeScript server;
-- `pyrightconfig.json` names a virtual environment whose interpreter is a script;
-- `go.mod` asks for Go toolchain `go1.99`, which doesn't exist.
+- `.venv/`, which `pyrightconfig.json` names, is a virtual environment whose interpreter is a script;
+- `e8/pinned/rust-toolchain.toml` and `go.mod` name toolchains that don't exist.
 
-The only script any of them runs is `e8/evil.sh`, which creates one empty marker file, `$TMPDIR/lo-e8-<name>`, and nothing else: no network, no deletes, no reads. Lo passes while no marker appears. `e8/README.md` lists each file and its marker.
+The only script any of them would run is `e8/evil.sh`, which creates one empty marker file, `$TMPDIR/lo-e8-<name>`, and nothing else: no network, no deletes, no reads. Lo passes while no marker appears. The toolchain files can only make rustup or go try a download, so they leave no marker; `e8/README.md` lists each file and its marker, and says how a check sees the toolchains.
+
+It targets `e8/base`, which holds only what `main` held when E8 was made, so merging it can't put these files on `main`.
 
 Made by `script/e2e/fixtures.sh` in scornz/lo.
 EOF
-  added_tree_setup e8 e8/hostile "test(e8): add files that try to run code when opened" \
-    "E8: hostile files" "$body"
+  body=${body%$'\n'}
+  if ! has_branch e8/base; then
+    # An E8 made before e8/base existed forked from main, so e8/base starts at that fork, and the
+    # PR's diff stays the same.
+    if has_branch e8/hostile; then
+      at=$(g merge-base refs/remotes/origin/main refs/remotes/origin/e8/hostile)
+      g checkout --quiet --detach "$at"
+    else
+      start_at main
+    fi
+    push e8/base
+    say "pushed e8/base"
+  fi
+  if has_branch e8/hostile; then
+    start_at e8/hostile
+    e8_tree "$work"
+    g add --all
+    if ! g diff --cached --quiet; then
+      commit "test(e8): bring the hostile files up to date"
+      push e8/hostile
+      say "updated e8/hostile"
+    fi
+  else
+    start_at e8/base
+    e8_tree "$work"
+    commit "test(e8): add files that try to run code when opened"
+    push e8/hostile
+    say "pushed e8/hostile"
+  fi
+  PR=$(pr_number e8/hostile)
+  if [[ -z $PR ]]; then
+    open_pr e8/hostile e8/base "E8: hostile files" "$body"
+    return
+  fi
+  info=$(gh_api "repos/$REPO/pulls/$PR")
+  state=$(jq -r 'if .merged_at then "merged" else .state end' <<<"$info")
+  base=$(jq -r .base.ref <<<"$info")
+  current=$(jq -r '.body // ""' <<<"$info")
+  if [[ $state == merged && $base != e8/base ]]; then
+    die "#$PR merged E8's baits into $base; take them out of $base by hand"
+  fi
+  [[ $state == open ]] || return 0
+  if [[ $base != e8/base ]]; then
+    gh_api -X PATCH "repos/$REPO/pulls/$PR" -f base=e8/base --silent
+    CHANGED=$((CHANGED + 1))
+    say "retargeted #$PR from $base to e8/base"
+  fi
+  if [[ $current != "$body" ]]; then
+    gh_api -X PATCH "repos/$REPO/pulls/$PR" -f body="$body" --silent
+    CHANGED=$((CHANGED + 1))
+    say "updated #$PR's description"
+  fi
 }
 
 # The number of the one line of <path>, at <branch>'s tip, that reads <text>.
