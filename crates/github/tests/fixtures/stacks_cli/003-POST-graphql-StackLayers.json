@@ -1,0 +1,743 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "StackLayers",
+    "variables": {
+      "ids": [
+        "PR_kwDODKw3uc8AAAABMqMrbA",
+        "PR_kwDODKw3uc8AAAABMqOh6g",
+        "PR_kwDODKw3uc8AAAABMqP3sA",
+        "PR_kwDODKw3uc8AAAABMqRAyw",
+        "PR_kwDODKw3uc8AAAABMqSQ7w",
+        "PR_kwDODKw3uc8AAAABMqUBCQ",
+        "PR_kwDODKw3uc8AAAABMqVTew",
+        "PR_kwDODKw3uc8AAAABMqWfxQ"
+      ]
+    },
+    "query_sha256": "673c47bfc3241e6cca5502a2ae2c231e7ccb84b343bbaeb30b92bb218e8a9d47"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4967",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "33"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4967,
+          "used": 33,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "nodes": [
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqMrbA",
+            "number": 14920,
+            "state": "OPEN",
+            "headRefOid": "2cbd5515878542a5125ec412045d2b3e365659b6",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "SUCCESS"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 47,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqOh6g",
+            "number": 14921,
+            "state": "OPEN",
+            "headRefOid": "a123f7736e7aaabe56b4662de888cc2bff1338a6",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 33,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqP3sA",
+            "number": 14922,
+            "state": "OPEN",
+            "headRefOid": "cdec123f39238bf931d65cad1b729aa06bd2b01c",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 12,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqRAyw",
+            "number": 14923,
+            "state": "OPEN",
+            "headRefOid": "5d653e7e21e65df3fc0d58874e6b5fc0f061b344",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 24,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqSQ7w",
+            "number": 14924,
+            "state": "OPEN",
+            "headRefOid": "60bf3dea2782353f8a76b45f680fd11aca4e3c7a",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 13,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqUBCQ",
+            "number": 14925,
+            "state": "OPEN",
+            "headRefOid": "2203164ed0fd16789e7d9e22679cd708a70c13c2",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 6,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqVTew",
+            "number": 14926,
+            "state": "OPEN",
+            "headRefOid": "c70a8cddf12c7352e64e4a93e8155c96bee7e38e",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 21,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDODKw3uc8AAAABMqWfxQ",
+            "number": 14927,
+            "state": "OPEN",
+            "headRefOid": "d43c4e3ad3c34332c803a568f85f116e3ee58f19",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "statusCheckRollup": {
+              "state": "FAILURE"
+            },
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 21,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            },
+            "movedFrom": {
+              "nodes": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

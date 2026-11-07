@@ -31,6 +31,8 @@ serde_urlencoded.workspace = true
 sha2.workspace = true
 sqlez.workspace = true
 sqlez_macros.workspace = true
+# What the open pull requests map into for finding stacks.
+stacks.workspace = true
 # The token file's temporary file: created exclusively, with a random name.
 tempfile.workspace = true
 thiserror.workspace = true

@@ -2,11 +2,12 @@
 //! (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3.
 
 use futures::executor::block_on;
+use github::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use github::queries::{
     FileViewedState, MergeStateStatus, PullRequestCheckData, PullRequestState, StatusState,
 };
 use github::replay::ReplayHttpClient;
-use github::{GithubClient, GithubError, Token};
+use github::{GithubClient, GithubError, RepoRef, Token};
 
 fn client(cassette: &str) -> (GithubClient, std::sync::Arc<ReplayHttpClient>) {
     let http = ReplayHttpClient::cassette(cassette);
@@ -137,7 +138,9 @@ fn a_check_counts_its_unresolved_threads() {
 #[test]
 fn open_pull_requests_with_their_stack() {
     let (client, http) = client("graphql_open_pull_requests_paged");
-    let list = block_on(client.open_pull_requests_paged("rozed-dev", "playground", 1)).unwrap();
+    let playground = RepoRef::new("rozed-dev", "playground");
+    let list =
+        block_on(client.open_pull_requests_paged(&playground, 1, RECENTLY_UPDATED_MERGED)).unwrap();
     assert_eq!(list.total_count, 2);
     assert!(!list.is_truncated());
     assert_eq!(http.seen().len(), 2);
@@ -331,6 +334,8 @@ mod synthetic {
     use github::replay::ReplayHttpClient;
     use serde_json::{Value, json};
 
+    use super::{RECENTLY_UPDATED_MERGED, RepoRef};
+
     pub fn replay(answers: Vec<(&str, Value, Value)>) -> Arc<ReplayHttpClient> {
         Arc::new(
             ReplayHttpClient::from_interactions(
@@ -378,32 +383,47 @@ mod synthetic {
         }}})
     }
 
-    /// The variables of a page of one open PR after `after`.
-    pub fn open_after(after: Option<&str>) -> Value {
-        json!({"owner": "o", "name": "r", "first": 1, "after": after})
+    pub fn repo() -> RepoRef {
+        RepoRef::new("o", "r")
     }
 
-    /// A page of open PRs, numbered `numbers`.
+    /// The variables of a page of one open PR after `after`. The first page also asks for the
+    /// merged pull requests updated most recently.
+    pub fn open_after(after: Option<&str>) -> Value {
+        let merged = if after.is_none() {
+            RECENTLY_UPDATED_MERGED
+        } else {
+            0
+        };
+        json!({"owner": "o", "name": "r", "first": 1, "after": after, "merged": merged})
+    }
+
+    /// A page of open PRs, numbered `numbers`, each targeting `main`.
     pub fn open_page(numbers: &[i64], has_next: bool, end_cursor: Option<&str>) -> Value {
-        let nodes: Vec<Value> = numbers
-            .iter()
+        let nodes: Vec<Value> = (numbers.iter())
             .map(|number| {
                 json!({
-                    "number": number, "title": "t", "isDraft": false,
-                    "updatedAt": "2026-11-06T08:15:08Z", "baseRefName": "main",
-                    "baseRefOid": "b".repeat(40), "headRefName": format!("pr-{number}"),
-                    "headRefOid": "c".repeat(40), "isCrossRepository": false,
-                    "headRepositoryOwner": null, "stackEntry": null,
+                    "id": format!("PR_{number}"), "number": number, "title": "t",
+                    "isDraft": false, "createdAt": "2026-11-06T08:15:08Z",
+                    "updatedAt": "2026-11-06T08:15:08Z", "author": null, "baseRefName": "main",
+                    "baseRefOid": "b".repeat(40), "baseRef": null,
+                    "headRefName": format!("pr-{number}"), "headRefOid": "c".repeat(40),
+                    "headRef": null, "isCrossRepository": false, "headRepositoryOwner": null,
+                    "commits": {"nodes": []}, "stackEntry": null,
                 })
             })
             .collect();
         json!({
             "rateLimit": null,
-            "repository": {"pullRequests": {
-                "totalCount": 3,
-                "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
-                "nodes": nodes,
-            }},
+            "repository": {
+                "defaultBranchRef": {"name": "main"},
+                "pullRequests": {
+                    "totalCount": 3,
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                    "nodes": nodes,
+                },
+                "mergedPullRequests": {"nodes": []},
+            },
         })
     }
 }
@@ -490,7 +510,12 @@ fn open_pull_requests_without_a_cursor_to_go_on_from_stop() {
         open_after(None),
         open_page(&[3], true, None),
     )]);
-    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap_err();
+    let error = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap_err();
     assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
 }
 
@@ -509,7 +534,12 @@ fn open_pull_requests_that_repeat_stop_the_paging() {
             open_page(&[2], true, Some("c1")),
         ),
     ]);
-    let error = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap_err();
+    let error = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap_err();
     assert!(matches!(error, GithubError::Inconsistent(_)), "{error:?}");
     assert_eq!(http.seen().len(), 2);
 }
@@ -524,7 +554,12 @@ fn null_pull_requests_dont_make_the_list_look_capped() {
         .unwrap()
         .push(serde_json::Value::Null);
     let http = replay(vec![("OpenPullRequests", open_after(None), page)]);
-    let list = block_on(client_for(&http).open_pull_requests_paged("o", "r", 1)).unwrap();
+    let list = block_on(client_for(&http).open_pull_requests_paged(
+        &synthetic::repo(),
+        1,
+        RECENTLY_UPDATED_MERGED,
+    ))
+    .unwrap();
     assert_eq!(list.pull_requests.len(), 2);
     assert!(!list.is_truncated());
 }

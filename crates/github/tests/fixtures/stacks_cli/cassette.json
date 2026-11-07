@@ -1,0 +1,6 @@
+{
+  "description": "OpenPullRequests and TrunkRules for cli/cli as rozed-bot, read only, which can't administer it: trunk's branch protection shows only through each pull request's base, and its one ruleset, Copilot reviews on ~ALL, gates nothing; then StackLayers for the stack of draft pull requests on williammartin-multiaccount branches",
+  "recorded_at": "2026-11-07T03:16:26Z",
+  "repo": "cli/cli",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

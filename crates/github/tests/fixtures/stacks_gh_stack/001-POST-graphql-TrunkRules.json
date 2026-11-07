@@ -1,0 +1,221 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "TrunkRules",
+    "variables": {
+      "owner": "github",
+      "name": "gh-stack"
+    },
+    "query_sha256": "f2c1c125fabe7970f08b9b1eaa2aa748beb36c8541eb4868670c5bc142208508"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4994",
+      "x-ratelimit-reset": "1794024852",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "6"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4994,
+          "used": 6,
+          "resetAt": "2026-11-07T04:14:12Z"
+        },
+        "repository": {
+          "rulesets": {
+            "nodes": [
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~ALL"
+                    ],
+                    "exclude": []
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "COPILOT_CODE_REVIEW"
+                    }
+                  ]
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~DEFAULT_BRANCH"
+                    ],
+                    "exclude": []
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "LICENSE_COMPLIANCE_SCANNING"
+                    }
+                  ]
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-2.*-release",
+                      "refs/heads/enterprise-3.[1-9]-release",
+                      "refs/heads/enterprise-3.[1-9].*-release",
+                      "refs/heads/enterprise-3.10-release",
+                      "refs/heads/enterprise-3.10.*-release",
+                      "refs/heads/enterprise-3.11-release",
+                      "refs/heads/enterprise-3.11.*-release",
+                      "refs/heads/enterprise-3.12-release",
+                      "refs/heads/enterprise-3.12.*-release",
+                      "refs/heads/enterprise-3.13-release",
+                      "refs/heads/enterprise-3.13.*-release",
+                      "refs/heads/enterprise-3.14-release",
+                      "refs/heads/enterprise-3.14.*-release",
+                      "refs/heads/enterprise-3.15-release",
+                      "refs/heads/enterprise-3.15.*-release",
+                      "refs/heads/enterprise-3.16-release",
+                      "refs/heads/enterprise-3.16.*-release",
+                      "refs/heads/enterprise-3.17-release",
+                      "refs/heads/enterprise-3.17.*-release",
+                      "refs/heads/enterprise-3.18-release",
+                      "refs/heads/enterprise-3.18.*-release"
+                    ],
+                    "exclude": []
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "DELETION"
+                    },
+                    {
+                      "type": "PULL_REQUEST"
+                    },
+                    {
+                      "type": "REQUIRED_STATUS_CHECKS"
+                    },
+                    {
+                      "type": "CREATION"
+                    },
+                    {
+                      "type": "NON_FAST_FORWARD"
+                    },
+                    {
+                      "type": "UPDATE"
+                    }
+                  ]
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-*.*.*-release",
+                      "refs/heads/enterprise-*.*.*-test"
+                    ],
+                    "exclude": [
+                      "refs/heads/enterprise-*.*.*-backport-*"
+                    ]
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "PULL_REQUEST"
+                    },
+                    {
+                      "type": "CREATION"
+                    },
+                    {
+                      "type": "NON_FAST_FORWARD"
+                    },
+                    {
+                      "type": "UPDATE"
+                    },
+                    {
+                      "type": "DELETION"
+                    }
+                  ]
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-*.*-release",
+                      "refs/heads/enterprise-*.*-test"
+                    ],
+                    "exclude": [
+                      "refs/heads/enterprise-*.*.*-release",
+                      "refs/heads/enterprise-*.*-backport-*",
+                      "refs/heads/enterprise-*.*.*-test"
+                    ]
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "DELETION"
+                    },
+                    {
+                      "type": "PULL_REQUEST"
+                    },
+                    {
+                      "type": "REQUIRED_STATUS_CHECKS"
+                    },
+                    {
+                      "type": "CREATION"
+                    },
+                    {
+                      "type": "NON_FAST_FORWARD"
+                    }
+                  ]
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~DEFAULT_BRANCH"
+                    ],
+                    "exclude": []
+                  }
+                },
+                "rules": {
+                  "nodes": [
+                    {
+                      "type": "DELETION"
+                    },
+                    {
+                      "type": "NON_FAST_FORWARD"
+                    },
+                    {
+                      "type": "PULL_REQUEST"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
