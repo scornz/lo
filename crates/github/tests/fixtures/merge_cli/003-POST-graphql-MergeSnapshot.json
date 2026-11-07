@@ -1,0 +1,362 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "cli",
+      "name": "cli",
+      "number": 12942,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4984",
+      "x-ratelimit-reset": "1794038585",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "16"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4984,
+          "used": 16,
+          "resetAt": "2026-11-07T08:03:05Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": true,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": true,
+          "viewerDefaultMergeMethod": "MERGE",
+          "pullRequest": {
+            "url": "https://github.com/cli/cli/pull/12942",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "CONFLICTING",
+            "mergeStateStatus": "DIRTY",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "headRefOid": "bdedb68faa1f542ba865cd8acf18eaade5293e00",
+            "baseRefName": "trunk",
+            "author": {
+              "__typename": "User",
+              "login": "maxbeizer"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+              },
+              "refUpdateRule": {
+                "requiredApprovingReviewCount": 1,
+                "requiredStatusCheckContexts": [
+                  "build (macos-latest)",
+                  "build (ubuntu-latest)",
+                  "build (windows-latest)"
+                ],
+                "requiresCodeOwnerReviews": true,
+                "requiresConversationResolution": false,
+                "requiresLinearHistory": false,
+                "requiresSignatures": false,
+                "viewerCanPush": false
+              },
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": false,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": null,
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "reviewRequests": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 11,
+              "nodes": [
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": false
+                },
+                {
+                  "isResolved": false
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": true
+                },
+                {
+                  "isResolved": false
+                },
+                {
+                  "isResolved": false
+                },
+                {
+                  "isResolved": false
+                }
+              ]
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 11,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 0
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 0
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 11
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 0
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "MTE"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261202/job/120491527999",
+                    "url": "https://github.com/cli/cli/runs/120491527999",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976260942/job/120491528085",
+                    "url": "https://github.com/cli/cli/runs/120491528085",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build (ubuntu-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491529411",
+                    "url": "https://github.com/cli/cli/runs/120491529411",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "CodeQL-Build (actions, none, security-and-quality)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261202/job/120491528535",
+                    "url": "https://github.com/cli/cli/runs/120491528535",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build (windows-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491530702",
+                    "url": "https://github.com/cli/cli/runs/120491530702",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build (macos-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491529240",
+                    "url": "https://github.com/cli/cli/runs/120491529240",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "govulncheck",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976260942/job/120491527941",
+                    "url": "https://github.com/cli/cli/runs/120491527941",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "integration-tests (ubuntu-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491529213",
+                    "url": "https://github.com/cli/cli/runs/120491529213",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "integration-tests (windows-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491529350",
+                    "url": "https://github.com/cli/cli/runs/120491529350",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "integration-tests (macos-latest)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/actions/runs/39976261298/job/120491528839",
+                    "url": "https://github.com/cli/cli/runs/120491528839",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "CodeQL",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/cli/cli/runs/120491802050",
+                    "url": "https://github.com/cli/cli/runs/120491802050",
+                    "isRequired": false
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "bdedb68faa1f542ba865cd8acf18eaade5293e00",
+                    "checkSuites": {
+                      "totalCount": 4,
+                      "nodes": [
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 39976260942
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 39976261202
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 39976261298
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

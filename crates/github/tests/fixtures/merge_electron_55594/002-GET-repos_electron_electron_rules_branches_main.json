@@ -1,0 +1,213 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/electron/electron/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"7346b58999260996d39426517fa7e7f737ebc5ecbc7dc8928fb8f6be0a320d69\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4968",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "32"
+    },
+    "body": [
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "dismiss_stale_reviews_on_push": false,
+          "require_code_owner_review": true,
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "squash"
+          ]
+        },
+        "ruleset_source_type": "Enterprise",
+        "ruleset_source": "electron",
+        "ruleset_id": 14656345
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": false,
+          "do_not_enforce_on_create": false,
+          "required_status_checks": [
+            {
+              "context": "faraday/cage",
+              "integration_id": 3637471
+            }
+          ]
+        },
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "electron",
+        "ruleset_id": 16202860
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "dismiss_stale_reviews_on_push": false,
+          "required_reviewers": [
+            {
+              "minimum_approvals": 1,
+              "file_patterns": [
+                "CODEOWNERS",
+                ".github"
+              ],
+              "reviewer": {
+                "id": 17475741,
+                "type": "Team"
+              }
+            }
+          ],
+          "require_code_owner_review": false,
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "squash"
+          ]
+        },
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "electron",
+        "ruleset_id": 14656443
+      },
+      {
+        "type": "required_signatures",
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "electron",
+        "ruleset_id": 7818884
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": false,
+          "do_not_enforce_on_create": false,
+          "required_status_checks": [
+            {
+              "context": "Socket Security: Pull Request Alerts",
+              "integration_id": 156372
+            }
+          ]
+        },
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "electron",
+        "ruleset_id": 7829062
+      },
+      {
+        "type": "workflows",
+        "parameters": {
+          "do_not_enforce_on_create": false,
+          "workflows": [
+            {
+              "repository_id": 175251714,
+              "path": ".github/workflows/zizmor.yml",
+              "sha": "dbe36719f898bb8b563ea3b96d5a75b5207cfce4",
+              "ref": "refs/heads/main"
+            }
+          ]
+        },
+        "ruleset_source_type": "Organization",
+        "ruleset_source": "electron",
+        "ruleset_id": 14754353
+      },
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "non_fast_forward",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "creation",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "required_linear_history",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 1,
+          "dismiss_stale_reviews_on_push": false,
+          "required_reviewers": [],
+          "require_code_owner_review": true,
+          "dismissal_restriction": {
+            "enabled": false,
+            "allowed_actors": []
+          },
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "merge",
+            "squash",
+            "rebase"
+          ]
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": false,
+          "do_not_enforce_on_create": false,
+          "required_status_checks": [
+            {
+              "context": "release-notes",
+              "integration_id": 16104
+            },
+            {
+              "context": "Semver Label Enforcement",
+              "integration_id": 25811
+            },
+            {
+              "context": "Validate PR Title",
+              "integration_id": 15368
+            },
+            {
+              "context": "Backport Labels Added",
+              "integration_id": 9879
+            },
+            {
+              "context": "lint / Lint",
+              "integration_id": 15368
+            },
+            {
+              "context": "GitHub Actions Completed",
+              "integration_id": 15368
+            }
+          ]
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 297261
+      },
+      {
+        "type": "required_signatures",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "electron/electron",
+        "ruleset_id": 6375
+      }
+    ]
+  }
+}

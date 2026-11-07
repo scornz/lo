@@ -181,7 +181,7 @@ impl GithubClient {
 
 /// A branch's name for a URL's path: its slashes kept, anything else but letters, digits and
 /// `-._~` percent-encoded, such as the `#` a branch's name may hold.
-fn path_encoded(branch: &str) -> String {
+pub(crate) fn path_encoded(branch: &str) -> String {
     let mut encoded = String::with_capacity(branch.len());
     for byte in branch.bytes() {
         match byte {

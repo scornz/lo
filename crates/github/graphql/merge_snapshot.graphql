@@ -1,0 +1,225 @@
+# What decides whether a pull request can merge (design §9, "Merge status"), for 1 point:
+# GitHub's verdict, the reviews, review requests, conversations and checks behind it, the base
+# branch's classic protection, the merge queue and auto-merge, and what the account may do.
+# `queries::merge_snapshot` adds the base branch's rulesets, read through REST, and maps it all
+# into `review::merge::MergeSnapshot`. Lists that don't fit their page are counted, and only the
+# checks are paged (`MergeChecks`). `$login` is the signed-in account's.
+query MergeSnapshot($owner: String!, $name: String!, $number: Int!, $login: String!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    isArchived
+    viewerPermission
+    mergeCommitAllowed
+    squashMergeAllowed
+    rebaseMergeAllowed
+    viewerDefaultMergeMethod
+    pullRequest(number: $number) {
+      url
+      state
+      isDraft
+      locked
+      mergeable
+      mergeStateStatus
+      reviewDecision
+      headRefOid
+      baseRefName
+      author {
+        __typename
+        login
+      }
+      viewerDidAuthor
+      viewerCanMergeAsAdmin
+      viewerCanEnableAutoMerge
+      baseRef {
+        # The base branch's tip now. baseRefOid can lag behind it.
+        target {
+          __typename
+          oid
+        }
+        # Classic branch protection, as anyone who can read the repository sees it.
+        refUpdateRule {
+          requiredApprovingReviewCount
+          requiredStatusCheckContexts
+          requiresCodeOwnerReviews
+          requiresConversationResolution
+          requiresLinearHistory
+          requiresSignatures
+          viewerCanPush
+        }
+        # All of it, which only those who can administer the repository see: null for anyone
+        # else.
+        branchProtectionRule {
+          requiresApprovingReviews
+          requiredApprovingReviewCount
+          requiresCodeOwnerReviews
+          dismissesStaleReviews
+          requireLastPushApproval
+          requiresConversationResolution
+          requiresStatusChecks
+          requiresStrictStatusChecks
+          requiredStatusChecks {
+            context
+            app {
+              databaseId
+            }
+          }
+          requiresLinearHistory
+          requiresCommitSignatures
+          requiresDeployments
+          lockBranch
+        }
+      }
+      isMergeQueueEnabled
+      isInMergeQueue
+      mergeQueueEntry {
+        position
+      }
+      # Null for anyone who can't write to the repository: the rulesets' merge_queue rule says
+      # it too.
+      mergeQueue {
+        configuration {
+          mergeMethod
+        }
+      }
+      autoMergeRequest {
+        mergeMethod
+        enabledBy {
+          __typename
+          login
+        }
+      }
+      latestOpinionatedReviews(first: 50) {
+        totalCount
+        nodes {
+          author {
+            __typename
+            login
+          }
+          state
+          # Null once GitHub no longer has the commit.
+          commit {
+            oid
+          }
+          authorCanPushToRepository
+          onBehalfOf(first: 10) {
+            totalCount
+            nodes {
+              combinedSlug
+            }
+          }
+        }
+      }
+      reviewRequests(first: 25) {
+        totalCount
+        nodes {
+          asCodeOwner
+          # Null for a team the account can't see.
+          requestedReviewer {
+            __typename
+            ... on User {
+              login
+            }
+            ... on Bot {
+              login
+            }
+            ... on Mannequin {
+              login
+            }
+            ... on Team {
+              combinedSlug
+              # Whether the account is in it, child teams included: its approval counts for
+              # the team. The search matches logins and names, so the login is compared too.
+              members(query: $login, first: 10) {
+                nodes {
+                  login
+                }
+              }
+            }
+          }
+        }
+      }
+      # Your pending review: GitHub takes no other review from you while it's pending.
+      viewerPendingReview: reviews(states: [PENDING], author: $login, first: 1) {
+        nodes {
+          id
+          commit {
+            oid
+          }
+          comments {
+            totalCount
+          }
+        }
+      }
+      reviewThreads(first: 100) {
+        totalCount
+        nodes {
+          isResolved
+        }
+      }
+      statusCheckRollup {
+        contexts(first: 100) {
+          totalCount
+          # Every check run and commit status on the head, by state, whatever the page holds.
+          checkRunCountsByState {
+            state
+            count
+          }
+          statusContextCountsByState {
+            state
+            count
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            ...MergeCheck
+          }
+        }
+      }
+      # Check suites that can still add check runs: a workflow that's queued or waiting on a job
+      # has no run yet for the jobs to come.
+      commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            checkSuites(first: 50) {
+              totalCount
+              nodes {
+                status
+                workflowRun {
+                  databaseId
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# A check run or commit status on the head. `MergeChecks` reads the same.
+fragment MergeCheck on StatusCheckRollupContext {
+  __typename
+  ... on CheckRun {
+    name
+    status
+    conclusion
+    detailsUrl
+    url
+    isRequired(pullRequestNumber: $number)
+  }
+  ... on StatusContext {
+    context
+    state
+    targetUrl
+    isRequired(pullRequestNumber: $number)
+  }
+}

@@ -15,6 +15,7 @@ use super::{
     Blocker, CheckState, MergeMethod, MergeSnapshot, MergeStateStatus, PullRequestState, Review,
     ReviewDecision, ReviewState, Reviewer, blockers,
 };
+use crate::pending::Refusal;
 
 /// Approve and ship's first step: nothing, and why, or the plan its one confirmation lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +35,11 @@ pub enum ApproveAndShip {
     Draft,
     /// Nothing: GitHub doesn't let you approve it, and it isn't yours.
     CannotApprove,
+    /// Nothing: your pending review is recorded on another revision than the one on screen
+    /// ([`Refusal::OtherRevision`]). GitHub takes no other review from you while it's pending, and
+    /// submitting it as an approval would approve code that isn't on screen. Submit it as a
+    /// comment, or switch to its revision, first.
+    PendingReviewElsewhere(Refusal),
     /// Approve unless that's skipped, then call [`after_approving`].
     Plan(Plan),
 }
@@ -151,6 +157,10 @@ pub enum Approval {
     /// Approve the head on screen again: your latest review of it was dismissed, such as by a
     /// maintainer, so the confirmation says so.
     ReapproveDismissed,
+    /// Approve the head on screen by submitting your pending review, which is recorded on it and
+    /// holds `comments` comments: GitHub takes no other review from you while it's pending. The
+    /// confirmation says the comments go with the approval.
+    SubmitPending { comments: usize },
     /// Skip it: it's your pull request, which GitHub doesn't let you approve.
     OwnPullRequest,
     /// Skip it: your latest review already approves the head on screen.
@@ -161,7 +171,7 @@ impl Approval {
     /// Whether this step submits an approval.
     pub fn approves(self) -> bool {
         match self {
-            Self::Approve | Self::ReapproveDismissed => true,
+            Self::Approve | Self::ReapproveDismissed | Self::SubmitPending { .. } => true,
             Self::OwnPullRequest | Self::AlreadyApproved => false,
         }
     }
@@ -237,6 +247,10 @@ pub enum Stop {
 ///   GitHub records that you approved what you saw, and so is one of that head that was
 ///   dismissed, which the plan says. When GitHub doesn't let you approve someone else's pull
 ///   request, it does nothing.
+/// - With a pending review, which GitHub allows one of and while which it takes no other review
+///   from you, it approves by submitting that review when it's recorded on the head on screen,
+///   and does nothing when it's recorded on another revision, or on a commit GitHub no longer has
+///   ([`ApproveAndShip::PendingReviewElsewhere`]).
 /// - [`Plan::likely`] is what [`after_approving`] would return if GitHub reported what Lo
 ///   expects once you've approved. It's only a prediction, for the confirmation's wording.
 pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
@@ -274,6 +288,17 @@ pub fn approve_and_ship(snapshot: &MergeSnapshot) -> ApproveAndShip {
         Approval::AlreadyApproved
     } else if !viewer.can_approve {
         return ApproveAndShip::CannotApprove;
+    } else if let Some(pending) = &snapshot.pending_review {
+        let on_screen = (pending.commit.as_deref())
+            .is_some_and(|commit| same_commit(commit, &snapshot.head_on_screen));
+        if !on_screen {
+            return ApproveAndShip::PendingReviewElsewhere(Refusal::OtherRevision {
+                review_on: pending.commit.clone(),
+            });
+        }
+        Approval::SubmitPending {
+            comments: pending.comments,
+        }
     } else if yours_on_screen(ReviewState::Dismissed) {
         Approval::ReapproveDismissed
     } else {
@@ -500,6 +525,7 @@ mod tests {
         ReviewRules, ReviewState, Reviewer, Viewer,
     };
     use super::*;
+    use crate::pending::PendingReview;
 
     const HEAD: &str = "c0ffee1c0ffee1c0ffee1c0ffee1c0ffee1c0ffe";
     const OLD_HEAD: &str = "0d1d4ead0d1d4ead0d1d4ead0d1d4ead0d1d4ead";
@@ -917,6 +943,108 @@ mod tests {
         assert!(Approval::Approve.approves());
         assert!(!Approval::OwnPullRequest.approves());
         assert!(!Approval::AlreadyApproved.approves());
+    }
+
+    /// Your pending review, recorded on `commit`, with `comments` comments.
+    fn pending_on(commit: Option<&str>, comments: usize) -> Option<PendingReview> {
+        Some(PendingReview {
+            id: "PRR_kwDOAbc".to_string(),
+            commit: commit.map(str::to_string),
+            comments,
+        })
+    }
+
+    #[test]
+    fn it_approves_by_submitting_your_pending_review_on_the_head_on_screen() {
+        let snapshot = MergeSnapshot {
+            pending_review: pending_on(Some(HEAD), 2),
+            ..reviewing()
+        };
+        let in_another_case = MergeSnapshot {
+            pending_review: pending_on(Some(&HEAD.to_uppercase()), 2),
+            ..reviewing()
+        };
+        // Your dismissed approval of the head is given again by submitting it.
+        let dismissed = MergeSnapshot {
+            reviews: vec![review("alice", ReviewState::Dismissed, HEAD)],
+            ..snapshot.clone()
+        };
+
+        let submit = Approval::SubmitPending { comments: 2 };
+        assert_eq!(
+            approve_and_ship(&snapshot),
+            plan(submit, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&in_another_case),
+            plan(submit, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&dismissed),
+            plan(submit, Ship::Merge(MergeMethod::Squash))
+        );
+        assert!(submit.approves());
+    }
+
+    #[test]
+    fn it_does_nothing_while_your_pending_review_is_on_another_revision() {
+        let elsewhere = MergeSnapshot {
+            pending_review: pending_on(Some(OLD_HEAD), 1),
+            ..reviewing()
+        };
+        let on_a_lost_commit = MergeSnapshot {
+            pending_review: pending_on(None, 1),
+            ..reviewing()
+        };
+
+        assert_eq!(
+            approve_and_ship(&elsewhere),
+            ApproveAndShip::PendingReviewElsewhere(Refusal::OtherRevision {
+                review_on: Some(OLD_HEAD.to_string()),
+            })
+        );
+        assert_eq!(
+            approve_and_ship(&on_a_lost_commit),
+            ApproveAndShip::PendingReviewElsewhere(Refusal::OtherRevision { review_on: None })
+        );
+    }
+
+    #[test]
+    fn a_pending_review_changes_nothing_when_approve_and_ship_does_not_approve() {
+        // Your own pull request: nothing's approved, so the pending review stays pending.
+        let mut own = MergeSnapshot {
+            merge_state: MergeStateStatus::Clean,
+            review_decision: Some(ReviewDecision::Approved),
+            reviews: vec![review("bob", ReviewState::Approved, HEAD)],
+            pending_review: pending_on(Some(OLD_HEAD), 1),
+            ..reviewing()
+        };
+        own.viewer.did_author = true;
+        own.viewer.can_approve = false;
+        // You approved the head on screen already, then started another review.
+        let approved = MergeSnapshot {
+            merge_state: MergeStateStatus::Clean,
+            review_decision: Some(ReviewDecision::Approved),
+            reviews: vec![review("alice", ReviewState::Approved, HEAD)],
+            pending_review: pending_on(Some(OLD_HEAD), 1),
+            ..reviewing()
+        };
+        // GitHub doesn't let you approve: that's what stops it.
+        let mut cannot = MergeSnapshot {
+            pending_review: pending_on(Some(OLD_HEAD), 1),
+            ..reviewing()
+        };
+        cannot.viewer.can_approve = false;
+
+        assert_eq!(
+            approve_and_ship(&own),
+            plan(Approval::OwnPullRequest, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(
+            approve_and_ship(&approved),
+            plan(Approval::AlreadyApproved, Ship::Merge(MergeMethod::Squash))
+        );
+        assert_eq!(approve_and_ship(&cannot), ApproveAndShip::CannotApprove);
     }
 
     #[test]

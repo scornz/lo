@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/rozed-dev/e2e/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"a5b1adb5c0ca493d0c80f8b7a69503be16db08a72cc02c3e043626a88caa5c23\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4977",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "23"
+    },
+    "body": []
+  }
+}

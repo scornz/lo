@@ -1,0 +1,104 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 16,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4848",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "152"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4848,
+          "used": 152,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "ADMIN",
+          "mergeCommitAllowed": true,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": true,
+          "viewerDefaultMergeMethod": "MERGE",
+          "pullRequest": {
+            "url": "https://github.com/rozed-dev/e2e/pull/16",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": null,
+            "headRefOid": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+            "baseRefName": "main",
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot"
+            },
+            "viewerDidAuthor": true,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
+              },
+              "refUpdateRule": null,
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": false,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": null,
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "reviewRequests": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "statusCheckRollup": null,
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "34427a8b828e8090ecbb56fb3d8f4fd91bf12648",
+                    "checkSuites": {
+                      "totalCount": 0,
+                      "nodes": []
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

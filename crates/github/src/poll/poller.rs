@@ -25,14 +25,16 @@ use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
 use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
 use crate::push_history::{PushHistory, read_push_history};
+use crate::queries::merge_snapshot::read_merge_facts;
 use crate::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use crate::queries::pending_review::read_pending_review;
 use crate::queries::review_threads::read_review_threads;
 use crate::queries::stack_layers::read_stack_layers;
 use crate::queries::timeline::read_timeline;
 use crate::queries::{
-    MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
-    PullRequestTimeline, ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview,
+    MAX_OPEN_PULL_REQUESTS, MergeFacts, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData,
+    PullRequestData, PullRequestTimeline, ReviewThreadList, StackLayerList, TrunkRuleList,
+    ViewerPendingReview,
 };
 use crate::rate_limit::RateLimits;
 use crate::revision_marks::RevisionMarks;
@@ -803,6 +805,23 @@ impl Poller {
         self.read_cached(
             pull,
             move |client, known| read_pending_review(client, target.clone(), login.clone(), known),
+            cx,
+        )
+    }
+
+    /// What decides whether `pull` can merge, as [`Self::read_cached`] keeps it, read as this
+    /// account. It's read again when GitHub's verdict or what explains it may have moved
+    /// ([`MergeFacts`]'s [`CachedRead::WATCHED`]), and on the 5-minute refresh, which also asks
+    /// whether the base branch's rules changed, for free when they didn't.
+    pub fn merge_facts(
+        &mut self,
+        pull: PullRef,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<MergeFacts>>> {
+        let (login, target) = (self.login.clone(), pull.clone());
+        self.read_cached(
+            pull,
+            move |client, known| read_merge_facts(client, target.clone(), login.clone(), known),
             cx,
         )
     }

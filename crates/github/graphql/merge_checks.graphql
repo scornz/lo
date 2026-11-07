@@ -1,0 +1,46 @@
+# A pull request's checks on its head after the first page `MergeSnapshot` reads, 100 a page,
+# with the head they were read on: a push between pages starts the read again.
+query MergeChecks($owner: String!, $name: String!, $number: Int!, $after: String!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      statusCheckRollup {
+        contexts(first: 100, after: $after) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            ...MergeCheck
+          }
+        }
+      }
+    }
+  }
+}
+
+# A check run or commit status on the head. `MergeSnapshot` reads the same.
+fragment MergeCheck on StatusCheckRollupContext {
+  __typename
+  ... on CheckRun {
+    name
+    status
+    conclusion
+    detailsUrl
+    url
+    isRequired(pullRequestNumber: $number)
+  }
+  ... on StatusContext {
+    context
+    state
+    targetUrl
+    isRequired(pullRequestNumber: $number)
+  }
+}

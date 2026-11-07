@@ -1,0 +1,781 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "zed-industries",
+      "name": "zed",
+      "number": 66650,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4980",
+      "x-ratelimit-reset": "1794038585",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "20"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4980,
+          "used": 20,
+          "resetAt": "2026-11-07T08:03:05Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": false,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": false,
+          "viewerDefaultMergeMethod": "SQUASH",
+          "pullRequest": {
+            "url": "https://github.com/zed-industries/zed/pull/66650",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": null,
+            "headRefOid": "79228ac4130a12b628a080c0fac3212c2f6cee92",
+            "baseRefName": "main",
+            "author": {
+              "__typename": "User",
+              "login": "SomeoneToIgnore"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "9a8ab54db4f9f9af4dc6efb42b304c55c6a62bd3"
+              },
+              "refUpdateRule": null,
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": true,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": {
+              "configuration": null
+            },
+            "autoMergeRequest": null,
+            "latestOpinionatedReviews": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "reviewRequests": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "asCodeOwner": false,
+                  "requestedReviewer": {
+                    "__typename": "User",
+                    "login": "MrSubidubi"
+                  }
+                }
+              ]
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 52,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 0
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 27
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 23
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 2
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "NTI"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "route-pr",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345484126/job/128322184777",
+                    "url": "https://github.com/zed-industries/zed/runs/128322184777",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "nudge-contributor",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345464893/job/128322125123",
+                    "url": "https://github.com/zed-industries/zed/runs/128322125123",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "welcome",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468728/job/128322136719",
+                    "url": "https://github.com/zed-industries/zed/runs/128322136719",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "welcome",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345484119/job/128322181691",
+                    "url": "https://github.com/zed-industries/zed/runs/128322181691",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_nix_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468399/job/128322163363",
+                    "url": "https://github.com/zed-industries/zed/runs/128322163363",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_nix_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483813/job/128322179906",
+                    "url": "https://github.com/zed-industries/zed/runs/128322179906",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_linux_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322134206",
+                    "url": "https://github.com/zed-industries/zed/runs/128322134206",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_linux_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322179353",
+                    "url": "https://github.com/zed-industries/zed/runs/128322179353",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "route-pr",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345463951/job/128322120774",
+                    "url": "https://github.com/zed-industries/zed/runs/128322120774",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-authorship-and-label",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345464915/job/128322123693",
+                    "url": "https://github.com/zed-industries/zed/runs/128322123693",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "danger",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466310/job/128322126865",
+                    "url": "https://github.com/zed-industries/zed/runs/128322126865",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "orchestrate",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322127486",
+                    "url": "https://github.com/zed-industries/zed/runs/128322127486",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_nix_mac_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468399/job/128322134432",
+                    "url": "https://github.com/zed-industries/zed/runs/128322134432",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_nix_mac_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483813/job/128322179467",
+                    "url": "https://github.com/zed-industries/zed/runs/128322179467",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322134527",
+                    "url": "https://github.com/zed-industries/zed/runs/128322134527",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322199637",
+                    "url": "https://github.com/zed-industries/zed/runs/128322199637",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_style",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322127309",
+                    "url": "https://github.com/zed-industries/zed/runs/128322127309",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_static_bwrap_linux_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322166086",
+                    "url": "https://github.com/zed-industries/zed/runs/128322166086",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_static_bwrap_linux_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322179848",
+                    "url": "https://github.com/zed-industries/zed/runs/128322179848",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "clippy_windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369889",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369889",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_static_bwrap_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322134571",
+                    "url": "https://github.com/zed-industries/zed/runs/128322134571",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build_static_bwrap_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322208686",
+                    "url": "https://github.com/zed-industries/zed/runs/128322208686",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "clippy_linux",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369922",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369922",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_mac_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322162617",
+                    "url": "https://github.com/zed-industries/zed/runs/128322162617",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_mac_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322210661",
+                    "url": "https://github.com/zed-industries/zed/runs/128322210661",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "clippy_mac",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369870",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369870",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_mac_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322134401",
+                    "url": "https://github.com/zed-industries/zed/runs/128322134401",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_mac_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322216921",
+                    "url": "https://github.com/zed-industries/zed/runs/128322216921",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "clippy_mac_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369821",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369821",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_windows_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322133959",
+                    "url": "https://github.com/zed-industries/zed/runs/128322133959",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_windows_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322199787",
+                    "url": "https://github.com/zed-industries/zed/runs/128322199787",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "run_tests_windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369840",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369840",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_windows_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345468417/job/128322163851",
+                    "url": "https://github.com/zed-industries/zed/runs/128322163851",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "bundle_windows_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345483791/job/128322202219",
+                    "url": "https://github.com/zed-industries/zed/runs/128322202219",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "run_tests_linux",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369947",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369947",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "run_tests_mac",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369914",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369914",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "miri_scheduler",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322370003",
+                    "url": "https://github.com/zed-industries/zed/runs/128322370003",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "doctests",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369957",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369957",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_workspace_binaries",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369879",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369879",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_wasm",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369913",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369913",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_dependencies",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369917",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369917",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_docs",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369963",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369963",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_licenses",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322371114",
+                    "url": "https://github.com/zed-industries/zed/runs/128322371114",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_scripts",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322370892",
+                    "url": "https://github.com/zed-industries/zed/runs/128322370892",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_remote_server_linux_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369885",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369885",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_remote_server_mac_aarch64",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369965",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369965",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_remote_server_windows_x86_64",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369930",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369930",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check_postgres_and_protobuf_migrations",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322369929",
+                    "url": "https://github.com/zed-industries/zed/runs/128322369929",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "extension_tests",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128322371064",
+                    "url": "https://github.com/zed-industries/zed/runs/128322371064",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "tests_pass",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/zed-industries/zed/actions/runs/42345466376/job/128324903322",
+                    "url": "https://github.com/zed-industries/zed/runs/128324903322",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "Danger",
+                    "state": "SUCCESS",
+                    "targetUrl": "http://danger.systems/js",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "verification/cla-signed",
+                    "state": "SUCCESS",
+                    "targetUrl": "https://s3.amazonaws.com/cla-bot-logs/zed-industries-8c0647da-3f72-4aa9-915d-e063f001f53e",
+                    "isRequired": false
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "79228ac4130a12b628a080c0fac3212c2f6cee92",
+                    "checkSuites": {
+                      "totalCount": 21,
+                      "nodes": [
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345463951
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345464517
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345464893
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345464915
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345466310
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345466376
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345468399
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345468417
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345468522
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345468728
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345483791
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345483813
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345484119
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42345484126
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+# A base branch's merge queue (design §9, "The merge queue"): its settings, and its entries in
+# order, each with what the queue view shows. Null when the branch has no queue. Its
+# configuration is null for anyone who can't write to the repository: the base branch's
+# merge_queue rule says it too (`queries::merge_snapshot`). It costs 1 point.
+query MergeQueue($owner: String!, $name: String!, $branch: String!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    mergeQueue(branch: $branch) {
+      id
+      url
+      nextEntryEstimatedTimeToMerge
+      configuration {
+        mergeMethod
+        mergingStrategy
+        checkResponseTimeout
+        maximumEntriesToBuild
+        maximumEntriesToMerge
+        minimumEntriesToMerge
+        minimumEntriesToMergeWaitTime
+      }
+      entries(first: 100) {
+        totalCount
+        nodes {
+          id
+          position
+          state
+          enqueuedAt
+          estimatedTimeToMerge
+          jump
+          solo
+          enqueuer {
+            __typename
+            login
+          }
+          # The commits the queue tests it on: entries tested together share a base.
+          baseCommit {
+            oid
+          }
+          headCommit {
+            oid
+          }
+          pullRequest {
+            id
+            number
+            title
+            url
+            headRefOid
+            viewerDidAuthor
+            author {
+              __typename
+              login
+            }
+          }
+        }
+      }
+    }
+  }
+}

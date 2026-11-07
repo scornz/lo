@@ -886,6 +886,151 @@ fn rest_pull_files_berry_7077() {
     );
 }
 
+/// Records what decides whether each of `numbers` in `owner/name` can merge, as rozed-bot.
+fn record_merge(name: &str, description: &str, owner: &str, repo: &str, numbers: &[i64]) {
+    let numbers = numbers.to_vec();
+    let (owner_name, repo_name) = (owner.to_string(), repo.to_string());
+    record_repo(
+        name,
+        description,
+        &format!("{owner}/{repo}"),
+        |client| async move {
+            for number in numbers {
+                let pull = PullRef::new(owner_name.clone(), repo_name.clone(), number);
+                let facts = client.merge_facts(&pull, BOT, None).await.unwrap();
+                assert_eq!(facts.login, BOT);
+                assert!(facts.left_out.is_empty(), "{:?}", facts.left_out);
+            }
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_cli() {
+    record_merge(
+        "merge_cli",
+        "What decides whether six of cli/cli's pull requests into trunk can merge, as rozed-bot, \
+         which can only read cli/cli, read only. trunk's classic protection, which rozed-bot sees \
+         only part of, requires an approval, a code owner's (a team rozed-bot can't see) and \
+         three build checks. #13788: the builds failed. #12942: conflicts. #14781: a draft. \
+         #13899: a maintainer requested changes. #14964: waiting on an approval. #13340: a \
+         first-time contributor's, whose workflows never ran",
+        "cli",
+        "cli",
+        &[13788, 12942, 14781, 13899, 14964, 13340],
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_vscode_346714() {
+    record_merge(
+        "merge_vscode_346714",
+        "microsoft/vscode#346714 as rozed-bot, read only: main's classic protection requires an \
+         approval, a code owner's, five checks and every conversation resolved, and a ruleset \
+         requires the latest push approved by someone else. One required check is running, two \
+         haven't reported, and two conversations are unresolved",
+        "microsoft",
+        "vscode",
+        &[346714],
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_pnpm_17816() {
+    record_merge(
+        "merge_pnpm_17816",
+        "pnpm/pnpm#17816 as rozed-bot, read only: main's classic protection requires an approval \
+         and a code owner's, and its code owner, a user, hasn't reviewed",
+        "pnpm",
+        "pnpm",
+        &[17816],
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_electron_55594() {
+    record_merge(
+        "merge_electron_55594",
+        "electron/electron#55594 as rozed-bot, read only: approved, with auto-merge on and its \
+         checks running",
+        "electron",
+        "electron",
+        &[55594],
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_pytorch_115316() {
+    record_merge(
+        "merge_pytorch_115316",
+        "pytorch/pytorch#115316 as rozed-bot, read only: approved, with over 100 checks, read 100 \
+         a page, and blocked for a reason Lo can't see: main's rulesets require linear history \
+         and restrict updates to those who may bypass them",
+        "pytorch",
+        "pytorch",
+        &[115316],
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_zed() {
+    record_repo(
+        "merge_zed",
+        "Two of zed-industries/zed's pull requests into main as rozed-bot, read only. main has \
+         rulesets only: a merge queue, squash merges, code owners and two required checks. \
+         #66631: a first-time contributor's, whose required checks never reported. #66650: \
+         ready for the queue. Then #66650 again, with its rules' ETag, answered 304",
+        "zed-industries/zed",
+        |client| async move {
+            let blocked = PullRef::new("zed-industries", "zed", 66631);
+            client.merge_facts(&blocked, BOT, None).await.unwrap();
+            let ready = PullRef::new("zed-industries", "zed", 66650);
+            let known = client.merge_facts(&ready, BOT, None).await.unwrap();
+            assert!(known.rules.etag.is_some());
+            let again = client.merge_facts(&ready, BOT, Some(&known)).await.unwrap();
+            assert_eq!(again.rules, known.rules);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_queue_flutter() {
+    record_repo(
+        "merge_queue_flutter",
+        "flutter/flutter's merge queue for master as rozed-bot, read only, then what decides \
+         whether the pull request first in it can merge",
+        "flutter/flutter",
+        |client| async move {
+            let repo = RepoRef::new("flutter", "flutter");
+            let queue = client.merge_queue(&repo, "master").await.unwrap();
+            let first = queue.entries()[0].pull_request.as_ref().unwrap().number;
+            let pull = PullRef::new("flutter", "flutter", first);
+            let facts = client.merge_facts(&pull, BOT, None).await.unwrap();
+            assert!(facts.pull_request.in_queue);
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn merge_e2e_16() {
+    record_merge(
+        "merge_e2e_16",
+        "rozed-dev/e2e#16 (E1, script/e2e/README.md), rozed-bot's own pull request, as rozed-bot, \
+         which administers e2e: main has no protection and no rulesets",
+        "rozed-dev",
+        "e2e",
+        &[16],
+    );
+}
+
 // The replay tests read every field of what the scenarios saw; this prints some.
 #[allow(dead_code)]
 #[path = "scenarios/review_writes.rs"]

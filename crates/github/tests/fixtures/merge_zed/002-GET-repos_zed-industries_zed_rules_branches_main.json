@@ -1,0 +1,89 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/zed-industries/zed/rules/branches/main?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"c79824da8d833bcf62f4e134b34f34289b1685dd2cb272c58cd97ec07e3fcea6\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4966",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "34"
+    },
+    "body": [
+      {
+        "type": "deletion",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "zed-industries/zed",
+        "ruleset_id": 16420151
+      },
+      {
+        "type": "non_fast_forward",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "zed-industries/zed",
+        "ruleset_id": 16420151
+      },
+      {
+        "type": "merge_queue",
+        "parameters": {
+          "merge_method": "SQUASH",
+          "max_entries_to_build": 7,
+          "min_entries_to_merge": 1,
+          "max_entries_to_merge": 5,
+          "min_entries_to_merge_wait_minutes": 5,
+          "grouping_strategy": "ALLGREEN",
+          "check_response_timeout_minutes": 60
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "zed-industries/zed",
+        "ruleset_id": 16420151
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "dismiss_stale_reviews_on_push": false,
+          "required_reviewers": [],
+          "require_code_owner_review": true,
+          "dismissal_restriction": {
+            "enabled": false,
+            "allowed_actors": []
+          },
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": false,
+          "require_extra_approval_for_unattributed_changes": true,
+          "allowed_merge_methods": [
+            "squash"
+          ]
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "zed-industries/zed",
+        "ruleset_id": 16420151
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": false,
+          "do_not_enforce_on_create": false,
+          "required_status_checks": [
+            {
+              "context": "danger"
+            },
+            {
+              "context": "tests_pass",
+              "integration_id": 15368
+            }
+          ]
+        },
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "zed-industries/zed",
+        "ruleset_id": 16420151
+      }
+    ]
+  }
+}

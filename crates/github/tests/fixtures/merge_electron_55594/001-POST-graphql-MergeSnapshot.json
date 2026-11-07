@@ -1,0 +1,1127 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergeSnapshot",
+    "variables": {
+      "owner": "electron",
+      "name": "electron",
+      "number": 55594,
+      "login": "rozed-bot"
+    },
+    "query_sha256": "371bbebfd24cbef43d6792e9e14bf0e4640f4225d314f8904522d3e477c3f084"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4840",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "160"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4840,
+          "used": 160,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "isArchived": false,
+          "viewerPermission": "READ",
+          "mergeCommitAllowed": false,
+          "squashMergeAllowed": true,
+          "rebaseMergeAllowed": false,
+          "viewerDefaultMergeMethod": "SQUASH",
+          "pullRequest": {
+            "url": "https://github.com/electron/electron/pull/55594",
+            "state": "OPEN",
+            "isDraft": false,
+            "locked": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "APPROVED",
+            "headRefOid": "701282a95e806d2bdcb655f5e5123b6f46e646d8",
+            "baseRefName": "main",
+            "author": {
+              "__typename": "Bot",
+              "login": "electron-roller"
+            },
+            "viewerDidAuthor": false,
+            "viewerCanMergeAsAdmin": false,
+            "viewerCanEnableAutoMerge": false,
+            "baseRef": {
+              "target": {
+                "__typename": "Commit",
+                "oid": "ef2710fa6c10fe56365a9949fa783d26ca1499e5"
+              },
+              "refUpdateRule": {
+                "requiredApprovingReviewCount": 1,
+                "requiredStatusCheckContexts": [
+                  "release-notes",
+                  "Semver Label Enforcement",
+                  "Backport Labels Added",
+                  "Validate PR Title",
+                  "lint / Lint",
+                  "GitHub Actions Completed"
+                ],
+                "requiresCodeOwnerReviews": true,
+                "requiresConversationResolution": false,
+                "requiresLinearHistory": true,
+                "requiresSignatures": false,
+                "viewerCanPush": false
+              },
+              "branchProtectionRule": null
+            },
+            "isMergeQueueEnabled": false,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "mergeQueue": null,
+            "autoMergeRequest": {
+              "mergeMethod": "SQUASH",
+              "enabledBy": {
+                "__typename": "User",
+                "login": "MarshallOfSound"
+              }
+            },
+            "latestOpinionatedReviews": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "author": {
+                    "__typename": "User",
+                    "login": "ckerr"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "5b2b2a62e1c7b5382fddb2767465f207aa13dc11"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                },
+                {
+                  "author": {
+                    "__typename": "User",
+                    "login": "MarshallOfSound"
+                  },
+                  "state": "APPROVED",
+                  "commit": {
+                    "oid": "cde376056ee0de326e1f8e496d91b57f195354c7"
+                  },
+                  "authorCanPushToRepository": true,
+                  "onBehalfOf": {
+                    "totalCount": 0,
+                    "nodes": []
+                  }
+                }
+              ]
+            },
+            "reviewRequests": {
+              "totalCount": 0,
+              "nodes": []
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "reviewThreads": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "isResolved": true
+                }
+              ]
+            },
+            "statusCheckRollup": {
+              "contexts": {
+                "totalCount": 86,
+                "checkRunCountsByState": [
+                  {
+                    "state": "ACTION_REQUIRED",
+                    "count": 0
+                  },
+                  {
+                    "state": "CANCELLED",
+                    "count": 0
+                  },
+                  {
+                    "state": "COMPLETED",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "IN_PROGRESS",
+                    "count": 1
+                  },
+                  {
+                    "state": "NEUTRAL",
+                    "count": 3
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "QUEUED",
+                    "count": 0
+                  },
+                  {
+                    "state": "SKIPPED",
+                    "count": 12
+                  },
+                  {
+                    "state": "STALE",
+                    "count": 0
+                  },
+                  {
+                    "state": "STARTUP_FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 69
+                  },
+                  {
+                    "state": "TIMED_OUT",
+                    "count": 0
+                  },
+                  {
+                    "state": "WAITING",
+                    "count": 0
+                  }
+                ],
+                "statusContextCountsByState": [
+                  {
+                    "state": "EXPECTED",
+                    "count": 0
+                  },
+                  {
+                    "state": "ERROR",
+                    "count": 0
+                  },
+                  {
+                    "state": "FAILURE",
+                    "count": 0
+                  },
+                  {
+                    "state": "PENDING",
+                    "count": 0
+                  },
+                  {
+                    "state": "SUCCESS",
+                    "count": 1
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "ODY"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Check for disallowed non-maintainer change",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850392/job/128157306283",
+                    "url": "https://github.com/electron/electron/runs/128157306283",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Tests Needed",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850366/job/128157305646",
+                    "url": "https://github.com/electron/electron/runs/128157305646",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Tests Needed",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269894/job/128196290725",
+                    "url": "https://github.com/electron/electron/runs/128196290725",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "backport/requested label added",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269901/job/128196312860",
+                    "url": "https://github.com/electron/electron/runs/128196312860",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "setup",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850048/job/128157300963",
+                    "url": "https://github.com/electron/electron/runs/128157300963",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Archaeologist Dig",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850087/job/128157300822",
+                    "url": "https://github.com/electron/electron/runs/128157300822",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "setup",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157304844",
+                    "url": "https://github.com/electron/electron/runs/128157304844",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "setup",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294849921/job/128157300291",
+                    "url": "https://github.com/electron/electron/runs/128157300291",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Validate PR Title",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850041/job/128157300546",
+                    "url": "https://github.com/electron/electron/runs/128157300546",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Set status to Needs Review",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850424/job/128157304039",
+                    "url": "https://github.com/electron/electron/runs/128157304039",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Check signed commits in PR",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850458/job/128157304184",
+                    "url": "https://github.com/electron/electron/runs/128157304184",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "zizmor Static Analysis",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294849919/job/128157300360",
+                    "url": "https://github.com/electron/electron/runs/128157300360",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "check-nmv-version",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294849921/job/128157428323",
+                    "url": "https://github.com/electron/electron/runs/128157428323",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Issue Needed",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850366/job/128157350312",
+                    "url": "https://github.com/electron/electron/runs/128157350312",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Issue Needed",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269894/job/128196323770",
+                    "url": "https://github.com/electron/electron/runs/128196323770",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "deprecation-review/complete label added",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269901/job/128196317993",
+                    "url": "https://github.com/electron/electron/runs/128196317993",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "apply-patches",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850048/job/128157390295",
+                    "url": "https://github.com/electron/electron/runs/128157390295",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "lint / Lint",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399741",
+                    "url": "https://github.com/electron/electron/runs/128157399741",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Blocked",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850366/job/128157306631",
+                    "url": "https://github.com/electron/electron/runs/128157306631",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Blocked",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269894/job/128196254853",
+                    "url": "https://github.com/electron/electron/runs/128196254853",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "ai-pr label added",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42306269901/job/128196254266",
+                    "url": "https://github.com/electron/electron/runs/128196254266",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-macos / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850048/job/128157390579",
+                    "url": "https://github.com/electron/electron/runs/128157390579",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "checkout-macos",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399425",
+                    "url": "https://github.com/electron/electron/runs/128157399425",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-linux / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850048/job/128157390831",
+                    "url": "https://github.com/electron/electron/runs/128157390831",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "checkout-linux",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399391",
+                    "url": "https://github.com/electron/electron/runs/128157399391",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-windows / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850048/job/128157390762",
+                    "url": "https://github.com/electron/electron/runs/128157390762",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "checkout-windows",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399242",
+                    "url": "https://github.com/electron/electron/runs/128157399242",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-macos / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399342",
+                    "url": "https://github.com/electron/electron/runs/128157399342",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-linux / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399730",
+                    "url": "https://github.com/electron/electron/runs/128157399730",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "build-siso-windows / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128157399793",
+                    "url": "https://github.com/electron/electron/runs/128157399793",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-gn-check / gn-check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128164959326",
+                    "url": "https://github.com/electron/electron/runs/128164959326",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "docs-only",
+                    "status": "COMPLETED",
+                    "conclusion": "SKIPPED",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161797287",
+                    "url": "https://github.com/electron/electron/runs/128161797287",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-gn-check / gn-check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161795922",
+                    "url": "https://github.com/electron/electron/runs/128161795922",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-gn-check / gn-check",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128162875470",
+                    "url": "https://github.com/electron/electron/runs/128162875470",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128164959698",
+                    "url": "https://github.com/electron/electron/runs/128164959698",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (darwin, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883211",
+                    "url": "https://github.com/electron/electron/runs/128179883211",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (darwin, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883198",
+                    "url": "https://github.com/electron/electron/runs/128179883198",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (darwin, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883137",
+                    "url": "https://github.com/electron/electron/runs/128179883137",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (mas, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883246",
+                    "url": "https://github.com/electron/electron/runs/128179883246",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (mas, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883210",
+                    "url": "https://github.com/electron/electron/runs/128179883210",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-x64 / test / test (mas, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128179883187",
+                    "url": "https://github.com/electron/electron/runs/128179883187",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128164959810",
+                    "url": "https://github.com/electron/electron/runs/128164959810",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / clang-tidy / clang-tidy",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128176625500",
+                    "url": "https://github.com/electron/electron/runs/128176625500",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / test / test (darwin, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128176625503",
+                    "url": "https://github.com/electron/electron/runs/128176625503",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / test / test (darwin, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128176625569",
+                    "url": "https://github.com/electron/electron/runs/128176625569",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / test / test (mas, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128176625525",
+                    "url": "https://github.com/electron/electron/runs/128176625525",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "macos-arm64 / test / test (mas, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128176625403",
+                    "url": "https://github.com/electron/electron/runs/128176625403",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161796406",
+                    "url": "https://github.com/electron/electron/runs/128161796406",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / clang-tidy / clang-tidy",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165761976",
+                    "url": "https://github.com/electron/electron/runs/128165761976",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / test / test (linux, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165762021",
+                    "url": "https://github.com/electron/electron/runs/128165762021",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / test / test (linux, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165762398",
+                    "url": "https://github.com/electron/electron/runs/128165762398",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / test / test (linux, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165762111",
+                    "url": "https://github.com/electron/electron/runs/128165762111",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / test-wayland / test (linux, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165762101",
+                    "url": "https://github.com/electron/electron/runs/128165762101",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / nn-test / Run Node.js Tests",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165761914",
+                    "url": "https://github.com/electron/electron/runs/128165761914",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64 / nn-test / Run Nan Tests",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165762001",
+                    "url": "https://github.com/electron/electron/runs/128165762001",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-asan / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161796187",
+                    "url": "https://github.com/electron/electron/runs/128161796187",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-asan / test / test (linux, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166325735",
+                    "url": "https://github.com/electron/electron/runs/128166325735",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-asan / test / test (linux, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166325880",
+                    "url": "https://github.com/electron/electron/runs/128166325880",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-asan / test / test (linux, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166325809",
+                    "url": "https://github.com/electron/electron/runs/128166325809",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-ubsan / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161796384",
+                    "url": "https://github.com/electron/electron/runs/128161796384",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-ubsan / test / test (linux, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165890119",
+                    "url": "https://github.com/electron/electron/runs/128165890119",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-ubsan / test / test (linux, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165890019",
+                    "url": "https://github.com/electron/electron/runs/128165890019",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-x64-ubsan / test / test (linux, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128165890206",
+                    "url": "https://github.com/electron/electron/runs/128165890206",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-arm64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128161796385",
+                    "url": "https://github.com/electron/electron/runs/128161796385",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-arm64 / test / test (linux, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166281073",
+                    "url": "https://github.com/electron/electron/runs/128166281073",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-arm64 / test / test (linux, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166281108",
+                    "url": "https://github.com/electron/electron/runs/128166281108",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "linux-arm64 / test / test (linux, 3)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128166281184",
+                    "url": "https://github.com/electron/electron/runs/128166281184",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-x64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128162876336",
+                    "url": "https://github.com/electron/electron/runs/128162876336",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-x64 / clang-tidy / clang-tidy",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128172638846",
+                    "url": "https://github.com/electron/electron/runs/128172638846",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-x64 / test / test (win, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128172639283",
+                    "url": "https://github.com/electron/electron/runs/128172639283",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-x64 / test / test (win, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128172638930",
+                    "url": "https://github.com/electron/electron/runs/128172638930",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-arm64 / build / build",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128162876348",
+                    "url": "https://github.com/electron/electron/runs/128162876348",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-arm64 / test / test (win, 1)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128171987998",
+                    "url": "https://github.com/electron/electron/runs/128171987998",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "windows-arm64 / test / test (win, 2)",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128171988069",
+                    "url": "https://github.com/electron/electron/runs/128171988069",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "test-linux-arm64-64k / test-linux-arm64-64k",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128169551576",
+                    "url": "https://github.com/electron/electron/runs/128169551576",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "GitHub Actions Completed",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/electron/actions/runs/42294850159/job/128189231190",
+                    "url": "https://github.com/electron/electron/runs/128189231190",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "faraday/cage",
+                    "status": "IN_PROGRESS",
+                    "conclusion": null,
+                    "detailsUrl": "https://electronjs.org",
+                    "url": "https://github.com/electron/electron/runs/128157310963",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Backportable? - 46-x-y",
+                    "status": "COMPLETED",
+                    "conclusion": "NEUTRAL",
+                    "detailsUrl": "https://github.com/electron/trop",
+                    "url": "https://github.com/electron/electron/runs/128196258425",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Claude Code Review",
+                    "status": "COMPLETED",
+                    "conclusion": "NEUTRAL",
+                    "detailsUrl": "https://github.com/electron/electron/pull/55594#pullrequestreview-5807081232",
+                    "url": "https://github.com/electron/electron/runs/128157295001",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Valid Backport",
+                    "status": "COMPLETED",
+                    "conclusion": "NEUTRAL",
+                    "detailsUrl": "https://github.com/electron/trop/blob/main/docs/manual-backports.md",
+                    "url": "https://github.com/electron/electron/runs/128157298547",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "API Review",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/cation",
+                    "url": "https://github.com/electron/electron/runs/128157296129",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Backport Labels Added",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/trop",
+                    "url": "https://github.com/electron/electron/runs/128157291011",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Semver Label Enforcement",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://github.com/electron/cation",
+                    "url": "https://github.com/electron/electron/runs/128196240055",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Socket Security: Project Report",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://socket.dev/dashboard/org/electron-conjk/sbom/2263d873-d61f-40ef-91fd-9753e35d15c8",
+                    "url": "https://github.com/electron/electron/runs/128157308563",
+                    "isRequired": false
+                  },
+                  {
+                    "__typename": "CheckRun",
+                    "name": "Socket Security: Pull Request Alerts",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS",
+                    "detailsUrl": "https://socket.dev",
+                    "url": "https://github.com/electron/electron/runs/128157389200",
+                    "isRequired": true
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "release-notes",
+                    "state": "SUCCESS",
+                    "targetUrl": null,
+                    "isRequired": true
+                  }
+                ]
+              }
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "701282a95e806d2bdcb655f5e5123b6f46e646d8",
+                    "checkSuites": {
+                      "totalCount": 20,
+                      "nodes": [
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "QUEUED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "IN_PROGRESS",
+                          "workflowRun": null
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294849919
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294849921
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850041
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850048
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850087
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850159
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850366
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850392
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850458
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42294850424
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42306269894
+                          }
+                        },
+                        {
+                          "status": "COMPLETED",
+                          "workflowRun": {
+                            "databaseId": 42306269901
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

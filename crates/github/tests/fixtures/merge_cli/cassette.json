@@ -1,0 +1,6 @@
+{
+  "description": "What decides whether six of cli/cli's pull requests into trunk can merge, as rozed-bot, which can only read cli/cli, read only. trunk's classic protection, which rozed-bot sees only part of, requires an approval, a code owner's (a team rozed-bot can't see) and three build checks. #13788: the builds failed. #12942: conflicts. #14781: a draft. #13899: a maintainer requested changes. #14964: waiting on an approval. #13340: a first-time contributor's, whose workflows never ran",
+  "recorded_at": "2026-11-07T07:35:41Z",
+  "repo": "cli/cli",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

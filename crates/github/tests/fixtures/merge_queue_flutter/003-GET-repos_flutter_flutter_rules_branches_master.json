@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/flutter/flutter/rules/branches/master?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"af0e3e52686caf7986ccf62f6c5b6fa198d1309e800c80d67b4b11b3d12589b9\"",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4964",
+      "x-ratelimit-reset": "1794038583",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "36"
+    },
+    "body": [
+      {
+        "type": "creation",
+        "ruleset_source_type": "Repository",
+        "ruleset_source": "flutter/flutter",
+        "ruleset_id": 13005489
+      }
+    ]
+  }
+}

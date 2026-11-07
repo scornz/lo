@@ -90,6 +90,7 @@ mod ship;
 mod status;
 
 pub use crate::UnknownValue;
+use crate::pending::PendingReview;
 pub use action::{MergeAction, NotPossible, merge_action};
 pub use blockers::{Blocker, blockers, may_not_see_every_rule};
 pub use github::{
@@ -184,6 +185,10 @@ pub struct MergeSnapshot {
     /// The head of the revision on screen, as a full SHA: what you looked at, so what approving
     /// approves. Empty when there's no revision on screen yet.
     pub head_on_screen: String,
+    /// Your pending review (`reviews(states: PENDING, author: <your login>)`), if you have one.
+    /// GitHub takes no other review from you while it's pending, so approve and ship approves by
+    /// submitting it ([`Approval::SubmitPending`]).
+    pub pending_review: Option<PendingReview>,
 }
 
 impl MergeSnapshot {
