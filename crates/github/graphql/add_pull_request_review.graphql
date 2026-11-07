@@ -1,0 +1,33 @@
+# Starts your pending review on $commitOID, or, with an $event, posts a review at once (design §8,
+# "Reviews"). Its $threads are on $commitOID's lines: GitHub refuses one outside the diff ("Line
+# could not be resolved"), and can't take a file-level one. GitHub refuses a second review while you
+# have one pending, even one posted at once, and a COMMENT with neither a body nor a thread, with an
+# empty message. Absent variables are left out, not sent as null.
+mutation AddPullRequestReview(
+  $pullRequestId: ID!
+  $commitOID: GitObjectID!
+  $event: PullRequestReviewEvent
+  $body: String
+  $threads: [DraftPullRequestReviewThread!]
+) {
+  addPullRequestReview(
+    input: {
+      pullRequestId: $pullRequestId
+      commitOID: $commitOID
+      event: $event
+      body: $body
+      threads: $threads
+    }
+  ) {
+    pullRequestReview {
+      id
+      state
+      # The thread it was started with, if any: its one comment.
+      comments(first: 1) {
+        nodes {
+          id
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# Changes the text of a comment in a review thread, pending or posted.
+mutation UpdatePullRequestReviewComment($id: ID!, $body: String!) {
+  updatePullRequestReviewComment(input: { pullRequestReviewCommentId: $id, body: $body }) {
+    pullRequestReviewComment {
+      id
+    }
+  }
+}

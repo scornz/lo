@@ -6,6 +6,7 @@ use http_client::http::HeaderMap;
 use serde::Deserialize;
 
 use crate::graphql::GraphQlError;
+use crate::review_writes::Rejection;
 
 /// Lo's OAuth app's client ID.
 pub const CLIENT_ID: &str = "Ov23liBORqwRdiPzqsPP";
@@ -71,6 +72,12 @@ pub enum GithubError {
     /// A GraphQL response's errors, when none of the cases above fits.
     #[error("{}", graphql_messages(.errors))]
     GraphQl { errors: Vec<GraphQlError> },
+
+    /// GitHub refused a comment, a review or an edit of one, as it explains in words: GraphQL's
+    /// `UNPROCESSABLE`, REST's `422`, or a mutation that answered nothing without an error
+    /// ([`crate::review_writes`]).
+    #[error("{0}")]
+    Rejected(Rejection),
 
     /// GitHub's pages didn't fit together: a cursor that doesn't move on, or a pull request that
     /// kept changing while its pages were read. Trying again later may work.
