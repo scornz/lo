@@ -1,0 +1,142 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/20/files?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"a635e9e61551bef3fc3511fb0396f5fce5045e4252b664e82d98ba71d6885a0b\"",
+      "last-modified": "Sat, 07 Nov 2026 02:15:12 GMT",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4907",
+      "x-ratelimit-reset": "1794031039",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "93"
+    },
+    "body": [
+      {
+        "sha": "a2449944e914b6b2df62c719c9a6558dcc7ebceb",
+        "filename": "e9/api/names.ts",
+        "status": "modified",
+        "additions": 7,
+        "deletions": 0,
+        "changes": 7,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fapi%2Fnames.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fapi%2Fnames.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fapi%2Fnames.ts?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -5,6 +5,13 @@ import type { User } from \"./user\";\n export class Names {\n   constructor(private readonly users: User[]) {}\n \n+  fullName(user: User): string {\n+    const first = user.first.trim();\n+    const middle = user.middle?.trim();\n+    const last = user.last.trim();\n+    return [first, middle, last].filter((name) => name).join(\" \");\n+  }\n+\n   sorted(): string[] {\n     return this.users.map((user) => user.last).sort();\n   }"
+      },
+      {
+        "sha": "d2eee989758953d9991698908a3483b3b9599206",
+        "filename": "e9/api/user.ts",
+        "status": "modified",
+        "additions": 0,
+        "deletions": 11,
+        "changes": 11,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fapi%2Fuser.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fapi%2Fuser.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fapi%2Fuser.ts?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -11,17 +11,6 @@ export function emailDomain(user: User): string {\n   return user.email.split(\"@\")[1] ?? \"\";\n }\n \n-export function fullName(user: User): string {\n-  const first = user.first.trim();\n-  const middle = user.middle?.trim();\n-  const last = user.last.trim();\n-  return [first, middle, last].filter(Boolean).join(\" \");\n-}\n-\n export function isValid(user: User): boolean {\n   return user.first.length > 0 && user.last.length > 0;\n }\n-\n-export function legacyName(user: User): string {\n-  return `${user.last.toUpperCase()}, ${user.first}`;\n-}"
+      },
+      {
+        "sha": "1b223bd86fe99748970c79d1cd34f545a9480928",
+        "filename": "e9/broken.ts",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 2,
+        "changes": 4,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fbroken.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fbroken.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fbroken.ts?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -2,8 +2,8 @@\n \n export function total(items: number[]): number {\n   let sum = 0;\n-  for (const item of items) {\n-    sum += item;\n+  for (const item of items {\n+    sum += item * 2;\n   }\n   return sum;\n }"
+      },
+      {
+        "sha": "5c49e8b2a5f53b3de0058e277b61b05d9c2bbb5e",
+        "filename": "e9/large.ts",
+        "status": "modified",
+        "additions": 3,
+        "deletions": 3,
+        "changes": 6,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Flarge.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Flarge.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Flarge.ts?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -4999,7 +4999,7 @@ export const ROWS: Array<[number, string]> = [\n   [4997, \"row 004997: 3477e0ff 2a54a042 19e562c4 22b73f24\"],\n   [4998, \"row 004998: 2c92664a 3f799b22 48b7f5bc 25662ef0\"],\n   [4999, \"row 004999: 5793a1be 1d5feddd 04f9573c 0dce26b1\"],\n-  [5000, \"row 005000: 594e358b 1d9d667b 48b3246d 691c9564\"],\n+  [5000, \"row 005000: 594e358b 1d9d667b 48b3246d 691c9564 changed\"],\n   [5001, \"row 005001: 53940e25 1d2cca01 6782169d 0d9ad282\"],\n   [5002, \"row 005002: 2f725bc8 7ce7bfcd 52e16bcb 4d6c06ef\"],\n   [5003, \"row 005003: 6f3b5c9e 223dc21f 049392c9 7489cc77\"],\n@@ -11999,7 +11999,7 @@ export const ROWS: Array<[number, string]> = [\n   [11997, \"row 011997: 50167227 71a08784 62212563 6e1db8e9\"],\n   [11998, \"row 011998: 61570179 1721e0dc 31319761 2ec97a82\"],\n   [11999, \"row 011999: 2d8a04cd 40414616 7d606f4e 462baa30\"],\n-  [12000, \"row 012000: 5cb2594d 4104fdc6 2eb0f383 63433567\"],\n+  [12000, \"row 012000: 5cb2594d 4104fdc6 2eb0f383 63433567 changed\"],\n   [12001, \"row 012001: 5167301a 4d8724b6 637b507d 34e17191\"],\n   [12002, \"row 012002: 3ce701b6 622172f6 0202a6cf 7c156110\"],\n   [12003, \"row 012003: 5f97a114 5bd05913 4b881d7c 5547dea1\"],\n@@ -17999,7 +17999,7 @@ export const ROWS: Array<[number, string]> = [\n   [17997, \"row 017997: 11c34d9c 2d1c45e0 1b2f8c43 4ea190a6\"],\n   [17998, \"row 017998: 511faa9e 75fa94ad 1637265e 7eb7f0b6\"],\n   [17999, \"row 017999: 5e1c7db8 2081eb4d 317f1ce7 10429b14\"],\n-  [18000, \"row 018000: 04d34663 4ab2100e 703c2d71 7ecb8f47\"],\n+  [18000, \"row 018000: 04d34663 4ab2100e 703c2d71 7ecb8f47 changed\"],\n   [18001, \"row 018001: 662bbf59 421fa076 2a5fc4e4 75776a77\"],\n   [18002, \"row 018002: 72eee6e0 2277b713 61945212 50984dca\"],\n   [18003, \"row 018003: 3f1b321c 1276eca2 3da98926 456b3d6a\"],"
+      },
+      {
+        "sha": "3aeaec0ae93a8c0baa340f38fb6792a584be3a1a",
+        "filename": "e9/lib.rs",
+        "status": "modified",
+        "additions": 8,
+        "deletions": 8,
+        "changes": 16,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Flib.rs",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Flib.rs",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Flib.rs?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -5,6 +5,14 @@ pub fn parse_header(line: &str) -> Option<(&str, &str)> {\n     Some((name.trim(), value.trim()))\n }\n \n+pub fn checksum(bytes: &[u8]) -> u32 {\n+    let mut sum: u32 = 0;\n+    for byte in bytes {\n+        sum = sum.wrapping_mul(31).wrapping_add(u32::from(*byte));\n+    }\n+    sum\n+}\n+\n pub fn parse_headers(text: &str) -> Vec<(&str, &str)> {\n     text.lines().filter_map(parse_header).collect()\n }\n@@ -18,11 +26,3 @@ pub fn has_header(text: &str, wanted: &str) -> bool {\n         .iter()\n         .any(|name| name.eq_ignore_ascii_case(wanted))\n }\n-\n-pub fn checksum(bytes: &[u8]) -> u32 {\n-    let mut sum: u32 = 0;\n-    for byte in bytes {\n-        sum = sum.wrapping_mul(31).wrapping_add(u32::from(*byte));\n-    }\n-    sum\n-}"
+      },
+      {
+        "sha": "f752f682e563dcb085088734a13796ac156ba72a",
+        "filename": "e9/short.py",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 3,
+        "changes": 7,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fshort.py",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fshort.py",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fshort.py?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -1,8 +1,5 @@\n \"\"\"Fixture E9: two lines move below describe(), too few to count as a move.\"\"\"\n \n-TIMEOUT_SECONDS = 30\n-RETRY_LIMIT = 3\n-\n \n def describe():\n     parts = [\n@@ -12,5 +9,9 @@ def describe():\n     return \", \".join(parts)\n \n \n+TIMEOUT_SECONDS = 30\n+RETRY_LIMIT = 3\n+\n+\n def main():\n     print(describe())"
+      },
+      {
+        "sha": "82121d5be08d71399d8691adfbf42034f0529924",
+        "filename": "e9/syntax/args.ts",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 2,
+        "changes": 4,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fargs.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fargs.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fsyntax%2Fargs.ts?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -1,9 +1,9 @@\n // Fixture E9: clamp's arguments are reordered, in its signature and at its call.\n \n-export function clamp(value: number, min: number, max: number): number {\n+export function clamp(min: number, max: number, value: number): number {\n   return Math.min(Math.max(value, min), max);\n }\n \n export function percent(done: number, total: number): number {\n-  return clamp((done / total) * 100, 0, 100);\n+  return clamp(0, 100, (done / total) * 100);\n }"
+      },
+      {
+        "sha": "bdbc51fac38ba81057d0ecbee4b8a730f5a1fa72",
+        "filename": "e9/syntax/config.json",
+        "status": "modified",
+        "additions": 5,
+        "deletions": 5,
+        "changes": 10,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fconfig.json",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fconfig.json",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fsyntax%2Fconfig.json?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -1,10 +1,10 @@\n {\n-  \"name\": \"e9\",\n   \"version\": \"1.0.0\",\n+  \"name\": \"e9\",\n   \"private\": true,\n+  \"license\": \"MIT\",\n   \"scripts\": {\n-    \"build\": \"tsc\",\n-    \"test\": \"node --test\"\n-  },\n-  \"license\": \"MIT\"\n+    \"test\": \"node --test\",\n+    \"build\": \"tsc\"\n+  }\n }"
+      },
+      {
+        "sha": "f60bdd3f8df394b3888096ab3fda1e948feb7350",
+        "filename": "e9/syntax/rename.rs",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 2,
+        "changes": 4,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Frename.rs",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Frename.rs",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fsyntax%2Frename.rs?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -4,6 +4,6 @@ pub fn average(values: &[f64]) -> f64 {\n     if values.is_empty() {\n         return 0.0;\n     }\n-    let total: f64 = values.iter().sum();\n-    total / values.len() as f64\n+    let sum: f64 = values.iter().sum();\n+    sum / values.len() as f64\n }"
+      },
+      {
+        "sha": "f8069abf8c01a12106d554a7cf73c5159ffaa0b3",
+        "filename": "e9/syntax/wrap.py",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 3,
+        "changes": 7,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fwrap.py",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/243ff703bd116e43c8bb0ab65d5252dde71b2bb6/e9%2Fsyntax%2Fwrap.py",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e9%2Fsyntax%2Fwrap.py?ref=243ff703bd116e43c8bb0ab65d5252dde71b2bb6",
+        "patch": "@@ -3,7 +3,8 @@\n \n def save(path, data, log):\n     tmp = path + \".tmp\"\n-    with open(tmp, \"wb\") as out:\n-        out.write(data)\n-    log.append(f\"saved {len(data)} bytes to {path}\")\n+    if data:\n+        with open(tmp, \"wb\") as out:\n+            out.write(data)\n+        log.append(f\"saved {len(data)} bytes to {path}\")\n     return tmp"
+      }
+    ]
+  }
+}

@@ -147,3 +147,63 @@ fn fixtures_hold_no_tokens() {
     }
     assert!(checked > 0);
 }
+
+/// Base64 as GitHub's contents API gives it: lines of the standard alphabet, padded.
+fn base64_decode(text: &str) -> Vec<u8> {
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let (mut bytes, mut bits, mut count) = (Vec::new(), 0u32, 0);
+    for character in text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace() && *byte != b'=')
+    {
+        let value = alphabet
+            .iter()
+            .position(|letter| *letter == character)
+            .unwrap();
+        bits = (bits << 6) | value as u32;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            bytes.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    bytes
+}
+
+#[test]
+fn github_gives_a_text_patch_for_a_file_its_attributes_call_binary() {
+    // yarnpkg/berry#7077, read as rozed-bot: its `.gitattributes` marks `/.pnp.*` and
+    // `hook.js` binary, which unsets `diff`. `repo_cache::Repo::patch` ignores attributes too.
+    let http = ReplayHttpClient::cassette("rest_pull_files_berry_7077");
+    let client = GithubClient::new(http, Token::new("gho_FAKE"));
+    let pull = PullRef::new("yarnpkg", "berry", 7077);
+    let summary: serde_json::Value = block_on(client.get(&pull.rest_path())).unwrap();
+    let head = summary["head"]["sha"].as_str().unwrap();
+    let files = block_on(client.pull_files(&pull)).unwrap();
+    let path = format!("/repos/yarnpkg/berry/contents/.gitattributes?ref={head}");
+    let contents: serde_json::Value = block_on(client.get(&path)).unwrap();
+    let attributes =
+        String::from_utf8(base64_decode(contents["content"].as_str().unwrap())).unwrap();
+    let marked = |pattern: &str| {
+        (attributes.lines()).any(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some(pattern) && fields.any(|field| field == "binary")
+        })
+    };
+    assert!(marked("/.pnp.*"), "{attributes}");
+    assert!(
+        marked("packages/yarnpkg-pnp/sources/hook.js"),
+        "{attributes}"
+    );
+
+    let file = |name: &str| (files.iter()).find(|file| file.filename == name).unwrap();
+    let pnp = file(".pnp.cjs").parsed_patch().unwrap().unwrap();
+    assert!(!pnp.hunks.is_empty());
+    // hook.js is one line of 140 kB, too large for a patch.
+    let hook = file("packages/yarnpkg-pnp/sources/hook.js");
+    assert_eq!(
+        (hook.additions, hook.deletions, hook.patch.as_ref()),
+        (1, 1, None)
+    );
+}

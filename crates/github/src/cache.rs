@@ -519,7 +519,9 @@ mod tests {
     use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
     use crate::push_history::PushHistory;
-    use crate::queries::{StackLayerList, TrunkRuleList};
+    use crate::queries::{
+        PullRequestTimeline, ReviewThreadList, StackLayerList, TrunkRuleList, ViewerPendingReview,
+    };
 
     fn account(login: &str) -> Account {
         Account {
@@ -753,6 +755,9 @@ mod tests {
             Stamped::<PushHistory>::NAME,
             Stamped::<StackLayerList>::NAME,
             TrunkRuleList::NAME,
+            Stamped::<ReviewThreadList>::NAME,
+            Stamped::<ViewerPendingReview>::NAME,
+            Stamped::<PullRequestTimeline>::NAME,
         ];
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "{names:?}");
@@ -772,16 +777,31 @@ mod tests {
                     Stamped::<StackLayerList>::version()
                 ),
                 (TrunkRuleList::NAME, TrunkRuleList::version()),
+                (
+                    Stamped::<ReviewThreadList>::NAME,
+                    Stamped::<ReviewThreadList>::version()
+                ),
+                (
+                    Stamped::<ViewerPendingReview>::NAME,
+                    Stamped::<ViewerPendingReview>::version()
+                ),
+                (
+                    Stamped::<PullRequestTimeline>::NAME,
+                    Stamped::<PullRequestTimeline>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
-                ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
+                ("PullRequestCheck", "ac60175b0801cac9".to_string()),
                 ("OpenPullRequests", "64bdb1e8ba14f7e0".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
                 ("StackLayers", "a79d34dd50325fec".to_string()),
                 ("TrunkRules", "22f61a7701923aef".to_string()),
+                ("ReviewThreads", "43e25e3f178e610c".to_string()),
+                ("PendingReview", "e545a53a4fa554b7".to_string()),
+                ("Timeline", "f817055119f7f095".to_string()),
             ]
         );
     }

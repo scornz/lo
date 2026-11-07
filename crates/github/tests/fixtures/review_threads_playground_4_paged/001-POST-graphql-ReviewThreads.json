@@ -1,0 +1,163 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "ReviewThreads",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 4,
+      "first": 2,
+      "after": null
+    },
+    "query_sha256": "c48252f9340f734e8ad9f51a8be4878dfb79ecc1886d2314dfaeab17fa9a5145"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4995",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "5"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4995,
+          "used": 5,
+          "resetAt": "2026-11-07T06:16:51Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "totalCount": 15,
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMToxMFrOtJdIWw=="
+              },
+              "nodes": [
+                {
+                  "id": "PRRT_kwDOVk6v9M60l0SS",
+                  "path": "review.txt",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": 30,
+                  "startLine": 30,
+                  "originalLine": 30,
+                  "originalStartLine": null,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 3,
+                    "pageInfo": {
+                      "hasNextPage": true,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMTowN1rPAAAAAQvpCFw="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-kFbA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 2: COMMENT review, no body",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:21:03Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494787948",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                        }
+                      },
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-kIXA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 3a: reply, no review id, no pending review",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:21:07Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494788700",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOVk6v9M60l0hb",
+                  "path": "review.txt",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": null,
+                  "line": 13,
+                  "startLine": 13,
+                  "originalLine": 13,
+                  "originalStartLine": null,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMToxMFrPAAAAAQvpC6Q="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-kLpA",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 5 control: REST comment on line 13 (context line in hunk 1)",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:21:10Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494789540",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "fc0f4b4b42bbc15db99629271361589110885c56"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
