@@ -1,5 +1,10 @@
-//! The fake GitHub's REST API, which answers per token, and signing in to it.
+//! The fake GitHub's API, which answers per token, and signing in to it. Its REST and GraphQL
+//! requests go through a list of handlers; a feature's tests add theirs in a file of their own
+//! under `github/`.
 
+mod viewed;
+
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,6 +19,8 @@ use gpui::{Entity, Task, TestAppContext};
 use http_client::http::HeaderValue;
 use http_client::{AsyncBody, HttpClient, Request, Response, Url};
 use parking_lot::Mutex;
+
+pub use viewed::WriteAnswer;
 
 /// A pull request the fake GitHub has.
 #[derive(Clone, Debug)]
@@ -62,7 +69,8 @@ struct State {
     /// The repositories each token can see, lowercased `owner/name`. Public ones need no token.
     sees: HashMap<String, Vec<String>>,
     public: Vec<String>,
-    /// Answers that win over the rest, by token (`""` for none) and path.
+    /// Answers that win over the rest, by token (`""` for none) and route: a path with its query,
+    /// or `graphql:<Operation>`. `/graphql` answers every GraphQL request.
     answers: HashMap<(String, String), Answer>,
     offline: bool,
     /// Whether every request connects and then times out, as on a slow connection.
@@ -71,12 +79,28 @@ struct State {
     proxy_refusing: bool,
     /// Tokens whose requests can't connect, though others' can.
     cut_off: Vec<String>,
-    /// Requests to these paths wait until they're let go, each with what lets it go.
+    /// Requests to these routes wait until they're let go, each with what lets it go: a path
+    /// without its query, where `/graphql` holds every GraphQL request, or `graphql:<Operation>`.
     held: HashMap<String, Vec<oneshot::Sender<()>>>,
     /// How many requests without a token GitHub still allows this hour, when it says.
     anonymous_left: Option<u32>,
-    /// Each request, as `GET /path as token`.
+    /// What a request no handler answers gets, when not GitHub's 404.
+    unhandled: Option<Answer>,
+    /// Each feature's own data, by its type ([`State::get`]).
+    features: HashMap<TypeId, Box<dyn Any + Send>>,
+    /// Each request, as `GET /path as token`, or `POST /graphql Operation as token`.
     requests: Vec<String>,
+}
+
+impl State {
+    /// A feature's own data, which starts as its `Default`.
+    fn get<T: Any + Default + Send>(&mut self) -> &mut T {
+        self.features
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()))
+            .downcast_mut()
+            .expect("stored by its type")
+    }
 }
 
 /// GitHub's REST API as far as opening a pull request needs it.
@@ -123,7 +147,8 @@ impl FakeGithub {
         self.0.lock().public.push(repo.to_ascii_lowercase());
     }
 
-    /// Answers `path` asked with `token` (`""` for none) with `answer`.
+    /// Answers `path` asked with `token` (`""` for none) with `answer`. `path` can also be a
+    /// GraphQL operation, as `graphql:<Operation>`, or `/graphql` for every one.
     pub fn answer(&self, token: &str, path: &str, answer: Answer) {
         self.0
             .lock()
@@ -175,7 +200,8 @@ impl FakeGithub {
         self.0.lock().cut_off.retain(|cut_off| cut_off != token);
     }
 
-    /// Makes requests to `path`, with any token, wait until [`Self::let_go`].
+    /// Makes requests to `path`, with any token, wait until [`Self::let_go`]. `path` can also be a
+    /// GraphQL operation, as `graphql:<Operation>`, or `/graphql` for every one.
     pub fn hold(&self, path: &str) {
         self.0.lock().held.entry(path.to_string()).or_default();
     }
@@ -196,15 +222,33 @@ impl FakeGithub {
             .remove(&(token.to_string(), path.to_string()));
     }
 
-    /// The requests made since the last call, as `GET /path as token`.
+    /// The requests made since the last call, as `GET /path as token`, or
+    /// `POST /graphql Operation as token`.
     pub fn requests(&self) -> Vec<String> {
         std::mem::take(&mut self.0.lock().requests)
     }
 
-    fn respond(&self, method: &str, path: &str, token: &str) -> anyhow::Result<Answer> {
+    /// Answers the requests no handler knows with `answer` instead of GitHub's 404.
+    pub fn answer_unhandled(&self, answer: Answer) {
+        self.0.lock().unhandled = Some(answer);
+    }
+
+    /// Runs `f` on a feature's own data ([`State::get`]).
+    pub fn with<T: Any + Default + Send, R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        f(self.0.lock().get())
+    }
+
+    fn respond(&self, asked: &Asked) -> anyhow::Result<Answer> {
         let mut state = self.0.lock();
+        let (path, token) = (asked.target.as_str(), asked.token.as_str());
         let who = if token.is_empty() { "nobody" } else { token };
-        state.requests.push(format!("{method} {path} as {who}"));
+        let operation = match &asked.graphql {
+            Some(graphql) => format!(" {}", graphql.operation),
+            None => String::new(),
+        };
+        state
+            .requests
+            .push(format!("{} {path}{operation} as {who}", asked.method));
         if state.offline || state.cut_off.iter().any(|cut_off| cut_off == token) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
@@ -225,7 +269,7 @@ impl FakeGithub {
             )));
         }
         let Some(left) = state.anonymous_left.filter(|_| token.is_empty()) else {
-            return self.answer_for(&state, path, token);
+            return answer_for(&mut state, asked);
         };
         let reset = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -234,7 +278,7 @@ impl FakeGithub {
         let answer = match left.checked_sub(1) {
             Some(left) => {
                 state.anonymous_left = Some(left);
-                self.answer_for(&state, path, token)?
+                answer_for(&mut state, asked)?
             }
             None => Answer::new(403, r#"{"message":"API rate limit exceeded"}"#),
         };
@@ -244,36 +288,106 @@ impl FakeGithub {
             .header("x-ratelimit-reset", reset.to_string())
             .header("x-ratelimit-resource", "core"))
     }
+}
 
-    fn answer_for(&self, state: &State, path: &str, token: &str) -> anyhow::Result<Answer> {
-        if let Some(answer) = state.answers.get(&(token.to_string(), path.to_string())) {
+/// What the fake GitHub answers `asked`: the answer a test set for it, or else its handler's, or
+/// else GitHub's 404.
+fn answer_for(state: &mut State, asked: &Asked) -> anyhow::Result<Answer> {
+    let routes = [asked.graphql_route(), Some(asked.target.clone())];
+    for route in routes.into_iter().flatten() {
+        if let Some(answer) = state.answers.get(&(asked.token.clone(), route)) {
             return Ok(answer.clone());
         }
-        let (path, query) = path.split_once('?').unwrap_or((path, ""));
-        let asked = Asked { path, query, token };
-        Ok(HANDLERS
-            .iter()
-            .find_map(|handler| handler(state, &asked))
-            .unwrap_or_else(not_found))
     }
+    for handler in HANDLERS {
+        if let Some(answer) = handler(state, asked) {
+            return answer;
+        }
+    }
+    Ok(state.unhandled.clone().unwrap_or_else(not_found))
 }
 
 /// A request to the fake GitHub.
-struct Asked<'a> {
+struct Asked {
+    method: String,
+    /// The path and query as asked.
+    target: String,
     /// The path, without its query.
-    path: &'a str,
-    query: &'a str,
+    path: String,
+    query: String,
     /// The token it came with, `""` for none.
-    token: &'a str,
+    token: String,
+    /// The operation and its variables, for a GraphQL request.
+    graphql: Option<GraphQl>,
 }
 
-/// Answers the requests it knows, and leaves the rest to the next handler with `None`.
-type Handler = fn(&State, &Asked) -> Option<Answer>;
+/// A GraphQL request's operation and its variables.
+struct GraphQl {
+    operation: String,
+    variables: serde_json::Value,
+}
 
-/// The fake GitHub's handlers, tried in order once no answer a test set fits. A request none of
-/// them answers isn't found. A feature's tests add their handlers here, each written in a file of
-/// its own under `test_support/github/`.
-const HANDLERS: &[Handler] = &[get_repo, get_pull, get_pull_files];
+impl Asked {
+    /// `request`'s method, path, query and token, and for a GraphQL request, the operation and
+    /// variables in its body.
+    fn read(request: Request<AsyncBody>) -> Self {
+        let token = request
+            .headers()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split_once(' ').map(|(_, token)| token.to_string()))
+            .unwrap_or_default();
+        let target = request
+            .uri()
+            .path_and_query()
+            .map(|path| path.to_string())
+            .unwrap_or_default();
+        let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+        let (path, query) = (path.to_string(), query.to_string());
+        let method = request.method().to_string();
+        let graphql = (path == "/graphql").then(|| {
+            use futures::AsyncReadExt as _;
+            let mut body = Vec::new();
+            futures::executor::block_on(request.into_body().read_to_end(&mut body)).unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            GraphQl {
+                operation: body["operationName"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                variables: body["variables"].clone(),
+            }
+        });
+        Self {
+            method,
+            target,
+            path,
+            query,
+            token,
+            graphql,
+        }
+    }
+
+    /// `graphql:<Operation>`, for a GraphQL request.
+    fn graphql_route(&self) -> Option<String> {
+        let graphql = self.graphql.as_ref()?;
+        Some(format!("graphql:{}", graphql.operation))
+    }
+}
+
+/// Answers the requests it knows, and leaves the rest to the next handler with `None`. It may
+/// change `State`, as a write does, and keep a feature's own data there ([`State::get`]).
+type Handler = fn(&mut State, &Asked) -> Option<anyhow::Result<Answer>>;
+
+/// The fake GitHub's handlers, tried once no answer a test set fits. A request none of them
+/// answers isn't found. They answer different requests, so they're listed in alphabetical order,
+/// one per line, and a feature's tests add theirs in a file of their own under `github/`.
+const HANDLERS: &[Handler] = &[
+    get_pull,                    // GET /repos/{owner}/{name}/pulls/{number}
+    get_pull_files,              // GET /repos/{owner}/{name}/pulls/{number}/files
+    get_repo,                    // GET /repos/{owner}/{name}
+    viewed::mark_file_as_viewed, // GraphQL markFileAsViewed and unmarkFileAsViewed
+];
 
 fn not_found() -> Answer {
     Answer::new(404, r#"{"message":"Not Found"}"#)
@@ -281,7 +395,7 @@ fn not_found() -> Answer {
 
 /// The repository a request under `/repos/{owner}/{name}` is for, as GitHub names it now, and the
 /// path's segments after its name, when the request's token can see it. Its old names find it too.
-fn repository<'a>(state: &State, asked: &Asked<'a>) -> Option<(String, Vec<&'a str>)> {
+fn repository<'a>(state: &State, asked: &'a Asked) -> Option<(String, Vec<&'a str>)> {
     let mut segments = asked.path.strip_prefix("/repos/")?.split('/');
     let (owner, repo) = (segments.next()?, segments.next()?);
     let asked_for = format!("{owner}/{repo}").to_ascii_lowercase();
@@ -300,7 +414,7 @@ fn repository<'a>(state: &State, asked: &Asked<'a>) -> Option<(String, Vec<&'a s
     let visible = state.public.contains(&key)
         || state
             .sees
-            .get(asked.token)
+            .get(&asked.token)
             .is_some_and(|repos| repos.contains(&key));
     visible.then(|| (canonical, segments.collect()))
 }
@@ -314,30 +428,31 @@ fn pull_request<'a>(state: &'a State, repo: &str, number: &str) -> Option<&'a Fa
 }
 
 /// `/repos/{owner}/{name}`: the repository, by its name now.
-fn get_repo(state: &State, asked: &Asked) -> Option<Answer> {
+fn get_repo(state: &mut State, asked: &Asked) -> Option<anyhow::Result<Answer>> {
     let (repo, rest) = repository(state, asked)?;
+    let json = serde_json::json!({ "full_name": repo });
     rest.is_empty()
-        .then(|| Answer::new(200, serde_json::json!({ "full_name": repo }).to_string()))
+        .then(|| Ok(Answer::new(200, json.to_string())))
 }
 
 /// `/repos/{owner}/{name}/pulls/{number}`: the pull request.
-fn get_pull(state: &State, asked: &Asked) -> Option<Answer> {
+fn get_pull(state: &mut State, asked: &Asked) -> Option<anyhow::Result<Answer>> {
     let (repo, rest) = repository(state, asked)?;
     let ["pulls", number] = rest.as_slice() else {
         return None;
     };
     let pull = pull_request(state, &repo, number)?;
-    Some(Answer::new(200, pull_json(pull).to_string()))
+    Some(Ok(Answer::new(200, pull_json(pull).to_string())))
 }
 
 /// `/repos/{owner}/{name}/pulls/{number}/files`: a page of the pull request's files.
-fn get_pull_files(state: &State, asked: &Asked) -> Option<Answer> {
+fn get_pull_files(state: &mut State, asked: &Asked) -> Option<anyhow::Result<Answer>> {
     let (repo, rest) = repository(state, asked)?;
     let ["pulls", number, "files"] = rest.as_slice() else {
         return None;
     };
     let pull = pull_request(state, &repo, number)?;
-    Some(files_page(pull, asked.query))
+    Some(Ok(files_page(pull, &asked.query)))
 }
 
 /// One page of `pull`'s files, as `query` (`per_page` and `page`) asks, with a `Link` header to
@@ -412,24 +527,16 @@ impl HttpClient for FakeGithub {
         &self,
         request: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
-        let token = request
-            .headers()
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split_once(' ').map(|(_, token)| token.to_string()))
-            .unwrap_or_default();
-        let path = request
-            .uri()
-            .path_and_query()
-            .map(|path| path.to_string())
-            .unwrap_or_default();
-        let method = request.method().to_string();
+        let asked = Asked::read(request);
         let held = {
             let mut state = self.0.lock();
-            let bare = path.split('?').next().unwrap_or_default().to_string();
-            state.held.get_mut(&bare).map(|waiting| {
+            let route = [Some(asked.path.clone()), asked.graphql_route()]
+                .into_iter()
+                .flatten()
+                .find(|route| state.held.contains_key(route));
+            route.map(|route| {
                 let (let_go, held) = oneshot::channel();
-                waiting.push(let_go);
+                state.held.entry(route).or_default().push(let_go);
                 held
             })
         };
@@ -438,7 +545,7 @@ impl HttpClient for FakeGithub {
             if let Some(held) = held {
                 held.await.ok();
             }
-            let answer = this.respond(&method, &path, &token)?;
+            let answer = this.respond(&asked)?;
             let mut response = Response::builder().status(answer.status);
             for (name, value) in answer.headers {
                 response = response.header(name, value);

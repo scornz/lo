@@ -17,7 +17,8 @@ use crate::pr_diff::{DiffCursor, DiffPosition};
 use futures::FutureExt as _;
 
 use crate::test_support::{
-    Answer, FakeGithub, FakePull, GitServer, anonymous, init, sign_in, sign_in_as, workspace,
+    Answer, FakeGithub, FakePull, GitServer, WriteAnswer, anonymous, init, sign_in, sign_in_as,
+    workspace,
 };
 
 use super::viewed::ToastLog;
@@ -294,120 +295,14 @@ fn details_at(head: &str, files: &[(&str, &str)]) -> PullRequestData {
     serde_json::from_value(details).unwrap()
 }
 
-/// How GitHub answers a viewed-mark mutation.
-#[derive(Clone, Copy, Debug)]
-enum WriteAnswer {
-    Done,
-    Forbidden,
-    RateLimited,
-    Offline,
-}
-
-/// GitHub as these tests need it: the viewed-mark mutations answer as each test says, and every
-/// other request fails as if GitHub were down, so the poller's polls change nothing and it
-/// doesn't think it's offline.
-#[derive(Default)]
-struct WriteGithub {
-    answers: std::sync::Mutex<std::collections::VecDeque<WriteAnswer>>,
-    /// Each mutation's operation and variables.
-    mutations: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
-}
-
-impl WriteGithub {
-    fn answer(&self, answer: WriteAnswer) {
-        self.answers.lock().unwrap().push_back(answer);
-    }
-
-    fn mutations(&self) -> Vec<(String, serde_json::Value)> {
-        self.mutations.lock().unwrap().clone()
-    }
-}
-
-impl http_client::HttpClient for WriteGithub {
-    fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
-        None
-    }
-
-    fn proxy(&self) -> Option<&http_client::Url> {
-        None
-    }
-
-    fn send(
-        &self,
-        request: http_client::Request<http_client::AsyncBody>,
-    ) -> futures::future::BoxFuture<
-        'static,
-        anyhow::Result<http_client::Response<http_client::AsyncBody>>,
-    > {
-        use futures::AsyncReadExt as _;
-        let mut body = Vec::new();
-        futures::executor::block_on(request.into_body().read_to_end(&mut body)).unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-        let operation = body["operationName"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        if !operation.ends_with("FileAsViewed") {
-            let unavailable = http_client::Response::builder()
-                .status(503)
-                .body(http_client::AsyncBody::from(b"{}".to_vec()))
-                .unwrap();
-            return Box::pin(async { Ok(unavailable) });
-        }
-        self.mutations
-            .lock()
-            .unwrap()
-            .push((operation.clone(), body["variables"].clone()));
-        let answer = self.answers.lock().unwrap().pop_front().expect("an answer");
-        let field = format!("{}{}", operation[..1].to_lowercase(), &operation[1..]);
-        let field = field.as_str();
-        let (remaining, json) = match answer {
-            WriteAnswer::Offline => {
-                return Box::pin(async { Err(anyhow::anyhow!("the network is down")) });
-            }
-            WriteAnswer::Done => (
-                "4999",
-                serde_json::json!({ "data": { field: { "pullRequest": { "id": "PR_x" } } } }),
-            ),
-            WriteAnswer::Forbidden => (
-                "4999",
-                serde_json::json!({
-                    "data": { field: null },
-                    "errors": [{
-                        "type": "FORBIDDEN",
-                        "path": [field],
-                        "message": "Resource not accessible by integration",
-                    }],
-                }),
-            ),
-            WriteAnswer::RateLimited => (
-                "0",
-                serde_json::json!({
-                    "errors": [{
-                        "type": "RATE_LIMITED",
-                        "message": "API rate limit exceeded for user ID 1.",
-                    }],
-                }),
-            ),
-        };
-        let response = http_client::Response::builder()
-            .status(200)
-            .header("content-type", "application/json")
-            .header("x-ratelimit-remaining", remaining)
-            .body(http_client::AsyncBody::from(
-                serde_json::to_vec(&json).unwrap(),
-            ))
-            .unwrap();
-        Box::pin(async { Ok(response) })
-    }
-}
-
 const BOT: &str = "rozed-bot";
 
 /// The tab signed in as the test bot, with its poller and the database where it records
 /// viewed files.
 struct SignedIn {
-    github: std::sync::Arc<WriteGithub>,
+    /// GitHub, which answers the viewed-mark mutations as each test says, and every other request
+    /// as if it were down, so the poller's polls change nothing and it doesn't think it's offline.
+    github: FakeGithub,
     records: ViewedRecords,
     pull: PullRef,
     accounts: Entity<github::accounts::Accounts>,
@@ -423,12 +318,16 @@ async fn sign_in_bot(
     recorded: &[(&str, &str)],
     cx: &mut VisualTestContext,
 ) -> SignedIn {
-    let github = std::sync::Arc::new(WriteGithub::default());
+    let github = FakeGithub::default();
+    github.answer_unhandled(Answer::new(503, "{}"));
     let db = github::db::LoDb::open_test(name).await;
     let store =
         std::sync::Arc::new(credentials_provider::test_support::FakeCredentialsProvider::default());
     let accounts = cx
-        .update(|_, cx| github::accounts::Accounts::load(db.clone(), store, github.clone(), cx))
+        .update(|_, cx| {
+            let http = std::sync::Arc::new(github.clone());
+            github::accounts::Accounts::load(db.clone(), store, http, cx)
+        })
         .unwrap();
     let user = github::AuthenticatedUser {
         user: github::User {

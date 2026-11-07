@@ -10,7 +10,7 @@ mod git;
 mod github;
 
 pub use git::GitServer;
-pub use github::{Answer, FakeGithub, FakePull, anonymous, sign_in, sign_in_as};
+pub use github::{Answer, FakeGithub, FakePull, WriteAnswer, anonymous, sign_in, sign_in_as};
 
 /// Sets the app up as Lo does: the command palette, the editor, Zed's keymap with the tab's
 /// keys over it, and Lo's changes to every workspace.

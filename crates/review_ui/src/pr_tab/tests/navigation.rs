@@ -158,9 +158,9 @@ async fn a_change_key_back_to_where_the_cursor_started_moves_the_list_with_it(
     );
 
     // `e` marks the file read, not the one the list showed before.
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
+    assert_eq!(github.github.viewed_mutations()[0].1["path"], "a.rs");
 }
 
 #[gpui::test]

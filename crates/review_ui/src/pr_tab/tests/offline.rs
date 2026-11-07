@@ -1033,7 +1033,7 @@ async fn after_github_listed_a_newer_head_its_older_copy_doesnt_mark_as_of_it(
     // GitHub would mark a.rs as of NEWER, which isn't on screen.
     tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
     cx.simulate_keystrokes("e");
-    assert_eq!(signed_in.github.mutations(), []);
+    assert_eq!(signed_in.github.viewed_mutations(), []);
     assert!(toasts(cx)[0].starts_with("There's a newer push"));
 }
 

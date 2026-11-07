@@ -31,7 +31,7 @@ async fn e_before_the_diff_shows_a_file_marks_nothing_and_says_why(cx: &mut Test
         ["The diff is still loading, so there's no file to mark viewed yet."]
     );
     assert_eq!(marks(&tab, cx), [mark("a.rs", Some(ViewedState::Unviewed))]);
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
 
     // Nor once it exists, until a file is in it.
     let editor = test_diff_editor(&workspace, cx);
@@ -40,7 +40,7 @@ async fn e_before_the_diff_shows_a_file_marks_nothing_and_says_why(cx: &mut Test
     });
     cx.simulate_keystrokes("e");
     assert_eq!(toasts(cx).len(), 2);
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
 }
 
 #[gpui::test]
@@ -69,9 +69,9 @@ async fn e_acts_on_the_file_at_the_top_of_the_view_when_the_cursor_is_out_of_it(
     // The list follows the view.
     assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
 
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations()[0].1["path"], "b.rs");
+    assert_eq!(github.github.viewed_mutations()[0].1["path"], "b.rs");
 }
 
 #[gpui::test]
@@ -108,9 +108,9 @@ async fn e_and_the_file_keys_move_only_to_files_in_the_diff(cx: &mut TestAppCont
     assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
 
     // e marks a.rs, and says why it stays: b.rs, the next unviewed file, isn't in yet.
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations()[0].1["path"], "a.rs");
+    assert_eq!(github.github.viewed_mutations()[0].1["path"], "a.rs");
     assert_eq!(cursor(&tab, &editor, cx).0.as_deref(), Some("a.rs"));
     assert_ne!(selected(&tab, cx).as_deref(), Some("b.rs"));
     assert_eq!(
@@ -138,7 +138,7 @@ async fn e_marks_the_file_viewed_and_moves_to_the_next_unviewed_one(cx: &mut Tes
         cx,
     )
     .await;
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
 
     // GitHub's head is the head on screen, and the diff's cursor starts in the first file.
     cx.simulate_keystrokes("e");
@@ -155,7 +155,7 @@ async fn e_marks_the_file_viewed_and_moves_to_the_next_unviewed_one(cx: &mut Tes
     // b.rs is viewed, and a file changed since viewed counts as unviewed.
     assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"));
     assert_eq!(
-        github.github.mutations(),
+        github.github.viewed_mutations(),
         [(
             "MarkFileAsViewed".to_string(),
             serde_json::json!({ "pullRequestId": "PR_kwDOVk6v9M8AAAABNQwFBw", "path": "a.rs" })
@@ -199,7 +199,7 @@ async fn after_a_newer_push_e_wont_mark_a_file_but_still_clears_one(cx: &mut Tes
     // markFileAsViewed takes no commit, so GitHub would mark a.rs as of the newer push.
     cx.simulate_keystrokes("e");
     assert_eq!(marks(&tab, cx), before);
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
     assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
     let toast = toast_log(cx).pop().unwrap();
     assert_eq!(
@@ -211,9 +211,9 @@ async fn after_a_newer_push_e_wont_mark_a_file_but_still_clears_one(cx: &mut Tes
 
     // Clearing a mark is always allowed.
     go_to(&tab, "b.rs", cx);
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+    assert_eq!(github.github.viewed_mutations()[0].0, "UnmarkFileAsViewed");
 }
 
 #[gpui::test]
@@ -232,7 +232,7 @@ async fn a_newer_push_in_githubs_summary_also_stops_e_marking(cx: &mut TestAppCo
     });
 
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
     assert!(toasts(cx)[0].starts_with("There's a newer push"));
 
     // Older details, from before the summary, don't bring the old head back.
@@ -241,7 +241,7 @@ async fn a_newer_push_in_githubs_summary_also_stops_e_marking(cx: &mut TestAppCo
         tab.take_details(&details_with(&[("a.rs", "UNVIEWED")]), older, Some(BOT), cx)
     });
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
 }
 
 #[gpui::test]
@@ -262,9 +262,9 @@ async fn an_older_head_from_before_the_diff_loaded_doesnt_stop_e(cx: &mut TestAp
         )
     });
 
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
-    assert_eq!(github.github.mutations()[0].0, "MarkFileAsViewed");
+    assert_eq!(github.github.viewed_mutations()[0].0, "MarkFileAsViewed");
 }
 
 #[gpui::test]
@@ -307,7 +307,7 @@ async fn e_wont_mark_a_file_github_doesnt_list(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("e");
 
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
     assert_eq!(marks(&tab, cx)[2], mark("c.rs", None));
     assert_eq!(
         toasts(cx),
@@ -350,11 +350,11 @@ async fn e_marks_a_renamed_file_at_the_path_github_lists(cx: &mut TestAppContext
     );
     go_to(&tab, "new.rs", cx);
 
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
     cx.run_until_parked();
 
-    assert_eq!(github.github.mutations()[0].1["path"], "old.rs");
+    assert_eq!(github.github.viewed_mutations()[0].1["path"], "old.rs");
     assert_eq!(
         marks(&tab, cx)[1],
         mark("new.rs", Some(ViewedState::Viewed))
@@ -380,9 +380,9 @@ async fn writes_waiting_when_the_tab_closes_still_record_and_say_why_they_failed
         cx,
     )
     .await;
-    github.github.answer(WriteAnswer::Done);
-    github.github.answer(WriteAnswer::Done);
-    github.github.answer(WriteAnswer::Forbidden);
+    github.github.answer_viewed(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Forbidden);
 
     // Writes are a second apart, so the second and third wait while the tab closes.
     cx.simulate_keystrokes("e");
@@ -393,7 +393,7 @@ async fn writes_waiting_when_the_tab_closes_still_record_and_say_why_they_failed
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
 
-    assert_eq!(github.github.mutations().len(), 3);
+    assert_eq!(github.github.viewed_mutations().len(), 3);
     assert_eq!(
         github.recorded(),
         HashMap::from([
@@ -473,8 +473,8 @@ async fn each_failed_write_has_its_own_toast_and_the_selection_stays(cx: &mut Te
         cx,
     )
     .await;
-    github.github.answer(WriteAnswer::Forbidden);
-    github.github.answer(WriteAnswer::Forbidden);
+    github.github.answer_viewed(WriteAnswer::Forbidden);
+    github.github.answer_viewed(WriteAnswer::Forbidden);
 
     cx.simulate_keystrokes("e");
     cx.simulate_keystrokes("e");
@@ -524,7 +524,7 @@ async fn while_github_cant_be_reached_e_marks_nothing_and_stays(cx: &mut TestApp
 
     cx.simulate_keystrokes("e");
 
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
     assert_eq!(
         marks(&tab, cx)[0],
         mark("a.rs", Some(ViewedState::Unviewed))
@@ -548,7 +548,7 @@ async fn marks_github_read_before_a_write_finished_dont_bring_the_old_mark_back(
     )
     .await;
     let before_the_write = SystemTime::now() - Duration::from_millis(1);
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
     cx.run_until_parked();
     assert_eq!(marks(&tab, cx)[0], mark("a.rs", Some(ViewedState::Viewed)));
@@ -593,7 +593,7 @@ async fn e_on_a_viewed_file_clears_its_mark(cx: &mut TestAppContext) {
     )
     .await;
     go_to(&tab, "b.rs", cx);
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
 
     cx.simulate_keystrokes("e");
 
@@ -608,16 +608,16 @@ async fn e_on_a_viewed_file_clears_its_mark(cx: &mut TestAppContext) {
     );
     // Clearing a mark stays on the file, and forgets where it was viewed.
     assert_eq!(selected(&tab, cx).as_deref(), Some("b.rs"));
-    assert_eq!(github.github.mutations()[0].0, "UnmarkFileAsViewed");
+    assert_eq!(github.github.viewed_mutations()[0].0, "UnmarkFileAsViewed");
     assert_eq!(github.recorded(), HashMap::new());
 
     // Pressed again, after the second's spacing between writes, it's marked again.
-    github.github.answer(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Done);
     cx.simulate_keystrokes("e");
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
     assert_eq!(marks(&tab, cx)[1], mark("b.rs", Some(Viewed)));
-    assert_eq!(github.github.mutations()[1].0, "MarkFileAsViewed");
+    assert_eq!(github.github.viewed_mutations()[1].0, "MarkFileAsViewed");
     assert_eq!(
         github.recorded(),
         HashMap::from([("b.rs".to_string(), HEAD.to_string())])
@@ -647,7 +647,7 @@ async fn a_mark_that_github_refuses_reverts_and_a_toast_says_why(cx: &mut TestAp
     ] {
         workspace.update(cx, |workspace, cx| workspace.clear_all_notifications(cx));
         go_to(&tab, "a.rs", cx);
-        github.github.answer(answer);
+        github.github.answer_viewed(answer);
 
         cx.simulate_keystrokes("e");
         cx.executor().advance_clock(Duration::from_secs(2));
@@ -659,7 +659,7 @@ async fn a_mark_that_github_refuses_reverts_and_a_toast_says_why(cx: &mut TestAp
         // The selection still moved on; only the mark went back.
         assert_eq!(selected(&tab, cx).as_deref(), Some("c.rs"), "{answer:?}");
     }
-    assert_eq!(github.github.mutations().len(), 3);
+    assert_eq!(github.github.viewed_mutations().len(), 3);
     assert_eq!(before[0], mark("a.rs", Some(Unviewed)));
 }
 
@@ -676,8 +676,8 @@ async fn the_new_mark_shows_while_the_write_waits(cx: &mut TestAppContext) {
         cx,
     )
     .await;
-    github.github.answer(WriteAnswer::Done);
-    github.github.answer(WriteAnswer::Forbidden);
+    github.github.answer_viewed(WriteAnswer::Done);
+    github.github.answer_viewed(WriteAnswer::Forbidden);
 
     // The second write waits a second after the first, so its mark shows before GitHub answers.
     cx.simulate_keystrokes("e");
@@ -692,7 +692,7 @@ async fn the_new_mark_shows_while_the_write_waits(cx: &mut TestAppContext) {
             mark("c.rs", Some(Unviewed))
         ]
     );
-    assert_eq!(github.github.mutations().len(), 1);
+    assert_eq!(github.github.viewed_mutations().len(), 1);
 
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
@@ -705,7 +705,7 @@ async fn the_new_mark_shows_while_the_write_waits(cx: &mut TestAppContext) {
             mark("c.rs", Some(Unviewed))
         ]
     );
-    assert_eq!(github.github.mutations().len(), 2);
+    assert_eq!(github.github.viewed_mutations().len(), 2);
     assert_eq!(
         toasts(cx),
         [
@@ -750,7 +750,7 @@ async fn e_says_why_it_cant_mark_without_an_account_or_githubs_details(cx: &mut 
     );
     assert!(has_viewed_toast(&workspace, cx));
     assert_eq!(marks(&tab, cx), [mark("a.rs", None)]);
-    assert_eq!(github.github.mutations(), []);
+    assert_eq!(github.github.viewed_mutations(), []);
     // Each tab's toast is its own, so the first still shows.
     let first = toast_log(cx)[0].0.clone();
     assert!(workspace.read_with(cx, |workspace, _| workspace.has_notification(&first)));
