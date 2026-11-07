@@ -122,10 +122,17 @@ fn a_check_counts_its_unresolved_threads() {
         "submittedReviews": {"totalCount": 1},
         "reviewThreads": {
             "totalCount": 3,
-            "nodes": [{"isResolved": false}, {"isResolved": true}, {"isResolved": false}]
+            "nodes": [
+                {"isResolved": false, "comments": {"totalCount": 1}},
+                {"isResolved": true, "comments": {"totalCount": 2}},
+                {"isResolved": false, "comments": {"totalCount": 1}}
+            ]
         },
+        "viewerPendingReview": {"nodes": [{"viewerDidAuthor": true, "comments": {"totalCount": 1}}]},
         "comments": {"totalCount": 0},
-        "changedFiles": 1
+        "changedFiles": 1,
+        "lastEditedAt": null,
+        "timelineEvents": {"filteredCount": 4, "updatedAt": "2026-11-06T08:15:21Z"}
     }))
     .unwrap();
     assert_eq!(check.unresolved_threads(), 2);

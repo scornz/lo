@@ -1,0 +1,142 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "ReviewThreads",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "number": 4,
+      "first": 2,
+      "after": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzowNFrOtJd70A=="
+    },
+    "query_sha256": "c48252f9340f734e8ad9f51a8be4878dfb79ecc1886d2314dfaeab17fa9a5145"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4992",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "8"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4992,
+          "used": 8,
+          "resetAt": "2026-11-07T06:16:51Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "reviewThreads": {
+              "totalCount": 15,
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzoyN1rOtJeF7A=="
+              },
+              "nodes": [
+                {
+                  "id": "PRRT_kwDOVk6v9M60l4Wb",
+                  "path": "review.txt",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": "RIGHT",
+                  "line": 11,
+                  "startLine": 10,
+                  "originalLine": 11,
+                  "originalStartLine": 10,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzoyNlrPAAAAAQvpb_o="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-lv-g",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 6: range 10-11 RIGHT (within hunk 1)",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:23:26Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494815226",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "PRRT_kwDOVk6v9M60l4Xs",
+                  "path": "review.txt",
+                  "subjectType": "LINE",
+                  "diffSide": "RIGHT",
+                  "startDiffSide": "RIGHT",
+                  "line": 30,
+                  "startLine": 10,
+                  "originalLine": 30,
+                  "originalStartLine": 10,
+                  "isOutdated": false,
+                  "isResolved": false,
+                  "viewerCanReply": true,
+                  "viewerCanResolve": true,
+                  "viewerCanUnresolve": false,
+                  "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {
+                      "hasNextPage": false,
+                      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxNjoyMzoyN1rPAAAAAQvpcIE="
+                    },
+                    "nodes": [
+                      {
+                        "id": "PRRC_kwDOVk6v9M8AAAABC-lwgQ",
+                        "author": {
+                          "__typename": "User",
+                          "login": "rozed-bot"
+                        },
+                        "body": "Check 6: range 10-30 RIGHT (across hunks 1 and 2)",
+                        "state": "SUBMITTED",
+                        "createdAt": "2026-11-06T16:23:27Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/4#discussion_r4494815361",
+                        "isMinimized": false,
+                        "minimizedReason": null,
+                        "viewerCanUpdate": true,
+                        "viewerCanDelete": true,
+                        "commit": {
+                          "oid": "b405bfc6e2bf7e950c2ec0a07c85f8a83dcff66d"
+                        },
+                        "originalCommit": {
+                          "oid": "2104a3c850387ea37380b950dd9efd77a131394b"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

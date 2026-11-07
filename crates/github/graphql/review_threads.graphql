@@ -1,0 +1,82 @@
+# A pull request's review threads (design §8, "Comments"), $first a page, each with its first
+# $first comments: where it is and was, whether it's outdated or resolved, and what the viewer may
+# do with it. A longer thread's other comments are read with ReviewThreadComments, whose comments
+# have the same fields. A thread's first comment says which commits its lines are on: `commit` for
+# `line` and `startLine`, `originalCommit` for `originalLine` and `originalStartLine`.
+query ReviewThreads(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $first: Int!
+  $after: String
+) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: $first, after: $after) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          path
+          subjectType
+          diffSide
+          startDiffSide
+          line
+          startLine
+          originalLine
+          originalStartLine
+          isOutdated
+          isResolved
+          viewerCanReply
+          viewerCanResolve
+          viewerCanUnresolve
+          comments(first: $first) {
+            totalCount
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              ...ReviewComment
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Kept the same as in review_thread_comments.graphql.
+fragment ReviewComment on PullRequestReviewComment {
+  id
+  # Null for a deleted account.
+  author {
+    __typename
+    login
+  }
+  body
+  state
+  createdAt
+  url
+  isMinimized
+  minimizedReason
+  viewerCanUpdate
+  viewerCanDelete
+  # Null once GitHub no longer has the commit.
+  commit {
+    oid
+  }
+  originalCommit {
+    oid
+  }
+}

@@ -82,8 +82,10 @@ pub struct PendingReview {
     pub id: String,
     /// `commit.oid`: the revision it's recorded on, which the review shows once submitted, and the
     /// one the threads it was started with are on. Threads added to it later are on the heads
-    /// that were current when they were added, so they may be on later revisions.
-    pub commit: String,
+    /// that were current when they were added, so they may be on later revisions. `None` once
+    /// GitHub no longer has the commit: it's on no revision Lo shows, so it submits only as a
+    /// comment.
+    pub commit: Option<String>,
     /// `comments.totalCount`: its threads and replies. [`YourReview::accepted`] counts the ones
     /// Lo adds. Deleting a pending comment isn't a mutation here, so the GitHub layer reads the
     /// pending review again after one.
@@ -219,8 +221,8 @@ pub enum Refusal {
     NotLatest { head: String },
     /// Your pending review is recorded on another revision, `review_on`, so approving it or
     /// requesting changes with it would record that on code that isn't on screen. Submit it as a
-    /// comment, or switch to its revision.
-    OtherRevision { review_on: String },
+    /// comment, or switch to its revision. `None` when GitHub no longer has its commit.
+    OtherRevision { review_on: Option<String> },
     /// You opened the pull request, and GitHub lets its author only comment.
     OwnPullRequest,
     /// A comment or a request for changes needs a summary or a pending comment: GitHub requires a
@@ -239,7 +241,8 @@ pub struct SubmitDialog {
     /// The account you're acting as.
     pub account: String,
     /// The revision the review is recorded on: your pending review's, or else the right column's.
-    pub on: String,
+    /// `None` when GitHub no longer has your pending review's commit.
+    pub on: Option<String>,
     /// Whether that's the revision on screen. When it isn't, your pending review was started on
     /// another, and the dialog says which: it submits only as a comment there.
     pub on_screen: bool,
@@ -362,7 +365,7 @@ impl YourReview {
                 if let Some(id) = review_id {
                     self.pending = Some(PendingReview {
                         id: id.to_string(),
-                        commit: commit.clone(),
+                        commit: Some(commit.clone()),
                         comments: usize::from(thread.is_some()),
                     });
                 }
@@ -382,13 +385,16 @@ impl YourReview {
     /// What the submit dialog shows, for `account`, on your own pull request or not, with the
     /// right column showing revision `on`.
     pub fn submit_dialog(&self, account: &str, own: bool, on: &str) -> SubmitDialog {
-        let review_on = self.pending.as_ref().map_or(on, |pending| &pending.commit);
+        let review_on = match &self.pending {
+            Some(pending) => pending.commit.as_deref(),
+            None => Some(on),
+        };
         SubmitDialog {
             choices: choices(own),
             pending_comments: self.pending_comments(),
             account: account.to_string(),
-            on: review_on.to_string(),
-            on_screen: review_on == on,
+            on: review_on.map(str::to_string),
+            on_screen: review_on == Some(on),
         }
     }
 
@@ -408,7 +414,7 @@ impl YourReview {
         }
         if let Some(pending) = &self.pending
             && event != ReviewEvent::Comment
-            && pending.commit != on
+            && pending.commit.as_deref() != Some(on)
         {
             return Err(Refusal::OtherRevision {
                 review_on: pending.commit.clone(),
@@ -475,7 +481,7 @@ mod tests {
     fn pending(commit: &str, comments: usize) -> YourReview {
         YourReview::new(Some(PendingReview {
             id: "PRR_1".to_string(),
-            commit: commit.to_string(),
+            commit: Some(commit.to_string()),
             comments,
         }))
     }
@@ -501,7 +507,7 @@ mod tests {
             review.pending(),
             Some(&PendingReview {
                 id: "PRR_1".to_string(),
-                commit: "a3".to_string(),
+                commit: Some("a3".to_string()),
                 comments: 1,
             })
         );
@@ -851,7 +857,7 @@ mod tests {
         // GitHub would record the approval on r3, code that isn't on screen.
         let review = pending("a3", 1);
         let other_revision = Err(Refusal::OtherRevision {
-            review_on: "a3".to_string(),
+            review_on: Some("a3".to_string()),
         });
 
         assert_eq!(
@@ -951,7 +957,7 @@ mod tests {
                 choices: choices(false),
                 pending_comments: 2,
                 account: "alice".to_string(),
-                on: "a3".to_string(),
+                on: Some("a3".to_string()),
                 on_screen: true,
             }
         );
@@ -961,17 +967,33 @@ mod tests {
                 choices: choices(true),
                 pending_comments: 0,
                 account: "alice".to_string(),
-                on: "a3".to_string(),
+                on: Some("a3".to_string()),
                 on_screen: true,
             }
         );
     }
 
     #[test]
+    fn a_pending_review_whose_commit_github_lost_is_on_no_revision() {
+        let review = YourReview::new(Some(PendingReview {
+            id: "PRR_1".to_string(),
+            commit: None,
+            comments: 1,
+        }));
+        let dialog = review.submit_dialog("alice", false, "a3");
+        assert_eq!((dialog.on, dialog.on_screen), (None, false));
+        assert_eq!(
+            review.submit(ReviewEvent::Approve, "", false, "a3"),
+            Err(Refusal::OtherRevision { review_on: None })
+        );
+        assert!(review.submit(ReviewEvent::Comment, "", false, "a3").is_ok());
+    }
+
+    #[test]
     fn the_submit_dialog_says_when_the_pending_review_is_on_another_revision() {
         let dialog = pending("a2", 1).submit_dialog("alice", false, "a3");
 
-        assert_eq!(dialog.on, "a2");
+        assert_eq!(dialog.on.as_deref(), Some("a2"));
         assert!(!dialog.on_screen);
     }
 

@@ -1,0 +1,38 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/yarnpkg/berry/contents/.gitattributes?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"35d8541a4aa03a3953613c90040f29c3c8b6de91\"",
+      "last-modified": "Mon, 30 Mar 2026 12:00:35 GMT",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4903",
+      "x-ratelimit-reset": "1794031039",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "97"
+    },
+    "body": {
+      "name": ".gitattributes",
+      "path": ".gitattributes",
+      "sha": "35d8541a4aa03a3953613c90040f29c3c8b6de91",
+      "size": 1235,
+      "url": "https://api.github.com/repos/yarnpkg/berry/contents/.gitattributes?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+      "html_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.gitattributes",
+      "git_url": "https://api.github.com/repos/yarnpkg/berry/git/blobs/35d8541a4aa03a3953613c90040f29c3c8b6de91",
+      "download_url": "https://raw.githubusercontent.com/yarnpkg/berry/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.gitattributes",
+      "type": "file",
+      "content": "IyBUaGlzIGxpbmUgZG9lcyB0d28gdGhpbmdzOgojIC0gZm9yY2VzIGdpdCB0\nbyB1c2UgTEYKIyAtIHRlbGwgZ2l0IHRvIGd1ZXNzIHdoZXRoZXIgZmlsZXMg\nYXJlIHRleHQgb3IgYmluYXJ5CiogICAgICAgICAgICAgICAgICAgICAgIHRl\neHQ9YXV0byBlb2w9bGYKCiMgTWFyayBnZW5lcmF0ZWQgZmlsZXMgYXMgYmlu\nYXJ5IHRvIHByZXZlbnQgZ2l0IGZyb20gdHJ5aW5nIHRvIG1lcmdlIHRoZW0K\nLy5wbnAuKiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\nICAgICAgICAgICBiaW5hcnkgbGluZ3Vpc3QtZ2VuZXJhdGVkCnBhY2thZ2Vz\nL3lhcm5wa2ctcG5wL3NvdXJjZXMvZXNtLWxvYWRlci9idWlsdC1sb2FkZXIu\nanMgYmluYXJ5IGxpbmd1aXN0LWdlbmVyYXRlZApwYWNrYWdlcy95YXJucGtn\nLXBucC9zb3VyY2VzL2hvb2suanMgICAgICAgICAgICAgICAgICAgIGJpbmFy\neSBsaW5ndWlzdC1nZW5lcmF0ZWQKcGFja2FnZXMveWFybnBrZy1jb3JlL3Nv\ndXJjZXMvd29ya2VyLXppcC9pbmRleC5qcyAgICAgICBiaW5hcnkgbGluZ3Vp\nc3QtZ2VuZXJhdGVkCnBhY2thZ2VzL3lhcm5wa2ctbGliemlwL3NvdXJjZXMv\nbGliemlwQXN5bmMuanMgICAgICAgICAgYmluYXJ5IGxpbmd1aXN0LWdlbmVy\nYXRlZApwYWNrYWdlcy95YXJucGtnLWxpYnppcC9zb3VyY2VzL2xpYnppcFN5\nbmMuanMgICAgICAgICAgIGJpbmFyeSBsaW5ndWlzdC1nZW5lcmF0ZWQKCiMg\nU2V0IHRoZSBsYW5ndWFnZSBmb3IgdGhlc2UgZmlsZXMgdG8ganNvbjUgdG8g\nZW5zdXJlIEdpdEh1YiBkb2Vzbid0IHNob3cgdGhlIGNvbW1lbnRzIGFzIGVy\ncm9ycwovLnZzY29kZS8qLmpzb24gICAgICAgICBsaW5ndWlzdC1sYW5ndWFn\nZT1KU09ONQoKIyBIaWRlIC55YXJuIGFuZCBkb2NzIGZyb20gR2l0SHViJ3Mg\nbGFuZ3VhZ2UgZGV0ZWN0aW9uCi8ueWFybi8qKiAgICAgICAgICAgICAgIGxp\nbmd1aXN0LXZlbmRvcmVkCi9wYWNrYWdlcy9kb2N1c2F1cnVzLyoqIGxpbmd1\naXN0LWRvY3VtZW50YXRpb24KCiMgTWFyayBidWlsdCBqYXZhc2NyaXB0IGJp\nbmFyaWVzIGFzIGdlbmVyYXRlZAojIFdpdGhvdXQgdGhpcywgdGhlIHJlcG8g\naXMgbWFya2VkIGFzID45MCUgamF2YXNjcmlwdCwgd2hpbGUgbW9zdCBjb2Rl\nIGlzIGFjdHVhbGx5IHR5cGVzY3JpcHQKL3BhY2thZ2VzLyovYmluLyoqLyou\nanMgbGluZ3Vpc3QtZ2VuZXJhdGVkCi9wYWNrYWdlcy8qL2xpYi8qLmpzICAg\nIGxpbmd1aXN0LWdlbmVyYXRlZAo=\n",
+      "encoding": "base64",
+      "_links": {
+        "self": "https://api.github.com/repos/yarnpkg/berry/contents/.gitattributes?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+        "git": "https://api.github.com/repos/yarnpkg/berry/git/blobs/35d8541a4aa03a3953613c90040f29c3c8b6de91",
+        "html": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.gitattributes"
+      }
+    }
+  }
+}

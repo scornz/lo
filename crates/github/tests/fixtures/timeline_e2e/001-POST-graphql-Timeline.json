@@ -1,0 +1,208 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "Timeline",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 14,
+      "last": 100,
+      "before": null
+    },
+    "query_sha256": "63b4b91e010e4f6cd8a24f3ccd09a7a6ca2f5b98954de823c1f18177caefedaf"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4977",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "23"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4977,
+          "used": 23,
+          "resetAt": "2026-11-07T06:16:51Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "author": {
+              "__typename": "User",
+              "login": "rozed-bot"
+            },
+            "body": "Fixture E1 (revisions). Three normal pushes, r1 to r3, each changing `e1/a.txt` or `e1/b.txt`, and rozed-bot's COMMENT review on r2. `push-r4` adds r4, touching both files, `rebase-r5` moves `main` and rebases this PR on GitHub, and `push-r6` adds r6 after the rebase. Made by `script/e2e/fixtures.sh` in scornz/rozed.",
+            "createdAt": "2026-11-06T19:27:51Z",
+            "lastEditedAt": null,
+            "timelineEvents": {
+              "updatedAt": "2026-11-06T19:29:45Z"
+            },
+            "timelineItems": {
+              "filteredCount": 9,
+              "pageInfo": {
+                "hasPreviousPage": false,
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABobJVAjAFqjU4MDU4MjA5NTM="
+              },
+              "edges": [
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVAjAFqjU4MDU4MjA5NTM=",
+                  "node": {
+                    "__typename": "PullRequestReview",
+                    "id": "PRR_kwDOVleUfc8AAAABWg3MGQ",
+                    "author": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "body": "rozed-bot's review of r2. Fixture E1 checks that rozed marks this revision as your last review.",
+                    "state": "COMMENTED",
+                    "createdAt": "2026-11-06T19:27:58Z",
+                    "submittedAt": "2026-11-06T19:27:58Z",
+                    "lastEditedAt": null,
+                    "url": "https://github.com/rozed-dev/e2e/pull/14#pullrequestreview-5805820953",
+                    "isMinimized": false,
+                    "commit": {
+                      "oid": "2e2d4be5645cab2f4d66515cc4974999be9b453b"
+                    },
+                    "comments": {
+                      "totalCount": 0
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVwZgH2gAzNTE5MzQzNjc3MTo4ZjllNmZmNTAwMDg3Yjk5YjQ5NjVjMzY1OWE0MjY2ZTI2ZTAwMmNh",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "8f9e6ff500087b99b4965c3659a4266e26e002ca",
+                      "messageHeadline": "test(e1): r1 adds a.txt and b.txt",
+                      "committedDate": "2026-11-06T19:28:47Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVwZgH2gAzNTE5MzQzNjc3MTo5OTVhMjgzNzhhMTUzY2U1OTU0YjkwMjc4M2RjMmExNjE3MjZkMGI3",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "995a28378a153ce5954b902783dc2a161726d0b7",
+                      "messageHeadline": "test(e1): r2 changes a.txt",
+                      "committedDate": "2026-11-06T19:28:47Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVwZgH2gAzNTE5MzQzNjc3MTplZWQ4NzVkZmNkMGRhMzk2NGY4M2JkYTk3YWY0ZDI2NWFhZDgyZDNk",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "eed875dfcd0da3964f83bda97af4d265aad82d3d",
+                      "messageHeadline": "test(e1): r3 changes b.txt",
+                      "committedDate": "2026-11-06T19:28:47Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVwZgH2gAzNTE5MzQzNjc3MTo3NTEzZGIzODYwOGI1YmRkYTlmYjQ4OGRhZjAwYjMxYzg0NmMxZGMx",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "7513db38608b5bdda9fb488daf00b31c846c1dc1",
+                      "messageHeadline": "test(e1): r4 changes a.txt and b.txt",
+                      "committedDate": "2026-11-06T19:28:47Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJVxYABqzM1MzgyODY5MjQ3",
+                  "node": {
+                    "__typename": "HeadRefForcePushedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "createdAt": "2026-11-06T19:28:48Z",
+                    "beforeCommit": {
+                      "oid": "28b21f232a7ed2ac8682a792045dcbb49a80183f"
+                    },
+                    "afterCommit": {
+                      "oid": "7513db38608b5bdda9fb488daf00b31c846c1dc1"
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJV4NgH2gAzNTE5MzQzNjc3MTphZGI3MjA4NDQ0M2M2YmViMDI1NWIwMWU4ZDc4ZTZmNjhlYjdkMjEx",
+                  "node": {
+                    "__typename": "PullRequestCommit",
+                    "gitCommit": {
+                      "oid": "adb72084443c6beb0255b01e8d78e6f68eb7d211",
+                      "messageHeadline": "test(e1): r6 changes a.txt",
+                      "committedDate": "2026-11-06T19:28:55Z",
+                      "author": {
+                        "name": "rozed-bot",
+                        "user": {
+                          "login": "rozed-bot"
+                        }
+                      },
+                      "statusCheckRollup": null
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobJWpCgBqzM1MzgyOTQyNDAy",
+                  "node": {
+                    "__typename": "ClosedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "rozed-bot"
+                    },
+                    "createdAt": "2026-11-06T19:29:45Z"
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobN6tbABqzM1NDA0Mjg5NDEx",
+                  "node": {
+                    "__typename": "ReferencedEvent"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
