@@ -1,0 +1,81 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "MergedPullRequests",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "headRefName": "e3/x",
+      "first": 10
+    },
+    "query_sha256": "f75c378b6ef0cfb6c59395c921c7acfadea6d1f33c0e9b5314e4e677c2998aa0"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4985",
+      "x-ratelimit-reset": "1794016456",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "15"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4985,
+          "used": 15,
+          "resetAt": "2026-11-07T01:54:16Z"
+        },
+        "repository": {
+          "pullRequests": {
+            "nodes": [
+              {
+                "number": 10,
+                "createdAt": "2026-11-06T18:44:54Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "a45754b66cccf1879cd0a252c781639330e6d1fa"
+                  }
+                },
+                "headRefName": "e3/x",
+                "headRefOid": "e86aa486704016ee033d555bcca81e33898c5608",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "161664c5ee326b4f6e5d90315063412a88126b90"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e86aa486704016ee033d555bcca81e33898c5608"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "04bdf22ddc81532f6d7d70108a0bc83bba486c9e",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "03fa28bc03ef0b1e44cefb32af67134cd37ddc8b"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

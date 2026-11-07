@@ -1,7 +1,7 @@
 //! Records the cassettes in `tests/fixtures` from `rozed-dev/playground`, a private repo where PR
 //! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3. The push histories
-//! come from `rozed-dev/e2e`'s revision fixtures (`script/e2e/README.md`) and from `sharkdp/fd`,
-//! read only.
+//! and stacks come from `rozed-dev/e2e`'s fixtures (`script/e2e/README.md`), and from
+//! `sharkdp/fd` and `github/gh-stack`, read only.
 //!
 //! Each test is ignored; run them by hand, one cassette or all:
 //!
@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
-use github::queries::FileViewedState;
 use github::queries::open_pull_requests::RECENTLY_MERGED;
+use github::queries::{FileViewedState, OpenPullRequestList, PAGE_SIZE};
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
@@ -536,5 +536,97 @@ fn push_history_fd_2202() {
         "sharkdp",
         "fd",
         2202,
+    );
+}
+
+/// The node IDs of the layers of the stack `number` is in, in the order the tree walks them.
+fn stack_ids(list: &OpenPullRequestList, number: u64) -> Vec<String> {
+    let stacks = list.stacks();
+    let stack = stacks.stack_of(number).expect("a layer of a stack");
+    (stack.layers.iter())
+        .map(|&layer| {
+            let pr = list.pull_request(layer as i64).expect("an open layer");
+            pr.id.clone()
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_playground() {
+    record_graphql(
+        "stacks_playground",
+        "OpenPullRequests for the playground, where PR #1 (stack-a -> main) and PR #2 (stack-b \
+         -> stack-a) form stack #3, then StackLayers for both",
+        |client| async move {
+            let list = client
+                .open_pull_requests("rozed-dev", "playground")
+                .await
+                .unwrap();
+            client.stack_layers(&stack_ids(&list, 1)).await.unwrap();
+        },
+    );
+}
+
+const E2E: &str = "rozed-dev/e2e";
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_e2e() {
+    record_with_schema(
+        "stacks_e2e",
+        "OpenPullRequests for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, #4 c -> b, #5 \
+         e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 (#11 y -> e3/x, \
+         on #10 x, squash-merged, among the pull requests merged most recently); then StackLayers \
+         for E2's tree, the native stack and #11",
+        E2E,
+        schema_commit(),
+        |client| async move {
+            let list = client.open_pull_requests("rozed-dev", "e2e").await.unwrap();
+            let mut ids = stack_ids(&list, 2);
+            ids.extend(stack_ids(&list, 7));
+            ids.extend(stack_ids(&list, 11));
+            client.stack_layers(&ids).await.unwrap();
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_e2e_looked_up() {
+    record_with_schema(
+        "stacks_e2e_looked_up",
+        "OpenPullRequests for rozed-dev/e2e without the pull requests merged most recently, so \
+         E3's #10 comes from looking up the merged pull requests of e3/x, the branch #11 targets",
+        E2E,
+        schema_commit(),
+        |client| async move {
+            let list = client
+                .open_pull_requests_paged("rozed-dev", "e2e", PAGE_SIZE, 0)
+                .await
+                .unwrap();
+            assert!(list.merged.iter().any(|pr| pr.number == 10));
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn stacks_gh_stack() {
+    record_with_schema(
+        "stacks_gh_stack",
+        "OpenPullRequests for github/gh-stack as rozed-bot, read only: the rulesets a reader \
+         sees, its organization's included, one of them on ~ALL, and merged GitHub stacks; then \
+         StackLayers for every open pull request, with their reviews and checks",
+        "github/gh-stack",
+        schema_commit(),
+        |client| async move {
+            let list = client
+                .open_pull_requests("github", "gh-stack")
+                .await
+                .unwrap();
+            let ids: Vec<String> = list.pull_requests.iter().map(|pr| pr.id.clone()).collect();
+            client.stack_layers(&ids).await.unwrap();
+        },
     );
 }

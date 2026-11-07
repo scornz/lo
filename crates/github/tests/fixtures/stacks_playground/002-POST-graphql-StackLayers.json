@@ -1,0 +1,76 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "StackLayers",
+    "variables": {
+      "ids": [
+        "PR_kwDOVk6v9M8AAAABNQwFBw",
+        "PR_kwDOVk6v9M8AAAABNQwF5A"
+      ]
+    },
+    "query_sha256": "1cd8dcbdf35a7be29d8a4c625c025fe37025a270d534f9a64fef4be9468ab63f"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4987",
+      "x-ratelimit-reset": "1794016456",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "13"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4987,
+          "used": 13,
+          "resetAt": "2026-11-07T01:54:16Z"
+        },
+        "nodes": [
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
+            "number": 1,
+            "state": "OPEN",
+            "headRefOid": "b046244d9569964088e952243e5e557312322488",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVk6v9M8AAAABNQwF5A",
+            "number": 2,
+            "state": "OPEN",
+            "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

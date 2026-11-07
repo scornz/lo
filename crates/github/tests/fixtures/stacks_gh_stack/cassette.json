@@ -1,0 +1,6 @@
+{
+  "description": "OpenPullRequests for github/gh-stack as rozed-bot, read only: the rulesets a reader sees, its organization's included, one of them on ~ALL, and merged GitHub stacks; then StackLayers for every open pull request, with their reviews and checks",
+  "recorded_at": "2026-11-07T01:17:48Z",
+  "repo": "github/gh-stack",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

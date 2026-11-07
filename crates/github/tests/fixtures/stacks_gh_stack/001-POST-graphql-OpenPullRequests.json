@@ -1,0 +1,1374 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "OpenPullRequests",
+    "variables": {
+      "owner": "github",
+      "name": "gh-stack",
+      "first": 100,
+      "after": null,
+      "merged": 20
+    },
+    "query_sha256": "664e34cc1c8f14f95b471432cb68cd52acf3cf705d2af31cf5b65211365e636d"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4971",
+      "x-ratelimit-reset": "1794016455",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "29"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4971,
+          "used": 29,
+          "resetAt": "2026-11-07T01:54:15Z"
+        },
+        "repository": {
+          "defaultBranchRef": {
+            "name": "main"
+          },
+          "branchProtectionRules": {
+            "nodes": []
+          },
+          "rulesets": {
+            "nodes": [
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~ALL"
+                    ],
+                    "exclude": []
+                  }
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~DEFAULT_BRANCH"
+                    ],
+                    "exclude": []
+                  }
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-2.*-release",
+                      "refs/heads/enterprise-3.[1-9]-release",
+                      "refs/heads/enterprise-3.[1-9].*-release",
+                      "refs/heads/enterprise-3.10-release",
+                      "refs/heads/enterprise-3.10.*-release",
+                      "refs/heads/enterprise-3.11-release",
+                      "refs/heads/enterprise-3.11.*-release",
+                      "refs/heads/enterprise-3.12-release",
+                      "refs/heads/enterprise-3.12.*-release",
+                      "refs/heads/enterprise-3.13-release",
+                      "refs/heads/enterprise-3.13.*-release",
+                      "refs/heads/enterprise-3.14-release",
+                      "refs/heads/enterprise-3.14.*-release",
+                      "refs/heads/enterprise-3.15-release",
+                      "refs/heads/enterprise-3.15.*-release",
+                      "refs/heads/enterprise-3.16-release",
+                      "refs/heads/enterprise-3.16.*-release",
+                      "refs/heads/enterprise-3.17-release",
+                      "refs/heads/enterprise-3.17.*-release",
+                      "refs/heads/enterprise-3.18-release",
+                      "refs/heads/enterprise-3.18.*-release"
+                    ],
+                    "exclude": []
+                  }
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-*.*.*-release",
+                      "refs/heads/enterprise-*.*.*-test"
+                    ],
+                    "exclude": [
+                      "refs/heads/enterprise-*.*.*-backport-*"
+                    ]
+                  }
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "refs/heads/enterprise-*.*-release",
+                      "refs/heads/enterprise-*.*-test"
+                    ],
+                    "exclude": [
+                      "refs/heads/enterprise-*.*.*-release",
+                      "refs/heads/enterprise-*.*-backport-*",
+                      "refs/heads/enterprise-*.*.*-test"
+                    ]
+                  }
+                }
+              },
+              {
+                "enforcement": "ACTIVE",
+                "conditions": {
+                  "refName": {
+                    "include": [
+                      "~DEFAULT_BRANCH"
+                    ],
+                    "exclude": []
+                  }
+                }
+              }
+            ]
+          },
+          "pullRequests": {
+            "totalCount": 6,
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNS0wN1QwMDoyNjoxNlrO2PeKag=="
+            },
+            "nodes": [
+              {
+                "id": "PR_kwDORKR9iM8AAAABMoU5lA",
+                "number": 615,
+                "title": "Bump zod from 4.6.5 to 4.6.7 in /docs in the npm_and_yarn group across 1 directory",
+                "isDraft": false,
+                "createdAt": "2026-11-03T18:34:19Z",
+                "updatedAt": "2026-11-03T18:34:22Z",
+                "author": {
+                  "__typename": "Bot",
+                  "login": "dependabot"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-11c2e24550",
+                "headRefOid": "8ffe14b56bf680a7237eaf81798cfcccbafb98e1",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "8ffe14b56bf680a7237eaf81798cfcccbafb98e1"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDORKR9iM8AAAABMnNaog",
+                "number": 614,
+                "title": "Fix rebase when upstack head has moved",
+                "isDraft": false,
+                "createdAt": "2026-11-03T17:07:49Z",
+                "updatedAt": "2026-11-03T18:50:29Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "skarim"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "2a49e6751238633db504655d8a8eba3e433e827d",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/fix-rebase-upstack-head-moved",
+                "headRefOid": "51ab7fc963aea931df1c29f8801b1e702ac51f62",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "51ab7fc963aea931df1c29f8801b1e702ac51f62"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDORKR9iM8AAAABMe8jKw",
+                "number": 612,
+                "title": "Add a hint to handle stacks that have closed pull requests",
+                "isDraft": false,
+                "createdAt": "2026-11-03T06:08:48Z",
+                "updatedAt": "2026-11-03T06:17:42Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "nickborromeo"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "2a49e6751238633db504655d8a8eba3e433e827d",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "closed-bottom-pr-hint",
+                "headRefOid": "c4caa6a9f789d6ba815d68e5ea98a56d89ccafb9",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "eb48e1cb64f76030e98a76c63e61f4a9001143cc"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ef619b04dac571cd47647d1969a21a2755169011"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "282e7d95a8af1a392e68946d6afda60b9be7df25"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c4caa6a9f789d6ba815d68e5ea98a56d89ccafb9"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDORKR9iM8AAAABMC12mg",
+                "number": 609,
+                "title": "Make less API calls when syncing a stack",
+                "isDraft": false,
+                "createdAt": "2026-11-01T01:17:54Z",
+                "updatedAt": "2026-11-01T01:28:47Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "nickborromeo"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "2a49e6751238633db504655d8a8eba3e433e827d",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "sync-fewer-api-calls",
+                "headRefOid": "983960cb442b053a5ed226334fd0249fe1cdcb1d",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "a141746c94dec828fcf42cf9c4c749982e219d08"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "55c36e613afc9278d953af8904b84faa17a222e1"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c73b266dcf2998372d2b9607aee2f7143cbdab1f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "971c12751ee053861123fb14107434421059d6f0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7d54c6b670224313b625607a3e11a18d88b82e82"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "cae9f9ae5b90a07898f1595d8f391c9bddc15cfd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "983960cb442b053a5ed226334fd0249fe1cdcb1d"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDORKR9iM8AAAABMBXQQw",
+                "number": 608,
+                "title": "Add a resolver for getting the default branch",
+                "isDraft": false,
+                "createdAt": "2026-10-31T21:29:55Z",
+                "updatedAt": "2026-10-31T21:43:15Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "nickborromeo"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "2a49e6751238633db504655d8a8eba3e433e827d",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "resolve-default-branch",
+                "headRefOid": "eb10e763c845eb1834e9f5f6e9655fc2141fbac3",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0b91606dd40558173163e15e093ea5cb9d7c2fbd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c097324fb75b967bcc72b5d6578c3af2e920fdf8"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9167e3fb7e4c2d5de501b86197bb01150ee28539"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "4f31f9e4d15aa5e90639551623752e021586ca9a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "eb10e763c845eb1834e9f5f6e9655fc2141fbac3"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDORKR9iM7Y94pq",
+                "number": 82,
+                "title": "Replace survey/v2 with huh-based prompter to fix terminal scrolling",
+                "isDraft": true,
+                "createdAt": "2026-05-07T00:26:16Z",
+                "updatedAt": "2026-10-22T20:46:25Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "skarim"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "de00856fdeea80f8eaac9762d7f653a1d69bb852",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/prompter-refactor",
+                "headRefOid": "d2c2be05d220bac5f91a6ac27aa88d0476e105c3",
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "github"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "a9628981c65cacb7dda22c3df030dd2928a4cb6e"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d2c2be05d220bac5f91a6ac27aa88d0476e105c3"
+                      }
+                    }
+                  ]
+                },
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                },
+                "isInMergeQueue": false,
+                "mergeQueueEntry": null,
+                "stackEntry": null
+              }
+            ]
+          },
+          "mergedPullRequests": {
+            "nodes": [
+              {
+                "number": 606,
+                "createdAt": "2026-10-29T19:51:19Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-aac2c02551",
+                "headRefOid": "3cbe46b8c8323cb0523dd47f3bc37206c8a2ede6",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3cbe46b8c8323cb0523dd47f3bc37206c8a2ede6"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "2a49e6751238633db504655d8a8eba3e433e827d"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 596,
+                "createdAt": "2026-10-26T19:46:20Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/push-atomic-default",
+                "headRefOid": "2cf4bc96a23592a849df5e25760b90ecf075d5ba",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3c6a15f74f2f680644e855f5ef1f8522ea8c849a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8c313e80b2393d026963191e4316cb48b4502850"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2cf4bc96a23592a849df5e25760b90ecf075d5ba"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "2a49e6751238633db504655d8a8eba3e433e827d",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "3f8c957e56c6b30ff3ce5731b0d34b8abeef0bcd"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 590,
+                "createdAt": "2026-10-25T13:33:56Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/base-retargeting",
+                "headRefOid": "a7914a9329ffbaa9f66641f969935681313eaac4",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "9d299c67c659c900d57e2980eb0299dc03269d15"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "274f0a03a6cd001f27cf06899102eb24a9fa7485"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0a4590ff7679d26d97a44a59c72b349af8afa676"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ad5706f301491c270903d6d77845d792ccafc13d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c09f7969d1da4cfdc8c5624f83823bffbbea9130"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "30e438de07863ebc77158188e11fda35a84b4344"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "12daf5db2f19fe38cdad68163ff7418de13c468f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a7db03d9d3161bb59ce26c2d78705aaec48ad054"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a7914a9329ffbaa9f66641f969935681313eaac4"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "3f8c957e56c6b30ff3ce5731b0d34b8abeef0bcd",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "c00989adeb8052df2b1257c189e50b7593851770"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 589,
+                "createdAt": "2026-10-25T02:08:39Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/brand-styling",
+                "headRefOid": "e2ea207af53edf74535b81fae1d664f4b06e9aa9",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "4edc6883dd605eef3bf6fd7e25c4c49e9a529ef4"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d3fcc71f16a3e6e6ca311d81214bcafda7f38876"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "730f1e4a3dff6ea3c16eed7f3a19b0d665aeb5be"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0afef06e4f4d068ed08639477ad4bbb4b845a993"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "11c8043c2bc80d775a58923258fb36d7136cdbb6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "89a4831c80e7878b6bd40c5f19e8a1dabbcb22c7"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e2ea207af53edf74535b81fae1d664f4b06e9aa9"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "c00989adeb8052df2b1257c189e50b7593851770",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "f63271237b45fb121affa4ae69e4dd0b2785a37b"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 586,
+                "createdAt": "2026-10-23T02:41:17Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/fix-stale-rebase",
+                "headRefOid": "d7911451140ca915641d9dcc78cb0b70decb7dce",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1ea5db00a468fce9cf56be40f9ab830748fa8589"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d7911451140ca915641d9dcc78cb0b70decb7dce"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "f63271237b45fb121affa4ae69e4dd0b2785a37b",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "c477b7d1f290a9df463b86773742a5237d14b980"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 562,
+                "createdAt": "2026-10-17T04:51:44Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "ktravers/rebase-with-push-option",
+                "headRefOid": "d8282b777c1d220ebd4eb0348eedeb38dfde8ada",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1d303e12a89fabf949855f02e4b893e0ed1cc407"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "91dbf5c98d2f1d4e9978cf0310a13f5324396ebf"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9c98913d4da4c664f2abd79d6ee8dc5036dff348"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "dab026f4f3c5936ef731ba54ececc15bd6240d09"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d8282b777c1d220ebd4eb0348eedeb38dfde8ada"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "c477b7d1f290a9df463b86773742a5237d14b980",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "199d42e945cdfd97d1fed0d860e93532d820c577"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 584,
+                "createdAt": "2026-10-22T17:44:00Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/stack-links",
+                "headRefOid": "873861e242442ff0ebb9fdb3393e5130204f84b6",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "93609e002af6fe72a1690d93a8a30f734db710f8"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "612101dbe851be8721026bc6ae021293ccab551d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "090e0b175390a74a3fef7c00cade14558c0da9a8"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "57659bd0fe4088cdebcb9888f250d24d0d100fb8"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "54e32c75f19d8838f4460cf1849b363c849df2d9"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "90fe3c3aa5974d70a5fdac9636f626ef391a3af6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "10559eaf8e169cfee9c018db845ea3ca9da7bb0c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7a7506f55bc12f7129c8e1d02ea35f520ef85d8d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "57ba15b8f44a1dd32c2aafa0951bf436d2b82f47"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "34283c191a42ddafdf91ab198bc5bbc64fb482ec"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "873861e242442ff0ebb9fdb3393e5130204f84b6"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "199d42e945cdfd97d1fed0d860e93532d820c577",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "6721eba93e847178089b44c89f2cd5c3c3c464bf"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 579,
+                "createdAt": "2026-10-22T02:28:25Z",
+                "baseRefName": "skarim/test-improvements",
+                "baseRef": null,
+                "headRefName": "skarim/worktree-probe-optimizations",
+                "headRefOid": "84d5c479bd047fad33fae65878b55e6f1ad3a20a",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0eea91b86aeef8260a01e9ed15bf04ed196bd138"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "84d5c479bd047fad33fae65878b55e6f1ad3a20a"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "6721eba93e847178089b44c89f2cd5c3c3c464bf",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "082cdac344c84dc9bf758bc64b8017a655f4a7a4"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 580
+                  }
+                }
+              },
+              {
+                "number": 578,
+                "createdAt": "2026-10-21T23:45:30Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/test-improvements",
+                "headRefOid": "175297de213e623a7df6d73d20de3e2eb4e00472",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "a8351f634471635b273a4e56a086d21de0b6640d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "af28053f791ac76714973bc9560f12d1a5e7a3d9"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "175297de213e623a7df6d73d20de3e2eb4e00472"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "082cdac344c84dc9bf758bc64b8017a655f4a7a4",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "a644af6d538e63804ed93933d4b69a3432372fd2"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 1,
+                  "stack": {
+                    "number": 580
+                  }
+                }
+              },
+              {
+                "number": 565,
+                "createdAt": "2026-10-19T16:51:30Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/go_modules/go_modules-b0addabadf",
+                "headRefOid": "391ecb5247312c38cbb45b6fea713db43f41b1e8",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "391ecb5247312c38cbb45b6fea713db43f41b1e8"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "a644af6d538e63804ed93933d4b69a3432372fd2",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "a1f33816a3858641218b6cbc6e3a141d10a3cf1b"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 573,
+                "createdAt": "2026-10-21T13:47:23Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-0ea313c36a",
+                "headRefOid": "d3677de14913127cd8a33c5374a6ce2b9e100862",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d3677de14913127cd8a33c5374a6ce2b9e100862"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "a1f33816a3858641218b6cbc6e3a141d10a3cf1b",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "c8bf271bfd3efae734fa60cdac13db80dc48e65c"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 561,
+                "createdAt": "2026-10-16T19:54:14Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/github_actions/actions/setup-node-7.1.0",
+                "headRefOid": "3be768989e8ee516e92f62ef46a806dee58e657a",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3be768989e8ee516e92f62ef46a806dee58e657a"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "c8bf271bfd3efae734fa60cdac13db80dc48e65c",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "282dffa731e5c295210a449b46f8ea79ed9c4ff1"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 576,
+                "createdAt": "2026-10-21T18:59:14Z",
+                "baseRefName": "skarim/fix-modify-partial-merge",
+                "baseRef": null,
+                "headRefName": "skarim/fix-keep-local-partial-merge",
+                "headRefOid": "620c787f3adba3337830cffffd19f9836a981602",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "620c787f3adba3337830cffffd19f9836a981602"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "282dffa731e5c295210a449b46f8ea79ed9c4ff1",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "2d07a1c2a7c913f05f083d68bb9089a4d169f054"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 3,
+                  "stack": {
+                    "number": 577
+                  }
+                }
+              },
+              {
+                "number": 575,
+                "createdAt": "2026-10-21T18:59:10Z",
+                "baseRefName": "skarim/fix-unstack-partial-merge",
+                "baseRef": null,
+                "headRefName": "skarim/fix-modify-partial-merge",
+                "headRefOid": "01c65b6b0f99a808236deeb539620e3737cb2103",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "f07938249f506307962db198e02d4969374cc32f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2002023a3c868974e3d634d24a73faa8148c1856"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "01c65b6b0f99a808236deeb539620e3737cb2103"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "2d07a1c2a7c913f05f083d68bb9089a4d169f054",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "83dbac26af460cea5b898f8dbd546f70a81dcdaa"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 577
+                  }
+                }
+              },
+              {
+                "number": 574,
+                "createdAt": "2026-10-21T14:12:26Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/fix-unstack-partial-merge",
+                "headRefOid": "41a1c477ea3488b589d8c102692a5e758a5657ca",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e96b74e7a1daeea4442645c0e23fe81306be74f6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "41a1c477ea3488b589d8c102692a5e758a5657ca"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "83dbac26af460cea5b898f8dbd546f70a81dcdaa",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "29a36d314be664583705f18e41cebdf2b61ad514"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 1,
+                  "stack": {
+                    "number": 577
+                  }
+                }
+              },
+              {
+                "number": 554,
+                "createdAt": "2026-10-09T10:43:58Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "williammartin-vhs-demo-ssh-alias",
+                "headRefOid": "e22c78249f09af6e7c7e6fd166f07c5d996d870d",
+                "isCrossRepository": true,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "aa3b214a3dbfa87084192a172f551798c4b61cb5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e22c78249f09af6e7c7e6fd166f07c5d996d870d"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "29a36d314be664583705f18e41cebdf2b61ad514",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "fc2b03d34528917574b41d4d749a477263a6afc5"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 552,
+                "createdAt": "2026-10-07T17:07:47Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/npm_and_yarn/docs/npm_and_yarn-501f592bae",
+                "headRefOid": "269d1d2cc115d9ee32f6fd903fe4e3f33a1c30f5",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "269d1d2cc115d9ee32f6fd903fe4e3f33a1c30f5"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "fc2b03d34528917574b41d4d749a477263a6afc5",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "b2f8e719a32c9e4574a35856ba68351403e3f301"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 551,
+                "createdAt": "2026-10-07T13:27:18Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "ktravers/bump-go-gh",
+                "headRefOid": "fdcf660e08c2d5b9fda546734354c86d432af62c",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "fdcf660e08c2d5b9fda546734354c86d432af62c"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "b2f8e719a32c9e4574a35856ba68351403e3f301",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "d4ab7ab47e5b3e3708a27c8c42abcdf4bc321419"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 545,
+                "createdAt": "2026-10-02T15:00:40Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "skarim/cli-update-notification",
+                "headRefOid": "80dfd1f44c787d4779abd4dbbababa32366f9ac8",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0b05b273c01ead9176343581aa1bbd8f27b6aaa5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c8e7b43fe17ff19eb8061e40122d917b40990d14"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "80dfd1f44c787d4779abd4dbbababa32366f9ac8"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "d4ab7ab47e5b3e3708a27c8c42abcdf4bc321419",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "cb357d8d68f7e4f44247eb784eba9a1fc3710798"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 542,
+                "createdAt": "2026-10-01T21:07:36Z",
+                "baseRefName": "main",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "bd0a32504f9ae9f795875a9e6bb90ff7408fda08"
+                  }
+                },
+                "headRefName": "dependabot/github_actions/actions/setup-go-7.0.0",
+                "headRefOid": "763152a410382109cc17bbac3393c7a09cc0a65b",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "763152a410382109cc17bbac3393c7a09cc0a65b"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "cb357d8d68f7e4f44247eb784eba9a1fc3710798",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "bceeab9586e5d7de958c9af137e95dcc73371a69"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

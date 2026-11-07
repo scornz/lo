@@ -22,7 +22,7 @@ use github::poll::{
     RateLimitState, WallClock,
 };
 use github::push_history::PushHistory;
-use github::queries::{PullRequestData, pull_request};
+use github::queries::{PullRequestData, StackLayerList, pull_request};
 use github::replay::ReplayHttpClient;
 use github::{AuthenticatedUser, GithubError, PullRef, RepoRef, Target, Token, User};
 use gpui::{AppContext as _, BackgroundExecutor, Entity, TestAppContext};
@@ -2292,4 +2292,73 @@ async fn the_poller_notes_every_head_it_sees(cx: &mut TestAppContext) {
         [(head_2, wall(0)), (pushed.to_string(), wall(120))]
     );
     assert_eq!(seen(1), [(head_1, wall(0))]);
+}
+
+/// `stacks_playground`'s recorded StackLayers answer, for PR #1 and #2, and the IDs it asked for.
+fn stack_layers_answer() -> (Interaction, Vec<String>) {
+    let (_, interactions) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("stacks_playground")).unwrap();
+    let (_, answer) = (interactions.into_iter())
+        .find(|(_, i)| i.request.operation.as_deref() == Some("StackLayers"))
+        .unwrap();
+    let ids =
+        serde_json::from_value(answer.request.variables.as_ref().unwrap()["ids"].clone()).unwrap();
+    (answer, ids)
+}
+
+fn layer_numbers(layers: &StackLayerList) -> Vec<i64> {
+    layers.layers.iter().map(|layer| layer.number).collect()
+}
+
+#[gpui::test]
+async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_layers(
+    cx: &mut TestAppContext,
+) {
+    let r = recorded();
+    let (both, ids) = stack_layers_answer();
+    // The same answer, about PR #2 alone.
+    let mut top = with_body(both.clone(), |body| {
+        let nodes = body["data"]["nodes"].as_array_mut().unwrap();
+        nodes.remove(0);
+    });
+    top.request.variables.as_mut().unwrap()["ids"] = serde_json::json!([ids[1]]);
+    let mut interactions = vec![r[0].clone(), r[6].clone(), r[1].clone(), r[2].clone()];
+    interactions.extend([both, top]);
+    interactions.extend(repo_answers(&r));
+    let mut t = Polling::new("stack_layers", interactions, cx).await;
+    let at_once = t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        poller.stack_layers(pr(1), ids.clone(), cx)
+    });
+    assert_eq!(at_once, None);
+    t.run();
+    let stack_layers = |requests: Vec<(u64, String)>| -> Vec<u64> {
+        (requests.into_iter())
+            .filter(|(_, what)| what == "StackLayers")
+            .map(|(secs, _)| secs)
+            .collect()
+    };
+    assert_eq!(stack_layers(t.requests()), [0]);
+    assert!(t.events().contains(&"read StackLayers #1".to_string()));
+    let read = |t: &Polling| t.read(|poller| poller.cached_read::<StackLayerList>(&pr(1)));
+    assert_eq!(layer_numbers(&read(&t).unwrap().value), [1, 2]);
+
+    // Asking about the same layers again reads nothing new, while the open PR's check doesn't
+    // change.
+    let held = t.update(|poller, cx| poller.stack_layers(pr(1), ids.clone(), cx));
+    assert_eq!(layer_numbers(&held.unwrap().value), [1, 2]);
+    t.run_until(60);
+    assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
+
+    // Asking about other layers gives what it holds, and reads them at once.
+    let held = t.update(|poller, cx| poller.stack_layers(pr(1), vec![ids[1].clone()], cx));
+    assert_eq!(held.unwrap().value.ids, ids);
+    assert_eq!(stack_layers(t.requests()), [60]);
+    let layers = read(&t).unwrap().value;
+    assert_eq!(
+        (layers.ids.as_slice(), layer_numbers(&layers)),
+        (&ids[1..], vec![2])
+    );
+    t.run_until(120);
+    assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
 }

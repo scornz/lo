@@ -1,0 +1,205 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "StackLayers",
+    "variables": {
+      "ids": [
+        "PR_kwDOVleUfc8AAAABNYU1Yg",
+        "PR_kwDOVleUfc8AAAABNYU4cQ",
+        "PR_kwDOVleUfc8AAAABNYU7vQ",
+        "PR_kwDOVleUfc8AAAABNYVCQg",
+        "PR_kwDOVleUfc8AAAABNYU_Cg",
+        "PR_kwDOVleUfc8AAAABNYVF8w",
+        "PR_kwDOVleUfc8AAAABNYVJNg",
+        "PR_kwDOVleUfc8AAAABNYVQng"
+      ]
+    },
+    "query_sha256": "1cd8dcbdf35a7be29d8a4c625c025fe37025a270d534f9a64fef4be9468ab63f"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4973",
+      "x-ratelimit-reset": "1794016455",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "27"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4973,
+          "used": 27,
+          "resetAt": "2026-11-07T01:54:15Z"
+        },
+        "nodes": [
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYU1Yg",
+            "number": 2,
+            "state": "OPEN",
+            "headRefOid": "78af6b6c595b22b6a58b5d99b3bd8e2862459ced",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYU4cQ",
+            "number": 3,
+            "state": "OPEN",
+            "headRefOid": "fd3d9a4102c1371a42100297822828c8cd12255c",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYU7vQ",
+            "number": 4,
+            "state": "OPEN",
+            "headRefOid": "4b18a1a61f29869e0665318e518ed79a9957fcc8",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYVCQg",
+            "number": 6,
+            "state": "OPEN",
+            "headRefOid": "8bb8daed45b4c4ceeaa9f90c55aeb26e512f8506",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 4,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                },
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYU_Cg",
+            "number": 5,
+            "state": "OPEN",
+            "headRefOid": "b1c25057a6f94e9fe1c2eddc6458ed84c84629d3",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYVF8w",
+            "number": 7,
+            "state": "OPEN",
+            "headRefOid": "df9d7c031b236e0c7cf4afa47ad800a7253bf41c",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYVJNg",
+            "number": 8,
+            "state": "OPEN",
+            "headRefOid": "380001c62c797601c7486bb04d2d07a1b87c2391",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "PullRequest",
+            "id": "PR_kwDOVleUfc8AAAABNYVQng",
+            "number": 11,
+            "state": "OPEN",
+            "headRefOid": "9e01c13b86864137cb6aa6bef52b0d7f08d91977",
+            "reviewDecision": null,
+            "statusCheckRollup": null,
+            "isInMergeQueue": false,
+            "mergeQueueEntry": null,
+            "files": {
+              "totalCount": 1,
+              "nodes": [
+                {
+                  "viewerViewedState": "UNVIEWED"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
