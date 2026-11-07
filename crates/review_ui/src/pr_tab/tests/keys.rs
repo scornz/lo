@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::key_clashes::Place;
+
 #[gpui::test]
 fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
     init(cx);
@@ -169,34 +171,102 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
     });
 }
 
-/// Each of Lo's keys does one thing where it works: of two bindings with the same keystrokes and
-/// context, the one bound later would quietly win.
+/// Each of Lo's keys does one thing wherever it's typed: on the context stack of every place in the
+/// window that takes keys, read from a window showing it, no two of Lo's bindings hold with the
+/// same keystrokes, or with one's starting the other's (see [`crate::key_clashes`]). The `lo`
+/// crate checks its Accounts modal the same way.
 #[gpui::test]
-fn no_two_of_los_bindings_share_a_keystroke_and_a_context(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        // The test app starts with no keymap, so these are Lo's bindings alone.
+async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppContext) {
+    let (workspace, cx) = workspace(cx).await;
+    let mut places = Vec::new();
+    // The focused element's context stack, which ends in `last`.
+    let focused = |name: &str, last: &str, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        let stack = cx.update(|window, _| window.context_stack());
+        assert!(
+            stack.last().is_some_and(|context| context.contains(last)),
+            "{name}: {stack:?}"
+        );
+        Place {
+            name: name.into(),
+            stack,
+        }
+    };
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        crate::recent_prs::show(workspace, window, cx)
+    });
+    places.push(focused("the recent list", "RecentPullRequests", cx));
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        crate::OpenBox::toggle(workspace, window, cx)
+    });
+    places.push(focused("the open box", "Editor", cx));
+    cx.dispatch_action(menu::Cancel);
+
+    let tab = open_unloaded(&workspace, "github.com/owner/repo/pull/1", cx);
+    tab.update_in(cx, |tab, window, cx| {
+        window.focus(&tab.focus_handle(cx), cx)
+    });
+    places.push(focused("a tab without a diff", "PrTab", cx));
+    tab.update_in(cx, |tab, window, cx| {
+        window.focus(tab.file_list_focus_handle(), cx)
+    });
+    places.push(focused("the file list", "PrFileList", cx));
+
+    let files = [("a.rs", lines(5, &[]), lines(5, &[3]))];
+    let diff = show_test_diff(&tab, &workspace, &files, cx).await;
+    tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
+    places.push(focused("the diff", "Editor", cx));
+    let diff_stack = places.last().unwrap().stack.clone();
+    cx.update(|window, cx| {
+        let left = diff.read(cx).lhs_editor().unwrap().focus_handle(cx);
+        window.focus(&left, cx)
+    });
+    places.push(focused("the diff's left side", "Editor", cx));
+    // A text box in the diff, such as a comment box, and a line of text in the tab.
+    for (name, editor) in [
+        (
+            "a text box in the diff",
+            cx.update(|window, cx| cx.new(|cx| Editor::auto_height(1, 10, window, cx))),
+        ),
+        (
+            "a line of text in the tab",
+            cx.update(|window, cx| cx.new(|cx| Editor::single_line(window, cx))),
+        ),
+    ] {
+        let mut stack = diff_stack.clone();
+        if name.ends_with("in the tab") {
+            stack.pop();
+        }
+        stack.push(
+            cx.update(|window, cx| editor.update(cx, |editor, cx| editor.key_context(window, cx))),
+        );
+        places.push(Place {
+            name: name.into(),
+            stack,
+        });
+    }
+
+    // Two accounts can see acme/app, so opening it asks which to use.
+    let github = FakeGithub::default();
+    let git = GitServer::start(cx);
+    let pull = git.pull_request("acme/app", 1, &[], &[("a.rs", "a\n")]);
+    github.add_pull(pull);
+    github.let_see("gho_HOME", "acme/app");
+    github.let_see("gho_WORK", "acme/app");
+    sign_in(&github, &[("home", "gho_HOME"), ("work", "gho_WORK")], cx).await;
+    open_loaded(&workspace, "github.com/acme/app/pull/1", cx);
+    places.push(focused("the account picker", "AccountPicker", cx));
+
+    cx.update(|_, cx| {
+        // Lo's bindings alone.
+        cx.clear_key_bindings();
         crate::bind_keys(cx);
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let mut bound = HashMap::new();
-        for binding in keymap.bindings() {
-            let keys: Vec<String> = binding
-                .keystrokes()
-                .iter()
-                .map(|keystroke| keystroke.inner().unparse(gpui::OperatingSystem::Mac))
-                .collect();
-            let context = binding
-                .predicate()
-                .map(|predicate| predicate.to_string())
-                .unwrap_or_default();
-            let action = binding.action().name();
-            if let Some(earlier) = bound.insert((keys.join(" "), context.clone()), action) {
-                panic!(
-                    "`{}` in `{context}` is bound to both {earlier} and {action}",
-                    keys.join(" ")
-                );
-            }
-        }
-        assert!(bound.len() > 30, "only {} bindings", bound.len());
+        assert!(keymap.bindings().len() > 30);
+        let clashes = crate::key_clashes::clashes(keymap.bindings(), &places);
+        assert!(clashes.is_empty(), "{clashes:#?}");
     });
 }

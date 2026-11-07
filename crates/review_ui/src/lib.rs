@@ -10,6 +10,7 @@ pub mod file_list;
 pub mod github_api;
 pub mod github_layer;
 mod image_preview;
+pub mod key_clashes;
 mod keymap;
 pub mod local_copies;
 pub mod local_project;
@@ -81,13 +82,20 @@ pub fn init_workspaces(cx: &mut App) {
     .detach();
 }
 
-/// Lo's own keys, which go over Zed's. Each module binds its own, and CLAUDE.md's "Keys" table lists
-/// them.
-fn bind_keys(cx: &mut App) {
-    pr_tab::bind_keys(cx);
-    account_picker::bind_keys(cx);
-    recent_prs::bind_keys(cx);
-    open_box::bind_keys(cx);
+/// Each module's `bind_keys`, one line each, in alphabetical order.
+const BIND_KEYS: &[fn(&mut App)] = &[
+    account_picker::bind_keys,
+    open_box::bind_keys,
+    pr_tab::bind_keys,
+    recent_prs::bind_keys,
+];
+
+/// Lo's own keys in this crate, which go over Zed's. Each module binds its own, and CLAUDE.md's
+/// "Keys" table lists them, with the `lo` crate's.
+pub fn bind_keys(cx: &mut App) {
+    for bind_keys in BIND_KEYS {
+        bind_keys(cx);
+    }
 }
 
 /// Keeps the window's tabs, panes and title as Lo has them when the workspace changes.
