@@ -1,4 +1,4 @@
-# GitHub layer research for rozed (milestone 3)
+# GitHub layer research for Lo (milestone 3)
 
 Researched 2026-11-06 for the `github` crate: HTTP, credentials, SQLite, typed GraphQL, device flow,
 `gh` import, polling and fixtures. Design: §3, §11 "GitHub", §12 "GitHub API".
@@ -7,9 +7,9 @@ Researched 2026-11-06 for the `github` crate: HTTP, credentials, SQLite, typed G
   Its pinned reqwest fork (`zed-industries/reqwest@33bc764`) was read from `~/.cargo/git/checkouts`.
 - **GitHub docs** were read from the `github/docs` source (`main`, 2026-11-06); URLs below are the
   published pages. `cli/cli` is at `v2.103.3`, `cli/oauth` at `fe4619f`.
-- **Live checks** (2026-11-06, 00:27–00:45 PST): device-flow endpoints with rozed's public client ID
+- **Live checks** (2026-11-06, 00:27–00:45 PST): device-flow endpoints with Lo's public client ID
   (no code was approved, nothing was granted), and read-only REST and GraphQL GETs on
-  `rozed-dev/playground` with rozed's OAuth token from `~/.config/rozed-dev/oauth-token`. No token
+  `rozed-dev/playground` with Lo's OAuth token from `~/.config/rozed-dev/oauth-token`. No token
   or device code was printed or written outside a mode-600 scratch file.
 - **A compile experiment** built `graphql_client`, `cynic` and `apollo-compiler` against GitHub's
   real schema with Rust 1.98.1 (scratchpad `gqlexp/`).
@@ -24,11 +24,11 @@ Researched 2026-11-06 for the `github` crate: HTTP, credentials, SQLite, typed G
    hand (token to `github.com`, no token to S3).
 2. **Credentials:** implement Zed's `credentials_provider::CredentialsProvider` twice: Keychain
    (through GPUI's `cx.read_credentials`) in release, and a mode-600 file
-   `~/.config/rozed/credentials.json` in debug. Don't use `zed_credentials_provider`: its dev file
-   isn't mode 600. Key each token by a per-account server string, `rozed://github.com/<login>`,
+   `~/.config/lo/credentials.json` in debug. Don't use `zed_credentials_provider`: its dev file
+   isn't mode 600. Key each token by a per-account server string, `lo://github.com/<login>`,
    because Zed's Keychain items are looked up by server alone.
-3. **SQLite:** use `sqlez` with rozed's own `Domain` and its own file,
-   `database_dir()/0-<channel>/rozed.sqlite`. `rusqlite` can't be added beyond 0.32.x: both link
+3. **SQLite:** use `sqlez` with Lo's own `Domain` and its own file,
+   `database_dir()/0-<channel>/lo.sqlite`. `rusqlite` can't be added beyond 0.32.x: both link
    `sqlite3`, and Zed pins `libsqlite3-sys` 0.30.1.
 4. **GraphQL:** use `graphql_client` 0.16 (derive) over `.graphql` files, plus a unit test that
    validates every query against the vendored schema with `apollo-compiler`.
@@ -85,15 +85,15 @@ Researched 2026-11-06 for the `github` crate: HTTP, credentials, SQLite, typed G
     `futures::AsyncReadExt::read_to_end`.
 - **Wrappers.**
   - `HttpClientWithProxy` (`:177-228`).
-  - `HttpClientWithUrl` (`:231-368`), a base URL plus Zed URL builders. rozed doesn't need it.
+  - `HttpClientWithUrl` (`:231-368`), a base URL plus Zed URL builders. Lo doesn't need it.
   - `BlockedHttpClient` (`:392-426`).
   - `read_proxy_from_env()` reads `ALL_PROXY`, `HTTPS_PROXY` and `HTTP_PROXY` (`:370-384`).
 - **Zed's own GitHub helpers.** `http_client/src/github.rs:143-152` and
   `git_hosting_providers/src/providers/github.rs:136-142` send `Authorization: Bearer $GITHUB_TOKEN`
   when that env var is set.
-  - **[inferred]** If a developer launches rozed with `GITHUB_TOKEN` exported, Zed's
+  - **[inferred]** If a developer launches Lo with `GITHUB_TOKEN` exported, Zed's
     language-server download code sends that token to `api.github.com`. That's harmless, but it
-    isn't rozed's account. Don't rely on it, and don't export it in tests.
+    isn't Lo's account. Don't rely on it, and don't export it in tests.
 
 ### The concrete client and how requests run
 
@@ -134,7 +134,7 @@ fn api_request(method: Method, url: &str, token: &Token, body: AsyncBody) -> any
         .header("Authorization", format!("token {}", token.expose())) // `token`, as gh does; uploads need it
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")                  // pin; the response echoes x-github-api-version-selected
-        .header("User-Agent", concat!("rozed/", env!("CARGO_PKG_VERSION"))) // GitHub requires one; don't rely on the shared client's
+        .header("User-Agent", concat!("lo/", env!("CARGO_PKG_VERSION"))) // GitHub requires one; don't rely on the shared client's
         .follow_redirects(RedirectPolicy::FollowLimit(3))               // always set it explicitly (see Redirects)
         .timeout(Duration::from_secs(30))                               // GitHub gives up after 10 s server-side
         .body(body)?)
@@ -159,7 +159,7 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
   `github.com/user-attachments/assets/<id>` to S3 therefore does **not** leak the token.
   - **Still, do that hop by hand:** `NoFollow`, check the `Location` host (an
     `*.s3.amazonaws.com` host), then GET it with no `Authorization`. That is defense in depth
-    against a future client change, and it lets rozed cache the signed URL. The URL is valid for
+    against a future client change, and it lets Lo cache the signed URL. The URL is valid for
     5 minutes (`X-Amz-Expires=300`, `research/github-checks.md` §3).
 - **Methods and bodies.**
   - 301/302/303 drop the body and switch non-GET methods to GET (`client.rs:2867-2886`).
@@ -185,7 +185,7 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
     coerces to `Arc<dyn HttpClient>`.
   - Also `with_404_response()`, `with_200_response()`, and `replace_handler` to chain handlers.
   - Zed's tests build `AppState::test` on it (`research/zed-crates.md` §1).
-- **For rozed:** a small `ReplayHttpClient` implementing the three trait methods is clearer than
+- **For Lo:** a small `ReplayHttpClient` implementing the three trait methods is clearer than
   closures (section 8). It needs no feature flag.
 
 ---
@@ -203,7 +203,7 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
 | macOS implementation | Runs on the background executor (`gpui_macos/src/platform.rs:1224-1258`). Uses **internet-password** items (`kSecClassInternetPassword`) with `kSecAttrServer = url`, `kSecAttrAccount = username` and `kSecValueData = password`. | `crates/gpui_apple/src/keychain.rs` |
 | Dev file provider | One JSON file `paths::config_dir()/development_credentials`, a map of `url → (username, bytes)`, written with `std::fs::write`. | same file `:125-196` |
 
-### Details that matter for rozed
+### Details that matter for Lo
 
 - **One item per server string.**
   - `write_credentials` runs `SecItemUpdate` with the query `{class, server}` and, if nothing
@@ -228,18 +228,18 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
 - **`TokenStore`** = `Arc<dyn credentials_provider::CredentialsProvider>`, chosen at startup. Using
   Zed's trait gets `FakeCredentialsProvider` for tests for free.
   - **Release:** `KeychainTokenStore`, which calls `cx.read_credentials(server)` and so on.
-  - **Debug** (`cfg!(debug_assertions)`, with `ROZED_USE_KEYCHAIN=1` to force the Keychain, like
+  - **Debug** (`cfg!(debug_assertions)`, with `LO_USE_KEYCHAIN=1` to force the Keychain, like
     Zed's env var): `FileTokenStore` at `paths::config_dir()/credentials.json`, which is
-    `~/.config/rozed/credentials.json` once the spike's `APP_NAME` patch is in.
-- **Server string:** `rozed://github.com/<login>`. A host-qualified login keeps GHES and ghe.com
+    `~/.config/lo/credentials.json` once the spike's `APP_NAME` patch is in.
+- **Server string:** `lo://github.com/<login>`. A host-qualified login keeps GHES and ghe.com
   open for later. Username: `<login>`. Password: the token bytes.
-  - **[inferred]** A `rozed://` server never matches Safari's `github.com` web passwords, so it won't
+  - **[inferred]** A `lo://` server never matches Safari's `github.com` web passwords, so it won't
     show up in AutoFill.
 - **File store rules.**
   - Create it with `OpenOptions::new().mode(0o600)` (`std::os::unix::fs::OpenOptionsExt`), write a
     temp file in the same directory, then `rename` over the old one.
   - On read, if the mode isn't 0600, `chmod` it back and log a warning.
-  - Directory `~/.config/rozed` at 0700.
+  - Directory `~/.config/lo` at 0700.
   - Never log the contents.
 - **The account list lives in SQLite,** not the Keychain: login, user id, source (device flow or
   `gh`), scopes and the default account per owner. The Keychain has no enumeration API in Zed's
@@ -300,20 +300,20 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
   | 0.33.0 (2025-01-19) | `^0.31.0` | no: `links` conflict |
   | … 0.41.1 (2026-10-28, latest) | `^0.39.0` | no |
 
-  (crates.io dependency API.) Bumping `libsqlite3-sys` in rozed's lock isn't possible either: `sqlez`
+  (crates.io dependency API.) Bumping `libsqlite3-sys` in Lo's lock isn't possible either: `sqlez`
   asks for `0.30.1`, and 0.31 is semver-incompatible.
 - **Recommendation: use `sqlez`.** It's already compiled in. It gives compile-time SQL syntax
   checks, the same migration model as the rest of the app, and a write thread that keeps the GPUI
   threads off disk writes. `rusqlite` 0.32 would mean a two-year-old API pinned until Zed bumps
   SQLite, for no gain.
 
-### How rozed should use it
+### How Lo should use it
 
 - **Its own file, its own domain,** not `AppDatabase`.
-  - Path: `paths::database_dir()/0-<channel>/rozed.sqlite`, next to Zed's file. Dev and release
+  - Path: `paths::database_dir()/0-<channel>/lo.sqlite`, next to Zed's file. Dev and release
     stay apart, which matters because their tokens live in different stores (section 2).
-  - Open with `ThreadSafeConnection::builder::<RozedDb>(path, true)` and Zed's pragmas.
-- **Don't open through `db::open_db`.** It silently falls back to memory. rozed's file holds
+  - Open with `ThreadSafeConnection::builder::<LoDb>(path, true)` and Zed's pragmas.
+- **Don't open through `db::open_db`.** It silently falls back to memory. Lo's file holds
   durable state (accounts per owner, "last seen", trusted repos), and losing it silently is worse
   than an error.
 - **Watch the in-memory fallback in `sqlez` too.** `Connection::open_file` falls back to an
@@ -385,10 +385,10 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
 | Runtime deps | `serde`, `serde_json` (its `reqwest` feature is optional; leave it off) | `serde`, `ref-cast`, `static_assertions`, `thiserror` 1 (its `reqwest ^0.13` feature is optional) | — |
 | Maintenance | `graphql-rust/graphql-client` on GitHub. Releases 0.15.0 (2025-12-08) and 0.16.0 (2026-01-15). Commits through 2026-08-11. 112 open issues. | **GitHub repo archived 2026-03-07** ("Add migration notice"). Development moved to `codeberg.org/obmarg/cynic` (commits to 2026-10-14, MSRV 1.95). Releases 3.13 (2026-02) and 3.14 (2026-07). | Apollo, active (1.33.1 on 2026-10-21) |
 
-- **Neither crate pulls an HTTP client.** Both build a serde body that rozed sends through
+- **Neither crate pulls an HTTP client.** Both build a serde body that Lo sends through
   `HttpClient`.
 - **Zed's workspace `serde_json` enables `preserve_order` and `raw_value`** (`Cargo.toml:894`).
-  - Feature unification turns them on for rozed's crates too. That's harmless for decoding.
+  - Feature unification turns them on for Lo's crates too. That's harmless for decoding.
   - It matters for fixture keys: `serde_json::Value` keeps insertion order, so canonicalise by
     sorting keys yourself (section 8).
 
@@ -410,7 +410,7 @@ spike wraps to refuse Zed's hosts, and a `ReplayHttpClient` in tests (section 8)
 - **Custom scalars** must be in scope under their schema names: `DateTime`, `GitObjectID`, `URI`,
   `HTML`, `GitTimestamp`, `BigInt`, `Base64String` and so on. For example
   `type DateTime = String;`, or `chrono::DateTime<Utc>`, which Zed already has.
-- **Decode the response with rozed's own envelope,** not `graphql_client::Response`. GitHub puts a
+- **Decode the response with Lo's own envelope,** not `graphql_client::Response`. GitHub puts a
   top-level `type` on each error, and graphql_client's `Error` has only `message`, `locations`,
   `path` and `extensions` (`graphql_client/src/lib.rs:197-206`). **[observed]** examples:
   - Data-level: `{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],..,"message":"Could not resolve to a Repository with the name 'rozed-dev/does-not-exist-xyz'."}]}`
@@ -466,7 +466,7 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
     churn it.
 - **Expiring tokens.** If the app ever opts into expiring tokens (or the request adds
   `offline_access`), the response adds `refresh_token`, `expires_in` (28800) and
-  `refresh_token_expires_in`. rozed's app doesn't, so tokens are long-lived.
+  `refresh_token_expires_in`. Lo's app doesn't, so tokens are long-lived.
 
 ### Recommended loop
 
@@ -477,7 +477,7 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
    `background_executor().timer(..)`, so tests can advance a fake clock.
    - `authorization_pending`: continue.
    - `slow_down`: set the interval to the response's `interval` (else +5 s) and continue. On a
-     second `slow_down`, keep going, unlike gh, which bails: rozed runs no VMs with drifting clocks.
+     second `slow_down`, keep going, unlike gh, which bails: Lo runs no VMs with drifting clocks.
    - `expired_token`, `access_denied`: stop, and offer "Start again".
    - Anything else (`incorrect_*`, `unsupported_grant_type`, `device_flow_disabled`, a non-JSON
      body, non-200): stop with the error text. These are bugs or misconfiguration.
@@ -486,7 +486,7 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
    - Read `login` and `id`.
    - Check that `x-oauth-scopes` contains `repo`, `read:org` and `workflow`. **[observed]** The
      header is `read:org, repo, workflow` (`research/github-checks.md` §2).
-   - Store the token under `rozed://github.com/<login>`, replacing any token for that login.
+   - Store the token under `lo://github.com/<login>`, replacing any token for that login.
 4. **Cancel** drops the polling task. Dropping the future aborts the in-flight request
    (section 1).
 
@@ -508,7 +508,7 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
     is blocked",
     [Troubleshooting the REST API](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api)).
 - **Detect** a 403 or GraphQL error whose message contains "OAuth App access restrictions".
-  - Show: "`<org>` hasn't approved rozed. Request approval on GitHub", linking to
+  - Show: "`<org>` hasn't approved Lo. Request approval on GitHub", linking to
     **`https://github.com/settings/connections/applications/Ov23liBORqwRdiPzqsPP`**.
   - That page lists each org with a **Request** button
     ([Requesting organization approval](https://docs.github.com/en/account-and-profile/how-tos/organization-membership/requesting-organization-approval-for-oauth-apps);
@@ -516,8 +516,8 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
   - Members can request; outside collaborators only if the org allows it.
   - **[observed]** The device-flow consent page already shows each restricted org with
     Grant/Request (`research/github-checks.md` §2).
-- **On a `NOT_FOUND`** for a PR link in an org repo, say "Not found, or `<org>` restricts rozed",
-  with the same link. rozed can't tell the two apart.
+- **On a `NOT_FOUND`** for a PR link in an org repo, say "Not found, or `<org>` restricts Lo",
+  with the same link. Lo can't tell the two apart.
 
 ### SAML SSO (design §11)
 
@@ -529,13 +529,13 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
 - **OAuth tokens** are SSO-authorized when they're created, but only for orgs where the user has
   an active SAML session at that moment
   ([Authorizing OAuth apps](https://docs.github.com/en/apps/oauth-apps/using-oauth-apps/authorizing-oauth-apps)).
-  A user who signs in to rozed without a fresh SAML session gets an unauthorized token for that org.
+  A user who signs in to Lo without a fresh SAML session gets an unauthorized token for that org.
 - **gh's handling.** gh captures `X-GitHub-SSO` from **every** response, GraphQL included, and
   extracts `url=([^;]+)` (`pkg/cmd/factory/default.go:26-27, 215, 348-358`). It prints
   "Authorize in your web browser: <url>" (`pkg/cmd/api/api.go:561-562`).
   - GraphQL's message is "Resource protected by organization SAML enforcement. You must grant
     your … token access to this organization." ([cli/cli#2661](https://github.com/cli/cli/issues/2661)).
-- **rozed:** record the header on every response, per account. On a 403 or GraphQL `FORBIDDEN`
+- **Lo:** record the header on every response, per account. On a 403 or GraphQL `FORBIDDEN`
   with it, show "Single sign-on required for this org" with the URL. If the URL has expired or is
   missing, offer "Sign in again", the device flow after visiting the org's SSO page.
 
@@ -614,10 +614,10 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
    - Verify with `GET /user`: its `login` must equal `<login>`, and record `x-oauth-scopes`.
    - Store the token like a device-flow token, with `source = gh`.
 4. **Don't read gh's Keychain items directly.**
-   - **[inferred]** They were created by `/usr/bin/security`, so rozed's own Security-framework
+   - **[inferred]** They were created by `/usr/bin/security`, so Lo's own Security-framework
      reads would trigger an access prompt per item.
    - Their format (base64 prefix, the refreshable JSON) is gh's private detail.
-5. **Refreshable gh accounts.** rozed's copy expires within 8 hours, and rozed must **never** use
+5. **Refreshable gh accounts.** Lo's copy expires within 8 hours, and Lo must **never** use
    the refresh token: that would rotate gh's credential under it. On a `401` for a `source = gh`
    account, re-run step 3 once (gh refreshes and saves). If that fails, mark the account signed out
    (design §11). The same retry also covers a user who re-logged in `gh`.
@@ -633,13 +633,13 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
 | 304s are free | "Making a conditional request does not count against your primary rate limit if a `304` response is returned and the request was made while correctly authorized with an `Authorization` header" ([Best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)). **[observed]** on every endpoint below, `x-ratelimit-used` didn't move on the 304 and went up by 1 on the next plain request. |
 | Which REST endpoints give ETags | **[observed]**, all `200` with an `etag`, all `304` on `If-None-Match`: `GET /repos/{o}/{r}`, `/pulls/{n}`, `/pulls?state=open`, `/pulls/{n}/reviews`, `/pulls/{n}/comments`, `/pulls/{n}/commits`, `/pulls/{n}/files`, `/issues/{n}/comments`, `/issues/{n}/timeline`, `/issues/{n}/events`, `/commits/{sha}/check-runs`, `/commits/{sha}/status`, `/commits/{sha}/check-suites`, `/stacks?pull_request=n`, `/stacks/{n}`, `/compare/a...b`, `/notifications` (also sends `x-poll-interval: 60`), `/user`. `last-modified` was also present on pulls/{n}, commits, files, compare, repo and user. |
 | No ETag | `GET /rate_limit`, which doesn't count against the primary limit. `GET /rules/branches/main` on the private free-plan repo returned `403` "Upgrade to GitHub Pro or make this repository public to enable this feature." **[observed]** So branch rules need a public or paid repo, which matters for the e2e repo. |
-| ETags are per token and per `Accept` | **[observed]** The same URL gave a different ETag for the bot's PAT than for rozed's OAuth token, and replaying one token's ETag with the other got a `200`. Changing `Accept` also changed it. `Vary: Accept-Encoding, Accept, X-Requested-With`. Key the cache by (account, URL, `Accept`, API version). |
+| ETags are per token and per `Accept` | **[observed]** The same URL gave a different ETag for the bot's PAT than for Lo's OAuth token, and replaying one token's ETag with the other got a `200`. Changing `Accept` also changed it. `Vary: Accept-Encoding, Accept, X-Requested-With`. Key the cache by (account, URL, `Accept`, API version). |
 | GraphQL has no conditional requests | **[observed]** No `etag` on `POST /graphql`. The minimum cost is **1 point** per call: the `PollPullRequest` query and the 100-PR `RepoOpenPulls` query each cost `1` (`rateLimit.cost`). |
 | GraphQL headers | `x-ratelimit-limit: 5000`, `-remaining`, `-used`, `-reset`, `x-ratelimit-resource: graphql`. "When possible, you should use the rate limit response headers instead of querying the API" ([GraphQL rate limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)), so `rateLimit { cost }` is only for development. |
 | Over the GraphQL primary limit | Status still **200**, an error message, and `x-ratelimit-remaining: 0`. |
 | Over the REST primary limit | `403` or `429`, `x-ratelimit-remaining: 0`, wait until `x-ratelimit-reset` ([REST rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)). |
 | Header values can disagree | "rate limit values can vary from one response to the next based on the location handling the request". **[observed]** `used` jumped from 23 to 1 and back to 25 between consecutive requests. Treat the counts as approximate: keep the lowest `remaining` seen per reset window. |
-| The budget is shared | 5,000 REST requests/h and 5,000 GraphQL points/h **per user**, "includes requests made with a PAT as well as requests made by a GitHub App or OAuth app on behalf of a user". rozed shares it with `gh`, agents and everything else the user runs. (15,000 / 10,000 if the app is approved by a GHEC org.) |
+| The budget is shared | 5,000 REST requests/h and 5,000 GraphQL points/h **per user**, "includes requests made with a PAT as well as requests made by a GitHub App or OAuth app on behalf of a user". Lo shares it with `gh`, agents and everything else the user runs. (15,000 / 10,000 if the app is approved by a GHEC org.) |
 | Secondary limits | No more than 100 concurrent requests (REST and GraphQL combined). Per minute: 900 points for REST endpoints and 2,000 for GraphQL. 90 s of CPU per 60 s. 80 content-creating requests/min and 500/h. GET = 1 point, mutating = 5. "Make requests serially." Wait ≥1 s between mutations. On a secondary limit (`403`/`429`, or GraphQL `200` or `403`), honour `retry-after`, else `x-ratelimit-reset` if remaining is 0, else wait ≥60 s with exponential backoff. There's no way to query secondary status. **[inferred]** 304s probably still count toward secondary limits. |
 | Timeouts cost extra | A GraphQL request over 10 s is killed, and "additional points will be deducted from your primary rate limit for the next hour". Keep queries small. |
 | Use stable list order | `sort=updated` reorders pages and defeats 304s. Use the default order and the same parameters every time. |
@@ -708,7 +708,7 @@ Docs: [Authorizing OAuth apps, Device flow](https://docs.github.com/en/apps/oaut
     if the user's other tools are heavy.
 - **ETag cache.**
   - Key: (account, method GET, full URL with query, `Accept`, API version). Value: `etag`,
-    `last-modified`, status, the headers rozed reads, and the body.
+    `last-modified`, status, the headers Lo reads, and the body.
   - Keep it in memory, and write it to the `http_cache` table so a reopened PR shows instantly and
     its first poll can still get a 304.
   - On a 304, serve the stored body.
@@ -767,11 +767,11 @@ re-recording diffs small.
 
 ### Recording
 
-- **A recorder that runs rozed's real code paths.** `RecordingHttpClient(inner: Arc<dyn HttpClient>, dir)`
+- **A recorder that runs Lo's real code paths.** `RecordingHttpClient(inner: Arc<dyn HttpClient>, dir)`
   wraps a real `ReqwestClient`, tees each response, and returns it unchanged.
   - Run it from an `#[ignore]` test or `cargo xtask record-fixtures <cassette>`, which calls the
     same `GithubClient` functions the app does.
-  - Token: from `ROZED_FIXTURE_TOKEN_FILE`, default `~/.config/rozed-dev/oauth-token` (rozed's
+  - Token: from `LO_FIXTURE_TOKEN_FILE`, default `~/.config/rozed-dev/oauth-token` (Lo's
     own `gho_` token as `rozed-bot`; the same token type users have).
   - Fall back to `ROZED_BOT_TOKEN` (`~/.config/rozed-dev/bot.env`) only for calls the OAuth token
     can't make.
@@ -795,7 +795,7 @@ re-recording diffs small.
   4. **Hard check:** after writing, scan every file for the token's bytes and for
      `gh[opsur]_[A-Za-z0-9]{36,}` and `github_pat_[A-Za-z0-9_]{50,}`. Delete the cassette and fail
      if any match.
-  5. The repo is private but rozed's repo is public. Committing fixtures publishes the
+  5. The repo is private but Lo's repo is public. Committing fixtures publishes the
      playground's contents, node IDs and the bot's commit email (`rozed-test@scornz.com`). Keep
      the playground free of anything sensitive.
 - **Synthetic cassettes** cover what can't be recorded on demand:
@@ -818,10 +818,10 @@ re-recording diffs small.
   recording the first cassettes; tune Tier A from the results.
 - **The exact status and GraphQL error `type`** for OAuth-restriction and SSO failures. Both are
   inferred above. Capture them the first time a restricted org is available. `rozed-dev` approved
-  rozed, so it can't show this.
+  Lo, so it can't show this.
 - **Whether GitHub accepts `Authorization: Bearer` for uploads.** Unknown; use `token` everywhere
   (`research/github-api.md` §1).
-- **Keychain item access for a signed release build:** check that a Developer ID-signed rozed reads
+- **Keychain item access for a signed release build:** check that a Developer ID-signed Lo reads
   its own items without prompting across updates. Needs the user's Apple account.
 
 ## Sources

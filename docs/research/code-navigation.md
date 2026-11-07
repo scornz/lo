@@ -1,7 +1,7 @@
 # Milestone 10 research: code features on git-sourced buffers
 
 Zed citations are against `~/src/zed-worktrees/rozed-v1.27.0` (branch `rozed/v1.27.0`, Zed v1.27.0
-plus rozed's 4 patches, HEAD `02b1c42d6f`), relative to that root. rozed citations name the branch.
+plus Lo's 4 patches, HEAD `02b1c42d6f`), relative to that root. Lo citations name the branch.
 Nothing was changed in either tree.
 
 ## Answer in brief
@@ -11,25 +11,25 @@ Nothing was changed in either tree.
    result is opened from disk. Remote, SSH and collab projects don't change this. They forward each
    request to a host, and on that host the file is again a local worktree file. Zed has no way to
    serve a virtual document. Zed's own commit view gets no language server help on historic files
-   either. So a literal "built-in language server that Zed's editor talks to" can't serve rozed's
+   either. So a literal "built-in language server that Zed's editor talks to" can't serve Lo's
    git-sourced buffers: both sides on untrusted repos, and the left side always.
 2. **The editor's `SemanticsProvider` is a public trait with a public setter.** A crate outside Zed
    can give any editor its own provider with no patch, including both editors of a
    `SplittableEditor`. That provider can be backed by `symbol_index` and wrap Zed's project
    provider. It handles go-to-definition, hover and document highlights, and it works in the split
-   diff's left editor. It can return targets in any `Entity<Buffer>`, including rozed's in-memory
-   git buffers. Find-references goes around it, but rozed's `gr` panel is rozed's own UI anyway.
+   diff's left editor. It can return targets in any `Entity<Buffer>`, including Lo's in-memory
+   git buffers. Find-references goes around it, but Lo's `gr` panel is Lo's own UI anyway.
 3. **Zed has no idea of precedence.** An editor has one provider. `LspStore` concatenates the
    answers of every server attached to a buffer. "Language server answers win" therefore has to be
-   rozed code, whatever the transport.
+   Lo code, whatever the transport.
 4. **Zed has no peek.** Its go-to-definition opens a new tab, a preview tab or a "Definitions"
    multibuffer tab. A peek can be built from public API: blocks with an embedded editor, as rename
    does, plus the split diff's automatic balancing spacers. A file view in the same tab and "into
-   the diff" are also rozed code on public API.
-5. **Recommendation:** answer from the syntax index in rozed's own process, through a rozed
+   the diff" are also Lo code on public API.
+5. **Recommendation:** answer from the syntax index in Lo's own process, through a Lo
    `SemanticsProvider` that wraps Zed's (Option C below). It needs no Zed patches. One optional
    patch of about 15 lines would make it tidier. This meets every behaviour in design §7. It doesn't
-   meet the mechanism sentence "runs as a built-in language server … rozed starts a copy of itself
+   meet the mechanism sentence "runs as a built-in language server … Lo starts a copy of itself
    in a server mode", so that bullet should be reworded (proposed text at the end).
 
 ---
@@ -77,7 +77,7 @@ Nothing was changed in either tree.
 - Zed's own commit view uses a `GitBlob` file whose `as_local()` returns `None`
   (`crates/git_ui/src/commit_view.rs:1070-1110`). Zed shows historic files with no language
   servers.
-- rozed's `GitFile` follows the same pattern (`integration/pr-tab:crates/rozed/src/pr_diff.rs:1161-1225`;
+- Lo's `GitFile` follows the same pattern (`integration/pr-tab:crates/rozed/src/pr_diff.rs:1161-1225`; <!-- rename:keep -->
   `feat/pr-tab` moved it into `review_ui`). Its doc comment already says "Language servers never
   see it" (`pr_diff.rs:929-930`).
 - The diff's left side is `BufferDiff`'s base-text buffer. It's a `Buffer::local` with no file at
@@ -99,7 +99,7 @@ Nothing was changed in either tree.
 
 ### Workarounds I rejected
 
-- **A fake `worktree::File`.** Its fields are all public (`worktree.rs:3824-3831`), so rozed could
+- **A fake `worktree::File`.** Its fields are all public (`worktree.rs:3824-3831`), so Lo could
   stamp an in-memory buffer as a file in a local worktree. It doesn't hold up:
   - `is_lsp_relevant` needs a real worktree entry (`completions.rs:146-156`), so the editor never
     registers the buffer.
@@ -109,7 +109,7 @@ Nothing was changed in either tree.
 
 ---
 
-## 2. `SemanticsProvider`: can rozed plug in its own?
+## 2. `SemanticsProvider`: can Lo plug in its own?
 
 Yes, with no patch.
 
@@ -129,7 +129,7 @@ Yes, with no patch.
   `Rc::new(project.downgrade())` (`2401-2403`). The getter and setter are public (`3311-3317`), and
   nothing else in Zed writes the field.
 - **Wrapping Zed's provider.** `impl SemanticsProvider for WeakEntity<Project>` is public
-  (`editor.rs:11959+`), so a rozed wrapper can forward to it.
+  (`editor.rs:11959+`), so a Lo wrapper can forward to it.
 - **Precedent.** Zed's own tests swap in custom providers (`crates/editor/src/hover_popover.rs:1959`,
   `2281`, `2355`).
 
@@ -147,7 +147,7 @@ Yes, with no patch.
 **What goes around it:**
 
 - **Find all references** calls `project.references` directly (`navigation.rs:1363`, `1410`).
-  rozed's `gr` panel is its own UI, so this costs nothing.
+  Lo's `gr` panel is its own UI, so this costs nothing.
 - **Workspace symbols and completions** have their own paths (`completion_provider`,
   `editor.rs:2400`). Design §7 needs neither.
 - **The file outline** comes from tree-sitter unless the `document_symbols` setting uses LSP
@@ -168,7 +168,7 @@ there.
 - The left editor is built in `split()` (`744-761`). It's rebuilt every time the diff splits again:
   on `toggle_split` (`1038`), and automatically when the pane widens past the minimum width
   (`1421-1431`). `split()` ends with `cx.notify()` (`938`).
-- **No patch:** rozed observes the `SplittableEditor` and sets its provider whenever `lhs_editor()`
+- **No patch:** Lo observes the `SplittableEditor` and sets its provider whenever `lhs_editor()`
   (`565`) returns a new entity.
 - **Optional patch:** `SplittableEditor::set_semantics_provider`, remembered for later left editors.
   It would be about 15 lines, the same shape as patch `02b1c42d6f` (`disable_expand_excerpt_buttons`,
@@ -186,7 +186,7 @@ there.
     (`buffer_diff.rs:1645-1657`), or set the file later with `Buffer::file_updated`
     (`buffer.rs:1795`).
 
-**Targets** go back as `Location { buffer, range }` and can point at any buffer entity. rozed should
+**Targets** go back as `Location { buffer, range }` and can point at any buffer entity. Lo should
 keep a registry from (tree, path) to buffer that reuses the diff's own buffers for changed files.
 Then "into the diff" (§5) becomes a simple identity check.
 
@@ -201,12 +201,12 @@ It's possible without a patch:
   never calls `std::fs` directly.
 - `Fs` is a public trait with 39 methods (`crates/fs/src/fs.rs:104`).
 
-A wrapper would delegate to `RealFs` and serve `…/rozed-virtual/<repo>/<tree>/…` from
-`git ls-tree -r -l` and `cat-file --batch`. Trees are local in rozed's `blob:none` clone
+A wrapper would delegate to `RealFs` and serve `…/lo-virtual/<repo>/<tree>/…` from
+`git ls-tree -r -l` and `cat-file --batch`. Trees are local in Lo's `blob:none` clone
 (`repo_cache/src/cache.rs:16`, `207`), and blobs are fetched on demand. Zed would then open real
 project buffers at any commit.
 
-**What it buys:** only rozed's own server can read it. Real language servers read the real disk,
+**What it buys:** only Lo's own server can read it. Real language servers read the real disk,
 and the design keeps them on the trusted head checkout anyway.
 
 **What it costs:**
@@ -216,20 +216,20 @@ and the design keeps them on the trusted head checkout anyway.
 - **Worktrees.** One per tree on screen: base and head for each PR, and more for revision
   comparisons and rebase-aware merge-tree results. Each one scans its tree into a snapshot.
 - **Buffer swaps.** Every diff buffer has to become a project buffer, the way checkout buffers
-  replace git buffers today (`integration/pr-tab:crates/rozed/src/pr_diff.rs:240-320`). The left
+  replace git buffers today (`integration/pr-tab:crates/rozed/src/pr_diff.rs:240-320`). The left <!-- rename:keep -->
   side's base buffers would come from the virtual worktree through `new_with_base_text_buffer`, and
-  rozed would have to register them by hand (`project.rs:3385`), because the left editor never
+  Lo would have to register them by hand (`project.rs:3385`), because the left editor never
   registers its buffers.
 - **A trust and visibility trap:**
   - If the virtual worktree is invisible, it reuses the visible trusted checkout's servers
     (`lsp_store.rs:3375-3420`). rust-analyzer would then receive old-side files.
   - If it's visible, its servers wait for trust (`lsp_store.rs:539-575`;
-    `trusted_worktrees.rs:461-498`). rozed would have to trust each one (`trusted_worktrees.rs:280`).
-  - rozed would also have to set `language_servers` per worktree
+    `trusted_worktrees.rs:461-498`). Lo would have to trust each one (`trusted_worktrees.rs:280`).
+  - Lo would also have to set `language_servers` per worktree
     (`SettingsStore::set_local_settings`, `crates/settings/src/settings_store.rs:1064`), because its
     forced layer is global. Without trust it forces `"language_servers": []`
-    (`feat/pr-tab:crates/rozed/src/forced_settings.rs:44`, `97-102`).
-- **Processes.** A `rozed --lsp` process for each worktree and server: two or more per PR, each
+    (`feat/pr-tab:crates/rozed/src/forced_settings.rs:44`, `97-102`). <!-- rename:keep -->
+- **Processes.** A `lo --lsp` process for each worktree and server: two or more per PR, each
   loading its tree's index. `symbol_index`'s `Store` lives in memory and "never evicts", so each
   process either rebuilds it or the crate gains a disk cache. In one process, one `Store` per repo is
   shared by every tab.
@@ -242,7 +242,7 @@ and the server would write each target before replying. These are real files, so
 It also blurs design §3/§7's "checkouts for trusted repos": nothing runs, but an untrusted repo's
 files land on disk.
 
-**Verdict:** possible, but it's a large, fragile layer whose only reader would be rozed's own
+**Verdict:** possible, but it's a large, fragile layer whose only reader would be Lo's own
 server.
 
 ---
@@ -261,7 +261,7 @@ server.
   not underneath them. Changing that through settings would mean editing per-worktree
   `language_servers` while servers run, which restarts them.
 
-**Rule for rozed's provider (`RozedSemantics`):**
+**Rule for Lo's provider (`LoSemantics`):**
 
 1. **Left side, untrusted repos, or a buffer with no language server running:** answer from the
    index.
@@ -279,11 +279,11 @@ server.
      rust-analyzer indexes or primes its cache
 4. **Hover (`K`):** the language server's only. On untrusted repos, either nothing or the index's
    definition signature (open question 3).
-5. **Everything else** (inlay hints, semantic tokens, rename): forward unchanged. rozed is read-only,
+5. **Everything else** (inlay hints, semantic tokens, rename): forward unchanged. Lo is read-only,
    so rename never applies.
 
 **Open question:** when a ready server returns nothing, which is common because dependencies are
-never installed, should rozed show nothing (or the import, per design §7 "Dependencies")? Or should
+never installed, should Lo show nothing (or the import, per design §7 "Dependencies")? Or should
 it fall back to a name match, which may point at the wrong definition? I'd show the server's empty
 answer and offer "search by name" in the peek.
 
@@ -309,12 +309,12 @@ answer and offer "search by name" in the peek.
   - Editors push entries through `ItemNavHistory` (`crates/workspace/src/pane.rs:466-469`,
     `4771-4802`).
   - `pane::GoBack` and `GoForward` are bound to `ctrl-o` and `ctrl-i` in vim (`vim.json:67-68`) and
-    by rozed's PR tab (`feat/pr-tab:crates/review_ui/src/pr_tab.rs:64-65`). They call
+    by Lo's PR tab (`feat/pr-tab:crates/review_ui/src/pr_tab.rs:64-65`). They call
     `workspace.go_back` and `go_forward` (`workspace.rs:3402-3418`), which activate the entry's item
     and call `Item::navigate(data)` (`crates/workspace/src/item.rs:221-228`).
-  - The editor's `NavigationData` is `pub(crate)` (`editor.rs:1664-1669`): rozed can't read it, but
+  - The editor's `NavigationData` is `pub(crate)` (`editor.rs:1664-1669`): Lo can't read it, but
     it can push data of its own type.
-  - `SplittableEditor::navigate` forwards to its focused editor (`split.rs:2053-2061`), and rozed's
+  - `SplittableEditor::navigate` forwards to its focused editor (`split.rs:2053-2061`), and Lo's
     `PrTab` already forwards `navigate` and nav history to the diff (`pr_tab.rs:1335-1355`).
 
 **Peek, built on public API:**
@@ -323,12 +323,12 @@ answer and offer "search by name" in the peek.
   (`editor.rs:8881`; `BlockProperties` at `crates/editor/src/display_map/block_map.rs:282-290`).
   Rename already embeds a whole `Editor` in a block this way (`editor.rs:8298-8330`).
 - **Its contents.** A read-only `Editor` over a `MultiBuffer` of the definition excerpts, ranked
-  same file, then same directory, then import. Give it `RozedSemantics` too, so `gd` works inside
+  same file, then same directory, then import. Give it `LoSemantics` too, so `gd` works inside
   the peek.
 - **Split alignment.** A block on one side of the split automatically gets a spacer of the same
   height on the other side (`balancing_block`, `block_map.rs:1751-1795`; applied around
   `crates/editor/src/display_map.rs:500-530`). The two sides stay aligned with no extra work.
-- **Keys.** rozed binds `gd` in a context more specific than vim's, so it overrides
+- **Keys.** Lo binds `gd` in a context more specific than vim's, so it overrides
   `editor::GoToDefinition` there.
 
 **Full file in the same tab:** `PrTab` swaps its content between the diff and a read-only `Editor`
@@ -337,7 +337,7 @@ on the target buffer.
 - On a trusted head, the target is a checkout project buffer, so language servers keep working
   inside it. Everywhere else, it's an in-memory git buffer.
 - At each switch, `PrTab` pushes its own nav entry (`ItemNavHistory::push`).
-- `PrTab::navigate` restores the view for rozed's own entries, and passes any other entry to
+- `PrTab::navigate` restores the view for Lo's own entries, and passes any other entry to
   whichever editor is showing.
 - `⌃o` and `⌃i` then work across the switch with no change to Zed.
 
@@ -347,7 +347,7 @@ on the target buffer.
   1. `MultiBuffer::buffer_point_to_anchor` (`crates/multi_buffer/src/multi_buffer.rs:1939`).
   2. If the point is in a collapsed, unchanged region, add a range around it with
      `SplittableEditor::update_excerpts_for_path` (`split.rs:1207`).
-  3. Select it with `change_selections(...nav_history(true))`, which rozed already does at
+  3. Select it with `change_selections(...nav_history(true))`, which Lo already does at
      `pr_tab.rs:714`.
 - **Left side.** Map the old point to the new with `base_text_point_to_buffer_point`
   (`buffer_diff.rs:825`) to expand the right-hand excerpt, then select in the left editor.
@@ -358,10 +358,10 @@ on the target buffer.
 
 | Option | What it is | Zed patches | Satisfies the behaviours? | Main costs |
 |---|---|---|---|---|
-| **A. Literal, with a virtual `Fs`** | Project buffers on per-tree virtual worktrees; `rozed --lsp` registered as an `LspAdapter` (`crates/language/src/language_registry.rs:332`) | 0 | Only with rozed's peek, precedence and into-the-diff code added on top | §3: virtual `Fs`, worktree per tree, trust and settings plumbing, a process per tree with its own index, precedence still needs a custom provider |
+| **A. Literal, with a virtual `Fs`** | Project buffers on per-tree virtual worktrees; `lo --lsp` registered as an `LspAdapter` (`crates/language/src/language_registry.rs:332`) | 0 | Only with Lo's peek, precedence and into-the-diff code added on top | §3: virtual `Fs`, worktree per tree, trust and settings plumbing, a process per tree with its own index, precedence still needs a custom provider |
 | **B. Literal, materialised blobs** | Same, with raw blobs written to disk on demand | 0 | Same as A | A's costs minus the `Fs`, plus untrusted files on disk |
-| **C. In-process provider (recommended)** | `RozedSemantics` wraps `WeakEntity<Project>`, answers from `symbol_index` in the app, and is set on both diff editors, the peek and file-view editors | 0 (optionally 1, about 15 lines) | Yes: both sides, every repo, server wins on trusted repos, peek | A provider of about 400 lines, a code-index service, and the peek, file-view and references UIs (needed under every option) |
-| **D. Provider plus a `rozed --lsp` child** | C, but the provider sends LSP over stdio to a child process it spawns with `lsp::LanguageServer::new` (`lsp.rs:516`), using rozed's own URIs | 0 | Yes | C's costs plus inter-process messages, a second copy of the index and process lifecycle. It buys crash isolation, which matters little: Zed already parses everything with tree-sitter in process |
+| **C. In-process provider (recommended)** | `LoSemantics` wraps `WeakEntity<Project>`, answers from `symbol_index` in the app, and is set on both diff editors, the peek and file-view editors | 0 (optionally 1, about 15 lines) | Yes: both sides, every repo, server wins on trusted repos, peek | A provider of about 400 lines, a code-index service, and the peek, file-view and references UIs (needed under every option) |
+| **D. Provider plus a `lo --lsp` child** | C, but the provider sends LSP over stdio to a child process it spawns with `lsp::LanguageServer::new` (`lsp.rs:516`), using Lo's own URIs | 0 | Yes | C's costs plus inter-process messages, a second copy of the index and process lifecycle. It buys crash isolation, which matters little: Zed already parses everything with tree-sitter in process |
 
 ## What would and wouldn't satisfy design §7's wording
 
@@ -370,11 +370,11 @@ on the target buffer.
 | Syntax navigation "on every repo", by name across the whole repo | yes | yes | yes |
 | "The right side navigates the new commit, and the left side the old one" | yes, but only with hand registration and a virtual or written tree for every commit on screen | yes | yes |
 | "Language server answers win. Syntax-based answers fill in while a language server starts up" | no on its own (Zed joins the answers, §4); needs a custom provider or settings swaps | yes | yes |
-| "Peek …", "Into the diff", `⌃o`/`⌃i` | rozed UI in every option | same | same |
-| "The index runs as a built-in language server: rozed starts a copy of itself in a server mode" | yes | **no** (it runs in process) | yes |
-| "Zed's editor talks to it like any other language server" | yes, for project buffers only | **no** (the editor calls rozed's provider) | **no** (rozed's provider talks to it) |
+| "Peek …", "Into the diff", `⌃o`/`⌃i` | Lo UI in every option | same | same |
+| "The index runs as a built-in language server: Lo starts a copy of itself in a server mode" | yes | **no** (it runs in process) | yes |
+| "Zed's editor talks to it like any other language server" | yes, for project buffers only | **no** (the editor calls Lo's provider) | **no** (Lo's provider talks to it) |
 | "so this needs no changes to Zed" | yes | yes | yes |
-| decisions.md "both the app and rozed's language-server mode use it [`symbol_index`]" | yes | the app only | yes |
+| decisions.md "both the app and Lo's language-server mode use it [`symbol_index`]" | yes | the app only | yes |
 
 The design's goal is navigation everywhere with no changes to Zed. Read that way, C meets it with the
 least machinery. Read literally, only A or B meet the mechanism sentence, at the cost in §3.
@@ -387,14 +387,14 @@ Use **Option C**:
   - It's keyed by tree, not commit, so rebase-aware merge-tree results work too.
   - Grammars come from Zed's `languages`, and indexes are built in the background.
   - It reads blobs from `repo_cache` and fetches missing blobs in batches using `Store::missing`.
-- **`RozedSemantics`.** A `SemanticsProvider` that wraps `Rc<dyn SemanticsProvider>` from
+- **`LoSemantics`.** A `SemanticsProvider` that wraps `Rc<dyn SemanticsProvider>` from
   `WeakEntity<Project>`. It answers definitions from the index with the §4 rule, forwards
   everything else, and resolves targets through a (tree, path) → buffer registry that reuses the
   diff's buffers.
 - **Wiring.** Set it on the right editor at creation, and on each new left editor by observing the
   `SplittableEditor`. Optionally carry the ~15-line Zed patch instead.
-- **Peek.** A block with an embedded read-only editor. rozed's `gd` overrides vim's.
-- **`PrTab` file view.** The same-tab full file, rozed's own nav entries, and "into the diff".
+- **Peek.** A block with an embedded read-only editor. Lo's `gd` overrides vim's.
+- **`PrTab` file view.** The same-tab full file, Lo's own nav entries, and "into the diff".
 - **`gr` panel.** `project.references` when the language server is ready, otherwise
   `Index::references`.
 - **`editor::GoToDefinition` and cmd-click.** These still reach Zed's navigation and would open a
@@ -403,7 +403,7 @@ Use **Option C**:
 
 **Proposed rewording of design §7, "How the editor uses it":**
 
-> **How the editor uses it.** rozed answers the editor's go-to-definition, references and highlight
+> **How the editor uses it.** Lo answers the editor's go-to-definition, references and highlight
 > requests itself, from the index, inside the app, through the editor's hook for custom providers.
 > On trusted repos it asks the language server first. This needs no changes to Zed.
 
@@ -411,14 +411,14 @@ Use **Option C**:
 
 > The index is served in process through a `SemanticsProvider`, not as a language server. Zed sends
 > only on-disk worktree files to language servers (`lsp_store.rs:5374-5395`,
-> `worktree.rs:3965-3971`), and rozed's diff buffers are in memory, so a server would need a
+> `worktree.rs:3965-3971`), and Lo's diff buffers are in memory, so a server would need a
 > virtual or written-out worktree for every commit. Zed also joins every server's answers, so
-> precedence needs rozed code anyway.
+> precedence needs Lo code anyway.
 
 **Suggested PR slices:**
 
 - **10a.** `CodeIndex` service.
-- **10b.** `RozedSemantics`, wired into both sides (`gd` through Zed's path, highlights).
+- **10b.** `LoSemantics`, wired into both sides (`gd` through Zed's path, highlights).
 - **10c.** Peek.
 - **10d.** File view, nav history, into the diff.
 - **10e.** `gr` panel.
@@ -436,4 +436,4 @@ Use **Option C**:
    5), or rely on observing the editor?
 5. cmd-click go-to-definition calls `navigate_to_hover_links` directly (`hover_links.rs:451`) and
    opens a read-only tab for the target. Accept that for the mouse, or add a small patch to route it
-   to rozed's peek?
+   to Lo's peek?

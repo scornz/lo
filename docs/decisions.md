@@ -11,7 +11,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   the worktree `~/src/rozed-worktrees/docs`, and land through one open docs PR that a subagent
   updates. Nobody commits to `main`, and the overseer doesn't commit.
 - **Merging resumed on 2026-11-06:** the user explicitly allowed the overseer to `gh pr merge` in
-  `scornz/rozed`. The stack lands bottom first (see `status.md`).
+  `scornz/lo`. The stack lands bottom first (see `status.md`).
 - **PRs are stacked while merging is blocked.** The auto-mode classifier refuses `gh pr merge` from
   the overseer ("Merge Without Review"), so merging waits for the user. Each new PR branches from
   the PR below it and targets that PR's branch, so every PR's diff shows only its own change and
@@ -48,14 +48,14 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 
 - **The spike is two stacked PRs:** 2a gets Zed's crates building locally and on CI, 2b opens a PR
   in the diff. A build or CI problem then surfaces before the diff work depends on it.
-- **Zed patch branches are named `rozed/v<zed version>`,** one per Zed release, so old submodule
+- **Zed patch branches are named `lo/v<zed version>`,** one per Zed release, so old submodule
   pointers stay reachable after a bump.
 - **The Cargo sync is a Rust `xtask` (`cargo xtask sync-zed`, using `toml_edit`),** not a shell or
   Python script: it edits TOML structurally, needs no extra toolchain, and gets tested like the rest.
 - **Zed's hosts are refused in the HTTP client as well as turned off in settings.** Settings alone
   depend on every Zed code path honouring them; refusing `zed.dev` and its subdomains in the one
   shared client catches anything missed and logs it.
-- **rozed fetches into its own namespace, `refs/rozed/...`,** so fetched revisions never collide
+- **Lo fetches into its own namespace, `refs/lo/...`,** so fetched revisions never collide
   with branch names and survive force-pushes (design §3).
 - **Verification screenshots stay on the devbox,** under `~/src/rozed-worktrees/evidence/<branch>/`,
   and PR descriptions describe them. Uploading them would publish them on a public repo.
@@ -67,10 +67,10 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   variable-type mistakes it misses. `cynic` costs about 19 crates, duplicate versions, and its repo
   moved off GitHub. (Research §4.)
 - **`sqlez`, not `rusqlite`:** Zed links `libsqlite3-sys` with `links = "sqlite3"`, so a second
-  SQLite would conflict. rozed opens its own database file rather than Zed's `db`.
-- **Debug builds keep tokens in a mode-600 file** (`~/.config/rozed/credentials.json`), as the
+  SQLite would conflict. Lo opens its own database file rather than Zed's `db`.
+- **Debug builds keep tokens in a mode-600 file** (`~/.config/lo/credentials.json`), as the
   handoff allows, because unsigned rebuilds re-prompt for Keychain access. Zed's own dev fallback
-  isn't mode 600, so rozed has its own.
+  isn't mode 600, so Lo has its own.
 - **The GraphQL schema is vendored from `github/docs`,** pinned by commit, because
   `octokit/graphql-schema` stopped updating in early 2025 and lacks stacks.
 - **Shared desktop:** agents take `mkdir ~/src/rozed-worktrees/.desktop.lock` before using the
@@ -89,7 +89,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   update time and stack) before spending GraphQL points.
 - **Requests start only once they hold the account's queue,** which serves waiters first in, first
   out, so a poll never overlaps a write.
-- **rozed's own writes invalidate what they change,** and the open PR's details are refetched in full
+- **Lo's own writes invalidate what they change,** and the open PR's details are refetched in full
   at least every 5 minutes, so viewed marks set elsewhere show up without a push.
 - **Only `Accounts` decides an account is signed out;** any other error getting a client (a locked
   Keychain) backs off and retries. "Offline" clears on any HTTP response.
@@ -106,22 +106,22 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Writes invalidate what they touched whatever their outcome,** since a failed write may still have
   reached GitHub. The 5-minute full refresh of the open PR runs only in the foreground and not below
   5% of the limit.
-- **GraphQL-generated cache types are versioned by their query text;** rozed's own types by a hash of
+- **GraphQL-generated cache types are versioned by their query text;** Lo's own types by a hash of
   their JSON schema. A snapshot test pins every version.
 
 ## Local copy
 
-- **rozed runs the `git` CLI with an isolated environment** (`GIT_CONFIG_GLOBAL=/dev/null`,
+- **Lo runs the `git` CLI with an isolated environment** (`GIT_CONFIG_GLOBAL=/dev/null`,
   `GIT_CONFIG_NOSYSTEM=1`, no credential helper). Design §3 says the user's git config is never
-  touched; ignoring it also stops `insteadOf` rewrites and helpers from changing how rozed fetches.
-- **Every fetched PR head is pinned at `refs/rozed/pull/<n>/revs/<sha>`,** so force-pushed revisions
+  touched; ignoring it also stops `insteadOf` rewrites and helpers from changing how Lo fetches.
+- **Every fetched PR head is pinned at `refs/lo/pull/<n>/revs/<sha>`,** so force-pushed revisions
   survive `gc` (design §3).
 - **git 2.41 or newer is required:** `merge-tree --write-tree --merge-base` needs 2.40 (rebase-aware
   comparison, design §6), and `--attr-source`, which keeps a PR's `.gitattributes` from changing
   checked-out bytes, needs 2.41 (`attr.tree` needs 2.43). macOS's `/usr/bin/git` is 2.54.
 
-- **Base branches are fetched per PR** (`refs/rozed/pull/<n>/base`, tips pinned under `bases/<sha>`),
-  never under a branch-name ref; arbitrary commits pin at `refs/rozed/commits/<sha>`.
+- **Base branches are fetched per PR** (`refs/lo/pull/<n>/base`, tips pinned under `bases/<sha>`),
+  never under a branch-name ref; arbitrary commits pin at `refs/lo/commits/<sha>`.
 - **`repo_cache`'s API blocks;** it's split into fetch, changed files and checkout, `Repo` is `Send +
   Sync`, and the app calls each step from a background task.
 - **A merged PR's diff needs its merge commit's first parent as the base** (the base tip already
@@ -141,7 +141,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **The diff never waits for a checkout:** the git-only view shows first, and a trusted checkout
   swaps in project buffers when ready, or a banner says why it failed.
 
-- **rozed's clones pin `core.precomposeUnicode=false`,** since `git init` on a Mac turns it on and git
+- **Lo's clones pin `core.precomposeUnicode=false`,** since `git init` on a Mac turns it on and git
   then reads a decomposed file name as its composed twin.
 - **Busy clones are repacked in the background after launch** (geometric on git 2.52+, full before,
   because geometric repack mishandled promisor packs until 2.52), and files over 1 MiB are left
@@ -152,30 +152,30 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Zed's unwanted crates are compiled in but never started.** `project`, `editor` and `workspace`
   pull in `language_model`, `agent_settings`, `cloud_llm_client`, `terminal`, `dap`, `remote` and
   `context_server`. Cutting them would take a large patch set on Zed that fights every bump, so
-  rozed accepts them, as design §2's "comes along unused" allows. It never calls their `init`,
+  Lo accepts them, as design §2's "comes along unused" allows. It never calls their `init`,
   never binds their actions, and forces `disable_ai`, which keeps context servers off. A CI check
   fails when the set of Zed crates changes, so new arrivals get looked at.
 - **A forced settings layer** (Zed's server-settings layer, merged above user settings) turns off
   telemetry, auto-update, AI and extension auto-install, and points `server_url` at
-  `https://rozed.invalid`. Tests apply contrary user settings and check the forced values win.
-- **Read-only is enforced by the keymap and trust, not just by read-only buffers.** rozed loads
+  `https://lo.invalid`. Tests apply contrary user settings and check the forced values win.
+- **Read-only is enforced by the keymap and trust, not just by read-only buffers.** Lo loads
   Zed's keymap without bindings to open, new, save or save-as actions (a test checks), and
   initialises Zed's worktree trust with nothing trusted, so no language server starts and no
-  repo `.zed/settings.json` applies until rozed trusts the worktree. The spike trusts its own PR
+  repo `.zed/settings.json` applies until Lo trusts the worktree. The spike trusts its own PR
   checkout explicitly; milestone 10 adds the trust gate.
 - **The HTTP client follows redirects itself,** checking and logging every hop, so a redirect can't
   reach Zed's hosts unseen and tokens aren't forwarded across hosts.
-- **`rozed/v*` patch branches are append-only.** Rewriting a patch makes a new branch
-  (`rozed/v1.27.0-2`), so commits pinned by older rozed commits stay reachable.
+- **Zed patch branches are append-only.** Rewriting a patch makes a new branch
+  (`lo/v1.27.0-2`), so commits pinned by older Lo commits stay reachable.
 - **The submodule is fetched with `git submodule update --init --depth 1`** (7 s, 32 MB); without
   `--depth`, git fetches all of Zed's history.
-- **`xtask` is its own Cargo workspace,** so `cargo xtask sync-zed` runs even when rozed's workspace
+- **`xtask` is its own Cargo workspace,** so `cargo xtask sync-zed` runs even when Lo's workspace
   can't resolve (an empty submodule, or a Zed bump that needs a new patch).
-- **`--seed-lock` merges lockfiles:** Zed's versions for Zed's packages, rozed's existing pins for
-  the rest, so a Zed bump doesn't silently upgrade rozed's own dependencies.
+- **`--seed-lock` merges lockfiles:** Zed's versions for Zed's packages, Lo's existing pins for
+  the rest, so a Zed bump doesn't silently upgrade Lo's own dependencies.
 - **`ZED_DISABLE_STAFF=1`** is set at startup so Zed's staff-only feature flags stay off in debug
-  builds, and **`ROZED_PARENT_PID`** stops rozed from starting under another rozed (Zed re-runs the
-  executable for `--printenv` and `--askpass`, which rozed handles).
+  builds, and **`LO_PARENT_PID`** stops Lo from starting under another Lo (Zed re-runs the
+  executable for `--printenv` and `--askpass`, which Lo handles).
 
 ## Revisions
 
@@ -183,16 +183,16 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   timeline of pushed commits and force-pushes. The timeline's commits carry no push time
   (`pushedDate` is null), so it can't separate two normal pushes. The repository activity API
   (`GET /repos/{o}/{r}/activity?ref=refs/heads/<branch>`) lists every push with before/after SHAs,
-  so rozed builds revisions from it first, then fills gaps from force-push events, review commits,
+  so Lo builds revisions from it first, then fills gaps from force-push events, review commits,
   check-suite pushes and heads its own poller saw. This keeps the design's intent (one revision per
   push) with a source that has the data. (Research: `research/revisions.md`.)
 - **Revisions are stored by head SHA and numbered r1, r2… only for display,** since a late source
   can insert one.
 - **A revision's base is the merge-base of its head with the base branch as it was then,** computed
   locally; for stacked or retargeted PRs, the base tip comes from base-branch force-push events,
-  the base branch's activity log and rozed's pinned refs.
+  the base branch's activity log and Lo's pinned refs.
 - **A replayed tree is pinned once per process and never unpinned while it runs;** pins are cleared on
-  the next open with no other rozed using the clone. No `Drop` runs git.
+  the next open with no other Lo using the clone. No `Drop` runs git.
 - **Rebase-aware comparison checks its inputs:** each base must be an ancestor of its head, and all
   four commits must already be in the copy (a missing one is its own error, never a silent download).
   A retargeted base, or an unchanged head on a moved base, is flagged rather than attributed to the
@@ -230,10 +230,10 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 
 ## Spike results (PR #4)
 
-- **rozed never applies a repository's own Zed settings** (`.zed/settings.json`, tasks, debug
-  configs), trusted or not. A trusted checkout's local settings merge over rozed's forced layer, so a
+- **Lo never applies a repository's own Zed settings** (`.zed/settings.json`, tasks, debug
+  configs), trusted or not. A trusted checkout's local settings merge over Lo's forced layer, so a
   PR could otherwise pick its own language-server binary. Trust means "run this repo's language
-  servers", not "let this repo configure rozed". Fixed on PR #4.
+  servers", not "let this repo configure Lo". Fixed on PR #4.
 - **PR checkouts are kept out of macOS Recent Items.** Zed adds every visible worktree there, and
   on this desktop the update blocks quitting. Fixed on PR #4.
 - **rust-analyzer is downloaded from GitHub for now,** with build scripts, proc macros,
@@ -249,7 +249,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   and blame in a partial clone fetched each file's history one request at a time (899 requests in
   2.5 minutes).
 - **Zed's `trusted_worktrees` table is emptied at startup,** so trust never carries over between
-  runs; rozed keeps its own trust list (milestone 10).
+  runs; Lo keeps its own trust list (milestone 10).
 - **rust-analyzer gets `RUSTUP_AUTO_INSTALL=0`** and a pinned `RUSTUP_TOOLCHAIN`, so a repo's
   `rust-toolchain.toml` can't make rustup download a toolchain. A trusted repo's `.cargo/config.toml`
   still steers cargo; that's within design §7's accepted cost for trusted repos.
@@ -280,32 +280,32 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   the `github` crate, because the app's PR loading lives on the spike's branch and the local copy's,
   which 3b doesn't sit on. Milestone 5's first task joins them.
 - **The database lives in `0-dev` for debug builds and `0-stable` for release,** keyed on the build
-  profile, because Zed's release channel reads `stable` in every rozed build.
+  profile, because Zed's release channel reads `stable` in every Lo build.
 - **`gh` accounts whose token comes from an environment variable aren't offered for import.** That's
   how a wrapper injects a token for one shell, not a stored account (and on this machine, it would
   be the user's own account).
 - **Trust is opt-in until milestone 10's gate exists.** The spike trusted every PR checkout, and a
   trusted checkout runs the PR's code (`.cargo/config.toml` wrappers through rust-analyzer's cargo
   calls, `.zed/settings.json` binary paths, rustup auto-installing a pinned toolchain). Without
-  trust, rozed makes no checkout, starts no language server, and reads both sides from git.
+  trust, Lo makes no checkout, starts no language server, and reads both sides from git.
 - **Untrusted and trusted alike, the right side's text comes from git.** A trusted checkout's file is
-  used for the language server only when its bytes match the head blob; otherwise rozed shows git's
+  used for the language server only when its bytes match the head blob; otherwise Lo shows git's
   content with a warning. APFS folds case and Unicode forms, so `Lib.rs` and `lib.rs` collide on
   disk, and `.gitattributes` filters change checked-out bytes.
-- **Even in a trusted repo, rozed hardens what it runs:** a forced allowlist of language servers
-  (only those rozed ships support for), no project-local Zed settings, no interactive login shell
-  in the checkout (the project gets rozed's own environment), and `RUSTC_WRAPPER`,
+- **Even in a trusted repo, Lo hardens what it runs:** a forced allowlist of language servers
+  (only those Lo ships support for), no project-local Zed settings, no interactive login shell
+  in the checkout (the project gets Lo's own environment), and `RUSTC_WRAPPER`,
   `RUSTC_WORKSPACE_WRAPPER`, `RUSTUP_TOOLCHAIN` and friends pinned for rust-analyzer. Design §7
   accepts that trusted repos' language servers may run repo code; these keep a PR's files from
   choosing *which* programs run. Milestone 10 also evaluates a macOS sandbox profile for language
   servers.
-- **No changed file is ever dropped from the diff.** Anything rozed can't render gets a placeholder
+- **No changed file is ever dropped from the diff.** Anything Lo can't render gets a placeholder
   saying why. Submodule bumps show "Subproject commit a → b", and mode-only and line-ending-only
   changes get a badge.
 - **Git runs with an allowlisted environment** (not inherited and then patched), plus
   `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.attributesFile=/dev/null`,
   `protocol.allow=never` with `https` allowed, and `GIT_NO_REPLACE_OBJECTS=1`.
-- **Cache refs are keyed by PR, not branch name** (`refs/rozed/pull/<n>/base`), the fetched head is
+- **Cache refs are keyed by PR, not branch name** (`refs/lo/pull/<n>/base`), the fetched head is
   checked against the head SHA GitHub reported, and repo copies are keyed by the API's canonical
   `owner/repo` (repository ID once the GitHub layer is wired in). Writes to a repo copy hold a
   per-repo lock.
@@ -336,8 +336,8 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   they're `https` on `github.com`; server-supplied numbers are clamped; transient errors keep the
   flow polling until its deadline.
 - **Removing an account always removes it,** even when its token is already gone, and tells the user
-  that revoking the grant happens on GitHub (rozed has no client secret to revoke it).
-- **Debug builds that opt into the Keychain use their own item names** (`rozed-dev://…`), so they
+  that revoking the grant happens on GitHub (Lo has no client secret to revoke it).
+- **Debug builds that opt into the Keychain use their own item names** (`lo-dev://…`), so they
   never touch a release build's tokens.
 - **A 401 is handled in one place:** the client's hook marks the account signed out, after one
   re-import from `gh` for accounts that came from `gh`.
@@ -370,7 +370,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   keymap and `?` sheet revisit all keys.
 - **A PR opened anonymously (public repo, no account) doesn't poll and isn't added to recent PRs.**
 
-- **rozed never opens a path it didn't create:** dropped files and folders are swallowed everywhere
+- **Lo never opens a path it didn't create:** dropped files and folders are swallowed everywhere
   (the PR tab, empty panes, the window), and every palette action that opens, creates, saves or adds
   a window is captured, not just unbound. Without `--trust`, every language's servers are forced off
   as a second line, since Zed treats invisible worktrees as trusted.
@@ -410,8 +410,8 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   through; that's accepted.
 - **`e` acts on the file the diff shows:** the cursor's file when it's in view, else the file at the
   top of the viewport, and never a file that hasn't loaded or that GitHub doesn't list.
-- **rozed's diff keys win over vim's inside the PR diff** (milestone 12 binds them in a context deeper
-  than vim's), and comment boxes never receive rozed's single-key bindings.
+- **Lo's diff keys win over vim's inside the PR diff** (milestone 12 binds them in a context deeper
+  than vim's), and comment boxes never receive Lo's single-key bindings.
 
 - **A token GitHub refuses signs that account out,** and then it counts as not signed in; it doesn't
   by itself block opening a public PR anonymously.
@@ -423,7 +423,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **With no PR open, the window shows a "Recent pull requests" tab** across all accounts; launching
   without a link opens it, and closing the last PR brings it back.
 - **The account picker answers once per owner;** dismissing it opens nothing, and reopening the link
-  asks again. The window title is `owner/repo#n — title`, or "rozed" (Zed's `window_title_format` is
+  asks again. The window title is `owner/repo#n — title`, or "Lo" (Zed's `window_title_format` is
   forced so its workspace never overwrites it).
 - **Offline, the diff comes from the copy only if the copy fetched the saved head,** compared from
   where that head left the last-fetched base, untrusted and without fetching; reopening the link
@@ -431,24 +431,24 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 
 - **An owner's account choice is about the repository's current owner** (from GitHub's `full_name`,
   so transferred repos follow), and a picker's answer applies only to tabs whose candidate accounts
-  include it. When the remembered account can't see one repo, rozed asks for that repo alone and
+  include it. When the remembered account can't see one repo, Lo asks for that repo alone and
   remembers it per repository, leaving the owner's choice alone. Pickers queue per owner; another
   dialog or click never cancels a waiting tab.
 - **Only failed connections and DNS lookups count as offline.** TLS failures and proxy refusals
   are errors, and timeouts and lost connections are retryable. A tab that has shown the local copy
   keeps it through any later failure, says why and keeps checking; "failed" is only for a load that
   never showed a copy.
-- **Rozed retries by itself only what waiting can fix** (network failures, 5xx, 429, a proxy's 503).
+- **Lo retries by itself only what waiting can fix** (network failures, 5xx, 429, a proxy's 503).
   Failures only the user can fix (no account chosen, refusals, SSO) keep the copy, stop retrying and
   show their help links; an automatic reload never opens the account picker, it offers a button.
 - **`e` marks only the head on screen.** When GitHub reports a newer head than the diff shown, the
   newer head is recorded as the latest and `e` is refused with the "newer push" message until that
   head's diff is up.
 - **A `0-dev` database from a single milestone 5 branch may not open in the combined build**
-  ("Migration changed at step 2"); unreleased, so delete `~/Library/Application Support/rozed/db/0-dev/rozed.sqlite`.
+  ("Migration changed at step 2"); unreleased, so delete `~/Library/Application Support/Lo/db/0-dev/lo.sqlite`.
 - **The account picker asks only for the active tab** and keeps focus until it's answered or
   dismissed; a background tab says "Waiting to ask…" until it's selected.
-- **Offline means rozed reads only what the copy already holds:** the saved head and saved base when
+- **Offline means Lo reads only what the copy already holds:** the saved head and saved base when
   both are pinned (else the details-only view), with lazy downloads off (`GIT_NO_LAZY_FETCH=1` on git
   2.44+, a missing-object check before reading on older git) and no write lock. An offline tab keeps
   checking and switches back online by itself; only connection failures count as offline, not slow
@@ -477,12 +477,12 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   hides whitespace-only changes, `alt-a` opens a folded file, loads a large one, or switches between
   its changes and the whole file. Files whose text didn't change fold with "no changes". Milestone 12
   revisits keys with vim.
-- **PR image previews are decoded in a helper process** (a hidden mode of the rozed binary), never in
+- **PR image previews are decoded in a helper process** (a hidden mode of the `lo` binary), never in
   the app. It has a big-stack thread, a deadline of about 3 s and a memory watchdog of about
   512 MiB, and at most two run at once; closing the tab kills them. A crafted SVG under 2 KB can
   overflow a worker's stack, take 6 GB or burn a CPU for hours inside usvg/resvg, and no in-process
   cap stops that. The app itself reads only capped image headers.
-- **PR images are decoded by rozed, never by gpui's loaders.** SVGs are parsed with rozed's own
+- **PR images are decoded by Lo, never by gpui's loaders.** SVGs are parsed with Lo's own
   `usvg::Options` that resolve no file or remote hrefs (gpui's defaults read any local path), and
   rasterized with `resvg`. Every image is capped from its header (8192 px a side, 40 MP), decoded
   with explicit `image::Limits`, GIFs to frame 0 only, and kept downscaled to the panel's size.
@@ -491,7 +491,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   - `alt-a` refuses files over 50 MiB or with a line over 1 MiB ("too large to show").
   - `.gitattributes` files are found with `ls-tree` and downloaded in one batch. Past 200 of them,
     attributes are skipped with a warning.
-- **Zed's base keymap loads before rozed's,** so rozed's keys win at equal depth. `tab` binds only in
+- **Zed's base keymap loads before Lo's,** so Lo's keys win at equal depth. `tab` binds only in
   full-size diff editors, and the `alt` view keys bind only in the diff and the file list.
 - **Hiding whitespace ignores only space, tab, CR and LF,** as `git diff -w` and GitHub do; other
   Unicode whitespace (U+2028, NBSP) can change meaning and stays visible.
@@ -517,45 +517,45 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   depends only on tree-sitter, so it's tested without compiling Zed.
 - **Departure from design §7's mechanism (behaviour kept): the index answers inside the app, not as a
   built-in language server.** Zed attaches language servers only to buffers backed by files on disk,
-  and neither side of rozed's diff is one (the right side is read from git on untrusted repos; the
-  left side is the diff's base text with no file). So rozed sets its own `SemanticsProvider` (a public
+  and neither side of Lo's diff is one (the right side is read from git on untrusted repos; the
+  left side is the diff's base text with no file). So Lo sets its own `SemanticsProvider` (a public
   Zed trait, no patch) on both diff editors and on the peek and file views: it answers from
   `symbol_index`, and on a trusted repo's right side wraps the project's language-server provider so
   the server's answers win once it's ready. Everything §7 asks for stays: syntax navigation on every
   repo and both sides, server answers winning, syntax filling in while a server starts, peek, the
-  read-only file view and `⌃o` back, jumping into the diff, no changes to Zed. Only "rozed starts a
+  read-only file view and `⌃o` back, jumping into the diff, no changes to Zed. Only "Lo starts a
   copy of itself in a server mode" goes. (Research: `research/code-navigation.md`.)
-- **When a ready language server finds nothing,** rozed shows the import if the name is imported
+- **When a ready language server finds nothing,** Lo shows the import if the name is imported
   (design §7 "Dependencies"), otherwise the syntax answer, labelled "syntax". On untrusted repos `K`
   shows the definition's line from the index, labelled the same way.
 - **Cmd-click opens the peek,** like `gd`, rather than Zed's new tab (one window, a tab per PR); a small
-  Zed patch is fine if no hook exists. rozed re-applies its provider when the split rebuilds by
+  Zed patch is fine if no hook exists. Lo re-applies its provider when the split rebuilds by
   observing the diff editor, with a patch only if that proves unreliable.
 
-- **The index uses each grammar's own `tags.scm`, plus small rozed additions appended after it**
+- **The index uses each grammar's own `tags.scm`, plus small Lo additions appended after it**
   (consts, fields, type references, components and the like), since the vendored queries miss
   much; the vendored tag wins when both match. JavaScript is parsed with the TSX grammar, as Zed does.
 - **Files over 1 MB, `linguist-generated` files, minified files and files with a "generated" header
   are skipped.** Ranking is same file, same directory, an import's target, then the rest; import
   matching is a per-language heuristic over the asking file's text, never reading project manifests.
-- **`tree-sitter-tags` needs `thiserror` 2.0.18 where Zed's lock has 2.0.17,** so rozed's lock moves
+- **`tree-sitter-tags` needs `thiserror` 2.0.18 where Zed's lock has 2.0.17,** so Lo's lock moves
   that one crate; a `--seed-lock` after a Zed bump lets cargo raise it again.
 
 ## Merging (PR #12 and its review)
 
-- **Approve and ship acts on GitHub's verdict, not rozed's prediction.** It approves first, then
+- **Approve and ship acts on GitHub's verdict, not Lo's prediction.** It approves first, then
   re-reads the PR and merges or joins the queue only if GitHub reports `CLEAN`, `HAS_HOOKS` or
   `UNSTABLE`. If GitHub still blocks it, it turns on auto-merge when every remaining blocker is one
-  waiting fixes, and otherwise stops and shows why. rozed's prediction only words the confirmation
+  waiting fixes, and otherwise stops and shows why. Lo's prediction only words the confirmation
   ("will likely merge" or "will likely wait"). Since it merges only on those states, approve and ship
   never bypasses a rule, even for an admin; the admin override stays in the merge panel, behind
   typing the PR's number (design §9).
-- **GitHub's own decision wins over rozed's model:** an `APPROVED` or `CHANGES_REQUESTED` review
+- **GitHub's own decision wins over Lo's model:** an `APPROVED` or `CHANGES_REQUESTED` review
   decision stays unless the viewer's approval is provably what changes it (they were the only
   requester).
 - **Auto-merge and later pushes.** The snapshot records whether stale approvals are dismissed. When
   they aren't, the confirmation warns that a later push could merge with this approval, and while
-  rozed runs it turns auto-merge off when it sees a newer head than the one approved, and says so.
+  Lo runs it turns auto-merge off when it sees a newer head than the one approved, and says so.
 - **Approve and ship does nothing on a draft** and refuses an empty head SHA.
 - **A required check that never reported is a wait only while something on the head can still report
   it;** otherwise it blocks. A deployment waiting for a reviewer is its own kind of wait. Every check
@@ -567,18 +567,18 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   someone else, or no reviews are required at all. Neither applies to your own PR, or once someone
   else turned auto-merge on.
 - **On a queue branch, `BEHIND` may join the queue** (the queue rebases); a direct merge still needs
-  `CLEAN`, `HAS_HOOKS` or `UNSTABLE`. When GitHub says `CLEAN` but rozed sees a blocker waiting won't
+  `CLEAN`, `HAS_HOOKS` or `UNSTABLE`. When GitHub says `CLEAN` but Lo sees a blocker waiting won't
   fix (a stale failed check), approve and ship stops rather than merges.
-- **"rozed may not see every rule" shows on any partly explained block** until the GitHub layer
+- **"Lo may not see every rule" shows on any partly explained block** until the GitHub layer
   confirms it read the branch's rules (milestone 9 wires `sees_every_rule`).
 
 ## Comments and reviews (PR #21)
 
 - **Comments go only on lines of the PR's diff** (checked live: GitHub refuses lines outside hunks,
-  and `addPullRequestReviewThread` refuses by returning a null thread with no error, which rozed treats
+  and `addPullRequestReviewThread` refuses by returning a null thread with no error, which Lo treats
   as a refusal). A range's two ends must each be a diff line but may sit in different hunks, and may
   run from a removed line to an added one. Suggestions only on the head's side. GitHub's web UI has
-  allowed comments outside hunks since 2025-09, but the API doesn't, so rozed offers a file-level
+  allowed comments outside hunks since 2025-09, but the API doesn't, so Lo offers a file-level
   comment instead. (Live checks: `research/review-api-checks.md`.)
 - **New threads land on the PR's current head,** whatever revision a pending review was started on
   (checked live). So a line comment on an older revision is possible only by starting a new review at
@@ -619,7 +619,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **The project is renamed "Lo"** (as in "lo and behold", an old word for "look"), chosen by the user
   on 2026-11-06. The repository becomes `scornz/lo`, the app's name is "Lo", the CLI and crate are
   `lo`, the Homebrew name is `lo`; the user may get `getlo.dev` for a website and would like `lo.dev`
-  eventually. It replaces the earlier "rozed"
+  eventually. It replaces the earlier "rozed" <!-- rename:keep -->
   (which the user had cleared against Zed's trademark terms). The rename lands as one PR right after
   milestone 5. Choices made for it:
   - **"Lo", capital L, in everything a person reads:** menus and the Quit item, window titles, error
@@ -638,7 +638,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   - The bundle ID is `com.scornz.lo`, from `lo.scornz.com`, confirmed by the user (2026-11-06). It's
     code, so it's lowercase. Changing it after the first release would orphan users' Keychain items
     and preferences, so a move to a domain like `lo.dev` must happen before milestone 13's release.
-  - The debug build's Keychain prefix `rozed-dev://` becomes `lo-dev://`. `rozed-dev` stays only
+  - The debug build's Keychain prefix `rozed-dev://` becomes `lo-dev://`. `rozed-dev` stays only <!-- rename:keep -->
     where it names the test org or its secrets folder, `~/.config/rozed-dev/`.
   - the Zed fork's branch `rozed/v1.27.0` keeps its name (older commits pin it); later bumps use
     `lo/v<version>`;
@@ -647,9 +647,9 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   Nothing has shipped, so no saved data is migrated; local dev state is moved or recreated.
 - **End-to-end fixtures live in the public `rozed-dev/e2e`** (merge queues need a public org repo);
   the private `rozed-dev/playground` stays for quick live checks.
-- **Rozed writes only to `rozed-dev` repos while testing.** `sharkdp/fd#2212` and other third-party
+- **Lo writes only to `rozed-dev` repos while testing.** `sharkdp/fd#2212` and other third-party
   PRs are read-only: no comments, reviews, approvals or merges. Fixture PRs in `rozed-dev/e2e` may
-  be merged and its rulesets set, as `rozed-bot`, to test rozed.
+  be merged and its rulesets set, as `rozed-bot`, to test Lo.
 - **Fixtures never force-push.** A rebased revision comes from GitHub's server-side rebase
   (`updatePullRequestBranch(updateMethod: REBASE)`); a conflicted rebase is checked read-only on a
   public PR and in GPUI tests.
@@ -706,7 +706,7 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 
 ## Weekly Zed build (PR #27)
 
-- **The weekly run stays green when Zed breaks rozed.** It reports through one `zed-update` issue
+- **The weekly run stays green when Zed breaks Lo.** It reports through one `zed-update` issue
   (opened, updated or closed) and fails only when its script can't run, so nobody is told twice.
 - **Two jobs:** the macOS build job runs Zed's and crates.io's build scripts with `contents: read`
   only; a separate ubuntu job holds `issues: write`.

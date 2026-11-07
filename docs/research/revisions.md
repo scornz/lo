@@ -1,4 +1,4 @@
-# Revisions research for rozed (milestone 6)
+# Revisions research for Lo (milestone 6)
 
 Researched 2026-11-06 for the `review` crate: push boundaries, revision bases, the two markers,
 viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "Missing revisions".
@@ -28,14 +28,14 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
      missed on `cli/cli#9208`. Its before→after chains were unbroken **[observed]**.
    - Data starts around March 2023: the oldest `cli/cli` entry is 2023-03-07, and a 2021 fork
      branch returned `[]` **[observed]**.
-2. **Fill gaps from GraphQL and rozed's own observations.**
+2. **Fill gaps from GraphQL and Lo's own observations.**
    - Force-push events (`HeadRefForcePushedEvent`: `beforeCommit`, `afterCommit`, `createdAt`) are
      exact.
    - Review commits, check-suite pushes (`CheckSuite.push { previousSha nextSha }`) and every head
-     SHA rozed's poller sees each pin a head that existed.
+     SHA Lo's poller sees each pin a head that existed.
    - The timeline alone misses runs of consecutive normal pushes: 38 of 46 revisions found on
      `cli/cli#9208` **[observed]**. Two normal pushes in a row, with no CI, review, activity entry
-     or rozed observation between them, can't be told apart.
+     or Lo observation between them, can't be told apart.
 3. **Key revisions by head SHA in storage** (markers, viewed records, pins) and number them r1, r2…
    only at display time. A late source can insert a revision and shift the numbers.
 4. **Where push boundaries are unknown inside a fast-forward run, offer the commits.** Any commit in
@@ -46,7 +46,7 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
    - Use today's base tip for an ordinary base branch.
    - For a PR merged with a merge commit, use the merge commit's first parent.
    - For stacked or retargeted PRs, use the base branch as it was. Sources:
-     `BaseRefForcePushedEvent.afterCommit`, the base branch's activity log, and rozed's pins of the
+     `BaseRefForcePushedEvent.afterCommit`, the base branch's activity log, and Lo's pins of the
      lower layer.
    - On `cli/cli#14745`, an early revision compared against today's `trunk` shows 65 commits. Against
      the branch it was stacked on at the time, it shows 3 **[observed]**.
@@ -55,7 +55,7 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
    2. `git diff -M <TREE> <new_head>`.
    - Exit 0 is clean and 1 is conflicted (fall back to the plain diff); anything else is an error.
    - Skip the replay when `old_base == new_base`.
-   - **Raise rozed's git floor from 2.38 to 2.40**, which added `--merge-base` (`decisions.md`
+   - **Raise Lo's git floor from 2.38 to 2.40**, which added `--merge-base` (`decisions.md`
      says 2.38).
 7. **It works in the bare blobless clone.**
    - merge-tree fetches only the blobs it needs, in batches: 0 fetches when each path changed on one
@@ -83,7 +83,7 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
       gone.
     - Gone shows up three ways: the force-push event's commit is `null`, REST `/commits/{sha}`
       returns `422`, and `git fetch` fails with `upload-pack: not our ref`.
-    - `refs/pull/<n>/head` holds only the latest head, so pin every head rozed sees
+    - `refs/pull/<n>/head` holds only the latest head, so pin every head Lo sees
       (`decisions.md` already does).
 
 ### Corrections for the design, plan and decisions
@@ -102,7 +102,7 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
   returned 250 **[observed]**. Revision commit lists must come from git.
 - **Free 304s:** with `gh`'s token, `x-ratelimit-used` rose by 1 on each `304` from both
   `/activity` and `/pulls/{n}`. Other sessions were using the account at the same time (the counter
-  jumped by 8 between my runs), so this is **inconclusive**. Re-check with rozed's own token when
+  jumped by 8 between my runs), so this is **inconclusive**. Re-check with Lo's own token when
   recording fixtures, since `github-layer.md` §7 observed 304s as free.
 
 ---
@@ -124,7 +124,7 @@ viewed marks, rebase-aware comparison and missing revisions. Design: §6, §11 "
 | **REST events API** (`PushEvent`) | Pushes | — | "Up to 300 events… within the past 30 days." Useless for history. |
 | **Webhooks** (`pull_request.synchronize` `before`/`after`) | Every push | Exact | Need a server; not for a desktop app. |
 | **`refs/pull/<n>/head`** | The current head only | — | No history refs: `ls-remote` shows only `head`, plus `merge` while open **[observed]**. |
-| **rozed's own poller** | Each new `head.sha` from `GET /pulls/{n}`, with first-seen time | Exact head, time ≈ ±poll interval | Only while rozed runs. |
+| **Lo's own poller** | Each new `head.sha` from `GET /pulls/{n}`, with first-seen time | Exact head, time ≈ ±poll interval | Only while Lo runs. |
 
 ### Live comparison
 
@@ -180,7 +180,7 @@ r15 2026-10-21T11:45:24Z force_push      e3117afd->21660dd7   GitHub's rebase af
   - Every push from the activity API.
   - Force-pushes (before, after, time) from GraphQL.
   - Pushes that triggered a check suite in the branch's repo (`push.previousSha/nextSha`).
-  - Every head rozed observed itself.
+  - Every head Lo observed itself.
 - **Exact head, approximate time:**
   - Review commits.
   - The `beforeCommit` of a force-push: the head just before it, pushed at some time after the
@@ -195,7 +195,7 @@ r15 2026-10-21T11:45:24Z force_push      e3117afd->21660dd7   GitHub's rebase af
 
 ```
 inputs: PR (number, createdAt, closedAt, mergedAt, mergeCommit, headRefName, headRepository,
-        headRefOid, baseRefName), and rozed's stored observations
+        headRefOid, baseRefName), and Lo's stored observations
 1. events  = GraphQL timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT, BASE_REF_FORCE_PUSHED_EVENT,
              BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, PULL_REQUEST_REVIEW,
              PULL_REQUEST_COMMIT { commit { oid checkSuites(first: 10) { nodes { createdAt push { previousSha nextSha } } } } }])
@@ -210,14 +210,14 @@ inputs: PR (number, createdAt, closedAt, mergedAt, mergeCommit, headRefName, hea
      - each force-push: before (time unknown, just before) and after (time = createdAt)
      - suites with push: nextSha at createdAt, previousSha as an earlier head (chase it with
        repository.object(oid:) for force-pushed-away SHAs, a few rounds)
-     - suites without push, review commits, rozed's observations, headRefOid
+     - suites without push, review commits, Lo's observations, headRefOid
    order: by known time; place unknown-time heads by ancestry (a normal push descends from the
    previous head) and before the force-push whose beforeCommit they are
 5. any adjacent pair (A, B) where A is an ancestor of B and B is more than one commit ahead is a
    fast-forward run whose inner boundaries may be unknown: expose its commits (from local git) as
    pickable points, labelled as such, unless the activity log or suites cover it
 6. store: (pr, head_sha, seq, pushed_at?, time_exact, kind, before_sha?, actor?, base_ref_name,
-   base_tip_sha?, source); number at display time; pin every head in refs/rozed/pull/<n>/revs/<sha>
+   base_tip_sha?, source); number at display time; pin every head in refs/lo/pull/<n>/revs/<sha>
 ```
 
 ### Failure modes
@@ -276,12 +276,12 @@ inputs: PR (number, createdAt, closedAt, mergedAt, mergeCommit, headRefName, hea
 base_branch_i = the base ref name in force when revision i was pushed (from BaseRefChanged /
                 AutomaticBaseChangeSucceeded events)
 base_tip_i    = if base_branch_i only moved forward since then and the PR isn't merged by merge commit:
-                    current tip of base_branch_i (refs/rozed/branches/<name>)      -- exact
+                    current tip of base_branch_i (refs/lo/branches/<name>)      -- exact
                 elif the PR was merged with a merge commit (mergeCommit has 2 parents):
                     mergeCommit^1                                                    -- exact
                 elif base_branch_i was force-pushed (stacks):
                     latest of {BaseRefForcePushedEvent.afterCommit, activity(base_branch_i).after,
-                    rozed's pinned tips of the lower PR} at or before pushed_at_i     -- exact if found
+                    Lo's pinned tips of the lower PR} at or before pushed_at_i     -- exact if found
                 else: current tip, flagged "base uncertain"
 base_i        = git merge-base head_i base_tip_i       (git merge-base --all; see §5 for >1)
 ```
@@ -296,7 +296,7 @@ base_i        = git merge-base head_i base_tip_i       (git merge-base --all; se
   - Squash and rebase merges create new SHAs, so they don't trigger it.
 - **Is the base branch's history recoverable?** Yes:
   - The activity API from about March 2023, plus `BaseRefForcePushedEvent` for force-pushes while
-    targeted, plus rozed's pins.
+    targeted, plus Lo's pins.
   - Base commits fetch by SHA like any other (§6).
 
 ---
@@ -326,7 +326,7 @@ base_i        = git merge-base head_i base_tip_i       (git merge-base --all; se
     `submittedAt`.
 - **Observed on `cli/cli#14745`:** reviews on `ca3cb242` (r1), `a842bc7a` (r2) and `aae5f981` (r3).
   r3's only other trace in the timeline is r4's `beforeCommit`.
-- **Reviews rozed submits** carry `commitOID` (design §11), so they're exact.
+- **Reviews Lo submits** carry `commitOID` (design §11), so they're exact.
 - **Open question:** a pending review started on head X and submitted after a push to Y. Its
   `commit` is probably X, since comments anchor there **[inferred]**. Verify with `rozed-bot`.
 
@@ -372,7 +372,7 @@ base_i        = git merge-base head_i base_tip_i       (git merge-base --all; se
     PR diff unchanged (or changes only its base content) dismisses the mark.
 - **Race:** a mark lands on GitHub's head at the time of the mutation **[inferred]**. If a push
   arrives between rendering and pressing `e`, GitHub marks the new version viewed.
-  - rozed should compare the head it rendered with the latest polled head before sending.
+  - Lo should compare the head it rendered with the latest polled head before sending.
   - If they differ, mark locally only and show the new revision first.
   - It should record locally `(pr, path) → head SHA rendered`, as design §6 says.
 - **Reads:** `files(first: 100) { nodes { path viewerViewedState } }` costs 1 point per page: 1 on a
@@ -404,7 +404,7 @@ base_i        = git merge-base head_i base_tip_i       (git merge-base --all; se
 ### Invocation
 
 ```sh
-# rozed's isolated environment, as in plan Task 4.1, including GIT_ASKPASS for lazy fetches
+# Lo's isolated environment, as in plan Task 4.1, including GIT_ASKPASS for lazy fetches
 OLD_BASE=$(git merge-base "$OLD_HEAD" "$OLD_BASE_TIP")   # §2
 NEW_BASE=$(git merge-base "$NEW_HEAD" "$NEW_BASE_TIP")
 if [ "$OLD_BASE" = "$NEW_BASE" ]; then
@@ -488,7 +488,7 @@ All from Appendix A, run with git 2.54.0 **[observed]**:
   - Rename plus edit: **2** fetch processes (rename detection, then the content merge).
 - **With `git --no-lazy-fetch`** (2.45+), a replay that needs blobs fails with exit 128:
   `fatal: could not fetch <oid> from promisor remote`. A replay that needs none still succeeds.
-  - rozed can use this offline to say "needs network" instead of hanging on a fetch.
+  - Lo can use this offline to say "needs network" instead of hanging on a fetch.
   - It must treat 128 as "fetch needed", not as a conflict.
 - **Fetches need credentials:** every git call against the repo must carry the `GIT_ASKPASS`
   environment, or lazy fetches of private repos fail (plan Task 4.1 already says this).
@@ -534,7 +534,7 @@ All from Appendix A, run with git 2.54.0 **[observed]**:
   (docs, Removing sensitive data). So force-pushed PR commits stay fetchable while the PR exists
   **[inferred]**. No retention period is documented. The 2015 case shows it isn't forever,
   probably from before those references or a one-off cleanup **[inferred]**.
-- **Fork commits fetch from the base repo URL** (same fork network) **[observed]**. rozed doesn't
+- **Fork commits fetch from the base repo URL** (same fork network) **[observed]**. Lo doesn't
   need access to the fork to fetch a fork PR's old revisions. For private repos that should hold
   with the user's token **[inferred]**.
 - **`refs/pull/<n>/head` has no history.** `ls-remote` on 6 PRs showed only `refs/pull/<n>/head`,
@@ -542,7 +542,7 @@ All from Appendix A, run with git 2.54.0 **[observed]**:
   namespace is read-only ("deny updating a hidden ref").
 - **Recommendation:**
   1. On opening a PR, fetch every known revision head by SHA in one `git fetch` and pin them under
-     `refs/rozed/pull/<n>/revs/<sha>`.
+     `refs/lo/pull/<n>/revs/<sha>`.
   2. Mark a revision "no longer available" when the API reports its commit as `null`/`422`, or
      `git fetch` fails with `not our ref`.
   3. Keep showing it in the picker with its time and author, disabled.
@@ -556,7 +556,7 @@ All from Appendix A, run with git 2.54.0 **[observed]**:
   before a push carry?
 - Does the activity API follow branch renames? What does it return for a private fork the user can't
   read (presumably 404)?
-- Are `304`s on `/activity` free with rozed's OAuth token? (Inconclusive here; see Corrections.)
+- Are `304`s on `/activity` free with Lo's OAuth token? (Inconclusive here; see Corrections.)
 - Is the activity API's history really bounded at about March 2023 for all repos, or per-repo
   (feature launch, or retention)? No retention is documented.
 - Can several `markFileAsViewed` calls be aliased in one request, and what do they cost?
@@ -611,7 +611,7 @@ fixed.
 # Rebase-aware revision comparison with `git merge-tree`, proved on throwaway repos.
 #
 # Builds an "origin" repo, a PR branch, rebases it onto a moved main with one extra
-# change, then works from a bare blobless partial clone (rozed's local copy) to show:
+# change, then works from a bare blobless partial clone (Lo's local copy) to show:
 #   1. a plain old_head..new_head diff includes main's changes;
 #   2. replaying r1 onto r2's base with merge-tree, then diffing against r2, shows only
 #      the author's extra change;
@@ -625,13 +625,13 @@ fixed.
 # Needs git >= 2.40 (--merge-base). Writes only under a new temp dir.
 set -euo pipefail
 
-# rozed's isolated git environment (decisions.md "Local copy").
+# Lo's isolated git environment (decisions.md "Local copy").
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 LC_ALL=C
 export GIT_AUTHOR_NAME=a GIT_AUTHOR_EMAIL=a@example.com GIT_COMMITTER_NAME=a GIT_COMMITTER_EMAIL=a@example.com
 T=0
 tick() { T=$((T + 60)); export GIT_AUTHOR_DATE="@$((1700000000 + T)) +0000" GIT_COMMITTER_DATE="@$((1700000000 + T)) +0000"; }
 
-ROOT=$(mktemp -d "${TMPDIR:-/tmp}/rozed-mergetree.XXXXXX")
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/lo-mergetree.XXXXXX")
 echo "work dir: $ROOT"; git --version
 O="$ROOT/origin"
 g() { git -C "$O" "$@"; }
@@ -669,19 +669,19 @@ tick; g commit -qam "P3: the extra change"
 g update-ref refs/pull/1/head feature        # a force-push: refs/pull/1/head moves r1 -> r2
 R2=$(g rev-parse feature)
 
-# ---------------------------------------------------------------- rozed's bare partial clone
+# ---------------------------------------------------------------- Lo's bare partial clone
 C="$ROOT/cache.git"
 git clone -q --bare --filter=blob:none "file://$O" "$C"
 c() { git -C "$C" "$@"; }
 missing() { c rev-list --objects --all --missing=print | grep -c '^?' || true; }
-# fetch both revisions by SHA into rozed's own refs (r1 is no longer on any branch)
-c fetch -q origin "$R1:refs/rozed/pull/1/revs/$R1" "$R2:refs/rozed/pull/1/revs/$R2" \
-  "+refs/heads/main:refs/rozed/branches/main"
+# fetch both revisions by SHA into Lo's own refs (r1 is no longer on any branch)
+c fetch -q origin "$R1:refs/lo/pull/1/revs/$R1" "$R2:refs/lo/pull/1/revs/$R2" \
+  "+refs/heads/main:refs/lo/branches/main"
 echo "r1=$R1"; echo "r2=$R2"; echo "missing blobs after clone: $(missing)"
 
 OLD_HEAD=$R1; NEW_HEAD=$R2
-OLD_BASE=$(c merge-base "$OLD_HEAD" refs/rozed/branches/main)
-NEW_BASE=$(c merge-base "$NEW_HEAD" refs/rozed/branches/main)
+OLD_BASE=$(c merge-base "$OLD_HEAD" refs/lo/branches/main)
+NEW_BASE=$(c merge-base "$NEW_HEAD" refs/lo/branches/main)
 echo "old_base=$(c log -1 --format='%h %s' "$OLD_BASE")  new_base=$(c log -1 --format='%h %s' "$NEW_BASE")"
 
 section "1. plain comparison r1..r2 (what a naive revision diff shows)"
@@ -693,7 +693,7 @@ set +e; REPLAY=$(c merge-tree --write-tree --merge-base="$OLD_BASE" "$NEW_BASE" 
 echo "exit=$rc tree=$REPLAY"
 echo "\$ git diff --stat \$REPLAY \$NEW_HEAD"; c diff --stat "$REPLAY" "$NEW_HEAD"
 echo "\$ git diff \$REPLAY \$NEW_HEAD"; c diff "$REPLAY" "$NEW_HEAD"
-echo "file list (what rozed shows): $(c diff --name-status "$REPLAY" "$NEW_HEAD" | tr '\n\t' '; ')"
+echo "file list (what Lo shows): $(c diff --name-status "$REPLAY" "$NEW_HEAD" | tr '\n\t' '; ')"
 echo "missing blobs now: $(missing)"
 
 section "3. conflict: main changes the line the PR changed, and the author resolves it in r3"
@@ -708,10 +708,10 @@ tick; git -C "$O" rebase -q main >/dev/null 2>&1 || {
   g add src/a.txt; GIT_EDITOR=true g rebase --continue >/dev/null; }
 g update-ref refs/pull/1/head feature
 R3=$(g rev-parse feature)
-c fetch -q origin "$R3:refs/rozed/pull/1/revs/$R3" "+refs/heads/main:refs/rozed/branches/main"
+c fetch -q origin "$R3:refs/lo/pull/1/revs/$R3" "+refs/heads/main:refs/lo/branches/main"
 OLD_HEAD=$R2; NEW_HEAD=$R3
-OLD_BASE=$(c merge-base "$OLD_HEAD" refs/rozed/branches/main)
-NEW_BASE=$(c merge-base "$NEW_HEAD" refs/rozed/branches/main)
+OLD_BASE=$(c merge-base "$OLD_HEAD" refs/lo/branches/main)
+NEW_BASE=$(c merge-base "$NEW_HEAD" refs/lo/branches/main)
 echo "--- default output"
 set +e; c merge-tree --write-tree --merge-base="$OLD_BASE" "$NEW_BASE" "$OLD_HEAD"; echo "exit=$?"
 echo "--- --name-only --no-messages (one path per line)"
@@ -721,7 +721,7 @@ c merge-tree --write-tree -z --name-only --merge-base="$OLD_BASE" "$NEW_BASE" "$
 echo "--- --quiet"
 c merge-tree --write-tree --quiet --merge-base="$OLD_BASE" "$NEW_BASE" "$OLD_HEAD"; echo "exit=$?"
 set -e
-echo "--- fallback (plain r2..r3), which is what rozed shows with a note"
+echo "--- fallback (plain r2..r3), which is what Lo shows with a note"
 c diff --stat "$OLD_HEAD" "$NEW_HEAD"
 
 section "4. stacked layer: the layer below is force-pushed, the upper layer only rebases"
@@ -736,40 +736,40 @@ echo "l amended" >> "$O/src/lower.txt"; tick; g commit -q --amend -am "L1': lowe
 LOWER2=$(g rev-parse lower)                     # base_ref_force_pushed: LOWER1 -> LOWER2
 g switch -q upper; tick; g rebase -q --onto lower "$LOWER1" upper
 U2=$(g rev-parse upper)                         # head_ref_force_pushed: U1 -> U2
-c fetch -q origin "$U1:refs/rozed/pull/2/revs/$U1" "$U2:refs/rozed/pull/2/revs/$U2" \
-  "$LOWER1:refs/rozed/pull/1/revs/$LOWER1" "+refs/heads/lower:refs/rozed/branches/lower"
-NAIVE_OLD_BASE=$(c merge-base "$U1" refs/rozed/branches/lower)
+c fetch -q origin "$U1:refs/lo/pull/2/revs/$U1" "$U2:refs/lo/pull/2/revs/$U2" \
+  "$LOWER1:refs/lo/pull/1/revs/$LOWER1" "+refs/heads/lower:refs/lo/branches/lower"
+NAIVE_OLD_BASE=$(c merge-base "$U1" refs/lo/branches/lower)
 echo "merge-base(U1, lower now) = $(c log -1 --format='%h %s' "$NAIVE_OLD_BASE")   <- wrong: L1 is gone from lower"
 echo "--- plain U1..U2:"; c diff --stat "$U1" "$U2"
 echo "--- replay with the naive base:"
 set +e; T_BAD=$(c merge-tree --write-tree --merge-base="$NAIVE_OLD_BASE" "$LOWER2" "$U1"); rc=$?; set -e
 echo "exit=$rc"; c diff --stat "$(echo "$T_BAD" | head -1)" "$U2"
-echo "--- replay with the old base tip (from base_ref_force_pushed.beforeCommit or rozed's pinned ref):"
+echo "--- replay with the old base tip (from base_ref_force_pushed.beforeCommit or Lo's pinned ref):"
 T_OK=$(c merge-tree --write-tree --merge-base="$LOWER1" "$LOWER2" "$U1")
 echo "exit=0 tree=$T_OK"; echo "diff --stat: [$(c diff --stat "$T_OK" "$U2")] (empty: the author changed nothing)"
 
 section "5. lazy blob fetching in the bare partial clone"
 git clone -q --bare --filter=blob:none "file://$O" "$ROOT/cold.git"
 k() { git -C "$ROOT/cold.git" "$@"; }
-k fetch -q origin "$R1:refs/rozed/r1" "$R2:refs/rozed/r2"
-OB=$(k merge-base refs/rozed/r1 refs/heads/main); NB=$(k merge-base refs/rozed/r2 refs/heads/main)
+k fetch -q origin "$R1:refs/lo/r1" "$R2:refs/lo/r2"
+OB=$(k merge-base refs/lo/r1 refs/heads/main); NB=$(k merge-base refs/lo/r2 refs/heads/main)
 echo "missing blobs before: $(k rev-list --objects --all --missing=print | grep -c '^?')"
 export GIT_TRACE2_EVENT="$ROOT/trace.json"
-TREE=$(k merge-tree --write-tree --merge-base="$OB" "$NB" refs/rozed/r1)
+TREE=$(k merge-tree --write-tree --merge-base="$OB" "$NB" refs/lo/r1)
 echo "merge-tree lazy fetches: $(grep -c '"event":"child_start".*"fetch"' "$ROOT/trace.json" || true)"
 : > "$ROOT/trace.json"
-k diff --name-status "$TREE" refs/rozed/r2 >/dev/null
+k diff --name-status "$TREE" refs/lo/r2 >/dev/null
 echo "diff --name-status lazy fetches: $(grep -c '"event":"child_start".*"fetch"' "$ROOT/trace.json" || true)"
 : > "$ROOT/trace.json"
-k diff "$TREE" refs/rozed/r2 >/dev/null
+k diff "$TREE" refs/lo/r2 >/dev/null
 echo "diff (content) lazy fetches: $(grep -c '"event":"child_start".*"fetch"' "$ROOT/trace.json" || true)"
 unset GIT_TRACE2_EVENT
 echo "missing blobs after: $(k rev-list --objects --all --missing=print | grep -c '^?')"
 echo "--- with lazy fetching off (git --no-lazy-fetch, git >= 2.45) in a fresh clone:"
 git clone -q --bare --filter=blob:none "file://$O" "$ROOT/off.git"
-git -C "$ROOT/off.git" fetch -q origin "$R1:refs/rozed/r1" "$R2:refs/rozed/r2"
+git -C "$ROOT/off.git" fetch -q origin "$R1:refs/lo/r1" "$R2:refs/lo/r2"
 set +e
-git -C "$ROOT/off.git" --no-lazy-fetch merge-tree --write-tree --merge-base="$OB" "$NB" refs/rozed/r1 2>&1 | tail -2
+git -C "$ROOT/off.git" --no-lazy-fetch merge-tree --write-tree --merge-base="$OB" "$NB" refs/lo/r1 2>&1 | tail -2
 echo "exit=${PIPESTATUS[0]}"
 set -e
 
@@ -785,19 +785,19 @@ g switch -q pr3; tick; g rebase -q main >/dev/null
 Q2=$(g rev-parse pr3)
 git clone -q --bare --filter=blob:none "file://$O" "$ROOT/cold2.git"
 q() { git -C "$ROOT/cold2.git" "$@"; }
-q fetch -q origin "$Q1:refs/rozed/q1" "$Q2:refs/rozed/q2"
-QOB=$(q merge-base refs/rozed/q1 refs/heads/main); QNB=$(q merge-base refs/rozed/q2 refs/heads/main)
+q fetch -q origin "$Q1:refs/lo/q1" "$Q2:refs/lo/q2"
+QOB=$(q merge-base refs/lo/q1 refs/heads/main); QNB=$(q merge-base refs/lo/q2 refs/heads/main)
 echo "missing blobs before: $(q rev-list --objects --all --missing=print | grep -c '^?')"
 export GIT_TRACE2_EVENT="$ROOT/trace2.json"
-QT=$(q merge-tree --write-tree --merge-base="$QOB" "$QNB" refs/rozed/q1)
+QT=$(q merge-tree --write-tree --merge-base="$QOB" "$QNB" refs/lo/q1)
 unset GIT_TRACE2_EVENT
 echo "merge-tree: 3 three-way content merges, lazy fetch processes: $(grep -c '"event":"child_start".*"fetch"' "$ROOT/trace2.json" || true)"
 echo "missing blobs after: $(q rev-list --objects --all --missing=print | grep -c '^?')"
-echo "diff vs r2 (empty = only rebase noise): [$(q diff --stat "$QT" refs/rozed/q2)]"
+echo "diff vs r2 (empty = only rebase noise): [$(q diff --stat "$QT" refs/lo/q2)]"
 git clone -q --bare --filter=blob:none "file://$O" "$ROOT/off2.git"
-git -C "$ROOT/off2.git" fetch -q origin "$Q1:refs/rozed/q1" "$Q2:refs/rozed/q2"
+git -C "$ROOT/off2.git" fetch -q origin "$Q1:refs/lo/q1" "$Q2:refs/lo/q2"
 set +e
-git -C "$ROOT/off2.git" --no-lazy-fetch merge-tree --write-tree --merge-base="$QOB" "$QNB" refs/rozed/q1 2>&1 | tail -3
+git -C "$ROOT/off2.git" --no-lazy-fetch merge-tree --write-tree --merge-base="$QOB" "$QNB" refs/lo/q1 2>&1 | tail -3
 echo "exit with --no-lazy-fetch: ${PIPESTATUS[0]}"
 set -e
 
@@ -816,18 +816,18 @@ echo "x" > "$O/src/extra.txt"; g add -A; tick; g commit -qm "S2: extra file"
 S2=$(g rev-parse pr4)
 git clone -q --bare --filter=blob:none "file://$O" "$ROOT/cold3.git"
 w() { git -C "$ROOT/cold3.git" "$@"; }
-w fetch -q origin "$S1:refs/rozed/s1" "$S2:refs/rozed/s2"
-SOB=$(w merge-base refs/rozed/s1 refs/heads/main); SNB=$(w merge-base refs/rozed/s2 refs/heads/main)
+w fetch -q origin "$S1:refs/lo/s1" "$S2:refs/lo/s2"
+SOB=$(w merge-base refs/lo/s1 refs/heads/main); SNB=$(w merge-base refs/lo/s2 refs/heads/main)
 export GIT_TRACE2_EVENT="$ROOT/trace3.json"
-set +e; ST=$(w merge-tree --write-tree --merge-base="$SOB" "$SNB" refs/rozed/s1); rc=$?; set -e
+set +e; ST=$(w merge-tree --write-tree --merge-base="$SOB" "$SNB" refs/lo/s1); rc=$?; set -e
 unset GIT_TRACE2_EVENT
 echo "exit=$rc, lazy fetch processes: $(grep -c '"event":"child_start".*"fetch"' "$ROOT/trace3.json" || true)"
-echo "plain s1..s2: $(w diff --name-status -M refs/rozed/s1 refs/rozed/s2 | tr '\n\t' '; ')"
-echo "rebase-aware: $(w diff --name-status -M "$ST" refs/rozed/s2 | tr '\n\t' '; ')"
+echo "plain s1..s2: $(w diff --name-status -M refs/lo/s1 refs/lo/s2 | tr '\n\t' '; ')"
+echo "rebase-aware: $(w diff --name-status -M "$ST" refs/lo/s2 | tr '\n\t' '; ')"
 
 section "8. --stdin: several replays in one process ('<base> -- <branch1> <branch2>' per line)"
-printf '%s -- %s %s\n' "$SOB" "$SNB" refs/rozed/s1 "$QOB" "$QNB" refs/rozed/q1 > "$ROOT/pairs"
-git -C "$ROOT/cold2.git" fetch -q origin "$S1:refs/rozed/s1" "$S2:refs/rozed/s2"
+printf '%s -- %s %s\n' "$SOB" "$SNB" refs/lo/s1 "$QOB" "$QNB" refs/lo/q1 > "$ROOT/pairs"
+git -C "$ROOT/cold2.git" fetch -q origin "$S1:refs/lo/s1" "$S2:refs/lo/s2"
 git -C "$ROOT/cold2.git" merge-tree --stdin < "$ROOT/pairs" | tr '\0' '|'; echo "exit=${PIPESTATUS[0]}  (each record: <1 clean|0 conflicted>|<tree>|...)"
 
 echo; echo "done; remove $ROOT when finished"
@@ -836,7 +836,7 @@ echo; echo "done; remove $ROOT when finished"
 Output (git 2.54.0, macOS; the temp path shortened to `$TMPDIR`):
 
 ```
-work dir: $TMPDIR/rozed-mergetree.eUgy28
+work dir: $TMPDIR/lo-mergetree.eUgy28
 git version 2.54.0 (Apple Git-157)
 r1=522bacb6ad367d74bfd7ea9730b6b044b8a3ac6a
 r2=be3bfe207aa3b0013936541099836bbcab2b08e1
@@ -869,7 +869,7 @@ index 587dca1..109e90b 100644
  c line 16
  c line 17
  c line 18
-file list (what rozed shows): M src/c.txt;
+file list (what Lo shows): M src/c.txt;
 missing blobs now: 3
 
 ==== 3. conflict: main changes the line the PR changed, and the author resolves it in r3
@@ -893,7 +893,7 @@ f74d6ab317132cd8ec8c2165016f89a7d9e03caa|src/a.txt||1|src/a.txt|Auto-merging|Aut
 exit=1
 --- --quiet
 exit=1
---- fallback (plain r2..r3), which is what rozed shows with a note
+--- fallback (plain r2..r3), which is what Lo shows with a note
  src/a.txt | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
@@ -906,7 +906,7 @@ merge-base(U1, lower now) = e6ca360 M4: change a.txt line 3   <- wrong: L1 is go
 exit=1
  src/lower.txt | 3 ---
  1 file changed, 3 deletions(-)
---- replay with the old base tip (from base_ref_force_pushed.beforeCommit or rozed's pinned ref):
+--- replay with the old base tip (from base_ref_force_pushed.beforeCommit or Lo's pinned ref):
 exit=0 tree=dc6e8bfa9614aab1e7f1b99159f4925421753a99
 diff --stat: [] (empty: the author changed nothing)
 
@@ -937,7 +937,7 @@ rebase-aware: A src/extra.txt;
 ==== 8. --stdin: several replays in one process ('<base> -- <branch1> <branch2>' per line)
 1|06f925a11fc680083fa7f340e6db642a30922b4c||1|d377351d166606fee7f8acd40d926fc88eedce9b||exit=0  (each record: <1 clean|0 conflicted>|<tree>|...)
 
-done; remove $TMPDIR/rozed-mergetree.eUgy28 when finished
+done; remove $TMPDIR/lo-mergetree.eUgy28 when finished
 ```
 
 ## Appendix B: `recon.py`

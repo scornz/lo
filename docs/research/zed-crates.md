@@ -1,6 +1,6 @@
-# Zed v1.27.0: what the rozed spike needs
+# Zed v1.27.0: what the Lo spike needs
 
-Research for the rozed spike: a bare app that opens one GitHub PR in Zed's side-by-side diff
+Research for the Lo spike: a bare app that opens one GitHub PR in Zed's side-by-side diff
 (`SplittableEditor`), with rust-analyzer running against a checkout of the PR head.
 
 - Zed tree: `~/src/zed` at tag `v1.27.0` (`c84af5b99cbc366d675064e52b23664a015b6e35`), unchanged.
@@ -28,7 +28,7 @@ Research for the rozed spike: a bare app that opens one GitHub PR in Zed's side-
 
    Block both with settings, and add an HTTP client that refuses Zed hosts.
 3. **Dev builds read assets from the repo root, not the crate.** `util::fs_embed!` resolves assets
-   against the nearest `.git` ancestor of the executable. For rozed that's rozed's root, so debug
+   against the nearest `.git` ancestor of the executable. For Lo that's Lo's root, so debug
    builds panic with `missing config for language`. Enable `util`'s `debug-embed` feature.
 4. **Required features:**
    - `gpui_platform/font-kit`. Without it, macOS renders **no text** (`crates/gpui_macos/src/platform.rs:220-228`).
@@ -37,11 +37,11 @@ Research for the rozed spike: a bare app that opens one GitHub PR in Zed's side-
    LSP to attach. The commit view's `GitBlob` buffers never get LSP. `git_ui_core/src/file_diff_view.rs`
    shows the pattern: a project buffer on the right, base text from anywhere.
 6. **`paths`: one line.** v1.27 already has `pub const APP_NAME: &str = "Zed"` for forks
-   (`crates/paths/src/paths.rs:18`). Setting it to `"rozed"` gives exactly the four folders asked for.
+   (`crates/paths/src/paths.rs:18`). Setting it to `"Lo"` gives exactly the four folders asked for.
 7. **Cargo:** `exclude = ["third_party/zed"]` is required. Without it, cargo makes Zed's crates
-   members of rozed's workspace and inheritance fails (I reproduced this). With it, `workspace = true`
+   members of Lo's workspace and inheritance fails (I reproduced this). With it, `workspace = true`
    resolves against Zed's root (confirmed). Zed's `[patch]`, `[profile]` and `.cargo/config.toml`
-   are ignored (confirmed for profile and config). Seed rozed's `Cargo.lock` from Zed's.
+   are ignored (confirmed for profile and config). Seed Lo's `Cargo.lock` from Zed's.
 8. **Weight:** about 104–116 Zed crates. `client`, cloud, telemetry, `agent_settings`/`language_model`,
    `dap`, `terminal`, `context_server` and `remote` are unavoidable. wasmtime is compiled even without
    `extension_host`, because `language` enables `tree-sitter/wasm`, so cmake is required. Don't depend
@@ -51,7 +51,7 @@ Research for the rozed spike: a bare app that opens one GitHub PR in Zed's side-
 
 ## 1. Minimal startup
 
-### What Zed's `main` does, and what rozed needs
+### What Zed's `main` does, and what Lo needs
 
 Everything is in `crates/zed/src/main.rs` unless noted.
 
@@ -114,11 +114,11 @@ Everything is in `crates/zed/src/main.rs` unless noted.
 Inferred from the calls above and `component_preview.rs`, not compiled.
 
 ```rust
-// rozed/crates/rozed/src/main.rs
+// lo/crates/lo/src/main.rs
 fn main() {
     for dir in [paths::config_dir(), paths::data_dir(), paths::logs_dir(), paths::database_dir(),
                 paths::languages_dir(), paths::temp_dir()] {
-        std::fs::create_dir_all(dir).expect("create rozed dirs");
+        std::fs::create_dir_all(dir).expect("create Lo dirs");
     }
     zlog::init();
     if std::io::stdout().is_terminal() { zlog::init_output_stdout(); }
@@ -134,13 +134,13 @@ fn main() {
         gpui_tokio::init(cx);
         settings::init(cx);
         // Forced overlay at the top settings layer. Users can't override it. See below.
-        SettingsStore::update_global(cx, |s, cx| s.set_server_settings(ROZED_FORCED, cx)).unwrap();
+        SettingsStore::update_global(cx, |s, cx| s.set_server_settings(LO_FORCED, cx)).unwrap();
 
         // One HTTP client for everything, refusing Zed hosts.
-        let inner = Arc::new(ReqwestClient::user_agent("rozed/0.1").unwrap());
+        let inner = Arc::new(ReqwestClient::user_agent("lo/0.1").unwrap());
         let http: Arc<dyn HttpClient> = Arc::new(NoZedHosts(inner));
         cx.set_http_client(http.clone());
-        let http_with_url = Arc::new(HttpClientWithUrl::new(http.clone(), "https://rozed.invalid", None));
+        let http_with_url = Arc::new(HttpClientWithUrl::new(http.clone(), "https://lo.invalid", None));
 
         let fs = fs::RealFs::new(None, cx.background_executor().clone());
         <dyn fs::Fs>::set_global(fs.clone(), cx);
@@ -166,7 +166,7 @@ fn main() {
         let session = cx.foreground_executor().block_on(Session::new(uuid::Uuid::new_v4().to_string(), kvp));
         let app_state = Arc::new(AppState {
             languages, client, user_store, workspace_store, fs, node_runtime: node,
-            build_window_options: rozed_window_options,
+            build_window_options: lo_window_options,
             session: cx.new(|cx| AppSession::new(session, cx)),
         });
         AppState::set_global(app_state.clone(), cx);
@@ -190,7 +190,7 @@ fn main() {
 }
 
 fn open_pr_window(app_state: Arc<AppState>, cx: &mut App) {
-    let window = cx.open_window(rozed_window_options(None, cx), {
+    let window = cx.open_window(lo_window_options(None, cx), {
         let app_state = app_state.clone();
         move |window, cx| {
             theme_settings::setup_ui_font(window, cx);
@@ -208,9 +208,9 @@ fn open_pr_window(app_state: Arc<AppState>, cx: &mut App) {
 }
 ```
 
-`rozed_window_options` can be plain `WindowOptions { titlebar: Some(TitlebarOptions { title: Some("rozed".into()), ..Default::default() }), ..Default::default() }`.
+`lo_window_options` can be plain `WindowOptions { titlebar: Some(TitlebarOptions { title: Some("Lo".into()), ..Default::default() }), ..Default::default() }`.
 Zed's version (`crates/zed/src/zed.rs:360-410`) uses `appears_transparent: true` with a
-traffic-light offset because it draws its own title bar from the `title_bar` crate. rozed has no
+traffic-light offset because it draws its own title bar from the `title_bar` crate. Lo has no
 title bar, so keep the native one for the spike.
 
 `MultiWorkspace::new` reads `AgentSettings` and `DisableAiSettings`
@@ -248,7 +248,7 @@ I grepped every crate in the resolved set for `build_zed_(api|cloud|llm)_url`, `
 | `client/src/user.rs:215-235`, `721`, `943`; `cloud_api_client.rs:116-161, 244-305` | `cloud.zed.dev` | After authentication | No | |
 | `context_server/src/oauth.rs:37` (`https://zed.dev/oauth/client-metadata.json`) | `zed.dev` | MCP OAuth for a configured context server | No | |
 | `release_channel/src/lib.rs:10`, `workspace/src/notifications.rs:1389,1405`, `project/src/project.rs:4017`, `editor/src/edit_prediction.rs:2555` | `zed.dev/docs`, `/releases` | Links opened with `cx.open_url` when the user clicks | No | Cosmetic |
-| Not linked by rozed: `auto_update`, `crashes`/minidumps, `copilot`, `language_models`, `web_search_providers`, `edit_prediction`, `AgentRegistryStore` | various | Started from `zed/src/main.rs` | n/a | Don't link or init them |
+| Not linked by Lo: `auto_update`, `crashes`/minidumps, `copilot`, `language_models`, `web_search_providers`, `edit_prediction`, `AgentRegistryStore` | various | Started from `zed/src/main.rs` | n/a | Don't link or init them |
 
 Other first-party downloads that aren't Zed hosts:
 
@@ -274,7 +274,7 @@ impl HttpClient for NoZedHosts {
     fn send(&self, req: http::Request<AsyncBody>) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
         let host = req.uri().host().unwrap_or_default().to_ascii_lowercase();
         if host == "zed.dev" || host.ends_with(".zed.dev") || host.ends_with(".invalid") {
-            log::warn!("rozed: blocked request to {}", req.uri()); // the spike's check greps for this
+            log::warn!("Lo: blocked request to {}", req.uri()); // the spike's check greps for this
             return Box::pin(async move { anyhow::bail!("blocked Zed host {host}") });
         }
         self.0.send(req)
@@ -295,22 +295,22 @@ Layer order is default → extension → global → user (plus release channel, 
 **server** (`crates/settings/src/settings_store.rs:1379-1397`).
 
 - `set_server_settings(&str)` (`:1020-1036`) is the top layer, so users can't override it. Use it
-  for things rozed must force.
+  for things Lo must force.
 - `set_global_settings` (`:995`) sits below user settings, but `watch_settings_files` (`:362-410`)
-  overwrites it from `~/.config/rozed/global_settings.json`. Use it only if you don't call
+  overwrites it from `~/.config/lo/global_settings.json`. Use it only if you don't call
   `watch_settings_files`.
 - Don't use the extension layer. `languages::init` writes it (`crates/languages/src/lib.rs:314`).
 
 ```jsonc
-// ROZED_FORCED (server layer)
+// LO_FORCED (server layer)
 {
   "telemetry": { "diagnostics": false, "metrics": false },
-  "server_url": "https://rozed.invalid",        // makes build_zed_*_url point nowhere
+  "server_url": "https://lo.invalid",        // makes build_zed_*_url point nowhere
   "auto_update": false,
   "disable_ai": true,                            // also keeps MultiWorkspace's sidebar off
   "auto_install_extensions": { "html": false },
   "diff_view_style": "split",                    // default already "split" (default.json:419)
-  "vim_mode": true                               // if rozed wants vim on by default; see section 7
+  "vim_mode": true                               // if Lo wants vim on by default; see section 7
 }
 ```
 
@@ -408,9 +408,9 @@ language servers by itself:
 Hover, go-to-definition, inlay hints and diagnostics then work on the right side. The left side has
 none, by design (`split.rs:746`).
 
-### Sketch: rozed's PR diff over two commits
+### Sketch: Lo's PR diff over two commits
 
-Adapted from `commit_view.rs` and `file_diff_view.rs`; not compiled. rozed's own code supplies:
+Adapted from `commit_view.rs` and `file_diff_view.rs`; not compiled. Lo's own code supplies:
 
 - `base` and `head` SHAs
 - a checkout of `head` at `checkout_dir`
@@ -481,7 +481,7 @@ Notes for the implementer:
   (`Editor::read_only` → `multi_buffer.read_only()`, `editor.rs:3439`; `multi_buffer.rs:1345`),
   even though project buffers are `ReadWrite`.
 - **Manual `BufferDiff` versus `open_diff_since`.** A manual `BufferDiff` doesn't recompute if the
-  file changes on disk. That's fine for a read-only checkout: rebuild when rozed checks out a new
+  file changes on disk. That's fine for a read-only checkout: rebuild when Lo checks out a new
   revision. `GitStore::open_diff_since(Some(old_blob_oid), buffer, repo, cx)` gives a live diff,
   but it needs the `Repository` entity and blob oids from a tree diff, and it attaches the
   unstaged diff.
@@ -510,7 +510,7 @@ What has to exist:
    highlighting.
    - It registers `rust::RustLspAdapter` (`lib.rs:80`).
    - `LanguageRegistry::set_language_server_download_dir(paths::languages_dir())` is where binaries
-     land: `~/Library/Application Support/rozed/languages/rust-analyzer/`.
+     land: `~/Library/Application Support/Lo/languages/rust-analyzer/`.
 2. **A `Project::local`** with a **visible local worktree at the checkout root**, created with
    `find_or_create_worktree(dir, true)`. Rust files must be opened **through the project**
    (`open_buffer` / `open_local_buffer`) and shown in an `Editor` with `lsp_data_enabled`. The
@@ -526,7 +526,7 @@ What has to exist:
    - Without the global, `track_worktree_trust` just logs (`crates/project/src/trusted_worktrees.rs:66-106`)
      and servers start.
    - The spike should skip `trusted_worktrees::init` and pass `init_worktree_trust: false`.
-   - **Design consequence:** with no gate, rozed must create a local worktree `Project` **only for
+   - **Design consequence:** with no gate, Lo must create a local worktree `Project` **only for
      repos it trusts** (design §7). A repo's `.zed/settings.json` can set `lsp.<server>.binary.path`.
      It's read by the project `SettingsObserver` (`BinarySettings` at
      `crates/settings_content/src/project.rs:311-317`).
@@ -574,7 +574,7 @@ How it works (`crates/paths/src/paths.rs`):
 | `log_file()` / `old_log_file()` | `logs_dir()/Zed.log`, `Zed.log.old` | 246-255 |
 | everything else | under `config_dir()` or `data_dir()`, e.g. `database_dir` = data/db (258), `extensions_dir` (348), `languages_dir` (441), `themes_dir` = config/themes (372), `settings_file`, `keymap_file`, `global_settings_file` (278-299) | |
 
-`set_custom_data_dir` (`103-119`) **doesn't** isolate rozed:
+`set_custom_data_dir` (`103-119`) **doesn't** isolate Lo:
 
 - `config_dir` becomes `custom/config` and `data_dir` becomes `custom`.
 - On macOS, `logs_dir` (`231-232`), `temp_dir` (`196-199`) and `state_dir` (`172-173`) ignore it
@@ -590,18 +590,18 @@ One commit on the patch branch:
 @@ -15,7 +15,7 @@
  /// Forks should change this to avoid colliding with Zed's user data.
 -pub const APP_NAME: &str = "Zed";
-+pub const APP_NAME: &str = "rozed";
++pub const APP_NAME: &str = "Lo";
 ```
 
 The resulting macOS paths are exactly the four requested:
 
-- `~/.config/rozed`
-- `~/Library/Application Support/rozed`
-- `~/Library/Caches/rozed`
-- `~/Library/Logs/rozed`, with `rozed.log` inside
+- `~/.config/lo`
+- `~/Library/Application Support/Lo`
+- `~/Library/Caches/Lo`
+- `~/Library/Logs/Lo`, with `Lo.log` inside
 
-It also moves `~/.local/state/rozed`. Nothing else in rozed's crate set reads `APP_NAME`.
-`crates/zed/src/main.rs:10-16` asserts that `APP_NAME_LOWERCASE` equals the binary name, but rozed
+It also moves `~/.local/state/Lo`. Nothing else in Lo's crate set reads `APP_NAME`.
+`crates/zed/src/main.rs:10-16` asserts that `APP_NAME_LOWERCASE` equals the binary name, but Lo
 doesn't build the `zed` crate.
 
 **Alternative, for upstreaming:** a settable name. Replace the const with
@@ -624,19 +624,19 @@ Every one follows the constant automatically.
 | `config_dir` | `crates/zed_credentials_provider/src/zed_credentials_provider.rs:131` (dev credentials file); `crates/project/src/git_store.rs:62` (import) |
 | `data_dir` | `crates/node_runtime/src/node_runtime.rs:639, 1033` (Node install); `crates/project/src/debugger/session.rs:3292` |
 | `database_dir` | `crates/db/src/db.rs:11, 64` (`AppDatabase::new`) |
-| `languages_dir` | set by rozed via `set_language_server_download_dir` (Zed does it at `main.rs:530`) |
+| `languages_dir` | set by Lo via `set_language_server_download_dir` (Zed does it at `main.rs:530`) |
 | `extensions_dir` | `crates/extension_host/src/extension_host.rs:329` |
 | `default_prettier_dir` | `crates/prettier/src/prettier.rs:9`; `crates/project/src/prettier_store.rs:23` |
 | `debug_adapters_dir` | `crates/dap/src/adapters.rs:280`; `crates/project/src/debugger/dap_store.rs:203`; `session.rs:3332` |
 | `external_agents_dir` | `crates/project/src/agent_server_store.rs:403, 1387`; `agent_registry_store.rs:627` |
-| `logs_dir` | `crates/client/src/telemetry.rs:285` (`telemetry.log`, created by `Telemetry::new` at `:214-224`); rozed's own `zlog` setup |
+| `logs_dir` | `crates/client/src/telemetry.rs:285` (`telemetry.log`, created by `Telemetry::new` at `:214-224`); Lo's own `zlog` setup |
 | `temp_dir` | `crates/fs/src/fs.rs:988, 1013` |
 | `settings_file` | `crates/settings/src/settings_store.rs:371, 555, 581, 1766, 1770`; `agent_settings.rs:2118-2227`; `json_schema_store.rs:432` |
 | `global_settings_file` | `settings_store.rs:376` |
 | `keymap_file` | `crates/settings/src/keymap_file.rs:878`; `json_schema_store.rs:442` |
 | `tasks_file` / `debug_scenarios_file` | `crates/project/src/project_settings.rs:953-1020`; `json_schema_store.rs:447, 454` |
 | `snippets_dir` | `crates/snippet_provider/src/lib.rs:155`; `json_schema_store.rs:462` |
-| `agents_file` | `crates/agent_settings/src/user_agents_md.rs:114-240` (unused by rozed) |
+| `agents_file` | `crates/agent_settings/src/user_agents_md.rs:114-240` (unused by Lo) |
 | per-project names (not app-named) | `.zed` via `local_settings_folder_name` (`486-489`) in `crates/worktree/src/worktree.rs:42` and `settings_store.rs:13`. PR checkouts' `.zed/settings.json` is still read. See section 3 on trust. |
 
 Other "Zed" identities that don't affect folders:
@@ -652,25 +652,25 @@ Other "Zed" identities that don't affect folders:
 
 ### Workspace inheritance: confirmed, with a required `exclude`
 
-Experiment in `cargo-mock/`: a rozed-like root with `crates/app` depending by path on
+Experiment in `cargo-mock/`: a Lo-like root with `crates/app` depending by path on
 `third_party/zed/crates/{a,b}`. `a` uses `edition.workspace`, `publish.workspace` and
 `b.workspace = true` (path + `features=["fancy"]`). Toolchain 1.98.1, offline.
 
 - **Without `exclude`:** `error inheriting 'edition' from workspace root manifest's 'workspace.package.edition'`.
-  Cargo makes path dependencies inside the workspace directory **members of rozed's workspace**, so
-  they inherit from rozed's root.
+  Cargo makes path dependencies inside the workspace directory **members of Lo's workspace**, so
+  they inherit from Lo's root.
 - **With `exclude = ["third_party/zed"]`:** it builds. `b` came through with the `fancy` feature,
   and `cargo metadata` lists only `app` as a member. Inheritance resolves against **Zed's root**,
   the nearest ancestor `[workspace]`.
 - In the same run, Zed's `[profile.dev] opt-level = 1` and `.cargo/config.toml` `[env]` were
   **ignored silently**. I didn't test `[patch]`; it's documented and the handoff confirms it.
 
-### What rozed's root must copy
+### What Lo's root must copy
 
 From `Cargo.toml` and `.cargo/config.toml` at the Zed root:
 
 ```toml
-# rozed/Cargo.toml
+# lo/Cargo.toml
 [workspace]
 resolver = "2"                      # match Zed (Cargo.toml:2)
 members = ["crates/*"]
@@ -724,7 +724,7 @@ Profiles are performance-only, not needed for correctness, but worth copying (`C
 - Entries for packages that aren't in the graph produce warnings, so prune them.
 
 ```toml
-# rozed/.cargo/config.toml (copy of Zed's .cargo/config.toml; the Windows and Linux sections are optional)
+# lo/.cargo/config.toml (copy of Zed's .cargo/config.toml; the Windows and Linux sections are optional)
 [target.'cfg(all())']
 rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
 [env]
@@ -740,9 +740,9 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
 
 - **Toolchain.** `rust-toolchain.toml` with `channel = "1.98.1"`, matching Zed's file. The
   `wasm32-wasip2` target is only for building extensions.
-- **`Cargo.lock`.** Rozed's lockfile replaces Zed's, so registry deps would resolve to the newest
+- **`Cargo.lock`.** Lo's lockfile replaces Zed's, so registry deps would resolve to the newest
   semver-compatible versions, which Zed never tested. **Seed it**: copy
-  `third_party/zed/Cargo.lock` to rozed's root before the first build and let cargo prune it.
+  `third_party/zed/Cargo.lock` to Lo's root before the first build and let cargo prune it.
   Inferred: cargo keeps the locked versions for packages still in the graph. Make the sync script
   re-seed it on every Zed bump.
 - **Xcode, not just the Command Line Tools.** `gpui_apple/build.rs:128-200` runs
@@ -759,7 +759,7 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
 - **Required features:**
   - `gpui_platform = { …, features = ["font-kit"] }`. Without it gpui_macos logs "no text will be
     rendered" (`crates/gpui_macos/src/platform.rs:220-228`). Only dev-deps and examples enable it in
-    Zed's graph, so rozed must.
+    Zed's graph, so Lo must.
   - `languages = { …, features = ["load-grammars"] }`.
   - `util = { …, features = ["debug-embed"] }`, for dev builds (section 7).
 - **Binary `build.rs`.** Inferred minimum: `cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=12.0`.
@@ -769,7 +769,7 @@ MACOSX_DEPLOYMENT_TARGET = "12.0"
 - **Env vars.** `ZED_RELEASE_CHANNEL`, if set at build time, overrides
   `crates/zed/RELEASE_CHANNEL` (`stable` at this tag; `release_channel/build.rs`,
   `release_channel/src/lib.rs:13-33`). Debug builds also read it at runtime. Leave it unset.
-- **Name collisions.** None between rozed's planned crate names and Zed's. Never add the crates.io
+- **Name collisions.** None between Lo's planned crate names and Zed's. Never add the crates.io
   `gpui` alongside the path one.
 
 ---
@@ -847,7 +847,7 @@ Chains are from the resolver's `--why`.
 builds** it reads them at runtime from `dev_repo_root()/root_relative`.
 
 - `dev_repo_root()` (`util.rs:681-701`) takes the first ancestor of `current_exe()` (then
-  `current_dir()`) that contains `.git`. For `rozed/target/debug/rozed`, that's **rozed's root**.
+  `current_dir()`) that contains `.git`. For `lo/target/debug/lo`, that's **Lo's root**.
 - These lookups would miss:
   - `SettingsAssets` (`assets/settings/*`, `assets/keymaps/*`; `crates/settings/src/settings.rs:138-144`)
   - `assets::Assets` (fonts, icons, themes, images, sounds; `crates/assets/src/assets.rs:10-24`)
@@ -858,7 +858,7 @@ builds** it reads them at runtime from `dev_repo_root()/root_relative`.
 **Fix:** depend on `util` with `features = ["debug-embed"]` (`crates/util/Cargo.toml:19-20`). It
 switches every `fs_embed!` to compile-time `RustEmbed` (`util.rs:759-778`). Folders resolve relative
 to each Zed crate's manifest, so `third_party/zed/assets` is found. The alternative, symlinking
-`assets/` and `crates/grammars/src` into rozed's root, is fragile.
+`assets/` and `crates/grammars/src` into Lo's root, is fragile.
 
 ### Required global state
 
@@ -894,8 +894,8 @@ Set before the first window opens. The ones that panic when missing are marked "
 - **Themes:** `theme_settings::init(LoadThemes::All(Box::new(Assets)))` loads the bundled themes
   (`theme_settings.rs:71-80`). Defaults are the `One` themes and the "Zed (Default)" icon theme
   (`default.json:9-14`).
-- **rozed's own assets.** `with_assets` takes one source, so write a small `AssetSource` that checks
-  rozed's embedded files first and falls back to `assets::Assets`. That's inferred, but it's the
+- **Lo's own assets.** `with_assets` takes one source, so write a small `AssetSource` that checks
+  Lo's embedded files first and falls back to `assets::Assets`. That's inferred, but it's the
   usual gpui pattern.
 
 ### Keymaps
@@ -911,14 +911,14 @@ The `zed` crate loads keymaps (`crates/zed/src/zed.rs:2348-2381`, `load_default_
 
 - `KeymapFile::load_asset` **returns `Err` if any binding names an unregistered action**
   (`crates/settings/src/keymap_file.rs:180-202`; `NotFound` at `565-569`). Zed `.unwrap()`s it.
-- Rozed doesn't link agent, terminal, collab, debugger and similar crates, so their actions in the
+- Lo doesn't link agent, terminal, collab, debugger and similar crates, so their actions in the
   default keymap aren't registered and the load fails.
 - Use **`KeymapFile::load_asset_allow_partial_failure`** (`204-222`). It drops unknown actions and
   returns the rest. Log its error once.
-- Later, rozed should ship its own keymap.
+- Later, Lo should ship its own keymap.
 
 Reloading keymaps when `vim_mode` or `base_keymap` changes is done by `handle_keymap_file_changes`
-in the `zed` crate (`zed.rs:2132-2160`). Copy that observer if rozed lets users toggle vim at
+in the `zed` crate (`zed.rs:2132-2160`). Copy that observer if Lo lets users toggle vim at
 runtime.
 
 ### Turning on vim mode
@@ -937,7 +937,7 @@ runtime.
 ### `release_channel`
 
 - The channel name comes from `include_str!("../../zed/RELEASE_CHANNEL")`. That's `stable` at this
-  tag, so rozed builds are "stable".
+  tag, so Lo builds are "stable".
 - `ZED_RELEASE_CHANNEL` overrides it at build time, and in debug builds also at runtime
   (`crates/release_channel/src/lib.rs:13-33`; `build.rs`).
 - Effects:
@@ -958,14 +958,14 @@ runtime.
 - **Split style** follows the global `diff_view_style` setting (`split.rs:660-666`), and windows
   narrower than 100 columns unsplit (`default.json:426`).
 - **`Client::production` resets the base URL.** In Zed, an observer resets `http.base_url` from
-  `server_url` on every settings change (`main.rs:818-824`). Rozed doesn't copy that observer.
+  `server_url` on every settings change (`main.rs:818-824`). Lo doesn't copy that observer.
 - **Not a TTY.** When launched as a `.app`, call `util::load_login_shell_environment()`
   (`main.rs:443-454`). Otherwise `git`, `rustup`, `rust-analyzer` and `node` aren't on `PATH`.
   Language-server binary lookup also uses the worktree's shell env.
 - **Shell environment.** `ProjectEnvironment` captures the user's login-shell environment for each
   worktree directory. Inferred: that runs shell hooks such as direnv in the PR checkout. One more
   reason to keep local projects to trusted repos.
-- **Telemetry log file.** `Telemetry::new` creates `~/Library/Logs/rozed/telemetry.log` locally
+- **Telemetry log file.** `Telemetry::new` creates `~/Library/Logs/Lo/telemetry.log` locally
   (`telemetry.rs:214-224`). It's harmless, but it means "telemetry" shows up on disk.
 - **Disk state.** `Workspace::new(None, …)`, with no `WorkspaceId`, keeps the workspace out of the
   db. `Workspace::new_local` would restore Zed-style session state.

@@ -202,11 +202,11 @@ Design §2 "First milestone". Research: [`research/zed-crates.md`](research/zed-
 startup, split diff, `paths`, Cargo, crate list, traps — read it before starting),
 [`research/github-api.md`](research/github-api.md) and
 [`research/github-checks.md`](research/github-checks.md) (attachments and stacks, already
-answered: rozed's OAuth token uploads attachments; stacks need no opt-in).
+answered: Lo's OAuth token uploads attachments; stacks need no opt-in).
 
 Two PRs, stacked:
 
-- **2a** `build: build rozed on Zed's crates` — branch `build/zed-workspace`, base
+- **2a** `build: build rozed on Zed's crates` — branch `build/zed-workspace`, base <!-- rename:keep -->
   `chore/bootstrap`. Tasks 2.1–2.5.
 - **2b** `feat: open a pull request in Zed's side-by-side diff` — branch `feat/spike`, base
   `build/zed-workspace`. Tasks 2.6–2.10.
@@ -217,9 +217,9 @@ Two PRs, stacked:
 
 - In a worktree of `~/src/zed` (don't move `~/src/zed`'s own checkout), create branch
   `rozed/v1.27.0` from tag `v1.27.0`.
-- One commit: `paths: use rozed's folders` setting `APP_NAME` to `"rozed"` in
+- One commit: `paths: use rozed's folders` setting `APP_NAME` to `"rozed"` in <!-- rename:keep -->
   `crates/paths/src/paths.rs` (research §4).
-- Push the branch to `scornz/zed`. A later Zed bump makes a new `rozed/v<version>` branch, so old
+- Push the branch to `scornz/zed`. A later Zed bump makes a new `lo/v<version>` branch, so old
   submodule pointers stay reachable.
 
 **Done when:** `git ls-remote https://github.com/scornz/zed refs/heads/rozed/v1.27.0` shows the
@@ -235,7 +235,7 @@ patch commit, whose parent is `v1.27.0`.
   `git submodule update --init --depth 1`).
 - `Cargo.toml`: `exclude = ["third_party/zed"]` (research §5; keep `third_party` excluded).
 - CLAUDE.md "Zed submodule": how to initialise it quickly in a new clone or worktree, the patch
-  list, and how to bump Zed (new `rozed/v<version>` branch, rebase the patches, run the sync, fix
+  list, and how to bump Zed (new `lo/v<version>` branch, rebase the patches, run the sync, fix
   breakages).
 - `.gitignore`: add `.build/` (a SwiftPM cache some tool drops in the clone).
 
@@ -244,7 +244,7 @@ patch commit, whose parent is `v1.27.0`.
 **Depends on:** 2.2
 
 - A `crates/xtask` binary (`cargo xtask sync-zed` via an alias in `.cargo/config.toml`, using
-  `toml_edit`) that copies from `third_party/zed` into rozed's root: the `[patch.*]` sections (paths
+  `toml_edit`) that copies from `third_party/zed` into Lo's root: the `[patch.*]` sections (paths
   rewritten to `third_party/zed/...`), the `[profile.*]` sections, and the parts of Zed's
   `.cargo/config.toml` that apply on macOS (rustflags `-C symbol-mangling-version=v0` and
   `--cfg tokio_unstable`, `MACOSX_DEPLOYMENT_TARGET = "12.0"`). Copied content sits between clear
@@ -259,7 +259,7 @@ patch commit, whose parent is `v1.27.0`.
 
 **Depends on:** 2.3
 
-- `crates/rozed` depends by path on the Zed crates the spike needs (research §6), with features
+- `crates/lo` depends by path on the Zed crates the spike needs (research §6), with features
   `gpui_platform/font-kit`, `languages/load-grammars` and `util/debug-embed` (research §5 "Required
   features"). A `build.rs` as in research §5 "Binary build.rs". Don't depend on `git_ui`,
   `git_ui_core` or `extension_host`.
@@ -270,10 +270,10 @@ patch commit, whose parent is `v1.27.0`.
 - **The HTTP client refuses Zed's hosts.** Wrap the one shared HTTP client so any request to
   `zed.dev` or a subdomain fails with an error and is logged at `warn`. Every request's host is
   logged at `debug`, for the network check in 2.9. Unit-test the host matching.
-- `cargo run -p rozed` opens one window showing a read-only Zed `Editor` with some Rust text,
+- `cargo run -p lo` opens one window showing a read-only Zed `Editor` with some Rust text,
   highlighted, in Zed's default theme.
-- Check on screen and take a screenshot. Check that `~/.config/rozed`,
-  `~/Library/Application Support/rozed` and `~/Library/Logs/rozed` are used, and that nothing
+- Check on screen and take a screenshot. Check that `~/.config/lo`,
+  `~/Library/Application Support/Lo` and `~/Library/Logs/Lo` are used, and that nothing
   under Zed's own folders changed.
 
 ### Task 2.5: CI builds it
@@ -290,7 +290,7 @@ patch commit, whose parent is `v1.27.0`.
 
 **Depends on:** 2a
 
-- `crates/rozed/src/pr_link.rs`: parse `https://github.com/<owner>/<repo>/pull/<n>` (with or without
+- `crates/lo/src/pr_link.rs`: parse `https://github.com/<owner>/<repo>/pull/<n>` (with or without
   scheme, trailing slash, `/files`, `/commits`, `/checks`) into `{ owner, repo, number }`. TDD: tests
   first, including rejects (issues links, other hosts, non-numeric numbers).
 
@@ -301,8 +301,8 @@ patch commit, whose parent is `v1.27.0`.
 Milestone 4 replaces this with the `repo_cache` crate; keep it small and tested.
 
 - Bare partial clone (`--filter=blob:none`) at `<cache dir>/repos/github.com/<owner>/<repo>.git`.
-- Fetch `refs/pull/<n>/head` and the base branch into rozed's own refs
-  (`refs/rozed/pull/<n>/head`, `refs/rozed/base/<branch>`). The base branch name comes from
+- Fetch `refs/pull/<n>/head` and the base branch into Lo's own refs
+  (`refs/lo/pull/<n>/head`, `refs/lo/base/<branch>`). The base branch name comes from
   unauthenticated `GET /repos/{owner}/{repo}/pulls/{n}` through the app's HTTP client (public
   repos only, for now).
 - Base commit = merge-base of head and base. Changed files from
@@ -316,7 +316,7 @@ Milestone 4 replaces this with the `repo_cache` crate; keep it small and tested.
 
 **Depends on:** 2.6, 2.7
 
-- `cargo run -p rozed -- <pr-url>`: prepares the local copy, creates a local `Project` on the
+- `cargo run -p lo -- <pr-url>`: prepares the local copy, creates a local `Project` on the
   checkout, and shows every changed file in one `SplittableEditor`, side by side. Right side: project
   buffers opened from the checkout. Left side: base text from `git show <base>:<path>`. Follow
   `git_ui_core/src/file_diff_view.rs` (research §2 "Sketch"), including its late-language-load fix.
@@ -333,9 +333,9 @@ rust-analyzer's type hover. Screenshots of both.
 
 **Depends on:** 2.8
 
-- Run the app on the PR from a clean state (rust-analyzer not yet downloaded, empty rozed folders)
+- Run the app on the PR from a clean state (rust-analyzer not yet downloaded, empty Lo folders)
   for at least two minutes, scrolling and hovering. Collect every HTTP host from the debug log, and
-  sample `lsof -i -n -P -a -p <pid>` every second for the rozed process's sockets.
+  sample `lsof -i -n -P -a -p <pid>` every second for the Lo process's sockets.
 - **Done when:** no Zed-owned host appears, every host is GitHub or a language-server download
   source, and the refused-host warning never fired (or, if it fired, the code path is found and
   disabled).
@@ -388,7 +388,7 @@ Two PRs, stacked on the spike:
 - `crates/github` depending by path on Zed's `http_client`, `gpui`, `credentials_provider`,
   `sqlez` and whatever else the research names; the client takes an `Arc<dyn HttpClient>`.
 - REST: `GET`/`POST`/`PUT`/`PATCH`/`DELETE` with `Authorization: token <token>`,
-  `Accept: application/vnd.github+json`, `X-GitHub-Api-Version`, a rozed `User-Agent`, conditional
+  `Accept: application/vnd.github+json`, `X-GitHub-Api-Version`, a Lo `User-Agent`, conditional
   requests (`If-None-Match`) and typed errors that keep GitHub's message, `documentation_url`, the
   `X-GitHub-SSO` link (research §5 "SAML SSO") and the OAuth-app-restriction case (§5 "Blocked by
   an org").
@@ -413,7 +413,7 @@ Two PRs, stacked on the spike:
   `viewerViewedState` per file with pagination, `updatedAt`), `PullRequestCheck` (the cheap poll in
   research §7: `updatedAt`, timeline `updatedAt`, head OID, counts), and `OpenPullRequests` (the
   repo's open PRs with base/head refs, head OIDs and stack membership, paginated, capped at 1,000).
-- Decode responses with rozed's own envelope so GraphQL errors keep their `type`.
+- Decode responses with Lo's own envelope so GraphQL errors keep their `type`.
 - Tests on recorded fixtures from `rozed-dev/playground` (PRs #1 and #2, stack #3), recorded with
   the bot's OAuth token from `~/.config/rozed-dev/oauth-token`.
 
@@ -422,10 +422,10 @@ Two PRs, stacked on the spike:
 **Depends on:** 3.1
 
 - Two `CredentialsProvider`s (research §2 "Recommended design"): Keychain via GPUI in release
-  builds, a mode-600 JSON file at `~/.config/rozed/credentials.json` (atomic writes) in debug
-  builds, `ROZED_USE_KEYCHAIN=1` forcing the Keychain. Keychain items are keyed
-  `rozed://github.com/<login>`.
-- rozed's SQLite database through `sqlez` at `<data dir>/rozed.sqlite`, failing loudly rather than
+  builds, a mode-600 JSON file at `~/.config/lo/credentials.json` (atomic writes) in debug
+  builds, `LO_USE_KEYCHAIN=1` forcing the Keychain. Keychain items are keyed
+  `lo://github.com/<login>`.
+- Lo's SQLite database through `sqlez` at `<data dir>/lo.sqlite`, failing loudly rather than
   falling back to memory. First migration: `accounts` (login, name, avatar URL, scopes, source:
   device flow or `gh`, added at) and `owner_accounts` (owner → account login, design §3 "Which
   account").
@@ -452,7 +452,7 @@ Two PRs, stacked on the spike:
 
 **Depends on:** 3.4
 
-- In `crates/rozed`: an "Accounts" modal (from the command palette and the app menu) listing
+- In `crates/lo`: an "Accounts" modal (from the command palette and the app menu) listing
   accounts, with "Sign in with GitHub" (shows the code, copies it, opens
   `https://github.com/login/device` in the default browser, waits, then adds the account) and
   "Import from gh" (lists gh's accounts, imports the chosen ones). Blocked-org and SSO errors show
@@ -527,10 +527,10 @@ One PR: `feat(repo_cache): keep a partial clone of each repository` — branch
 - `RepoCache::open(owner, repo)` → a bare clone with `--filter=blob:none` at
   `<cache dir>/repos/github.com/<owner>/<repo>.git`, created on first use, with a `last_used` stamp.
 - `fetch_pull(n)`: fetches `refs/pull/<n>/head` (works for PRs from forks) into
-  `refs/rozed/pull/<n>/head` and pins the commit at `refs/rozed/pull/<n>/revs/<sha>`, so every
+  `refs/lo/pull/<n>/head` and pins the commit at `refs/lo/pull/<n>/revs/<sha>`, so every
   revision ever fetched survives force-pushes and `gc`.
-- `fetch_branch(name)` into `refs/rozed/branches/<name>`, and `fetch_commit(sha)` for a revision
-  rozed knows by SHA but hasn't fetched (a missing one reports "no longer available", design §11).
+- `fetch_branch(name)` into `refs/lo/branches/<name>`, and `fetch_commit(sha)` for a revision
+  Lo knows by SHA but hasn't fetched (a missing one reports "no longer available", design §11).
 - Reads: `merge_base`, `changed_files(a, b)` (name-status with renames, binary detection),
   `read_blob(rev, path)` through a long-lived `git cat-file --batch` per repo, `is_ancestor`.
 - Progress events for the first clone (design §11 "First open").
@@ -550,10 +550,10 @@ One PR: `feat(repo_cache): keep a partial clone of each repository` — branch
 
 ### Task 4.4: Use it in the app
 
-- Replace the spike's local-copy module in `crates/rozed` with `repo_cache`, passing the account's
+- Replace the spike's local-copy module in `crates/lo` with `repo_cache`, passing the account's
   token when one can see the repo.
 - **Verify:** `sharkdp/fd#2212` and `rozed-dev/playground#2` (private, as `rozed-bot`) open as
-  before, with the head pinned under `refs/rozed/pull/2/revs/`. Force-push survival is proved by
+  before, with the head pinned under `refs/lo/pull/2/revs/`. Force-push survival is proved by
   Task 4.2's tests on local repos; nothing force-pushes to GitHub.
 
 ---
@@ -613,7 +613,7 @@ stacked on `feat/review-order` (same crate). Design §6; research
 
 - Input: push records from several sources, each tagged with its source: activity-API pushes
   (before, after, time, forced), force-push events (before, after, time), review commits (SHA,
-  time), check-suite pushes (previous, next, time), and heads rozed's poller saw (SHA, time); plus
+  time), check-suite pushes (previous, next, time), and heads Lo's poller saw (SHA, time); plus
   the PR's current commits in order (from git).
 - `build_revisions`: merge the sources into revisions keyed by head SHA, ordered by time and by
   ancestry, deduplicated, each with its previous head, whether it was forced and which sources saw
@@ -728,7 +728,7 @@ PR: `feat(diff_extras): compare files by syntax` — branch `feat/syntax-diff`, 
 ## Milestone 5: The PR tab
 
 Design §5, §6 "Viewed marks", §10 "Window", §11 "The local copy". A new `crates/review_ui` holds the
-PR tab; `crates/rozed` keeps startup, windows and menus. This is the first milestone that needs the
+PR tab; `crates/lo` keeps startup, windows and menus. This is the first milestone that needs the
 GitHub layer, the local copy and the review model together.
 
 **Base:** an integration branch, `integration/pr-tab`, made only of merges of `feat/repo-cache`
@@ -741,7 +741,7 @@ Five PRs, in order (5c and 5d can run in parallel once 5b is open):
 
 ### 5a `feat(review_ui): open pull requests in tabs` — branch `feat/pr-tab`
 
-- **Wiring:** `rozed <pr-url>` picks the account (`Accounts::account_for_repo`; unauthenticated for
+- **Wiring:** `lo <pr-url>` picks the account (`Accounts::account_for_repo`; unauthenticated for
   public repos when none can see it), starts that account's `Poller`, opens the PR from the cache
   at once and refreshes it, prepares the local copy with `repo_cache` using the account's token,
   and builds revisions (`review::revisions`, with the PR's head and `createdAt`). `--trust` stays
@@ -865,9 +865,9 @@ PR: `ci: build weekly against Zed's latest release` — branch `ci/weekly-zed`, 
 "CI and Zed updates".
 
 - A scheduled workflow (weekly, plus `workflow_dispatch`) on macOS: find Zed's latest stable release
-  tag (`gh api repos/zed-industries/zed/releases/latest`), check out rozed, move the submodule to that
-  tag with rozed's patches replayed on top (cherry-pick the patch commits listed in `CLAUDE.md`'s Zed
-  section from `rozed/v<current>`; a patch that no longer applies is itself a breakage to report), run
+  tag (`gh api repos/zed-industries/zed/releases/latest`), check out Lo, move the submodule to that
+  tag with Lo's patches replayed on top (cherry-pick the patch commits listed in `CLAUDE.md`'s Zed
+  section from the current patch branch; a patch that no longer applies is itself a breakage to report), run
   `cargo xtask sync-zed --seed-lock`, then fmt, clippy and tests.
 - On failure, open or update one issue (label `zed-update`) naming the Zed release, the failing step
   and the first errors; on success, close it. Never pushes branches or changes the repo.
@@ -890,8 +890,8 @@ landed, from `main`.
   PR in a lane starts a new branch in that worktree from its dependency, so Zed's crates build
   once per lane, not once per branch. A shared `CARGO_TARGET_DIR` wouldn't help: Zed's crates are
   path dependencies, and a different path is a different build. Fixes to a PR under review check
-  out its branch in its lane, and only rozed's crates rebuild.
-- **Migration slots** in `github::db::RozedDb::MIGRATIONS` are fixed ahead, so parallel PRs never
+  out its branch in its lane, and only Lo's crates rebuild.
+- **Migration slots** in `github::db::LoDb::MIGRATIONS` are fixed ahead, so parallel PRs never
   take the same index:
   - 2: `viewed_files` (5c)
   - 3: `repo_accounts` (5e)
@@ -962,7 +962,7 @@ that `GET /user` returns `rozed-bot` first). It builds nothing.
   workflow.
 
 Merging fixture PRs and setting e2e's rulesets happen only in `rozed-dev/e2e`, as `rozed-bot`, to
-test rozed.
+test Lo.
 
 ## Rename to Lo — `refactor: rename the project to Lo` — branch `refactor/rename-lo`
 
@@ -970,13 +970,13 @@ Lands right after milestone 5, before 6a, as one mechanical PR (see decisions, "
 
 - **Fork:** add a patch on the Zed fork branch (append-only) setting `paths`' `APP_NAME` to "Lo", and
   move the submodule pin.
-- **Code:** rename the crate and binary `rozed` → `lo` (`crates/lo`), and every identifier, ref,
-  environment variable, folder, `rozed://` and the debug Keychain prefix `rozed-dev://` → `lo-dev://`.
+- **Code:** rename the crate and binary `rozed` → `lo` (`crates/lo`), and every identifier, ref, <!-- rename:keep -->
+  environment variable, folder, `rozed://` and the debug Keychain prefix `rozed-dev://` → `lo-dev://`. <!-- rename:keep -->
   Keep `rozed-dev` only for the test org and `~/.config/rozed-dev/`, plus `rozed-bot` and the fork
   branch `rozed/v1.27.0`.
 - **Visible text by hand, not by the script:** every string a person reads says "Lo" with a capital
   L: menus and the Quit item, window titles, error and status messages, sign-in prompts, Keychain
-  item labels, and docs prose, even mid-sentence (`Quit rozed` → `Quit Lo`, "rozed couldn't find gh"
+  item labels, and docs prose, even mid-sentence (`Quit rozed` → `Quit Lo`, "rozed couldn't find gh" <!-- rename:keep -->
   → "Lo couldn't find gh"). Lowercase `lo` only for code names (crate, binary, command, cask, repo,
   refs, URL scheme, `~/.config/lo`, user agent). The script renames code names only, and lists
   every remaining string literal and doc line that mentions the name for a hand pass; a test or check
@@ -986,11 +986,11 @@ Lands right after milestone 5, before 6a, as one mechanical PR (see decisions, "
   follow-up once every open branch has it). Open branches such as 6c and the docs branch merge
   `main` first, then run the script, then fix the lines it lists by hand. Running the script first
   conflicts far more, because the rename PR's hand pass edits the same lines. The script also renames
-  hyphenated prose ("rozed-specific" → "lo-specific"), so check each branch's diff for that.
-- **Local state:** move `~/Library/Application Support/rozed` and `~/Library/Caches/rozed` to the new
+  hyphenated prose ("rozed-specific" → "lo-specific"), so check each branch's diff for that. <!-- rename:keep -->
+- **Local state:** move `~/Library/Application Support/rozed` and `~/Library/Caches/rozed` to the new <!-- rename:keep -->
   names with `mv` (never reading token files), or recreate them.
 - **Verify:** the full suite; `lo <pr-url>` opens `fd#2212` and `playground#2` with the bot signed in;
-  `git grep -i rozed` lists only the kept names; on screen, the menu bar, Quit item, window title,
+  `git grep -i rozed` lists only the kept names; on screen, the menu bar, Quit item, window title, <!-- rename:keep -->
   sign-in prompt and an error message all say "Lo".
 - **The user** renames the GitHub repo to `scornz/lo` (GitHub redirects the old URLs) and the OAuth
   app to "Lo".
@@ -1049,7 +1049,7 @@ Design §6, §11 "Missing revisions". This milestone wires `review::revisions` (
   `queries/`.
 - **`repo_cache`:**
   - `Repo::pull_commits(base, head)` (`rev-list --topo-order --reverse`);
-  - `Repo::fetch_commits(&[Oid])`, one fetch that pins under `refs/rozed/pull/<n>/revs/`, and treats
+  - `Repo::fetch_commits(&[Oid])`, one fetch that pins under `refs/lo/pull/<n>/revs/`, and treats
     "not our ref" as unavailable.
 - **`review::revisions::base_tip_at`** (pure): the base branch's tip when a revision was pushed.
   For a PR merged with a merge commit, it's the first parent.
@@ -1198,7 +1198,7 @@ Design §8, §11 "Unsent text". This milestone wires in `review::threads`, `revi
 - **A `drafts` table** (slot 5).
 - **Verify:** fixtures recorded on the playground as the bot.
 
-### 8c `feat(review_ui): turn on vim, with rozed's keys above it` — branch `feat/vim-keys`
+### 8c `feat(review_ui): turn on vim, with Lo's keys above it` — branch `feat/vim-keys`
 
 - **Vim:**
   - Adds the `vim` crate (with `search`) and updates `script/zed-crates.txt`.
@@ -1209,7 +1209,7 @@ Design §8, §11 "Unsent text". This milestone wires in `review::threads`, `revi
 - **Removed bindings:** `editor::NewlineBelow` and `NewlineAbove`, which would take `cmd-enter`.
 - **Comment editors** turn on modal editing when created.
 - **Verify on screen:**
-  - GPUI tests: every milestone 5 key reaches rozed with vim on.
+  - GPUI tests: every milestone 5 key reaches Lo with vim on.
   - On `fd#2212`: `j`, `k`, `w`, `b`, `gg` and `G` move; `e` marks viewed; `v` starts visual mode.
 
 ### 8d `feat(review_ui): show review threads in the diff and the threads panel` — branch `feat/threads-view`
@@ -1271,7 +1271,7 @@ Design §8, §11 "Unsent text". This milestone wires in `review::threads`, `revi
 
 ### 8g `feat(review_ui): show the timeline` — branch `feat/timeline`
 
-- **The timeline** is a virtualized list of the item types. Markdown images load through rozed's own
+- **The timeline** is a virtualized list of the item types. Markdown images load through Lo's own
   loader:
   - the token goes only to `https://github.com/user-attachments/assets/*`;
   - the redirect is followed to S3 without it;
@@ -1533,7 +1533,7 @@ Design §7 and §11 "Language servers"; decisions "Code features" and "Spike res
 - **What the left editor still gets:** it runs with `disable_lsp_data()` (`split.rs:761`). That turns off the cmd-hover underline there but not go-to-definition, hover or highlights, so `gd` and `K` work on both sides.
 
 **What design §7 asks that this approach can't do.**
-- **The mechanism sentence.** Neither "rozed starts a copy of itself in a server mode" nor "Zed's editor talks to it like any other language server" holds; decisions already reword this.
+- **The mechanism sentence.** Neither "Lo starts a copy of itself in a server mode" nor "Zed's editor talks to it like any other language server" holds; decisions already reword this.
 - **Zed's own paths that skip the provider.** `editor::FindAllReferences` calls `project.references` directly (`navigation.rs:1363`), and workspace-symbol search has its own path. Both reach only real servers, so Lo captures them and sends them to its own `gr`.
 - **Crash isolation.** The index runs in Lo's process. Zed already parses everything in process, so this matters little.
 - **Languages from bundled extensions get no syntax navigation (independent of mechanism).** Their grammars are WebAssembly, and `tree-sitter-tags` parses with its own `Parser`, which has no WebAssembly store **(inferred)**. "On every repo" holds per repo, not per language: Rust, TypeScript/TSX, JavaScript, Python and Go are covered.

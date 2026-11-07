@@ -1,9 +1,9 @@
-# Live GitHub checks for rozed
+# Live GitHub checks for Lo
 
 Run 2026-11-06, 08:10 to 08:17 UTC, against `rozed-dev` on github.com. Tokens:
 
 - `$BOT`: rozed-bot's classic PAT (`ROZED_BOT_TOKEN`). Scopes: `delete_repo, read:org, repo, workflow`.
-- `$OAUTH`: the token rozed's OAuth app minted through device flow in step 2, at
+- `$OAUTH`: the token Lo's OAuth app minted through device flow in step 2, at
   `~/.config/rozed-dev/oauth-token`.
 
 Every request sends `Authorization: token <…>`. No token, password or code was printed. The
@@ -13,7 +13,7 @@ attachment's signed S3 query string is elided.
 
 | Check | Result |
 | --- | --- |
-| rozed's OAuth token uploads an attachment | **Yes.** `201`, with the URL returned |
+| Lo's OAuth token uploads an attachment | **Yes.** `201`, with the URL returned |
 | Stacks on an org repo need an opt-in or setting | **No.** `POST /stacks` returned `201` on a brand-new private org repo |
 | OAuth token scopes | `read:org, repo, workflow`. Client `Ov23liBORqwRdiPzqsPP`, prefix `gho_` |
 | Fixtures | Private repo `rozed-dev/playground`. PRs #1 (`stack-a` → `main`) and #2 (`stack-b` → `stack-a`). Stack #3. All open |
@@ -34,7 +34,7 @@ curl -X POST -H "Authorization: token $BOT" https://api.github.com/orgs/rozed-de
 
 **Conclusion:** `rozed-dev/playground` exists and is private, with `main` initialized.
 
-## 2. Device-flow sign-in as the bot with rozed's OAuth app
+## 2. Device-flow sign-in as the bot with Lo's OAuth app
 
 **Request a device code:**
 
@@ -51,8 +51,8 @@ signed in to GitHub as rozed-bot, so no password or two-factor code was needed.
 
 1. In a new tab I opened `github.com/login/device`. The account picker showed "Signed in as
    rozed-bot", and I chose Continue.
-2. I entered the code, and the consent page "Authorize rozed" appeared:
-   - Header: "rozed by Mike Scornavacca wants to access your rozed-bot account"
+2. I entered the code, and the consent page "Authorize rozed" appeared: <!-- rename:keep -->
+   - Header: "rozed by Mike Scornavacca wants to access your rozed-bot account" <!-- rename:keep -->
    - Organizations and teams: read-only
    - Repositories: public and private
    - Workflow
@@ -62,8 +62,8 @@ signed in to GitHub as rozed-bot, so no password or two-factor code was needed.
    - The approve button reads **"Authorize scornz"**, the app owner's login
 3. **Organization access.** `rozed-dev` was listed with a **Grant** button, which means the org
    restricts OAuth apps. That's GitHub's default for new orgs. The bot is an org owner, so I clicked
-   Grant and the button changed to "Revoke". **rozed is now an approved OAuth app on `rozed-dev`.**
-   - For rozed's own UX: in an org with this restriction, a member who isn't an owner sees "Request"
+   Grant and the button changed to "Revoke". **Lo is now an approved OAuth app on `rozed-dev`.**
+   - For Lo's own UX: in an org with this restriction, a member who isn't an owner sees "Request"
      instead, and the token can't reach the org's private repos until an owner approves.
 4. I clicked Authorize, and the page said "Congratulations, you're all set!"
 5. I closed the tab and left the profile window as I found it.
@@ -93,13 +93,13 @@ curl -sI -H "Authorization: token $OAUTH" https://api.github.com/user | grep -i 
 - `/user` returns `{"login":"rozed-bot","id":353226052}`
 
 **Conclusion:** device flow works with no client secret. The token is a `gho_` token with exactly
-`repo read:org workflow`. In an org that restricts OAuth apps, an owner has to grant rozed access.
+`repo read:org workflow`. In an org that restricts OAuth apps, an owner has to grant Lo access.
 
-## 3. Attachment upload with rozed's OAuth token
+## 3. Attachment upload with Lo's OAuth token
 
 **Setup.**
 
-- **Image.** An 8x8 RGB PNG, 165 bytes, made with Python's `zlib` and `struct` (`rozed-test.png` in
+- **Image.** An 8x8 RGB PNG, 165 bytes, made with Python's `zlib` and `struct` (`lo-test.png` in
   the scratchpad).
 - **Repo ID.** GraphQL with `$OAUTH`:
   `{"repository":{"databaseId":1447997428,"viewerPermission":"ADMIN","isPrivate":true}}`
@@ -107,10 +107,10 @@ curl -sI -H "Authorization: token $OAUTH" https://api.github.com/user | grep -i 
 **Upload.** The same request `gh --attach` sends:
 
 ```sh
-curl -X POST "https://uploads.github.com/user-attachments/assets?name=rozed-test.png&content_type=image/png&repository_id=1447997428" \
+curl -X POST "https://uploads.github.com/user-attachments/assets?name=lo-test.png&content_type=image/png&repository_id=1447997428" \
   -H "Authorization: token $OAUTH" -H "Content-Type: application/octet-stream" \
   -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-  -H "User-Agent: rozed-spike" --data-binary @rozed-test.png
+  -H "User-Agent: lo-spike" --data-binary @lo-test.png
 ```
 
 - **`HTTP/2 201`**, `content-type: application/json`:
@@ -133,11 +133,11 @@ The signed URL has `X-Amz-Expires=300`, so it's valid for 5 minutes. The S3 path
 
 **Conclusion:**
 
-- GitHub accepts rozed's OAuth app token (`gho_`, `repo`) for attachment uploads, so the fallback
+- GitHub accepts Lo's OAuth app token (`gho_`, `repo`) for attachment uploads, so the fallback
   to an imported `gh` token isn't needed for this.
 - On a private repo the asset URL returns `404` without auth. With the user's token it `302`s to a
   short-lived S3 URL.
-- So rozed must fetch attachment images with its token and follow the redirect, and must not send
+- So Lo must fetch attachment images with its token and follow the redirect, and must not send
   the token to S3. A plain `<img src>` won't load in a private repo.
 
 ## 4. Stacks on an org repo
@@ -217,7 +217,7 @@ fragment F on PullRequest { number stack { id number size baseRefName entries(fi
 
 - Stacks work on a new private org repo with no opt-in or setting.
 - Creating one works with a classic `repo` token.
-- Reading works with both the classic token and rozed's OAuth token, over REST (`/stacks`, PR
+- Reading works with both the classic token and Lo's OAuth token, over REST (`/stacks`, PR
   `.stack`) and GraphQL (`stack`, `stackEntry`).
 - **I didn't try creating a stack with `$OAUTH`.** It has the same `repo` scope, and the endpoint
   lists no required OAuth scope.

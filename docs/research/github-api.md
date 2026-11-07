@@ -1,4 +1,4 @@
-# GitHub research for rozed: attachments, Stacks API, async merge
+# GitHub research for Lo: attachments, Stacks API, async merge
 
 Researched 2026-11-05/06. Sources: `cli/cli` at tag `v2.103.3` (commit `63837fb`, the latest release),
 `github/gh-stack` at `v0.3.0` (`2a49e67`), GitHub's REST OpenAPI description
@@ -121,14 +121,14 @@ The endpoint, not `gh`, decides.
    - PATs work, so the endpoint isn't limited to gh's own app.
 
    **[inferred]** An OAuth app's user token with `repo` scope probably works, since it's a plain
-   user credential like a PAT. This needs a real test: one upload with rozed's own OAuth token to
+   user credential like a PAT. This needs a real test: one upload with Lo's own OAuth token to
    a `rozed-dev` repo where the account has WRITE. A refusal would show up as a 404.
 
-   rozed's plan to fall back to an imported `gh` token is sound, since that token is gh's own
-   `gho_`. **If rozed were ever built as a GitHub App rather than an OAuth app, uploads would be
+   Lo's plan to fall back to an imported `gh` token is sound, since that token is gh's own
+   `gho_`. **If Lo were ever built as a GitHub App rather than an OAuth app, uploads would be
    refused.**
 4. **Scopes.** Nothing says which OAuth scope is needed. **[inferred]** `repo` for private repos;
-   rozed already asks for it.
+   Lo already asks for it.
 
 ### What an upload needs
 
@@ -219,7 +219,7 @@ comments and review summaries. That matches the web UI.
   the gradual rollout. A third-party client reported the same 404 for repos that weren't enabled
   during the preview.
 
-  **[inferred]** For rozed, read a 404 on `GET /repos/{o}/{r}/stacks` as "stacks unavailable here"
+  **[inferred]** For Lo, read a 404 on `GET /repos/{o}/{r}/stacks` as "stacks unavailable here"
   (GHES, or a token without access), not as a repo setting. Design §4's "when the repo doesn't have
   stacks turned on" should become "when the Stacks API isn't available."
 - **Constraints.**
@@ -390,7 +390,7 @@ Sources: `content/pull-requests/reference/stacked-pull-requests.md` and
   - "Troubleshooting stacked pull requests" says "If a failure occurs part way through, merging
     stops at that pull request. Pull requests below it that merged successfully remain landed."
 
-  rozed's design (§9, "they merge, join the queue or don't merge at all") should allow for a
+  Lo's design (§9, "they merge, join the queue or don't merge at all") should allow for a
   partial result. Re-read the stack after a `failed` result.
 
 ### Live check
@@ -408,12 +408,12 @@ Sources: `content/pull-requests/reference/stacked-pull-requests.md` and
   there.** **[inferred]** Most likely the Coder GitHub App isn't installed on the org, or the repos
   are private.
 - **Elsewhere,** every probe returned `200` with `X-Accepted-GitHub-Permissions: pull_requests=read`:
-  - `GET repos/scornz/rozed/stacks` (public, user-owned) returned `[]`.
+  - `GET repos/scornz/lo/stacks` (public, user-owned) returned `[]`.
   - `GET repos/cli/cli/stacks` returned real stacks, including #14958 with 8 draft PRs.
   - `GET repos/github/gh-stack/stacks` returned stacks too.
 
   The endpoint is live without any opt-in, and draft PRs can be stacked.
-- **Async merge.** `GET repos/scornz/rozed/pulls/1/merge-async/<zero-uuid>` returned `404` with
+- **Async merge.** `GET repos/scornz/lo/pulls/1/merge-async/<zero-uuid>` returned `404` with
   `X-Accepted-GitHub-Permissions: contents=write`.
 
 ---
@@ -497,7 +497,7 @@ header.
 - `PUT /pulls/{n}/merge` (sync) says: "We recommend using the asynchronous merge API instead. This
   endpoint does not support stacked pull requests or merging with a merge queue." The GraphQL
   `mergePullRequest` mutation says the same.
-- Stacks and bypass: only the bottom PR can be merged with bypass rules. rozed's admin override
+- Stacks and bypass: only the bottom PR can be merged with bypass rules. Lo's admin override
   (§9) can't apply to a whole stack.
 
 ---
@@ -508,8 +508,8 @@ header.
   policy, upload and confirm sequence.
   - The 10 MB and 100 MB limits match.
   - So does needing write access: READ and TRIAGE get 404.
-  - "If GitHub won't take rozed's sign-in": the documented refusals are GitHub App tokens.
-    rozed's OAuth app token is untested. Test it with one upload before relying on the fallback.
+  - "If GitHub won't take Lo's sign-in": the documented refusals are GitHub App tokens.
+    Lo's OAuth app token is untested. Test it with one upload before relying on the fallback.
   - A refused token and missing write access both return the same 404.
   - Uploads can't be deleted.
 - **§4 "repo doesn't have stacks turned on".** There's no such setting on github.com since GA. The

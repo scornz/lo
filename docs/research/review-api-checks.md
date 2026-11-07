@@ -1,7 +1,7 @@
 # GitHub review API checks
 
 Run on 2026-11-06 against `rozed-dev/playground` as `rozed-bot` (classic token), to check the review
-model in scornz/rozed#21. Every call went through GraphQL (`POST /graphql`) or REST as noted. Tokens
+model in scornz/lo#21. Every call went through GraphQL (`POST /graphql`) or REST as noted. Tokens
 are elided. Responses are trimmed to the fields that matter.
 
 PR #21 has no "Still to check against a live PR" section (body last updated 2026-11-06T15:51:03Z, no
@@ -203,7 +203,7 @@ All sent with R1 pending:
 | Sent | Response |
 | --- | --- |
 | `addPullRequestReview {commitOID: c2}`, no event | `errors: [{type: UNPROCESSABLE, message: "User can only have one pending review per pull request"}]` |
-| `addPullRequestReview {commitOID: c2, event: COMMENT, threads: [line 50]}` (rozed's `C`) | same message |
+| `addPullRequestReview {commitOID: c2, event: COMMENT, threads: [line 50]}` (Lo's `C`) | same message |
 | REST `POST /pulls/4/comments {line: 50, …}` | `422 {"message": "Validation Failed", "errors": [{"resource": "PullRequestReview", "code": "custom", "field": "user_id", "message": "user_id can only have one pending review per pull request"}]}` |
 | REST `POST /pulls/4/reviews {event: COMMENT, body}` | `422 {"errors": ["User can only have one pending review per pull request"]}` |
 | Extra: `addPullRequestReviewThread {pullRequestId: PR, line: 11}`, no review id | accepted, joined R1 (`pullRequestReview.state PENDING`, id R1) |
