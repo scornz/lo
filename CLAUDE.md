@@ -124,9 +124,7 @@ from its link. With none open, the window lists the pull requests opened recentl
 opens one, and Lo starts there without a link.
 
 In the diff, generated files, lockfiles and files over 5,000 changed lines or 1 MiB start collapsed,
-each header saying why. `alt-a` opens or loads the file at the cursor and switches it between its
-changes and its whole text, `alt-v` shows the diff inline or side by side, `alt-w` hides changes to
-whitespace alone, and `tab` moves the cursor to the other side.
+each header saying why; `alt-a` opens one. "Keys" lists every key.
 
 The local copy is the `repo_cache` crate, which runs git with an environment of its own: none of
 your git config, HTTPS only. A pull request opens with the GitHub account that can see its
@@ -141,6 +139,68 @@ Lo keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`,
 `~/Library/Caches/Lo` and `~/Library/Logs/Lo`, never Zed's. It logs to
 `~/Library/Logs/Lo/Lo.log`, and to the terminal when it has one. `RUST_LOG` sets the levels:
 `RUST_LOG=info,lo=debug` also logs the host and path of every HTTP request and redirect.
+
+## Keys
+
+Lo binds its keys over Zed's. Each module binds its own in its `bind_keys`: `review_ui`'s
+`bind_keys` (`crates/review_ui/src/lib.rs`) calls those of `review_ui`'s modules, the PR tab's calls
+its parts' (`pr_tab/keys.rs`), and the Accounts modal binds its own (`crates/lo/src/accounts_ui.rs`).
+Keys for reading the diff go through `pr_tab::keys::reading`. Tests in both crates read the
+context stack of each place in the window that takes keys, from a window showing it. They fail when
+one of Lo's bindings holds in none of the places, so a binding in a new context needs a place, and
+when two of Lo's bindings both hold in one with the same keystrokes, or with one's starting the
+other's (`review_ui::key_clashes`). A key that's added, changed or removed changes its row here.
+
+Where a key works, in the PR tab (`crates/review_ui/src/pr_tab/keys.rs`): *tab* is anywhere in it
+(`KEY_CONTEXT`), *reading* is the tab outside any text box in it (`READING_CONTEXT`), *diff* is the
+diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CONTEXT`). The tab's
+context says what its middle shows, `middle=diff` or `middle=view`, and keys that act on the diff
+hold only while it shows: *diff*, *reading the diff* (`DIFF_READING_CONTEXT`) and *file list, the
+diff showing* (`DIFF_FILE_LIST_CONTEXT`). Elsewhere:
+*window* is anywhere in Lo's window (`Workspace`), *open box* is the box `cmd-o` opens
+(`OpenPullRequest > Editor`), *recent list* is the list of recent pull requests
+(`RecentPullRequests`), *account picker* is the question about which account to use
+(`AccountPicker`), and *accounts* is the Accounts modal (`AccountsModal`).
+
+| Key | Where | Action | What it does |
+|---|---|---|---|
+| `cmd-o` | window | `review_ui::OpenPullRequest` | Asks for a pull request's link and opens it in a tab, or switches to its tab |
+| `enter` | open box | `menu::Confirm` | Opens the link typed |
+| `escape` | open box | `menu::Cancel` | Closes the box |
+| `cmd-b` | tab | `review_ui::ToggleFileList` | Shows or hides the file list |
+| `cmd-alt-b` | tab | `review_ui::ToggleThreads` | Shows or hides the threads panel |
+| `cmd-r` | tab | `review_ui::ToggleThreads` | Shows or hides the threads panel |
+| `ctrl-o` | tab | `pane::GoBack` | Goes back to where the diff's cursor was before it jumped |
+| `ctrl-i` | tab | `pane::GoForward` | Goes forward again |
+| `e` | reading the diff | `review_ui::ToggleViewed` | Marks the current file viewed and moves to the next unviewed file, or clears a viewed file's mark |
+| `] f` | reading the diff | `review_ui::NextFile` | Moves to the next file in the diff |
+| `[ f` | reading the diff | `review_ui::PreviousFile` | Moves to the previous file in the diff |
+| `] c` | reading the diff | `review_ui::NextChange` | Moves to the next change, in whichever file it is |
+| `[ c` | reading the diff | `review_ui::PreviousChange` | Moves to the previous change, in whichever file it is |
+| `alt-o` | reading | `review_ui::ToggleFileOrder` | Switches the file list between review order and path order |
+| `tab` | diff | `review_ui::SwitchSide` | Side by side, moves the cursor to the diff's other side |
+| `alt-v` | diff; file list, the diff showing | `review_ui::ToggleDiffLayout` | Shows the diff inline or side by side |
+| `alt-w` | diff; file list, the diff showing | `review_ui::ToggleWhitespace` | Hides changes to whitespace alone, or shows them again |
+| `alt-a` | diff; file list, the diff showing | `review_ui::ExpandFile` | Opens the file at the cursor, or the one selected in the file list, when it's collapsed, loads it when it's too large to have loaded, and otherwise switches it between its changes and its whole text |
+| `o` | file list | `review_ui::ToggleFileOrder` | Switches the file list between review order and path order |
+| `j` | file list | `menu::SelectNext` | Selects the next file, and scrolls the diff to it |
+| `k` | file list | `menu::SelectPrevious` | Selects the previous file, and scrolls the diff to it |
+| `enter` | file list | `menu::Confirm` | Scrolls the diff to the selected file and moves to the diff |
+| `escape` | file list | `menu::Cancel` | Moves back to the diff |
+| `j` | recent list | `menu::SelectNext` | Selects the next pull request |
+| `down` | recent list | `menu::SelectNext` | Selects the next pull request |
+| `k` | recent list | `menu::SelectPrevious` | Selects the previous pull request |
+| `up` | recent list | `menu::SelectPrevious` | Selects the previous pull request |
+| `enter` | recent list | `menu::Confirm` | Opens the selected pull request, with the account it was opened with if it's still signed in |
+| `cmd-w` | recent list | `workspace::CloseWindow` | Closes the window, as closing an empty pane does |
+| `j` | account picker | `menu::SelectNext` | Selects the next account |
+| `down` | account picker | `menu::SelectNext` | Selects the next account |
+| `k` | account picker | `menu::SelectPrevious` | Selects the previous account |
+| `up` | account picker | `menu::SelectPrevious` | Selects the previous account |
+| `enter` | account picker | `menu::Confirm` | Uses the selected account, and remembers it |
+| `escape` | account picker | `menu::Cancel` | Closes the picker without choosing |
+| `space` | accounts | `accounts::ToggleChosen` | Picks or unpicks the selected `gh` account to import |
+| `cmd-backspace` | accounts | `accounts::RemoveSelected` | Removes the selected account and its token, on a second press |
 
 ## Verify
 
