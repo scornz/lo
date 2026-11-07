@@ -87,8 +87,14 @@ fn thread(node: Node) -> Thread {
                 body: "…".to_string(),
                 state: state.parse().unwrap(),
                 created_at: at(40 + index as u64),
+                url: format!("https://github.com/bob/parse/pull/7#discussion_r{index}"),
+                viewer_can_update: *author == "alice",
+                viewer_can_delete: *author == "alice",
             })
             .collect(),
+        viewer_can_reply: true,
+        viewer_can_resolve: !node.is_resolved,
+        viewer_can_unresolve: node.is_resolved,
     }
 }
 

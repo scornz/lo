@@ -198,6 +198,12 @@ pub struct Thread {
     pub written_on: Option<String>,
     /// `comments`, oldest first.
     pub comments: Vec<ThreadComment>,
+    /// `viewerCanReply`: whether you can reply to it.
+    pub viewer_can_reply: bool,
+    /// `viewerCanResolve`: whether you can resolve it. GitHub says no while it's resolved.
+    pub viewer_can_resolve: bool,
+    /// `viewerCanUnresolve`: whether you can unresolve it. GitHub says no while it isn't resolved.
+    pub viewer_can_unresolve: bool,
 }
 
 impl Thread {
@@ -257,6 +263,12 @@ pub struct ThreadComment {
     pub state: CommentState,
     /// `createdAt`.
     pub created_at: SystemTime,
+    /// `url`: where it is on GitHub.
+    pub url: String,
+    /// `viewerCanUpdate`: whether you can edit it.
+    pub viewer_can_update: bool,
+    /// `viewerCanDelete`: whether you can delete it.
+    pub viewer_can_delete: bool,
 }
 
 #[cfg(test)]
@@ -393,6 +405,9 @@ mod tests {
             body: "Typo".to_string(),
             state,
             created_at: SystemTime::UNIX_EPOCH,
+            url: "https://github.com/octo/repo/pull/1#discussion_r1".to_string(),
+            viewer_can_update: true,
+            viewer_can_delete: true,
         };
         let pending = Thread {
             comments: vec![comment(CommentState::Pending)],
