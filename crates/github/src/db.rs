@@ -119,6 +119,40 @@ impl Domain for LoDb {
                 FOREIGN KEY(host, login) REFERENCES accounts(host, login) ON DELETE CASCADE
             ) STRICT;
         ),
+        sql!(
+            // Every head an account's poller saw on a pull request, and when it first saw it: one
+            // of the sources of the pull request's revisions. Not cached data, so clearing the
+            // cache keeps them; removing the account removes its rows.
+            CREATE TABLE seen_heads(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                first_seen INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, head),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+
+            // "Last seen here": the head of the newest revision on screen when an account last
+            // left a pull request on this Mac. Kept like seen_heads.
+            CREATE TABLE last_seen(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The head commit's SHA.
+                head TEXT NOT NULL,
+                // Seconds since the Unix epoch.
+                seen_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
     ];
 }
 
@@ -718,6 +752,70 @@ mod tests {
                     .as_deref(),
                 Some("a")
             );
+        });
+    }
+
+    /// rozed's database as it was before revision marks: with accounts per repository.
+    struct BeforeRevisionMarks;
+
+    impl Domain for BeforeRevisionMarks {
+        const NAME: &str = RozedDb::NAME;
+        // The first four steps.
+        const MIGRATIONS: &[&str] = RozedDb::MIGRATIONS.split_at(4).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_revision_marks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rozed.sqlite");
+        futures::executor::block_on(async {
+            let old =
+                ThreadSafeConnection::builder::<BeforeRevisionMarks>(&path.to_string_lossy(), true)
+                    .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                    .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                    .build()
+                    .await
+                    .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO viewed_files(host, account, owner, repo, number, path, head, viewed_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "a.rs", "h1", 1)
+                ))?()?;
+                connection.exec(sql!(
+                    INSERT INTO repo_accounts(host, owner, repo, login)
+                    VALUES ("github.com", "acme", "secret", "a")
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = RozedDb::open(&path).await.unwrap();
+            assert_eq!(
+                db.repo_account("github.com", "acme", "secret")
+                    .unwrap()
+                    .as_deref(),
+                Some("a")
+            );
+            let pull = crate::PullRef::new("o", "r", 1);
+            let viewed = crate::viewed::ViewedRecords::new(db.clone());
+            assert_eq!(viewed.heads("a", &pull).unwrap().len(), 1);
+            let marks = crate::revision_marks::RevisionMarks::new(db);
+            let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100);
+            marks.record_seen("a", &pull, "h1", at).await.unwrap();
+            marks.set_last_seen("a", &pull, "h1", at).await.unwrap();
+            assert_eq!(
+                marks.seen_heads(&pull).unwrap(),
+                [crate::revision_marks::SeenHead {
+                    head: "h1".into(),
+                    first_seen: at,
+                }]
+            );
+            assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
         });
     }
 

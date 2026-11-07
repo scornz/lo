@@ -1,5 +1,7 @@
 //! Records the cassettes in `tests/fixtures` from `rozed-dev/playground`, a private repo where PR
-//! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3.
+//! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3. The push histories
+//! come from `rozed-dev/e2e`'s revision fixtures (`script/e2e/README.md`) and from `sharkdp/fd`,
+//! read only.
 //!
 //! Each test is ignored; run them by hand, one cassette or all:
 //!
@@ -44,14 +46,15 @@ fn record<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    record_with_schema(name, description, None, run);
+    record_with_schema(name, description, REPO, None, run);
 }
 
-/// [`record`], noting the GraphQL schema the queries were checked against, if any. The recorder
-/// writes `cassette.json` and checks it like every other file.
+/// [`record`] from `repo`, noting the GraphQL schema the queries were checked against, if any. The
+/// recorder writes `cassette.json` and checks it like every other file.
 fn record_with_schema<F: Future<Output = ()>>(
     name: &str,
     description: &str,
+    repo: &str,
     schema: Option<String>,
     run: impl FnOnce(GithubClient) -> F,
 ) {
@@ -75,7 +78,7 @@ fn record_with_schema<F: Future<Output = ()>>(
                 chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
-            repo: Some(REPO.into()),
+            repo: Some(repo.into()),
             schema,
         })
         .expect("finishing the cassette");
@@ -167,7 +170,7 @@ fn record_graphql<F: Future<Output = ()>>(
     description: &str,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    record_with_schema(name, description, schema_commit(), run);
+    record_with_schema(name, description, REPO, schema_commit(), run);
 }
 
 #[test]
@@ -454,5 +457,83 @@ fn rest_pull_304_rate_limit() {
             }
             rate_limit().await.unwrap();
         },
+    );
+}
+
+/// The test bot, whose last review the push histories read.
+const BOT: &str = "rozed-bot";
+
+/// Records `owner/repo#number`'s push history twice, as a poll reads it: first from nothing, then
+/// with the first answer, asking about each page of pushes with its ETag.
+fn record_push_history(name: &str, description: &str, owner: &str, repo: &str, number: i64) {
+    let full_name = format!("{owner}/{repo}");
+    record_with_schema(
+        name,
+        description,
+        &full_name,
+        schema_commit(),
+        |client| async move {
+            let pull = PullRef::new(owner, repo, number);
+            let first = client.push_history(&pull, BOT, None).await.unwrap();
+            let again = client.push_history(&pull, BOT, Some(&first)).await.unwrap();
+            assert_eq!(
+                again, first,
+                "the push history changed while it was recorded"
+            );
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_e2e_14() {
+    record_push_history(
+        "push_history_e2e_14",
+        "rozed-dev/e2e#14's push history, twice: E1's full run, closed. r1-r4 are normal \
+         pushes with rozed-bot's COMMENT review on r2, r5 is GitHub's rebase onto a moved main \
+         (updatePullRequestBranch), and r6 a normal push after it",
+        "rozed-dev",
+        "e2e",
+        14,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_e2e_16() {
+    record_push_history(
+        "push_history_e2e_16",
+        "rozed-dev/e2e#16's push history, twice: E1 open at r3, with rozed-bot's COMMENT review \
+         on r2",
+        "rozed-dev",
+        "e2e",
+        16,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_fd_2212() {
+    record_push_history(
+        "push_history_fd_2212",
+        "sharkdp/fd#2212's push history, twice, as rozed-bot: a public pull request from the fork \
+         voidsipp/fd, two normal pushes, a maintainer's review on the first, and check suites \
+         without pushes",
+        "sharkdp",
+        "fd",
+        2212,
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn push_history_fd_2202() {
+    record_push_history(
+        "push_history_fd_2202",
+        "sharkdp/fd#2202's push history, twice, as rozed-bot: a merged pull request whose fork was \
+         deleted, so its head branch's pushes can't be read",
+        "sharkdp",
+        "fd",
+        2202,
     );
 }

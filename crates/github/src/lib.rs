@@ -5,6 +5,7 @@
 //! refuses Zed's hosts; in tests, a [`replay::ReplayHttpClient`] serving recorded responses.
 
 pub mod accounts;
+pub mod activity;
 pub mod cache;
 #[cfg(any(test, feature = "test-support"))]
 pub mod cassette;
@@ -19,19 +20,21 @@ mod graphql;
 pub mod patch;
 pub mod poll;
 mod pulls;
+pub mod push_history;
 pub mod queries;
 mod rate_limit;
 #[cfg(any(test, feature = "test-support"))]
 pub mod record;
 #[cfg(any(test, feature = "test-support"))]
 pub mod replay;
+pub mod revision_marks;
 mod token;
 mod user;
 pub mod viewed;
 
 pub use client::{
-    API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RestResponse,
-    user_agent,
+    API_URL, API_VERSION, ClientState, Conditional, GithubClient, OnUnauthorized, RequestGate,
+    RestResponse, user_agent,
 };
 pub use error::{CLIENT_ID, GithubError, HelpLink, SsoHeader, approval_url};
 pub use graphql::{GraphQlError, GraphQlResponse};

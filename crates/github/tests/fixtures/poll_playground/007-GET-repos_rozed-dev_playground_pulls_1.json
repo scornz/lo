@@ -7,14 +7,14 @@
   "response": {
     "status": 304,
     "headers": {
-      "etag": "\"6ee83fe7a7bf92f673d4700e72e0d4bcb89fefd1a77b0605bd68a0aa2878b4b2\"",
+      "etag": "\"7469c69be1d5bc679e1d1159bce1458e504e606fb48c00bdd83b6956a046d4c4\"",
       "last-modified": "Fri, 06 Nov 2026 08:15:07 GMT",
       "x-github-api-version-selected": "2022-11-28",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4988",
-      "x-ratelimit-reset": "1793972985",
+      "x-ratelimit-remaining": "4967",
+      "x-ratelimit-reset": "1794012780",
       "x-ratelimit-resource": "core",
-      "x-ratelimit-used": "12"
+      "x-ratelimit-used": "33"
     }
   }
 }

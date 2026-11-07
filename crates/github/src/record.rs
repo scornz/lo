@@ -21,6 +21,7 @@ use regex::Regex;
 
 use crate::cassette::{
     self, CassetteInfo, Interaction, KEPT_HEADERS, RecordedRequest, RecordedResponse,
+    SCOPES_KEPT_FOR,
 };
 
 /// Wraps a real HTTP client, writing each request and response to a cassette and returning the
@@ -158,16 +159,19 @@ fn recorded_request(
     request
 }
 
-/// The response with only the kept headers, and signed URLs redacted.
+/// The response with only the kept headers, and signed URLs redacted. The token's scopes are
+/// kept only for a request to [`SCOPES_KEPT_FOR`] (`url`'s path).
 fn recorded_response(
+    url: &Url,
     status: u16,
     headers: &http_client::http::HeaderMap,
     body: &[u8],
 ) -> RecordedResponse {
     let mut kept = BTreeMap::new();
-    for name in KEPT_HEADERS {
+    let scopes = (url.path() == SCOPES_KEPT_FOR).then_some("x-oauth-scopes");
+    for name in KEPT_HEADERS.iter().copied().chain(scopes) {
         let values: Vec<&str> = headers
-            .get_all(*name)
+            .get_all(name)
             .iter()
             .filter_map(|value| value.to_str().ok())
             .collect();
@@ -245,7 +249,7 @@ impl HttpClient for RecordingHttpClient {
             body.read_to_end(&mut response_body).await?;
             this.record(
                 recorded,
-                recorded_response(parts.status.as_u16(), &parts.headers, &response_body),
+                recorded_response(&url, parts.status.as_u16(), &parts.headers, &response_body),
             )?;
             Ok(Response::from_parts(parts, AsyncBody::from(response_body)))
         })
@@ -399,8 +403,39 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_tokens_scopes_only_for_get_user() {
+        let headers: http_client::http::HeaderMap = [
+            ("x-oauth-scopes", "delete_repo, repo"),
+            ("x-accepted-oauth-scopes", "repo"),
+            ("x-ratelimit-remaining", "4999"),
+        ]
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                http_client::http::HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            )
+        })
+        .collect();
+        let kept = |url: &str| -> Vec<String> {
+            let url = Url::parse(url).unwrap();
+            let response = recorded_response(&url, 200, &headers, b"{}");
+            response.headers.into_keys().collect()
+        };
+        assert_eq!(
+            kept("https://api.github.com/user"),
+            ["x-oauth-scopes", "x-ratelimit-remaining"]
+        );
+        assert_eq!(
+            kept("https://api.github.com/repos/o/r/activity"),
+            ["x-ratelimit-remaining"]
+        );
+    }
+
+    #[test]
     fn redacts_signed_urls() {
         let response = recorded_response(
+            &Url::parse("https://api.github.com/x").unwrap(),
             302,
             &[(
                 http_client::http::header::LOCATION,
@@ -442,6 +477,7 @@ mod tests {
     #[test]
     fn a_kept_sso_header_is_redacted() {
         let response = recorded_response(
+            &Url::parse("https://api.github.com/x").unwrap(),
             403,
             &[(
                 http_client::http::HeaderName::from_static("x-github-sso"),

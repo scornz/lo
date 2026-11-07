@@ -198,13 +198,13 @@ pub struct PrCache {
     db: LoDb,
 }
 
-fn to_secs(time: SystemTime) -> i64 {
+pub(crate) fn to_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or_default()
 }
 
-fn from_secs(secs: i64) -> SystemTime {
+pub(crate) fn from_secs(secs: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).unwrap_or_default())
 }
 
@@ -227,6 +227,10 @@ fn key<T: CacheEntry>(
 impl PrCache {
     pub fn new(db: LoDb) -> Self {
         Self { db }
+    }
+
+    pub(crate) fn db(&self) -> &RozedDb {
+        &self.db
     }
 
     /// `account`'s cached answer about `target`, if there's one in the current shape.
@@ -373,6 +377,30 @@ impl PrCache {
             .await
     }
 
+    /// Replaces the value at `path` in a stored answer's JSON with the JSON `json`, and records
+    /// that GitHub confirmed the answer at `fetched_at`.
+    pub(crate) async fn update_json<T: CacheEntry>(
+        &self,
+        account: &str,
+        target: &Target,
+        path: &'static str,
+        json: String,
+        fetched_at: SystemTime,
+    ) -> Result<()> {
+        let (key, version) = (key::<T>(account, target), T::version());
+        let fetched_at = to_secs(fetched_at);
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    UPDATE pr_cache SET json = json_set(json, ?8, json(?9)), fetched_at = ?10
+                    WHERE host = ?1 AND account = ?2 AND owner = ?3 AND repo = ?4
+                        AND number = ?5 AND query = ?6 AND version = ?7
+                ))?((key, version, path.to_string(), json, fetched_at))
+            })
+            .await
+    }
+
     /// Forgets an answer.
     pub async fn remove<T: CacheEntry>(&self, account: &str, target: &Target) -> Result<()> {
         let key = key::<T>(account, target);
@@ -483,7 +511,9 @@ mod tests {
     use serde::Deserialize;
 
     use crate::db::{Account, AccountSource};
+    use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
+    use crate::push_history::PushHistory;
 
     fn account(login: &str) -> Account {
         Account {
@@ -703,9 +733,21 @@ mod tests {
 
     /// Every version, as of the last change to what the cache stores. When this fails, a stored
     /// shape changed: rows written in the old one will read as missing and be fetched again.
-    /// Check that's what the change means, then update the versions here.
+    /// Check that's what the change means, then update the versions here. A read the poller keeps
+    /// ([`crate::poll::CachedRead`]) is stored stamped. No two share a name, which would make
+    /// one read the other's rows as missing.
     #[test]
     fn versions_follow_the_stored_shapes() {
+        let names = [
+            PullSummary::NAME,
+            ListedPulls::NAME,
+            PullRequestData::NAME,
+            PullRequestCheckData::NAME,
+            OpenPullRequestList::NAME,
+            Stamped::<PushHistory>::NAME,
+        ];
+        let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+        assert_eq!(unique.len(), names.len(), "{names:?}");
         assert_eq!(
             [
                 (PullSummary::NAME, PullSummary::version()),
@@ -713,13 +755,18 @@ mod tests {
                 (PullRequestData::NAME, PullRequestData::version()),
                 (PullRequestCheckData::NAME, PullRequestCheckData::version()),
                 (OpenPullRequestList::NAME, OpenPullRequestList::version()),
+                (
+                    Stamped::<PushHistory>::NAME,
+                    Stamped::<PushHistory>::version()
+                ),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
-                ("PullRequestCheck", "2e0c794b22d16bc7".to_string()),
+                ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
                 ("OpenPullRequests", "a228c23b9720c0a4".to_string()),
+                ("PushHistory", "1f9c5b1925f77e8b".to_string()),
             ]
         );
     }

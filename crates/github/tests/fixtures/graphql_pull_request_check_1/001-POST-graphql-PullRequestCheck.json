@@ -8,28 +8,26 @@
       "name": "playground",
       "number": 1
     },
-    "query_sha256": "2e0c794b22d16bc7d562489ebdff6d69efb76af956d368fdd7bf619cdf21aa68"
+    "query_sha256": "098cc23f0fe0c48df4509831e3744a0ac93f3bebd398f86da37ce1fc37d8eb83"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "x-accepted-oauth-scopes": "repo",
-      "x-oauth-scopes": "read:org, repo, workflow",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4998",
-      "x-ratelimit-reset": "1793973997",
+      "x-ratelimit-remaining": "4981",
+      "x-ratelimit-reset": "1794012781",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "2"
+      "x-ratelimit-used": "19"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4998,
-          "used": 2,
-          "resetAt": "2026-11-06T14:06:37Z"
+          "remaining": 4981,
+          "used": 19,
+          "resetAt": "2026-11-07T00:53:01Z"
         },
         "repository": {
           "pullRequest": {
@@ -47,10 +45,16 @@
               "updatedAt": "2026-11-06T08:15:21Z",
               "totalCount": 2
             },
+            "revisionEvents": {
+              "filteredCount": 0
+            },
             "commits": {
               "totalCount": 1
             },
             "reviews": {
+              "totalCount": 0
+            },
+            "submittedReviews": {
               "totalCount": 0
             },
             "reviewThreads": {
