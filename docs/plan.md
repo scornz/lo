@@ -1010,7 +1010,8 @@ Design §6, §11 "Missing revisions". This milestone wires `review::revisions` (
   - The tests move to `pr_tab/tests/…`.
   - `test_support.rs` becomes `test_support/{github,git}.rs`, with a list of request handlers.
 - **Extension points:**
-  - the header's ordered slots: stack, revision picker, pending review, merge status;
+  - the header's ordered slots: stack, merge status, revision picker, pending review (design §10
+    puts merge status before the picker);
   - a left slot above the file list, for the stack tree;
   - a middle switch between the diff and the timeline;
   - a right panel host, for threads.
@@ -1111,13 +1112,17 @@ Design §4. This milestone wires in `stacks::Stacks::find` and its layers, rules
 
 ### 7a `feat(github): read what finding stacks needs` — branch `feat/stack-data`
 
-- **`OpenPullRequests` gains:**
-  - `id`, `createdAt`, `author`, and `baseRef { target { oid } }`;
-  - `commits(last: 20)`;
-  - `reviewDecision`, `statusCheckRollup`, `isInMergeQueue` and `mergeQueueEntry`.
+- **`OpenPullRequests` gains** `id`, `createdAt`, `author`, `baseRef { target { oid } }`,
+  `commits(last: 20)`, and `baseRef`/`headRef { refUpdateRule { pattern } }`. Those last are
+  protection rules non-admins can see. Review, checks and queue state are not read here: they go
+  stale on the list, and `StackLayers` reads them for the tree.
 - **`MergedPullRequests($headRefName)`** for the branches `branches_to_look_up` returns.
-- **Trunks:** from `defaultBranchRef`, branch protection patterns and ruleset `refName` conditions
-  (`~DEFAULT_BRANCH`, `~ALL`, fnmatch).
+- **Trunks:** a separate cached read that tolerates errors:
+  - from `defaultBranchRef` and `refUpdateRule` patterns;
+  - branch protection patterns (admins only);
+  - rulesets that enforce merging (`PULL_REQUEST`, `MERGE_QUEUE`, `REQUIRED_STATUS_CHECKS`, `UPDATE`
+    or `REQUIRED_DEPLOYMENTS`, active), with `refName` conditions (`~DEFAULT_BRANCH`, `~ALL` with
+    excludes, fnmatch).
 - **`StackLayers(ids)`** reads each layer's review, checks, queue and "n of m viewed" state, and
   refreshes with the open PR.
 - **Mapping** into `stacks::PullRequest`, including `State::Merged { head_in_base }`.
@@ -1461,7 +1466,8 @@ These milestones start as milestone 9 ends. A few PRs move earlier: the ones tha
     - 10b and 10c touch only `new_diff_editor` and `Target::add_file`.
     - 10g first extracts the trusted part of `show_local_copy` into `start_language_servers`.
     - 11a adds one decorator registration.
-  - **6a's middle switch:** 10e adds `Middle::File`, and 11b adds `Middle::Syntax`, in that order.
+  - **6a's middle switch:** 10e and 11b each show their own entity as `Middle::View(PartView)`; 8g's
+    `alt-t` checks `middle().shows(timeline_id)`.
   - **`crates/lo/src/forced_settings.rs`:**
     - 10d adds `lsp_results_location`;
     - 10g changes the server model;
@@ -1638,7 +1644,7 @@ No Zed build; it can run at any time.
   - a header naming the path, revision and side, with "Back to the diff (⌃o)".
 - **Navigation:**
   - `PrTab` pushes its own `ItemNavHistory` payload, `PrTabNav::{Diff(DiffPosition), File { side, tree, path, point }}`.
-  - `PrTab::navigate` (today it forwards to the diff, `pr_tab.rs:3594`) restores its own payloads and passes any other to the visible editor.
+  - `PrTab::navigate` (today it forwards to the diff, `pr_tab/ (see 6a's split)`) restores its own payloads and passes any other to the visible editor.
   - `⌃o`/`⌃i` (`pane::GoBack`/`GoForward`, already bound) then cross views.
 - **Outline:** `g s` calls `outline::toggle(focused_editor, …)` (`outline.rs:31`, public). Adds the `outline` crate.
 - **Keys:**

@@ -650,6 +650,12 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Lo writes only to `rozed-dev` repos while testing.** `sharkdp/fd#2212` and other third-party
   PRs are read-only: no comments, reviews, approvals or merges. Fixture PRs in `rozed-dev/e2e` may
   be merged and its rulesets set, as `rozed-bot`, to test Lo.
+- **Fixture PRs target their own `e<n>/base` branches,** so `main` never moves for them and a wrong
+  merge can't put a fixture's files on `main`. E8's hostile files only ever create
+  `$TMPDIR/lo-e8-<name>`; toolchain baits (rustup, go) can't run repo code, so they're checked
+  through the servers' environments and network instead.
+- **The fixture script isolates git from `$HOME`** (no global ignores, no `~/.netrc`) and fails on any
+  ignored or untracked file after a commit.
 - **Fixtures never force-push.** A rebased revision comes from GitHub's server-side rebase
   (`updatePullRequestBranch(updateMethod: REBASE)`); a conflicted rebase is checked read-only on a
   public PR and in GPUI tests.
@@ -691,6 +697,36 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **A base tip that already contains the revision's head is flagged uncertain,** as after a git-flow
   back-merge.
 
+## Stack data (PR #34)
+
+- **Trunks come from the default branch, each open PR's `baseRef`/`headRef` `refUpdateRule`**
+  (classic protection non-admins can see; a fork's head rule is ignored) **and the repository's
+  active rulesets.** Rulesets are read once per repository with the repo poll, refreshed every 30
+  minutes, and never fail the open-PR list. When they can't be read, REST
+  `rules/branches/{branch}` is asked for up to 10 branches open PRs use. A ruleset names trunks when
+  it gates merging (pull-request, merge-queue, status-check, update or deployment rules) or when its
+  include is exact (`~DEFAULT_BRANCH` or a branch with no wildcards), whatever it enforces. Until
+  the rules are read once, a stack tree is "loading". Ruleset patterns match the full
+  `refs/heads/…` with Ruby `File.fnmatch` and `FNM_PATHNAME`, as GitHub documents; `^` and braces are
+  literal.
+- **Catch-all rules with no excludes name no trunk** (`~ALL`, or patterns made only of `*`, `?` and `/`). Taken
+  literally, they make every branch a trunk in repos like cli/cli and rust-lang/rust, and no stack
+  would ever form.
+- **The first page of open PRs also reads the 20 most recently merged PRs,** at no extra cost, so a
+  layer whose lower layer was squash-merged and deleted still shows "needs rebase".
+- **Merged PRs are looked up in batches:** one aliased query asks about 10 branches at 5 merged PRs
+  each, at most 20 branches a read, ranked by how many open PRs target the branch, and carried over
+  between reads by branch and tip. A merged PR with no merge commit counts as in the base.
+- **A layer GitHub retargeted after its lower layer merged** is traced through its
+  `AutomaticBaseChangeSucceededEvent { oldBase }`, so "needs rebase" survives a deleted branch.
+- **A write to a PR re-reads the other stack trees that show it, debounced by 2 seconds;** the open
+  PR's own tree overlays the tab's marks instead. Lookups carry over only from a list under an hour
+  old, empty ones are re-queried after a day, and a stopped lookup retries with backoff.
+- **A layer's moved-from base** comes from its last automatic or manual base change.
+- **`StackLayers` refreshes with the open layer's state, head, review decision, checks and queue
+  entry;** other layers refresh every 5 minutes, or when the set of layers changes. Viewed counts
+  read the first 100 files.
+
 ## Milestones 6–9 (planning)
 
 - **Builds run in two reused lane worktrees** (`lane-1`, `lane-2`). Zed's crates are path
@@ -700,6 +736,15 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   5 drafts, 6 merge methods), so parallel PRs never take the same index.
 - **PRs opened without signing in** keep milestone 5's read-only view; revisions, stacks, threads
   and merging say "Sign in to see …", since GraphQL needs a token.
+- **Key clashes are checked on real context stacks:** a test reads each place's stack from a live
+  window (tab, file list, both diff sides, picker, recent list, open box, Accounts modal) and fails
+  when two of Lo's bindings with equal or prefix keystrokes are both enabled there.
+- **The tab's key context says what the middle shows** (`PrTab middle=diff` or `middle=view`), so
+  the diff's keys (`e`, `]f`, `[f`, `]c`, `[c`, `alt-v`, `alt-w`, `alt-a`) hold only while the diff
+  shows; `alt-o` works on the file list whatever the middle shows. Every binding must hold in some
+  listed place, or the key test fails.
+- **The fake GitHub serves GraphQL by operation name;** each feature keeps its handlers in
+  `test_support/github/<feature>.rs` and its data in a type-keyed store.
 - **Multi-layer stack diffs are read-only:** each PR keeps its own threads and viewed marks.
 - **The PR tab is split into per-feature files first (6a),** with header slots, one `bind_keys` per
   feature and a test that fails on duplicate key bindings, so parallel UI PRs don't collide.

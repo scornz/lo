@@ -23,8 +23,8 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
 
 | PR | What | Base | State |
 |---|---|---|---|
-| #33 | Rename the project to Lo (`refactor/rename-lo`, lane-1) | `main` | Reviewed: sound, but behind `main` (#31's code still says rozed). Fixes: merge `main` and rename #31's names, a `--check` CI guard, safer handling of Markdown and fixtures. <!-- rename:keep --> |
-| 7a | Stack data layer (`feat/stack-data`, lane-2) | `main` | In progress. |
+| 6b | Show any comparison and let features decorate the diff (`refactor/shown-comparison`, lane-1) | `main` | In progress. |
+| 8a | Threads, pending review and timeline data (`feat/threads-data`, lane-2) | `main` | In progress. |
 | #2 | The docs (`docs/status`) | `main` | Land last; its branch keeps moving. |
 
 ### How a line lands
@@ -62,6 +62,10 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
   #15 shows as merged; #17, #18, #23 and #25 were closed with a comment naming their commits, and the
   stack shows closed. See Notes.
 - #31 `feat(github): read a pull request's push history` (6c) → `7fbc54c` (2026-11-06), after two rounds of review fixes.
+- #33 `refactor: rename the project to Lo` → `c7ec5da` (2026-11-06). CI's `rename` job now fails on the old name outside the kept test names.
+- #36 `test: script the code, moves and large-PR fixtures on rozed-dev/e2e` → `e39d1ea` (2026-11-06). Fixtures E6 (#18), E8 hostile (#19, on `e8/base`), E9 (#20), E10 (#21), E12 (#22) and the image PR #17 are scripted.
+- #34 `feat(github): read what finding stacks needs` (7a) → `b090b57` (2026-11-06), after two rounds of review fixes.
+- #35 `refactor(review_ui): give each part of the PR tab its own file` (6a) → `fa2a425` (2026-11-06), after two rounds of review fixes.
 - **Milestone 5 verified on screen** at `36f9980` (evidence in `evidence/milestone-5/verify/`):
   - Every acceptance check passed, including the image-bomb fixture (`rozed-dev/e2e#17`, helper
     killed at 512 MiB, Lo at 128 MB).
