@@ -1,0 +1,171 @@
+# The merged pull requests from ten head branches, newest first, $first a branch: the layers below
+# a stack's open ones whose branch an open pull request still targets, or targeted until GitHub
+# moved it, which finding stacks follows down to a trunk (`stacks::branches_to_look_up`). Fewer
+# branches repeat the first. With $first at 5, it costs 1 point: 10 connections and 100 below them.
+query MergedPullRequests(
+  $owner: String!
+  $name: String!
+  $b0: String!
+  $b1: String!
+  $b2: String!
+  $b3: String!
+  $b4: String!
+  $b5: String!
+  $b6: String!
+  $b7: String!
+  $b8: String!
+  $b9: String!
+  $first: Int!
+) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    b0: pullRequests(
+      states: [MERGED]
+      headRefName: $b0
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b1: pullRequests(
+      states: [MERGED]
+      headRefName: $b1
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b2: pullRequests(
+      states: [MERGED]
+      headRefName: $b2
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b3: pullRequests(
+      states: [MERGED]
+      headRefName: $b3
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b4: pullRequests(
+      states: [MERGED]
+      headRefName: $b4
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b5: pullRequests(
+      states: [MERGED]
+      headRefName: $b5
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b6: pullRequests(
+      states: [MERGED]
+      headRefName: $b6
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b7: pullRequests(
+      states: [MERGED]
+      headRefName: $b7
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b8: pullRequests(
+      states: [MERGED]
+      headRefName: $b8
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+    b9: pullRequests(
+      states: [MERGED]
+      headRefName: $b9
+      orderBy: { field: CREATED_AT, direction: DESC }
+      first: $first
+    ) {
+      nodes {
+        ...MergedPullRequestFields
+      }
+    }
+  }
+}
+
+# What finding stacks reads of a merged pull request. `OpenPullRequests` reads the same.
+fragment MergedPullRequestFields on PullRequest {
+  number
+  createdAt
+  baseRefName
+  baseRef {
+    target {
+      __typename
+      oid
+    }
+    refUpdateRule {
+      pattern
+    }
+  }
+  headRefName
+  headRefOid
+  isCrossRepository
+  commits(last: 20) {
+    nodes {
+      commit {
+        oid
+      }
+    }
+  }
+  # Its head is in its base branch when it's this commit or one of its parents: after a merge
+  # commit or a fast-forward, not a squash or a rebase.
+  mergeCommit {
+    oid
+    parents(first: 2) {
+      nodes {
+        oid
+      }
+    }
+  }
+  stackEntry {
+    position
+    stack {
+      number
+    }
+  }
+}

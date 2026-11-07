@@ -1,6 +1,6 @@
 //! One account's poller: what it watches, when each poll is due, and what each answer changed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
@@ -25,8 +25,11 @@ use crate::client::{Conditional, GithubClient};
 use crate::error::GithubError;
 use crate::pulls::{ListedPage, ListedPull, ListedPulls, PullRef, PullSummary, RepoRef, Target};
 use crate::push_history::{PushHistory, read_push_history};
+use crate::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
+use crate::queries::stack_layers::read_stack_layers;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
+    StackLayerList, TrunkRuleList,
 };
 use crate::rate_limit::RateLimits;
 use crate::revision_marks::RevisionMarks;
@@ -57,6 +60,9 @@ pub enum PollEvent {
         repo: RepoRef,
         list: Arc<OpenPullRequestList>,
     },
+    /// A watched repository's branch rulesets changed, or were read for the first time:
+    /// [`Poller::trunk_rules`] has them.
+    TrunkRules { repo: RepoRef },
     /// A poll failed for a reason that isn't the network, the rate limit or the token, such as a
     /// pull request that's gone or an organization's SSO. It's tried again at its next interval.
     Failed {
@@ -173,6 +179,15 @@ struct RepoState {
     /// `list` changed.
     listed: Option<Cached<Arc<ListedPulls>>>,
     list: Option<Cached<Arc<OpenPullRequestList>>>,
+    rules: Option<Cached<Arc<TrunkRuleList>>>,
+    /// How many reads of `rules` in a row couldn't read the rulesets, and when they may be read
+    /// again.
+    rules_failures: u32,
+    rules_retry_at: Option<Instant>,
+    /// How many times in a row the lookups of merged PRs stopped short, and when they may run
+    /// again without the list changing.
+    lookup_failures: u32,
+    lookup_retry_at: Option<Instant>,
 }
 
 struct OfflineState {
@@ -198,11 +213,20 @@ enum Job {
         summary: Option<Arc<PullSummary>>,
     },
     /// A watched repository: conditional GETs of its open PRs, a page at a time, then the full
-    /// list when they changed.
+    /// list when they changed, and the merged PRs its stacks link through, carried over from
+    /// `list` where their branches haven't moved.
     Repo {
         repo: RepoRef,
         listed: Option<Arc<ListedPulls>>,
-        have_list: bool,
+        list: Option<Arc<OpenPullRequestList>>,
+        /// Whether `list` is recent enough to carry its lookups over from.
+        carry: bool,
+        /// Whether to look up merged PRs again for `list` while the PRs haven't changed, because
+        /// its lookups stopped short.
+        retry_lookups: bool,
+        rules: Option<Arc<TrunkRuleList>>,
+        /// Whether to read the rulesets again.
+        read_rules: bool,
     },
     /// A read [`Poller::read_cached`] keeps for the open PR.
     Read { pull: PullRef, read: ReadJob },
@@ -216,11 +240,14 @@ enum Outcome {
     Repo {
         listed: ListedPulls,
         list: Option<OpenPullRequestList>,
+        rules: Option<TrunkRuleList>,
     },
     Read {
         name: &'static str,
         value: Value,
         stamp: String,
+        generation: u64,
+        started: Instant,
     },
 }
 
@@ -338,21 +365,30 @@ impl Job {
             Self::Repo {
                 repo,
                 listed: known,
-                have_list,
+                list,
+                ..
             } => {
                 let listed = get_listed(&client, &repo, known.as_deref()).await?;
                 let changed = known.is_none_or(|known| !known.lists_the_same(&listed));
-                let list = if changed || !have_list {
-                    Some(client.open_pull_requests(&repo.owner, &repo.name).await?)
+                let list = if changed || list.is_none() {
+                    let page = PAGE_SIZE;
+                    let merged = RECENTLY_UPDATED_MERGED;
+                    Some(client.open_pull_requests_paged(&repo, page, merged).await?)
                 } else {
                     None
                 };
-                Ok(Outcome::Repo { listed, list })
+                Ok(Outcome::Repo {
+                    listed,
+                    list,
+                    rules: None,
+                })
             }
             Self::Read { read, .. } => Ok(Outcome::Read {
                 name: read.name,
                 value: (read.run)(client, read.known).await?,
                 stamp: read.stamp,
+                generation: read.generation,
+                started: read.started,
             }),
         }
     }
@@ -390,6 +426,11 @@ pub struct Poller {
     opened_at: Option<SystemTime>,
     pulls: BTreeMap<PullRef, PullState>,
     repos: BTreeMap<RepoRef, RepoState>,
+    /// The sets of layers each pull request's stack trees asked about, and when each was last
+    /// asked ([`Poller::stack_layers`]).
+    layer_asks: BTreeMap<PullRef, BTreeMap<BTreeSet<String>, SystemTime>>,
+    /// The layers each pull request's read of them reads: the sets asked about lately.
+    layer_union: BTreeMap<PullRef, BTreeSet<String>>,
     limits: RateLimits,
     cooldown: Option<Cooldown>,
     secondary_attempts: u32,
@@ -453,6 +494,8 @@ impl Poller {
             opened_at: None,
             pulls: BTreeMap::new(),
             repos: BTreeMap::new(),
+            layer_asks: BTreeMap::new(),
+            layer_union: BTreeMap::new(),
             limits: RateLimits::default(),
             cooldown: None,
             secondary_attempts: 0,
@@ -520,6 +563,11 @@ impl Poller {
                 list: self
                     .cached::<OpenPullRequestList>(&repo)
                     .map(|c| c.map(Arc::new)),
+                rules: self.cached::<TrunkRuleList>(&repo).map(|c| c.map(Arc::new)),
+                rules_failures: 0,
+                rules_retry_at: None,
+                lookup_failures: 0,
+                lookup_retry_at: None,
             };
             self.repos.insert(pull.repo.clone(), state);
         }
@@ -534,6 +582,8 @@ impl Poller {
             return;
         }
         self.failures.remove(&Target::Pull(pull.clone()));
+        self.layer_asks.remove(pull);
+        self.layer_union.remove(pull);
         if self.open.as_ref() == Some(pull) {
             self.open = None;
             self.opened_at = None;
@@ -669,6 +719,8 @@ impl Poller {
                         fetched_at,
                         failures: 0,
                         retry_at: None,
+                        generation: 0,
+                        again_at: None,
                     },
                 );
                 self.wake();
@@ -703,14 +755,116 @@ impl Poller {
         )
     }
 
+    /// What the stack tree shows of the layers whose node IDs are `ids`, kept for `pull`, the
+    /// layer that's open, as [`Self::read_cached`] keeps it. It reads the layers of every set
+    /// asked about in the last 5 minutes, so two trees asking about different sets for one pull
+    /// share a read rather than take turns. It's read again:
+    ///
+    /// - when the open layer's state, head, review decision, checks, queue entry or retargets
+    ///   change ([`StackLayerList`]'s [`CachedRead::WATCHED`]);
+    /// - a couple of seconds after Lo last writes to another layer it shows, once for a burst of
+    ///   writes. Writes to the open layer itself, such as viewed marks, aren't read back: the tab
+    ///   holds them, and shows them over what this holds;
+    /// - on the 5-minute refresh;
+    /// - at once when asked about a layer it doesn't read, whatever the order.
+    ///
+    /// Until then it returns what it holds, which may be about other layers too.
+    pub fn stack_layers(
+        &mut self,
+        pull: PullRef,
+        ids: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Option<Cached<Arc<StackLayerList>>> {
+        let wall = self.config.wall_clock.now();
+        let max_age = self.config.details_max_age;
+        let asks = self.layer_asks.entry(pull.clone()).or_default();
+        asks.insert(ids.iter().cloned().collect(), wall);
+        asks.retain(|_, at| wall.duration_since(*at).unwrap_or_default() < max_age);
+        // These layers first, in the order asked, then the other sets'.
+        let mut asked = ids;
+        for id in asks.keys().flatten() {
+            if !asked.contains(id) {
+                asked.push(id.clone());
+            }
+        }
+        let union: BTreeSet<String> = asked.iter().cloned().collect();
+        let repo = pull.repo.clone();
+        let clock = self.config.wall_clock.clone();
+        let cached = self.read_cached(
+            pull.clone(),
+            move |client, known| {
+                read_stack_layers(client, repo.clone(), asked.clone(), known, clock.now())
+            },
+            cx,
+        );
+        let held = (cached.as_ref())
+            .map(|cached| cached.value.ids.iter().cloned().collect::<BTreeSet<_>>());
+        let reading = match self.layer_union.insert(pull.clone(), union.clone()) {
+            Some(before) => before,
+            None => held.unwrap_or_default(),
+        };
+        if !union.is_subset(&reading) {
+            self.read_again::<StackLayerList>(&pull, cx);
+        }
+        cached
+    }
+
+    /// The branch rulesets that name trunks in a watched repository, read with its open PRs and
+    /// again every 30 minutes, or `None` until they've been read once: a stack tree is "loading"
+    /// until then ([`OpenPullRequestList::stacks`]). When they can't be read, they're tried
+    /// again after a wait, and what they hold says why ([`TrunkRuleList::unavailable`]).
+    pub fn trunk_rules(&self, repo: &RepoRef) -> Option<Cached<Arc<TrunkRuleList>>> {
+        self.repos.get(repo)?.rules.clone()
+    }
+
+    /// Makes a read [`Self::read_cached`] keeps for `pull` due at once, whatever the fields it
+    /// watches say, and whatever wait its failures set. A run already under way doesn't stamp
+    /// what it reads, so it runs again.
+    fn read_again<T: CachedRead>(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
+        let state = self.pulls.get_mut(pull);
+        if let Some(read) = state.and_then(|state| state.reads.get_mut(T::NAME)) {
+            read.stamp = None;
+            read.generation += 1;
+            read.failures = 0;
+            read.retry_at = None;
+            self.wake();
+            cx.notify();
+        }
+    }
+
+    /// After a write to `pull`, makes every stack tree that shows it read its layers again a
+    /// couple of seconds after the last write of a burst, so the burst is read back once. The open
+    /// pull request's own tree doesn't read back a write to itself: its tab holds what it wrote.
+    fn layer_written(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
+        let soon = cx.background_executor().now() + WRITES_READ_BACK_AFTER;
+        let open = self.open.clone();
+        for (other, state) in &mut self.pulls {
+            if other.repo != pull.repo || (other == pull && open.as_ref() == Some(pull)) {
+                continue;
+            }
+            let Some(read) = state.reads.get_mut(StackLayerList::NAME) else {
+                continue;
+            };
+            let layers =
+                (read.value.as_ref()).and_then(|value| value.downcast_ref::<StackLayerList>());
+            if layers.is_some_and(|layers| (layers.layers.iter()).any(|l| l.number == pull.number))
+            {
+                read.again_at = Some(soon);
+            }
+        }
+        self.wake();
+        cx.notify();
+    }
+
     /// Runs a write (a comment, a review, viewed marks, a merge) that changes `target`, with the
     /// account's client, in the account's queue: after any poll in flight, ahead of waiting
     /// polls, and at least a second after the previous write.
     ///
     /// Afterwards what Lo knows about `target` is out of date, whether or not the write
     /// succeeded (a failed one may still have reached GitHub): a pull request's details are
-    /// fetched in full again, a repository's open PRs are listed again, and either is polled at
-    /// once if it's watched. A rate limit the write runs into pauses polling as a poll's would.
+    /// fetched in full again, and so are the layers of every stack tree that shows it, such as
+    /// its viewed files; a repository's open PRs are listed again; and either is polled at once
+    /// if it's watched. A rate limit the write runs into pauses polling as a poll's would.
     ///
     /// The write goes on if the returned task is dropped, so closing what asked for it can't cut
     /// a merge or a review off halfway.
@@ -795,6 +949,7 @@ impl Poller {
                     state.check = None;
                     state.schedule.force();
                 }
+                self.layer_written(pull, cx);
                 async move { cache.remove::<PullRequestCheckData>(&login, &key).await }.boxed()
             }
             Target::Repo(repo) => {
@@ -920,10 +1075,21 @@ impl Poller {
             });
         }
         for (repo, state) in &self.repos {
+            let ready = |retry_at: Option<Instant>| retry_at.is_none_or(|at| at <= now);
+            let rules_due = match &state.rules {
+                None => true,
+                Some(rules) if rules.value.unavailable.is_some() => ready(state.rules_retry_at),
+                Some(rules) => rules.age_at(wall) >= TRUNK_RULES_MAX_AGE,
+            };
+            let truncated = (state.list.as_ref()).is_some_and(|list| list.value.merged_truncated);
             consider(&state.schedule, Tier::Watched, &|| Job::Repo {
                 repo: repo.clone(),
                 listed: state.listed.as_ref().map(|l| l.value.clone()),
-                have_list: state.list.is_some(),
+                list: state.list.as_ref().map(|list| list.value.clone()),
+                carry: (state.list.as_ref()).is_some_and(|list| list.age_at(wall) < CARRY_MAX_AGE),
+                retry_lookups: truncated && ready(state.lookup_retry_at),
+                rules: state.rules.as_ref().map(|rules| rules.value.clone()),
+                read_rules: rules_due,
             });
         }
         // The open PR's reads, once its check says what they watch.
@@ -949,6 +1115,11 @@ impl Poller {
                 } else {
                     None
                 };
+                // A write reads it back a little later.
+                let at = match (at, read.again_at) {
+                    (Some(at), Some(again)) => Some(at.min(again)),
+                    (at, again) => at.or(again),
+                };
                 // A read that keeps failing waits longer each time, whatever made it due.
                 let at = at.map(|at| read.retry_at.map_or(at, |retry_at| at.max(retry_at)));
                 if let Some(at) = at
@@ -959,6 +1130,8 @@ impl Poller {
                         run: read.run.clone(),
                         known: read.value.clone(),
                         stamp: current,
+                        generation: read.generation,
+                        started: now,
                     };
                     next = Some((
                         at,
@@ -1209,6 +1382,7 @@ impl Poller {
                         Put::Listed(value) => cache.put(&login, &target, &*value, None, wall).await,
                         Put::TouchListed => cache.touch::<ListedPulls>(&login, &target, wall).await,
                         Put::List(value) => cache.put(&login, &target, &*value, None, wall).await,
+                        Put::Rules(value) => cache.put(&login, &target, &*value, None, wall).await,
                         Put::TouchDetails => {
                             cache.touch::<PullRequestData>(&login, &target, wall).await
                         }
@@ -1355,10 +1529,63 @@ impl Poller {
                     None => put(&mut writes, &cache, &login, Put::TouchSummary),
                 }
             }
-            (Outcome::Repo { listed, list }, Target::Repo(repo)) => {
+            (
+                Outcome::Repo {
+                    listed,
+                    list,
+                    rules,
+                },
+                Target::Repo(repo),
+            ) => {
+                let (first, jitter) = (self.config.watched_interval, self.config.jitter);
+                let now = cx.background_executor().now();
                 let Some(state) = self.repos.get_mut(repo) else {
                     return writes;
                 };
+                if let Some(rules) = rules {
+                    if rules.unavailable.is_some() {
+                        state.rules_failures += 1;
+                        let wait = backoff(
+                            state.rules_failures,
+                            first,
+                            TRUNK_RULES_MAX_AGE,
+                            jitter,
+                            jitter_sample(),
+                        );
+                        state.rules_retry_at = Some(now + wait);
+                    } else {
+                        state.rules_failures = 0;
+                        state.rules_retry_at = None;
+                    }
+                    let changed = (state.rules.as_ref()).is_none_or(|known| *known.value != rules);
+                    let rules = Arc::new(rules);
+                    state.rules = Some(Cached {
+                        value: rules.clone(),
+                        etag: None,
+                        fetched_at: wall,
+                    });
+                    put(&mut writes, &cache, &login, Put::Rules(rules));
+                    if changed {
+                        cx.emit(PollEvent::TrunkRules { repo: repo.clone() });
+                    }
+                }
+                // Lookups that stopped short run again after a wait, if the PRs don't change.
+                if let Some(list) = &list {
+                    if list.merged_truncated {
+                        state.lookup_failures += 1;
+                        let wait = backoff(
+                            state.lookup_failures,
+                            first,
+                            TRUNK_RULES_MAX_AGE,
+                            jitter,
+                            jitter_sample(),
+                        );
+                        state.lookup_retry_at = Some(now + wait);
+                    } else {
+                        state.lookup_failures = 0;
+                        state.lookup_retry_at = None;
+                    }
+                }
                 if state
                     .listed
                     .as_ref()
@@ -1403,7 +1630,16 @@ impl Poller {
                     }
                 }
             }
-            (Outcome::Read { name, value, stamp }, Target::Pull(pull)) => {
+            (
+                Outcome::Read {
+                    name,
+                    value,
+                    stamp,
+                    generation,
+                    started,
+                },
+                Target::Pull(pull),
+            ) => {
                 let state = self.pulls.get_mut(pull);
                 let Some(read) = state.and_then(|state| state.reads.get_mut(name)) else {
                     return writes;
@@ -1411,13 +1647,18 @@ impl Poller {
                 let changed =
                     (read.value.as_ref()).is_none_or(|known| !(read.ty.same)(known, &value));
                 // A value that isn't complete is kept without a stamp, so it's read again once
-                // its wait is over.
+                // its wait is over. So is one whose read started before it was asked to read
+                // again, which it then does at once.
                 let complete = (read.ty.complete)(&value);
-                let stamp = complete.then_some(stamp);
+                let stamp = (complete && generation == read.generation).then_some(stamp);
                 let restamped = read.stamp != stamp;
                 read.value = Some(value.clone());
                 read.stamp = stamp.clone();
                 read.fetched_at = Some(wall);
+                // A write's read-back is done once a read started after it was due.
+                if read.again_at.is_some_and(|again| again <= started) {
+                    read.again_at = None;
+                }
                 if complete {
                     read.failures = 0;
                     read.retry_at = None;
@@ -1556,9 +1797,74 @@ enum Put {
     Listed(Arc<ListedPulls>),
     TouchListed,
     List(Arc<OpenPullRequestList>),
+    Rules(Arc<TrunkRuleList>),
     TouchDetails,
     TouchList,
     ForgetCheck,
+}
+
+/// How long after the last of a burst of writes the stack trees that show its pull requests read
+/// their layers again, so the burst is read back once.
+const WRITES_READ_BACK_AFTER: Duration = Duration::from_secs(2);
+/// How long a repository's rulesets are kept before they're read again.
+const TRUNK_RULES_MAX_AGE: Duration = Duration::from_secs(30 * 60);
+/// How old a list of open PRs may be for its lookups of merged PRs to carry over, while their
+/// branches stay put: a list kept from before a restart may have missed a merge.
+const CARRY_MAX_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// The rest of a repository's poll, after its open PRs: its rulesets, when they're due, then the
+/// merged PRs its stacks link through, for a new list or for one whose lookups stopped short.
+/// Each request takes its own turn in the queue, through `client`, so writes can go between.
+async fn finish_repo(
+    client: GithubClient,
+    job: Job,
+    result: Result<Outcome, GithubError>,
+    now: SystemTime,
+) -> Result<Outcome, GithubError> {
+    let Job::Repo {
+        repo,
+        list: known,
+        carry,
+        retry_lookups,
+        rules: known_rules,
+        read_rules,
+        ..
+    } = job
+    else {
+        return result;
+    };
+    let Outcome::Repo {
+        listed, mut list, ..
+    } = result?
+    else {
+        unreachable!("a repository's poll gives a repository's outcome");
+    };
+    if list.is_none() && retry_lookups {
+        list = known.as_deref().cloned().map(|mut list| {
+            list.lookups.clear();
+            list.merged_truncated = false;
+            list
+        });
+    }
+    let rules = if read_rules || known_rules.is_none() {
+        let basis = list.as_ref().or(known.as_deref());
+        let branches = basis.map(OpenPullRequestList::branches_to_check);
+        let branches = branches.unwrap_or_default();
+        Some((client.trunk_rules(&repo, known_rules.as_deref(), &branches)).await?)
+    } else {
+        None
+    };
+    if let Some(list) = &mut list {
+        let in_force = rules.as_ref().or(known_rules.as_deref());
+        let in_force = in_force.cloned().unwrap_or_default();
+        let carried = known.as_deref().filter(|_| carry);
+        (client.look_up_merged(&repo, list, carried, &in_force, now)).await?;
+    }
+    Ok(Outcome::Repo {
+        listed,
+        list,
+        rules,
+    })
 }
 
 /// The poll loop: runs whatever is due, one poll at a time, and sleeps until the next is due or
@@ -1602,6 +1908,16 @@ async fn poll(
                     Job::Read { .. } => {
                         let gated = client.gated(queue.gate());
                         executor.spawn((*job).clone().run(gated)).await
+                    }
+                    Job::Repo { .. } => {
+                        let result = queue
+                            .read(|| executor.spawn((*job).clone().run(client.clone())))
+                            .await;
+                        let (gated, job) = (client.gated(queue.gate()), (*job).clone());
+                        let wall = this.read_with(cx, |this, _| this.config.wall_clock.now())?;
+                        executor
+                            .spawn(async move { finish_repo(gated, job, result, wall).await })
+                            .await
                     }
                     _ => {
                         queue

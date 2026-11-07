@@ -44,6 +44,14 @@ actions!(
 
 const KEY_CONTEXT: &str = "AccountsModal";
 
+/// The modal's keys, over Zed's. CLAUDE.md's "Keys" table lists them, with `review_ui`'s.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
+        KeyBinding::new("cmd-backspace", RemoveSelected, Some(KEY_CONTEXT)),
+    ]);
+}
+
 /// Set when Lo's database couldn't be opened, so the modal can say why accounts are missing.
 struct AccountsUnavailable(SharedString);
 
@@ -53,10 +61,7 @@ impl Global for AccountsUnavailable {}
 /// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
 /// to `None` when the database couldn't be opened.
 pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
-    cx.bind_keys([
-        KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
-        KeyBinding::new("cmd-backspace", RemoveSelected, Some(KEY_CONTEXT)),
-    ]);
+    bind_keys(cx);
     // The app menu enables an item only when something on the focused element's path handles
     // its action, and before anything in the window is focused nothing is. This handler keeps
     // "Accounts…" working then. It runs while the window that dispatched the action is being
@@ -1133,6 +1138,53 @@ mod tests {
             interaction
         });
         Arc::new(ReplayHttpClient::from_interactions("sign_in", interactions).unwrap())
+    }
+
+    /// Each of Lo's keys does one thing in the Accounts modal, read from a window showing it: this
+    /// crate's bindings all hold there, and no two of Lo's bindings, this crate's and
+    /// `review_ui`'s, hold there with the same keystrokes, or with one's starting the other's.
+    /// `review_ui` checks the rest of the window the same way.
+    #[gpui::test]
+    async fn no_two_of_los_bindings_fight_in_the_accounts_modal(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings = settings::SettingsStore::test(cx);
+            cx.set_global(settings);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let project = project::Project::test(project::FakeFs::new(cx.executor()), [], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            AccountsModal::open(workspace, Start::List, window, cx)
+        });
+        cx.run_until_parked();
+        let stack = cx.update(|window, _| window.context_stack());
+        assert!(
+            stack
+                .last()
+                .is_some_and(|context| context.contains(KEY_CONTEXT)),
+            "{stack:?}"
+        );
+
+        let places = [review_ui::key_clashes::Place {
+            name: "the Accounts modal".into(),
+            stack,
+        }];
+        cx.update(|_, cx| {
+            // This crate's bindings hold in the modal, which `review_ui`'s test doesn't have.
+            cx.clear_key_bindings();
+            bind_keys(cx);
+            let keymap = cx.key_bindings();
+            let unplaced = review_ui::key_clashes::unplaced(keymap.borrow().bindings(), &places);
+            assert!(unplaced.is_empty(), "{unplaced:#?}");
+            // With `review_ui`'s, Lo's bindings alone.
+            review_ui::bind_keys(cx);
+            let keymap = keymap.borrow();
+            let clashes = review_ui::key_clashes::clashes(keymap.bindings(), &places);
+            assert!(clashes.is_empty(), "{clashes:#?}");
+        });
     }
 
     #[gpui::test]

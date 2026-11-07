@@ -20,9 +20,11 @@ use crate::client::API_VERSION;
 use crate::credentials::HOST;
 use crate::db::LoDb;
 use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
+use crate::queries::merged_pull_requests::{MAX_BRANCH_LOOKUPS, MERGED_PER_BRANCH};
+use crate::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
-    open_pull_requests, pull_request, pull_request_check,
+    merged_pull_requests, open_pull_requests, pull_request, pull_request_check,
 };
 
 /// Something the cache can hold.
@@ -139,9 +141,12 @@ impl CacheEntry for OpenPullRequestList {
 
     fn shape() -> String {
         format!(
-            "{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page",
+            "{}\n{}\n{}\nat most {MAX_OPEN_PULL_REQUESTS}, {PAGE_SIZE} a page, with the \
+             {RECENTLY_UPDATED_MERGED} merged updated most recently and {MERGED_PER_BRANCH} \
+             merged from each of at most {MAX_BRANCH_LOOKUPS} branches",
             schema_shape::<Self>(),
-            open_pull_requests::QUERY
+            open_pull_requests::QUERY,
+            merged_pull_requests::QUERY
         )
     }
 }
@@ -514,6 +519,7 @@ mod tests {
     use crate::poll::reads::Stamped;
     use crate::pulls::{PullBranch, RepoRef};
     use crate::push_history::PushHistory;
+    use crate::queries::{StackLayerList, TrunkRuleList};
 
     fn account(login: &str) -> Account {
         Account {
@@ -745,6 +751,8 @@ mod tests {
             PullRequestCheckData::NAME,
             OpenPullRequestList::NAME,
             Stamped::<PushHistory>::NAME,
+            Stamped::<StackLayerList>::NAME,
+            TrunkRuleList::NAME,
         ];
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "{names:?}");
@@ -759,14 +767,21 @@ mod tests {
                     Stamped::<PushHistory>::NAME,
                     Stamped::<PushHistory>::version()
                 ),
+                (
+                    Stamped::<StackLayerList>::NAME,
+                    Stamped::<StackLayerList>::version()
+                ),
+                (TrunkRuleList::NAME, TrunkRuleList::version()),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
-                ("OpenPullRequests", "a228c23b9720c0a4".to_string()),
+                ("OpenPullRequests", "64bdb1e8ba14f7e0".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
+                ("StackLayers", "a79d34dd50325fec".to_string()),
+                ("TrunkRules", "22f61a7701923aef".to_string()),
             ]
         );
     }
