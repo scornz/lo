@@ -842,7 +842,7 @@ async fn a_rows_tab_shows_its_viewed_marks_and_offline_e_says_why_it_cant_mark(
     assert!(matches!(status(&tab, cx), Status::Offline(_)));
     assert_eq!(marks(&tab, cx), viewed);
     assert_eq!(
-        tab.read_with(cx, |tab, _| tab.viewed_at.get("a.rs").cloned()),
+        tab.read_with(cx, |tab, _| tab.pull.viewed_at.get("a.rs").cloned()),
         Some(pull.head.clone())
     );
     tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
@@ -1026,7 +1026,7 @@ async fn after_github_listed_a_newer_head_its_older_copy_doesnt_mark_as_of_it(
     });
     cx.run_until_parked();
     assert_eq!(
-        tab.read_with(cx, |tab, _| tab.head.clone()),
+        tab.read_with(cx, |tab, _| tab.pull.head.clone()),
         Some(HEAD.to_string())
     );
 

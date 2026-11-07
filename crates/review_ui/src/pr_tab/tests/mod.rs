@@ -26,6 +26,7 @@ use crate::file_list::FileOrder;
 use workspace::notifications::NotificationId;
 
 mod accounts;
+mod events;
 mod github_diff;
 mod keys;
 mod navigation;
@@ -491,7 +492,7 @@ async fn signed_in_diff<'a>(
 /// Selects `path` in the list, which moves the diff there.
 fn go_to(tab: &Entity<PrTab>, path: &str, cx: &mut VisualTestContext) {
     tab.update_in(cx, |tab, window, cx| {
-        tab.files.select_path(path);
+        tab.pull.files.select_path(path);
         tab.selection_moved(window, cx);
     });
     cx.run_until_parked();

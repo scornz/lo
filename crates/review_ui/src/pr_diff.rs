@@ -427,6 +427,7 @@ pub(crate) async fn show_local_copy(
         if let Some(source) = tab.diff_source() {
             return (Some(source), tab.positions_of(&entries));
         }
+        tab.set_local_copy(local.clone());
         let positions = tab.copied(entries.clone(), &local.head, polled_at, cx);
         tab.show_diff(editor.clone(), DiffSource::LocalCopy, window, cx);
         (None, positions)
@@ -512,6 +513,7 @@ pub(crate) async fn show_local_copy(
     }
     tab.update_in(cx, |tab, window, cx| {
         if replacing.is_some() {
+            tab.set_local_copy(local.clone());
             tab.copied(entries, &local.head, polled_at, cx);
             tab.switch_diff(editor.clone(), &local.head, window, cx);
         }

@@ -202,6 +202,7 @@ impl PrTab {
         };
         let in_file_list = self.file_list_focus.contains_focused(window, cx);
         let selected = self
+            .pull
             .files
             .selected()
             .filter(|_| in_file_list)
@@ -221,9 +222,9 @@ impl PrTab {
         let github_path = self.github_path(&path)?;
         let none = Revisions::default();
         let note = changed_since_viewed(
-            self.revisions.as_ref().unwrap_or(&none),
-            self.marks.state(&github_path),
-            self.viewed_at.get(&github_path).map(String::as_str),
+            self.pull.revisions.as_ref().unwrap_or(&none),
+            self.pull.marks.state(&github_path),
+            self.pull.viewed_at.get(&github_path).map(String::as_str),
         )?;
         Some((path, note))
     }
@@ -235,16 +236,16 @@ impl PrTab {
             return;
         };
         let positions: Vec<usize> = match forward {
-            true => (current + 1..self.files.len()).collect(),
+            true => (current + 1..self.pull.files.len()).collect(),
             false => (0..current).rev().collect(),
         };
         let target = positions
             .into_iter()
-            .filter_map(|position| self.files.at_review_position(position))
+            .filter_map(|position| self.pull.files.at_review_position(position))
             .map(|entry| entry.path().to_string())
             .find(|path| self.location_in_diff(path, cx).is_some());
         if let Some(path) = target {
-            self.files.select_path(&path);
+            self.pull.files.select_path(&path);
             self.selection_moved(window, cx);
         }
     }

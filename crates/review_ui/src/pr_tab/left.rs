@@ -115,13 +115,13 @@ impl PrTab {
     }
 
     fn toggle_file_order(&mut self, _: &ToggleFileOrder, _: &mut Window, cx: &mut Context<Self>) {
-        self.files.toggle_order();
+        self.pull.files.toggle_order();
         self.scroll_to_selected();
         cx.notify();
     }
 
     fn select_next(&mut self, _: &menu::SelectNext, window: &mut Window, cx: &mut Context<Self>) {
-        self.files.select_next();
+        self.pull.files.select_next();
         self.selection_moved(window, cx);
     }
 
@@ -131,7 +131,7 @@ impl PrTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.files.select_previous();
+        self.pull.files.select_previous();
         self.selection_moved(window, cx);
     }
 
@@ -146,11 +146,11 @@ impl PrTab {
 
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let order = match self.files.order() {
+        let order = match self.pull.files.order() {
             FileOrder::Review => "Review order",
             FileOrder::Path => "Path order",
         };
-        let count = match self.files.len() {
+        let count = match self.pull.files.len() {
             1 => "1 file".to_string(),
             count => format!("{count} files"),
         };
@@ -181,7 +181,7 @@ impl PrTab {
             .child(
                 uniform_list(
                     "pr-files",
-                    self.files.len(),
+                    self.pull.files.len(),
                     cx.processor(|this, range: Range<usize>, _window, cx| {
                         range
                             .filter_map(|row| this.render_file_row(row, cx))
@@ -194,8 +194,8 @@ impl PrTab {
     }
 
     fn render_file_row(&self, row: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let entry = self.files.row(row)?;
-        let selected = self.files.selected_row() == Some(row);
+        let entry = self.pull.files.row(row)?;
+        let selected = self.pull.files.selected_row() == Some(row);
         let (dir, name) = match entry.path().rsplit_once('/') {
             Some((dir, name)) => (Some(dir.to_string()), name.to_string()),
             None => (None, entry.path().to_string()),
@@ -245,7 +245,7 @@ impl PrTab {
                         .children(viewed_mark(row, entry.viewed)),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.files.select_row(row);
+                    this.pull.files.select_row(row);
                     this.reveal_selected(window, cx);
                     cx.notify();
                 }))

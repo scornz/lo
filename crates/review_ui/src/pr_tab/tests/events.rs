@@ -1,0 +1,112 @@
+use super::*;
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// The events `tab` sends from now on.
+fn record_events(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Rc<RefCell<Vec<PrTabEvent>>> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let log = events.clone();
+    cx.update(|_, cx| {
+        cx.subscribe(tab, move |_, event: &PrTabEvent, _| {
+            log.borrow_mut().push(event.clone())
+        })
+        .detach()
+    });
+    events
+}
+
+/// The events sent since the last call, leaving out [`PrTabEvent::Changed`], which only the
+/// window's title follows.
+fn taken(events: &Rc<RefCell<Vec<PrTabEvent>>>) -> Vec<PrTabEvent> {
+    events
+        .borrow_mut()
+        .drain(..)
+        .filter(|event| *event != PrTabEvent::Changed)
+        .collect()
+}
+
+fn with_head(head: char) -> PullRequest {
+    let mut pull_request = fd_2212();
+    pull_request.head.sha = head.to_string().repeat(40);
+    pull_request
+}
+
+/// Features hear when GitHub gives a new head and when the diff shows another comparison, and
+/// only then.
+#[gpui::test]
+async fn features_hear_of_a_new_head_and_a_new_comparison(cx: &mut TestAppContext) {
+    let (workspace, cx) = workspace(cx).await;
+    let tab = open_unloaded(&workspace, PULL, cx);
+    let events = record_events(&tab, cx);
+
+    let answered = SystemTime::now();
+    tab.update(cx, |tab, cx| {
+        tab.set_pull_request(&with_head('2'), answered, cx)
+    });
+    assert_eq!(taken(&events), [PrTabEvent::HeadChanged]);
+    // The same head again isn't news, nor is an older answer naming another.
+    tab.update(cx, |tab, cx| {
+        tab.set_pull_request(&with_head('2'), answered + Duration::from_secs(1), cx);
+        tab.set_pull_request(&with_head('3'), answered - Duration::from_secs(1), cx);
+    });
+    assert_eq!(taken(&events), []);
+    tab.update(cx, |tab, cx| {
+        tab.set_pull_request(&with_head('4'), answered + Duration::from_secs(2), cx)
+    });
+    assert_eq!(taken(&events), [PrTabEvent::HeadChanged]);
+
+    let files = [("a.rs", lines(5, &[]), lines(5, &[3]))];
+    show_test_diff(&tab, &workspace, &files, cx).await;
+    assert_eq!(taken(&events), [PrTabEvent::ComparisonChanged]);
+}
+
+/// A tab can show another pull request in place of its own and back, as a stack's tab does for
+/// each layer: everything it knows about each goes with it, and features hear of each swap.
+#[gpui::test]
+async fn swapping_the_pull_request_swaps_what_the_tab_knows_about_it(cx: &mut TestAppContext) {
+    let (workspace, cx) = workspace(cx).await;
+    let tab = open_unloaded(&workspace, PULL, cx);
+    tab.update(cx, |tab, cx| {
+        tab.set_pull_request(&fd_2212(), SystemTime::now(), cx)
+    });
+    let files = [
+        ("a.rs", lines(5, &[]), lines(5, &[3])),
+        ("b.rs", lines(5, &[]), lines(5, &[3])),
+    ];
+    list_test_files(&tab, &files, cx);
+    let events = record_events(&tab, cx);
+
+    let other = ShownPull::new(link("https://github.com/owner/repo/pull/2"));
+    let first = tab.update(cx, |tab, cx| tab.show_pull(other, cx));
+    cx.run_until_parked();
+    assert_eq!(taken(&events), [PrTabEvent::PullChanged]);
+    assert_eq!(cx.window_title().as_deref(), Some("owner/repo#2"));
+    tab.read_with(cx, |tab, _| {
+        assert_eq!(tab.pull().number(), 2);
+        assert_eq!(tab.link().number, 2);
+        assert_eq!(tab.header().title, None);
+        assert_eq!(tab.files().len(), 0);
+        assert!(tab.revisions().is_none());
+        assert_eq!(tab.pull().latest_head(), None);
+    });
+    assert_eq!(first.number(), 1);
+    assert_eq!(first.latest_head(), Some("2".repeat(40).as_str()));
+
+    tab.update(cx, |tab, cx| tab.show_pull(first, cx));
+    cx.run_until_parked();
+    assert_eq!(taken(&events), [PrTabEvent::PullChanged]);
+    tab.read_with(cx, |tab, _| {
+        assert_eq!(tab.pull().number(), 1);
+        assert_eq!(
+            tab.header().title.as_deref(),
+            Some("Honor explicit use-jemalloc requests")
+        );
+        assert_eq!(tab.files().len(), 2);
+        assert!(tab.revisions().is_some());
+    });
+    assert_eq!(
+        cx.window_title().as_deref(),
+        Some("sharkdp/fd#1 — Honor explicit use-jemalloc requests")
+    );
+}
