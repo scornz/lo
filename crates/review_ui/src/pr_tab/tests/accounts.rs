@@ -208,7 +208,7 @@ async fn closing_the_account_picker_opens_nothing_until_the_link_is_opened_again
     };
     assert_eq!(message.as_ref(), "No account was chosen for acme.");
     assert_eq!(
-        tab.read_with(cx, |tab, _| tab.action),
+        tab.read_with(cx, |tab, _| tab.pull.action),
         Some(TabAction::ChooseAccount)
     );
     // It doesn't ask again by itself.

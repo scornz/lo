@@ -12,7 +12,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::cache::{GitEnv, stamp_last_used};
 use crate::cat_file::{CatFile, ReadError};
-use crate::diff::{self, ChangedFile};
+use crate::diff::{self, ChangedFile, FileVersion};
 use crate::git::{GitCommand, GitVersion, Location, Token, failure_message};
 use crate::lock::RepoLock;
 use crate::oid::{self, Oid};
@@ -583,8 +583,9 @@ impl Repo {
         self.pin(pin, oid)
     }
 
-    /// Whether commit `oid` is in the clone. Never downloads anything.
-    pub(crate) fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
+    /// Whether commit `oid` is in the clone. Never downloads anything: check before asking git
+    /// about a commit that may be missing, which it would download with all its history.
+    pub fn has_commit(&self, oid: &Oid) -> Result<bool, Error> {
         // `--missing` stops rev-list from fetching what's missing.
         let finished = self
             .git()
@@ -849,6 +850,56 @@ impl Repo {
                 .args([base.as_str(), head.as_str(), "--"])
                 .arg(OsStr::from_bytes(path)),
         )
+    }
+
+    /// The file at `path` in `rev`, a commit or a tree, as a [`crate::diff::ChangedFile`]'s side
+    /// has it: its blob, mode and size, or for a submodule the commit it points at. `path` is
+    /// bytes, as git stores it. `None` when there's no file there; a folder there is an error.
+    /// Reads only trees, which a partial clone has, and blobs' sizes, which it may download.
+    pub fn file_version(&self, rev: &Oid, path: &[u8]) -> Result<Option<FileVersion>, Error> {
+        let shown = String::from_utf8_lossy(path);
+        if path.is_empty() || path.contains(&0) {
+            return Err(Error::Invalid {
+                what: "path",
+                value: shown.into_owned(),
+            });
+        }
+        let output = self.run(
+            self.git()
+                .args(["ls-tree", "-z", "-l", rev.as_str(), "--"])
+                .arg(OsStr::from_bytes(path)),
+        )?;
+        let Some(entry) = output.strip_suffix(b"\0") else {
+            return Ok(None);
+        };
+        let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
+            return Err(unexpected_ls_tree(entry));
+        };
+        let (info, found) = (&entry[..tab], &entry[tab + 1..]);
+        if found != path {
+            return Ok(None);
+        }
+        // "<mode> <kind> <oid> <size>", the size padded with spaces, or "-" for a submodule.
+        let info = std::str::from_utf8(info).map_err(|_| unexpected_ls_tree(entry))?;
+        let mut fields = info.split_whitespace();
+        let (Some(mode), Some(kind), Some(oid), Some(size)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return Err(unexpected_ls_tree(entry));
+        };
+        if kind == "tree" {
+            return Err(Error::Git {
+                command: format!("git ls-tree {rev} -- {shown}"),
+                message: format!("{shown} is a tree, not a file"),
+            });
+        }
+        let mode = diff::parse_mode(mode)?.ok_or_else(|| unexpected_ls_tree(entry))?;
+        Ok(Some(FileVersion {
+            path: path.to_vec(),
+            oid: oid.parse()?,
+            mode,
+            size: size.parse().ok(),
+        }))
     }
 
     /// Fails unless `name` is a branch name git accepts, which also keeps it from changing what

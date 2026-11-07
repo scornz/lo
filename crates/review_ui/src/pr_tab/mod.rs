@@ -3,6 +3,7 @@
 //! request that's already open switches to its tab.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
@@ -18,7 +19,7 @@ use github::viewed::ViewedRecords;
 use github::{GithubError, HelpLink, PullRef, Target};
 use gpui::{
     AnyElement, AnyView, App, AsyncWindowContext, Context, Entity, EntityId, EventEmitter,
-    FocusHandle, Focusable, Render, SharedString, Subscription, Task, UniformListScrollHandle,
+    FocusHandle, Focusable, Render, SharedString, Subscription, UniformListScrollHandle,
     WeakEntity, Window,
 };
 use language::{Capability, Point};
@@ -35,13 +36,15 @@ use crate::account::{self, AccountDecision, Acting, Refusal};
 use crate::account_picker::{self, NotChosen};
 use crate::api_diff::{self, FilesReader, GithubDiff, thousands};
 use crate::diff_cursor;
+use crate::diff_decorations::{self, Redecorate};
 use crate::file_list::{FileEntry, FileList};
 use crate::github_api::{self, CanSignIn, PullRequest};
 use crate::github_layer::{self, Saved};
-use crate::poll_state::{self, PollState};
+use crate::poll_state;
 use crate::pr_banner::{self, BannerAction, BannerKind, Banners};
-use crate::pr_diff::{self, CopyProgress, Trust};
+use crate::pr_diff::{self, CopyProgress, LocalPullRequest, Trust};
 use crate::pr_link::PrLink;
+use crate::shown_comparison::ShownComparison;
 use crate::shown_files;
 use crate::tabs::{TabKey, find_tab};
 use crate::viewed_marks::ViewedMarks;
@@ -52,6 +55,7 @@ pub(crate) mod keys;
 mod left;
 mod middle;
 mod right;
+mod shown_pull;
 mod viewed;
 
 pub use header::HeaderSlot;
@@ -62,6 +66,7 @@ pub use middle::{
     ToggleDiffLayout, ToggleWhitespace,
 };
 pub use right::ToggleThreads;
+pub use shown_pull::{PullHandle, PullId, ShownPull};
 pub use viewed::ToggleViewed;
 
 /// Opens `link`'s pull request in a tab of `workspace`, or switches to its tab if it's open. A new
@@ -94,7 +99,7 @@ pub fn open_as(
         window,
         cx,
         move |tab, window, cx| {
-            tab.preferred = Some(login);
+            tab.pull.preferred = Some(login);
             tab.load(window, cx);
         },
     )
@@ -110,11 +115,14 @@ pub fn open_with(
     start: impl FnOnce(&mut PrTab, &mut Window, &mut Context<PrTab>),
 ) -> Entity<PrTab> {
     let tabs: Vec<Entity<PrTab>> = workspace.items_of_type::<PrTab>(cx).collect();
-    let keys: Vec<TabKey> = tabs.iter().map(|tab| tab.read(cx).key.clone()).collect();
+    let keys: Vec<TabKey> = tabs
+        .iter()
+        .map(|tab| tab.read(cx).pull.key.clone())
+        .collect();
     if let Some(index) = find_tab(&keys, &link) {
         let tab = tabs[index].clone();
         workspace.activate_item(&tab, true, true, window, cx);
-        if tab.read(cx).status.tries_again() {
+        if tab.read(cx).pull.status.tries_again() {
             log::info!("{link} didn't load from GitHub before; trying again");
             tab.update(cx, |tab, cx| {
                 tab.start_again(cx);
@@ -134,9 +142,15 @@ pub fn open_with(
     });
     // The window may be titled after it while it isn't the active item, as with an empty pane
     // active.
-    cx.subscribe_in(&tab, window, |workspace, _, _: &PrTabEvent, window, cx| {
-        window_title::update(workspace, window, cx)
-    })
+    cx.subscribe_in(
+        &tab,
+        window,
+        |workspace, _, event: &PrTabEvent, window, cx| {
+            if matches!(event, PrTabEvent::Changed | PrTabEvent::PullChanged) {
+                window_title::update(workspace, window, cx)
+            }
+        },
+    )
     .detach();
     workspace.add_item_to_active_pane(Box::new(tab.clone()), None, true, window, cx);
     tab
@@ -260,66 +274,41 @@ pub enum DiffSource {
     LocalCopy,
 }
 
-/// Sent when what the tab's title shows changes.
+/// What changed in a tab, for the window and for features that show something about its pull
+/// request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrTabEvent {
+    /// What the tab's title shows.
     Changed,
+    /// The tab shows another pull request ([`PrTab::show_pull`]), as a stack's tab does for each
+    /// layer. Features that show anything about the pull request start over for the new one.
+    PullChanged,
+    /// GitHub's latest head for the pull request changed: GitHub said it for the first time, or
+    /// the pull request got a push.
+    HeadChanged,
+    /// The diff shows another comparison: GitHub's diff, or the local copy's
+    /// ([`PrTab::comparison`]).
+    ComparisonChanged,
 }
 
 /// One pull request in a tab.
 pub struct PrTab {
     /// The tab's own entity's.
     id: EntityId,
-    key: TabKey,
     trust: Trust,
     workspace: WeakEntity<Workspace>,
     focus_handle: FocusHandle,
     file_list_focus: FocusHandle,
     file_list_scroll: UniformListScrollHandle,
-    acting: Option<Acting>,
-    /// The account to open the pull request with, while it can see the repository, whatever
-    /// account the repository's choice is: a recent row's, for the load that row started.
-    preferred: Option<String>,
-    /// Why the diff shown is a local copy that isn't of GitHub's latest head, while it is.
-    showing_copy: Option<OlderCopy>,
-    header: Header,
-    created_at: Option<SystemTime>,
-    files: FileList,
-    /// GitHub's viewed marks, and the ones being set, kept for when the files arrive.
-    marks: ViewedMarks,
-    /// The pull request's GraphQL node ID, which writes name it by.
-    node_id: Option<String>,
-    /// The head on screen: GitHub's at first, then the one the local copy fetched.
-    head: Option<String>,
-    /// When Lo learned the head on screen. What GitHub said about its head before then is
-    /// older news.
-    head_at: Option<SystemTime>,
-    /// GitHub's latest head for the pull request, from its details or its summary, and when GitHub
-    /// gave it. `e` marks files only while it's the head on screen.
-    latest_head: Option<(String, SystemTime)>,
-    /// Where this Mac's records say each file was marked viewed, by path.
-    viewed_at: HashMap<String, String>,
-    /// This Mac's records of where files were marked viewed, once signed in.
-    records: Option<ViewedRecords>,
-    revisions: Option<Revisions>,
-    status: Status,
-    /// GitHub's links for fixing why the tab failed, such as authorizing single sign-on.
-    help_links: Vec<HelpLink>,
-    /// What the tab offers once it stopped loading for a reason only the user can fix.
-    action: Option<TabAction>,
-    /// Whether the viewed marks shown are another account's than the one the tab acts as, to
-    /// let go of once GitHub answers for that one.
-    viewed_are_others: bool,
-    /// Whether GitHub gave this load the pull request, so anything that fails after is the local
-    /// copy's.
-    answered: bool,
-    /// The account and the time of the details Lo saved, while the tab shows them instead of
-    /// GitHub's answer.
-    saved: Option<(String, SystemTime)>,
-    /// What the tab should tell about what its diff shows, under its header.
-    banners: Entity<Banners>,
-    diff: Option<Entity<SplittableEditor>>,
-    diff_source: Option<DiffSource>,
+    /// The pull request the tab shows, and everything it knows about it, its load and its diff
+    /// included.
+    pull: ShownPull,
+    /// Pull requests the tab keeps without showing them, as a stack's tab keeps its other
+    /// layers: their loads and diffs carry on, for when they show again.
+    kept: Vec<ShownPull>,
+    /// Whether `pull` is a kept pull request, there only while work started for it runs
+    /// ([`Self::with_pull`]). It sends no events and takes no focus.
+    pull_hidden: bool,
     /// The pane's history, for the diff to record where its cursor goes. The pane hands it over
     /// when the tab joins it, before the diff exists.
     nav_history: Option<ItemNavHistory>,
@@ -329,13 +318,6 @@ pub struct PrTab {
     setting_style: DiffViewStyle,
     /// Whether changes to whitespace alone are hidden.
     hide_whitespace: bool,
-    /// Brings the diff's files in line with `hide_whitespace`.
-    _whitespace: Option<Task<()>>,
-    /// Loads large files on a key, one task a file of a diff, each until it's done.
-    loading: HashMap<(EntityId, String), Task<()>>,
-    /// Keeps the diff's images right as it goes side by side and back, and stops decoding a
-    /// file's images when it folds.
-    _diff_watch: Vec<Subscription>,
     /// What features show in the header's slots, by [`HeaderSlot`].
     header_slots: [Option<AnyView>; HeaderSlot::ALL.len()],
     /// The pull request's stack tree, above the file list.
@@ -348,37 +330,8 @@ pub struct PrTab {
     threads_panel: Option<PartView>,
     show_file_list: bool,
     show_threads: bool,
-    /// The account's poller and the pull request it watches for this tab, until the tab closes.
-    watched: Option<(Entity<Poller>, PullRef)>,
-    /// How the poller is doing, for the header.
-    poll: PollState,
-    /// The trusted checkout's worktree, which goes with the last tab that uses it.
-    checkout: Option<WorktreeId>,
     opened: Instant,
-    /// Where the tab put the diff's cursor while files arrive, until it's moved.
-    parked_cursor: Option<Anchor>,
-    /// Whether the diff's cursor was moved, by a key, a click or the file list. From then on the
-    /// tab leaves it where it is.
-    cursor_moved: bool,
-    /// Keeps the file list's selection on the file the diff's cursor is in, and the cursor at the
-    /// start until it's moved.
-    _diff_cursor: Option<Subscription>,
-    _load: Option<Task<()>>,
-    /// Reads and shows GitHub's diff, until the local copy's replaces it.
-    _github_diff: Option<Task<()>>,
-    /// Why the local copy failed for good, when it did before GitHub's diff showed.
-    copy_failed: Option<SharedString>,
-    /// Whether GitHub's diff failed for good, or wasn't read, so it won't show.
-    github_failed: bool,
-    /// The head GitHub's REST API gave for the pull request, which the local copy fetches.
-    api_head: Option<String>,
-    /// The head GitHub's diff was listed at, once it shows and if GitHub's links say.
-    github_head: Option<String>,
-    /// Tries copying again, when Lo stopped trying after failures it doesn't know.
-    retry_copy: Option<oneshot::Sender<()>>,
     _subscriptions: Vec<Subscription>,
-    /// What the tab hears from the poller it watches with, replaced when it watches with another.
-    _poller_subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PrTabEvent> for PrTab {}
@@ -401,8 +354,6 @@ impl PrTab {
         // Moving the tab to another pane removes it from one pane and adds it to another, so
         // only closing it, which releases it, lets go of what it holds.
         cx.on_release(Self::released).detach();
-        let banners = cx.new(|_| Banners::default());
-        let on_banners = cx.observe(&banners, |_, _, cx| cx.notify());
         let style = EditorSettings::get_global(cx).diff_view_style;
         // A diff goes back to the setting's style on any change to settings; the tab's style
         // follows a change to the setting itself, and otherwise puts its own back.
@@ -416,42 +367,18 @@ impl PrTab {
         });
         Self {
             id: cx.entity_id(),
-            key: TabKey::new(link),
             trust,
             workspace,
             focus_handle,
             file_list_focus: cx.focus_handle(),
             file_list_scroll: UniformListScrollHandle::new(),
-            acting: None,
-            preferred: None,
-            showing_copy: None,
-            header: Header::default(),
-            created_at: None,
-            files: FileList::default(),
-            marks: ViewedMarks::default(),
-            node_id: None,
-            head: None,
-            head_at: None,
-            latest_head: None,
-            viewed_at: HashMap::new(),
-            records: None,
-            revisions: None,
-            status: Status::Loading("Finding an account that can see it…".into()),
-            help_links: Vec::new(),
-            action: None,
-            viewed_are_others: false,
-            answered: false,
-            saved: None,
-            banners,
-            diff: None,
-            diff_source: None,
+            pull: ShownPull::new(link, cx),
+            kept: Vec::new(),
+            pull_hidden: false,
             nav_history: None,
             diff_style: style,
             setting_style: style,
             hide_whitespace: false,
-            _whitespace: None,
-            loading: HashMap::new(),
-            _diff_watch: Vec::new(),
             header_slots: Default::default(),
             stack_tree: None,
             show_stack_tree: true,
@@ -459,29 +386,16 @@ impl PrTab {
             threads_panel: None,
             show_file_list: true,
             show_threads: true,
-            watched: None,
-            poll: PollState::default(),
-            checkout: None,
             opened: Instant::now(),
-            parked_cursor: None,
-            cursor_moved: false,
-            _diff_cursor: None,
-            _load: None,
-            _github_diff: None,
-            copy_failed: None,
-            github_failed: false,
-            api_head: None,
-            github_head: None,
-            retry_copy: None,
-            _subscriptions: vec![on_focus, on_banners, on_settings],
-            _poller_subscriptions: Vec::new(),
+            _subscriptions: vec![on_focus, on_settings],
         }
     }
 
-    /// Starts loading the pull request.
+    /// Starts loading the pull request the tab shows.
     pub fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (link, trust, opened) = (self.key.opened_as.clone(), self.trust, self.opened);
-        self._load = Some(cx.spawn_in(window, async move |this, cx| {
+        let (link, trust, opened) = (self.pull.key.opened_as.clone(), self.trust, self.opened);
+        let pull = self.handle(cx);
+        self.pull._load = Some(cx.spawn_in(window, async move |_, cx| {
             // How many times GitHub was checked since a load last worked, so the waits keep
             // growing across loads that fail again.
             let mut checks = 0;
@@ -491,7 +405,7 @@ impl PrTab {
             loop {
                 let saved = saved_details(&link, cx).await;
                 let loaded = load(
-                    this.clone(),
+                    pull.clone(),
                     link.clone(),
                     trust,
                     opened,
@@ -504,15 +418,15 @@ impl PrTab {
                     return;
                 };
                 let waitable = is_waitable(&error);
-                match this.read_with(cx, |this, _| (this.showing_copy.is_some(), this.answered)) {
+                match pull.read_with(cx, |pull, _| (pull.showing_copy.is_some(), pull.answered)) {
                     Err(_) => return,
                     // GitHub gave the pull request, so its diff, or the copy shown, stays, with
                     // why the rest didn't load. Waiting won't fix that: the local copy tries
                     // again by itself for what it may.
                     Ok((_, true)) => {
                         log::error!("{link}: {error:#}");
-                        this.update(cx, |this, cx| {
-                            this.help_links = help_links(&error);
+                        pull.update(cx, |this, cx| {
+                            this.pull.help_links = help_links(&error);
                             this.load_failed(&error, cx)
                         })
                         .ok();
@@ -522,20 +436,20 @@ impl PrTab {
                     Ok((true, false)) => {
                         log::warn!("{link}: {error:#}; still showing the local copy");
                         let shown =
-                            this.update(cx, |this, cx| this.showing_copy_because(&error, cx));
+                            pull.update(cx, |this, cx| this.showing_copy_because(&error, cx));
                         if shown.is_err() {
                             return;
                         }
                     }
                     Ok((false, false)) if waitable => {
                         if let Err(error) =
-                            show_offline(this.clone(), link.clone(), opened, saved, error, cx).await
+                            show_offline(pull.clone(), link.clone(), opened, saved, error, cx).await
                         {
-                            failed(&this, &link, error, cx);
+                            failed(&pull, &link, error, cx);
                         }
                     }
                     Ok((false, false)) => {
-                        failed(&this, &link, error, cx);
+                        failed(&pull, &link, error, cx);
                         return;
                     }
                 }
@@ -549,66 +463,81 @@ impl PrTab {
                 }
                 may_ask = false;
                 log::info!("{link}: GitHub answers again, so loading it again");
-                if this.update(cx, |this, cx| this.start_again(cx)).is_err() {
+                if pull.update(cx, |this, cx| this.start_again(cx)).is_err() {
                     return;
                 }
             }
         }));
     }
 
-    /// The tab shows its pull request with language servers from the trusted checkout in
-    /// `worktree`.
+    /// The pull request shows with language servers from the trusted checkout in `worktree`.
     pub(crate) fn uses_checkout(&mut self, worktree: WorktreeId) {
-        self.checkout = Some(worktree);
+        self.pull.checkout = Some(worktree);
     }
 
-    /// The tab closed: its poller stops watching its pull request, and a trusted checkout no other
-    /// tab uses leaves the project, which stops its language servers (design §11).
+    /// The pull request is copied locally, as `local`.
+    pub(crate) fn set_local_copy(&mut self, local: Arc<LocalPullRequest>) {
+        self.pull.local = Some(local);
+    }
+
+    /// The tab closed: it lets go of every pull request it holds, shown or kept, so their
+    /// pollers stop watching them, and a trusted checkout no other pull request uses leaves the
+    /// project, which stops its language servers (design §11).
     fn released(&mut self, cx: &mut App) {
         // A question about its account is moot.
         account_picker::tab_closed(self.id, cx);
-        if let Some(diff) = &self.diff {
-            shown_files::release_images(diff, None, cx);
-        }
-        if let Some((poller, pull)) = self.watched.take() {
-            poller.update(cx, |poller, cx| poller.unwatch(&pull, cx));
-        }
-        let (Some(checkout), Some(workspace)) = (self.checkout.take(), self.workspace.upgrade())
-        else {
-            return;
-        };
-        let still_used = workspace
-            .read(cx)
-            .items_of_type::<PrTab>(cx)
-            .any(|tab| tab.read(cx).checkout == Some(checkout));
-        if still_used {
-            return;
-        }
-        let project = workspace.read(cx).project().clone();
-        project.update(cx, |project, cx| {
-            if let Some(worktree) = project.worktree_for_id(checkout, cx) {
-                log::info!(
-                    "closing the checkout {} and its language servers",
-                    worktree.read(cx).abs_path().display()
-                );
+        let workspace = self.workspace.upgrade();
+        let project = workspace
+            .as_ref()
+            .map(|workspace| workspace.read(cx).project().clone());
+        let mut pulls = std::mem::take(&mut self.kept);
+        // The tab is going, so its own pull requests count only while not yet released.
+        let mut checkouts: Vec<WorktreeId> = std::iter::once(&self.pull)
+            .chain(&pulls)
+            .filter_map(|pull| pull.checkout)
+            .collect();
+        let others = other_tabs_checkouts(workspace.as_ref(), self.id, cx);
+        let release = |pull: &mut ShownPull, checkouts: &mut Vec<WorktreeId>, cx: &mut App| {
+            if let Some(checkout) = pull.checkout
+                && let Some(position) = checkouts.iter().position(|other| *other == checkout)
+            {
+                checkouts.remove(position);
             }
-            project.remove_worktree(checkout, cx);
-        });
+            let used = |checkout| others.contains(&checkout) || checkouts.contains(&checkout);
+            pull.release(project.as_ref(), used, cx);
+        };
+        release(&mut self.pull, &mut checkouts, cx);
+        for pull in &mut pulls {
+            release(pull, &mut checkouts, cx);
+        }
     }
 
-    /// Forgets why the tab failed, before it loads again.
+    /// Lets go of `pull`, a pull request the tab no longer shows or keeps, as
+    /// [`ShownPull`]'s docs say it must be: its poller stops watching it, and its trusted
+    /// checkout goes unless another pull request uses it.
+    pub fn release_pull(&mut self, mut pull: ShownPull, cx: &mut Context<Self>) {
+        let workspace = self.workspace.upgrade();
+        let project = workspace
+            .as_ref()
+            .map(|workspace| workspace.read(cx).project().clone());
+        let mut used: Vec<WorktreeId> = other_tabs_checkouts(workspace.as_ref(), self.id, cx);
+        used.extend(self.pulls().filter_map(|pull| pull.checkout));
+        pull.release(project.as_ref(), |checkout| used.contains(&checkout), cx);
+    }
+
+    /// Forgets why the pull request failed to load, before it loads again.
     fn start_again(&mut self, cx: &mut Context<Self>) {
-        self.acting = None;
+        self.pull.acting = None;
         // A recent row's account is for the load it started.
-        self.preferred = None;
-        self.help_links.clear();
-        self.action = None;
-        self.answered = false;
+        self.pull.preferred = None;
+        self.pull.help_links.clear();
+        self.pull.action = None;
+        self.pull.answered = false;
         // The load before is dropped, and with it the copy its Retry button would try again.
-        self.retry_copy = None;
-        self.copy_failed = None;
-        self.github_failed = false;
-        self.banners.update(cx, |banners, cx| {
+        self.pull.retry_copy = None;
+        self.pull.copy_failed = None;
+        self.pull.github_failed = false;
+        self.pull.banners.update(cx, |banners, cx| {
             banners.hide(BannerKind::LocalCopyFailed, cx)
         });
         self.set_status(
@@ -617,32 +546,179 @@ impl PrTab {
         );
     }
 
+    /// The pull request the tab shows, and everything it knows about it.
+    pub fn pull(&self) -> &ShownPull {
+        &self.pull
+    }
+
+    /// Every pull request the tab holds: the one it shows, then those it keeps.
+    pub fn pulls(&self) -> impl Iterator<Item = &ShownPull> {
+        std::iter::once(&self.pull).chain(&self.kept)
+    }
+
+    /// The pull request `id`, shown or kept.
+    pub fn pull_by_id(&self, id: PullId) -> Option<&ShownPull> {
+        self.pulls().find(|pull| pull.id == id)
+    }
+
+    /// What work started for the pull request the tab shows holds, to write to it whatever the
+    /// tab shows by then.
+    pub fn handle(&self, cx: &Context<Self>) -> PullHandle {
+        PullHandle::new(cx.weak_entity(), self.pull.id)
+    }
+
+    /// Runs `f` with pull request `id` as the tab's `pull`, the one the tab's methods act on, and
+    /// returns what it returns, or `None` once the tab no longer holds it. A pull request the tab
+    /// keeps out of sight is put in `pull`'s place while `f` runs, and sends no events and takes
+    /// no focus meanwhile: what its load, its GitHub's diff or a viewed mark's write does lands on
+    /// it, never on the pull request shown. `f` mustn't show or keep pull requests.
+    pub fn with_pull<R>(
+        &mut self,
+        id: PullId,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Self, &mut Context<Self>) -> R,
+    ) -> Option<R> {
+        if self.pull.id == id && !self.pull_hidden {
+            return Some(f(self, cx));
+        }
+        let index = self.kept.iter().position(|pull| pull.id == id)?;
+        let was_hidden = std::mem::replace(&mut self.pull_hidden, true);
+        std::mem::swap(&mut self.pull, &mut self.kept[index]);
+        let result = f(self, cx);
+        // `f` may have kept or released pull requests: the one in `pull` goes back to its place.
+        std::mem::swap(&mut self.pull, &mut self.kept[index]);
+        self.pull_hidden = was_hidden;
+        Some(result)
+    }
+
+    /// Whether the tab shows the pull request its methods act on now, rather than one it keeps.
+    fn shows_pull(&self) -> bool {
+        !self.pull_hidden
+    }
+
+    /// Sends `event`, about the pull request shown; a kept one's changes wait until it shows.
+    fn emit(&self, event: PrTabEvent, cx: &mut Context<Self>) {
+        if self.shows_pull() {
+            cx.emit(event);
+        }
+    }
+
+    /// Shows `pull` in place of the pull request the tab shows, and returns that one, as a stack's
+    /// tab does when it moves to another layer, with its diff, its banners and its load. Features
+    /// hear [`PrTabEvent::PullChanged`] first, and start over. The pull request the poller polls
+    /// most often follows, when it was this tab's.
+    ///
+    /// The returned pull request goes on loading only once the tab keeps it
+    /// ([`Self::keep_pull`]); one the tab won't keep must be released ([`Self::release_pull`]).
+    #[must_use = "a pull request the tab no longer shows must be kept or released"]
+    pub fn show_pull(
+        &mut self,
+        pull: ShownPull,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ShownPull {
+        debug_assert!(
+            !self.pull_hidden,
+            "work for a kept pull request swapped pull requests"
+        );
+        let open = self.is_poller_open(cx);
+        if open {
+            self.set_active(false, cx);
+        }
+        let shown = std::mem::replace(&mut self.pull, pull);
+        self.pull_shown(open, window, cx);
+        shown
+    }
+
+    /// Keeps `pull`, one the tab no longer shows, out of sight: its load and diff carry on, for
+    /// when [`Self::show_kept_pull`] shows it again, and it's released with the tab.
+    pub fn keep_pull(&mut self, pull: ShownPull) {
+        debug_assert!(
+            !self.pull_hidden,
+            "work for a kept pull request kept another"
+        );
+        self.kept.push(pull);
+    }
+
+    /// Shows the pull request `id` the tab keeps, keeping the one it showed. Returns whether the
+    /// tab keeps `id`.
+    pub fn show_kept_pull(
+        &mut self,
+        id: PullId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        debug_assert!(
+            !self.pull_hidden,
+            "work for a kept pull request swapped pull requests"
+        );
+        let Some(index) = self.kept.iter().position(|pull| pull.id == id) else {
+            return false;
+        };
+        let open = self.is_poller_open(cx);
+        if open {
+            self.set_active(false, cx);
+        }
+        std::mem::swap(&mut self.pull, &mut self.kept[index]);
+        self.pull_shown(open, window, cx);
+        true
+    }
+
+    /// The pull requests the tab keeps out of sight.
+    pub fn kept_pulls(&self) -> &[ShownPull] {
+        &self.kept
+    }
+
+    /// Whether the poller polls the pull request shown most often, as it does the active tab's.
+    fn is_poller_open(&self, cx: &App) -> bool {
+        (self.pull.watched.as_ref())
+            .is_some_and(|(poller, watched)| poller.read(cx).open() == Some(watched))
+    }
+
+    /// Another pull request shows now: features hear so first, the poller polls it most often if
+    /// it did the one before (`open`), and its diff takes the tab's layout and focus.
+    fn pull_shown(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(PrTabEvent::PullChanged);
+        if open {
+            self.set_active(true, cx);
+        }
+        let focused = self.focus_handle.contains_focused(window, cx);
+        self.apply_diff_style(window, cx);
+        self.sync_whitespace(window, cx);
+        self.scroll_to_selected();
+        if focused {
+            self.focus_diff(window, cx);
+        }
+        cx.emit(PrTabEvent::ComparisonChanged);
+        self.changed(cx);
+    }
+
     pub fn key(&self) -> &TabKey {
-        &self.key
+        &self.pull.key
     }
 
     pub fn link(&self) -> &PrLink {
-        &self.key.opened_as
+        &self.pull.key.opened_as
     }
 
     pub fn acting(&self) -> Option<&Acting> {
-        self.acting.as_ref()
+        self.pull.acting.as_ref()
     }
 
     pub fn header(&self) -> &Header {
-        &self.header
+        &self.pull.header
     }
 
     pub fn files(&self) -> &FileList {
-        &self.files
+        &self.pull.files
     }
 
     pub fn revisions(&self) -> Option<&Revisions> {
-        self.revisions.as_ref()
+        self.pull.revisions.as_ref()
     }
 
     pub fn status(&self) -> &Status {
-        &self.status
+        &self.pull.status
     }
 
     pub(crate) fn workspace(&self) -> &WeakEntity<Workspace> {
@@ -651,20 +727,28 @@ impl PrTab {
 
     /// GitHub's links for fixing why the tab failed.
     pub fn help_links(&self) -> &[HelpLink] {
-        &self.help_links
+        &self.pull.help_links
     }
 
     pub fn banners(&self) -> &Entity<Banners> {
-        &self.banners
+        &self.pull.banners
     }
 
     pub fn diff(&self) -> Option<&Entity<SplittableEditor>> {
-        self.diff.as_ref()
+        self.pull.diff.as_ref()
     }
 
     /// Where the diff shown comes from, once one shows.
     pub fn diff_source(&self) -> Option<DiffSource> {
-        self.diff_source
+        self.pull.diff_source
+    }
+
+    /// What the diff shown compares, when it's the local copy's.
+    pub fn comparison(&self, cx: &App) -> Option<Arc<ShownComparison>> {
+        shown_files::read(self.pull.diff.as_ref()?, cx, |files| {
+            files.comparison.clone()
+        })
+        .flatten()
     }
 
     /// Whether the tab's diffs show inline or side by side.
@@ -690,12 +774,12 @@ impl PrTab {
     }
 
     fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
-        self.status = status;
+        self.pull.status = status;
         cx.notify();
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
-        cx.emit(PrTabEvent::Changed);
+        self.emit(PrTabEvent::Changed, cx);
         cx.notify();
     }
 
@@ -703,12 +787,12 @@ impl PrTab {
         // Viewed marks are the account's own, so another account's saved ones go once GitHub
         // answers for this one; until then, as when this load fails and the local copy stays,
         // they stay.
-        if let Some((saved_for, _)) = &self.saved {
-            self.viewed_are_others = acting
+        if let Some((saved_for, _)) = &self.pull.saved {
+            self.pull.viewed_are_others = acting
                 .login()
                 .is_none_or(|login| !login.eq_ignore_ascii_case(saved_for));
         }
-        self.acting = Some(acting);
+        self.pull.acting = Some(acting);
         self.set_status(Status::Loading("Asking GitHub for it…".into()), cx);
     }
 
@@ -716,7 +800,7 @@ impl PrTab {
     /// answers.
     pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
         self.take_details(&saved.details, saved.fetched_at, Some(&saved.login), cx);
-        self.saved = Some((saved.login.clone(), saved.fetched_at));
+        self.pull.saved = Some((saved.login.clone(), saved.fetched_at));
         self.show_saved_banner(true, cx);
     }
 
@@ -725,15 +809,15 @@ impl PrTab {
     /// to try again.
     fn showing_copy_because(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
         let offline = is_offline(why);
-        self.showing_copy = Some(if offline {
+        self.pull.showing_copy = Some(if offline {
             OlderCopy::Unreachable
         } else {
             OlderCopy::NotLoaded
         });
         self.show_saved_banner(false, cx);
-        self.help_links = help_links(why);
+        self.pull.help_links = help_links(why);
         let waitable = is_waitable(why);
-        self.action = (!waitable).then(|| action_for(why));
+        self.pull.action = (!waitable).then(|| action_for(why));
         let reason = sentence(why);
         let text = if offline {
             format!(
@@ -750,7 +834,7 @@ impl PrTab {
                 "Lo couldn't load the pull request from GitHub: {reason}. This is the local \
                  copy's diff, read-only; Lo keeps trying."
             )
-        } else if self.action == Some(TabAction::ChooseAccount) {
+        } else if self.pull.action == Some(TabAction::ChooseAccount) {
             format!("{reason}. This is the local copy's diff, read-only.")
         } else {
             format!(
@@ -800,14 +884,14 @@ impl PrTab {
         };
         let pull = PullRef::new(&link.owner, &link.repo, number);
         match layer.read(cx).viewed_records().heads(&saved.login, &pull) {
-            Ok(heads) => self.viewed_at = heads,
+            Ok(heads) => self.pull.viewed_at = heads,
             Err(error) => log::error!("{pull}: reading where files were viewed: {error:#}"),
         }
     }
 
     /// Says how old the saved details the tab shows are, if it shows them.
     fn show_saved_banner(&self, asking: bool, cx: &mut Context<Self>) {
-        let Some((login, fetched_at)) = &self.saved else {
+        let Some((login, fetched_at)) = &self.pull.saved else {
             return;
         };
         let mut text = format!(
@@ -819,7 +903,7 @@ impl PrTab {
         } else {
             "."
         });
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(BannerKind::Saved, Severity::Info, text, cx)
         });
     }
@@ -831,34 +915,35 @@ impl PrTab {
         answered_at: SystemTime,
         cx: &mut Context<Self>,
     ) {
-        self.header.title = Some(window_title::without_bidi(&pull_request.title));
+        self.pull.header.title = Some(window_title::without_bidi(&pull_request.title));
         if let Some(user) = &pull_request.user {
-            self.header.author = Some(user.login.clone());
+            self.pull.header.author = Some(user.login.clone());
         }
         let repo = &pull_request.base.repo;
-        self.header.repo = Some(repo.full_name.clone());
+        self.pull.header.repo = Some(repo.full_name.clone());
         if let Ok((owner, name)) = repo.owner_and_name() {
-            self.key.canonical = Some((owner.to_string(), name.to_string()));
+            self.pull.key.canonical = Some((owner.to_string(), name.to_string()));
         }
-        self.created_at = Some(pull_request.created_at.into());
+        self.pull.created_at = Some(pull_request.created_at.into());
         // A diff on screen, such as the local copy shown offline, keeps its head until the new
         // copy replaces it; if GitHub's is newer, `e` won't mark files as of it meanwhile.
-        if self.diff.is_none() {
+        if self.pull.diff.is_none() {
             self.set_head(&pull_request.head.sha, answered_at);
         }
-        self.note_latest_head(&pull_request.head.sha, answered_at);
-        self.api_head = Some(pull_request.head.sha.clone());
-        self.answered = true;
-        self.showing_copy = None;
-        self.status = Status::Loading("Copying it locally…".into());
+        self.note_latest_head(&pull_request.head.sha, answered_at, cx);
+        self.pull.api_head = Some(pull_request.head.sha.clone());
+        self.pull.answered = true;
+        self.pull.showing_copy = None;
+        self.pull.status = Status::Loading("Copying it locally…".into());
         // GitHub answered for the account the tab acts as, whose viewed marks its details bring.
-        if std::mem::take(&mut self.viewed_are_others) {
-            self.marks.set_github(HashMap::new());
-            self.files.set_viewed(&self.marks.shown());
+        if std::mem::take(&mut self.pull.viewed_are_others) {
+            self.pull.marks.set_github(HashMap::new());
+            self.pull.files.set_viewed(&self.pull.marks.shown());
         }
         // GitHub answered, and the account's poller brings its details up to date.
-        if self.saved.take().is_some() {
-            self.banners
+        if self.pull.saved.take().is_some() {
+            self.pull
+                .banners
                 .update(cx, |banners, cx| banners.hide(BannerKind::Saved, cx));
         }
         self.changed(cx);
@@ -873,7 +958,7 @@ impl PrTab {
 
     /// The account whose poller the tab watches its pull request with.
     fn watched_login(&self, cx: &App) -> Option<String> {
-        let (poller, _) = self.watched.as_ref()?;
+        let (poller, _) = self.pull.watched.as_ref()?;
         Some(poller.read(cx).login().to_string())
     }
 
@@ -883,7 +968,7 @@ impl PrTab {
         let (Some(login), Some(watched)) = (login, self.watched_login(cx)) else {
             return false;
         };
-        let acting = self.acting.as_ref().and_then(Acting::login);
+        let acting = self.pull.acting.as_ref().and_then(Acting::login);
         watched.eq_ignore_ascii_case(login)
             && acting.is_some_and(|acting| acting.eq_ignore_ascii_case(login))
     }
@@ -897,8 +982,8 @@ impl PrTab {
         login: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        self.note_latest_head(&details.head_ref_oid, fetched_at);
-        let mut header = self.header.clone();
+        self.note_latest_head(&details.head_ref_oid, fetched_at, cx);
+        let mut header = self.pull.header.clone();
         header.title = Some(window_title::without_bidi(&details.title));
         if let Some(author) = &details.author {
             header.author = Some(author.login.clone());
@@ -910,23 +995,23 @@ impl PrTab {
             .flatten()
             .filter_map(|file| Some((file.path.clone(), viewed_state(&file.viewer_viewed_state)?)))
             .collect();
-        self.node_id = Some(details.id.clone());
+        self.pull.node_id = Some(details.id.clone());
         // Details from before a write finished, such as the ones a tab switch hands back, don't
         // undo it.
-        let viewed = self.marks.without_stale(viewed, fetched_at);
+        let viewed = self.pull.marks.without_stale(viewed, fetched_at);
         // Only the watched account's marks say where it viewed files.
         if self.records_follow(login, cx) {
             self.follow_marks_set_elsewhere(&viewed, &details.head_ref_oid, cx);
         }
-        let listed_changed = self.marks.set_listed(listed_paths(details));
-        let marks_changed = self.marks.set_github(viewed) || listed_changed;
+        let listed_changed = self.pull.marks.set_listed(listed_paths(details));
+        let marks_changed = self.pull.marks.set_github(viewed) || listed_changed;
         // A change of title makes the workspace report the active item changed, which comes back
         // here through `set_active`, so only a real change is reported.
-        if header == self.header && !marks_changed {
+        if header == self.pull.header && !marks_changed {
             return;
         }
-        self.header = header;
-        self.files.set_viewed(&self.marks.shown());
+        self.pull.header = header;
+        self.pull.files.set_viewed(&self.pull.marks.shown());
         self.changed(cx);
     }
 
@@ -942,14 +1027,14 @@ impl PrTab {
     ) {
         let changes: Vec<(String, Option<String>)> = marks
             .iter()
-            .filter(|(path, _)| !self.marks.is_pending(path))
+            .filter(|(path, _)| !self.pull.marks.is_pending(path))
             .filter_map(|(path, state)| match state {
-                ViewedState::Unviewed if self.viewed_at.contains_key(path) => {
+                ViewedState::Unviewed if self.pull.viewed_at.contains_key(path) => {
                     Some((path.clone(), None))
                 }
                 ViewedState::Viewed
                     if matches!(
-                        self.marks.github_state(path),
+                        self.pull.marks.github_state(path),
                         Some(ViewedState::Unviewed | ViewedState::Dismissed)
                     ) =>
                 {
@@ -963,11 +1048,12 @@ impl PrTab {
         }
         for (path, head) in &changes {
             match head {
-                Some(head) => self.viewed_at.insert(path.clone(), head.clone()),
-                None => self.viewed_at.remove(path),
+                Some(head) => self.pull.viewed_at.insert(path.clone(), head.clone()),
+                None => self.pull.viewed_at.remove(path),
             };
         }
-        let (Some(records), Some((poller, pull))) = (self.records.clone(), self.watched.clone())
+        let (Some(records), Some((poller, pull))) =
+            (self.pull.records.clone(), self.pull.watched.clone())
         else {
             return;
         };
@@ -1005,18 +1091,37 @@ impl PrTab {
             head: head.as_str().to_string(),
             at: polled_at,
         }];
-        self.revisions = Some(build_revisions(
+        self.pull.revisions = Some(build_revisions(
             &records,
             &[],
             head.as_str(),
-            self.created_at.unwrap_or(polled_at),
+            self.pull.created_at.unwrap_or(polled_at),
         ));
-        self.status = Status::Loading("Loading the diff…".into());
+        self.pull.status = Status::Loading("Loading the diff…".into());
         // The list may reorder, as files its new entries say are generated go last; the file
         // selected stays selected and in view.
         self.scroll_to_selected();
         cx.notify();
-        self.files.review_positions()
+        self.pull.files.review_positions()
+    }
+
+    /// The local copy's diff of other revisions than the load showed, of `entries` with `head`
+    /// on the right, is about to show: lists them and returns where each file goes in the diff,
+    /// by its index in `entries`. The revisions stay as they are.
+    pub(crate) fn compared(
+        &mut self,
+        entries: Vec<FileEntry>,
+        head: &Oid,
+        cx: &mut Context<Self>,
+    ) -> Vec<usize> {
+        self.list(entries);
+        // A head other than GitHub's latest is older news than anything GitHub said, so `e` marks
+        // nothing while it shows.
+        self.set_head(head.as_str(), SystemTime::UNIX_EPOCH);
+        self.pull.status = Status::Loading("Loading the diff…".into());
+        self.scroll_to_selected();
+        cx.notify();
+        self.pull.files.review_positions()
     }
 
     /// Where each of the local copy's `entries` goes in its diff, by its index in `entries`,
@@ -1029,12 +1134,12 @@ impl PrTab {
     /// selected file.
     fn list(&mut self, entries: Vec<FileEntry>) {
         let mut list = FileList::new(entries);
-        list.set_order(self.files.order());
-        list.set_viewed(&self.marks.shown());
-        if let Some(selected) = self.files.selected() {
+        list.set_order(self.pull.files.order());
+        list.set_viewed(&self.pull.marks.shown());
+        if let Some(selected) = self.pull.files.selected() {
             list.select_path(selected.path());
         }
-        self.files = list;
+        self.pull.files = list;
     }
 
     /// Reads GitHub's diff of the pull request with `reader` and shows it until the local copy's
@@ -1071,7 +1176,8 @@ impl PrTab {
         };
         let opened = self.opened;
         let changed_files = pull_request.changed_files;
-        self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
+        let this = self.handle(cx);
+        self.pull._github_diff = Some(cx.spawn_in(window, async move |_, cx| {
             let mut wait = GITHUB_FIRST_RETRY;
             let read = loop {
                 let started = Instant::now();
@@ -1113,7 +1219,7 @@ impl PrTab {
             }
             let cut = cut_text(read.files.len(), changed_files, read.cut_short);
             let shown = this.update(cx, |this, cx| {
-                this.banners.update(cx, |banners, cx| {
+                this.pull.banners.update(cx, |banners, cx| {
                     banners.hide(BannerKind::GithubDiffFailed, cx);
                     if let Some(cut) = cut {
                         log::info!("{link}: {cut}");
@@ -1126,7 +1232,7 @@ impl PrTab {
             }
             source.head = read.head;
             source.listed_at = SystemTime::now();
-            let tab = this.clone();
+            let tab = this.tab().clone();
             if let Err(error) = api_diff::show(this, source, read.files, opened, cx).await
                 && tab.upgrade().is_some()
             {
@@ -1146,7 +1252,8 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let opened = self.opened;
-        self._github_diff = Some(cx.spawn_in(window, async move |this, cx| {
+        let this = self.handle(cx);
+        self.pull._github_diff = Some(cx.spawn_in(window, async move |_, cx| {
             let link = source.link.clone();
             if let Err(error) = api_diff::show(this, source, files, opened, cx).await {
                 log::warn!("{link}: can't show GitHub's diff: {error:#}");
@@ -1166,11 +1273,11 @@ impl PrTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Vec<usize>> {
-        if self.diff.is_some() {
+        if self.pull.diff.is_some() {
             return None;
         }
         // The local copy fetches the head GitHub gave before it listed the files.
-        if let (Some(head), Some(api_head)) = (&head, &self.api_head)
+        if let (Some(head), Some(api_head)) = (&head, &self.pull.api_head)
             && head != api_head
         {
             let text = format!(
@@ -1179,7 +1286,7 @@ impl PrTab {
                 short(head),
                 short(api_head)
             );
-            self.banners.update(cx, |banners, cx| {
+            self.pull.banners.update(cx, |banners, cx| {
                 banners.show(BannerKind::MovedOn, Severity::Warning, text, cx)
             });
         }
@@ -1187,24 +1294,24 @@ impl PrTab {
         // latest.
         if let Some(head) = &head {
             self.set_head(head, listed_at);
-            self.note_latest_head(head, listed_at);
+            self.note_latest_head(head, listed_at, cx);
         }
-        self.github_head = head;
+        self.pull.github_head = head;
         self.list(entries);
         self.show_diff(editor, DiffSource::GitHub, window, cx);
         // The local copy failed for good, so this is the diff the tab shows.
-        if self.copy_failed.is_some() {
+        if self.pull.copy_failed.is_some() {
             self.set_status(Status::Ready, cx);
         }
-        Some(self.files.review_positions())
+        Some(self.pull.files.review_positions())
     }
 
     /// GitHub's diff couldn't be read for a reason that may pass, and is read again soon.
     fn github_diff_retried(&mut self, error: &GithubError, cx: &mut Context<Self>) {
-        if self.diff.is_some() {
+        if self.pull.diff.is_some() {
             return;
         }
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
@@ -1219,19 +1326,19 @@ impl PrTab {
 
     /// GitHub's diff can't be read, and isn't tried again.
     fn github_diff_failed(&mut self, error: &GithubError, cx: &mut Context<Self>) {
-        self.github_failed = true;
-        if self.diff.is_some() {
+        self.pull.github_failed = true;
+        if self.pull.diff.is_some() {
             return;
         }
         // Neither diff can show.
-        if let Some(copy_failed) = self.copy_failed.clone() {
-            self.banners.update(cx, |banners, cx| {
+        if let Some(copy_failed) = self.pull.copy_failed.clone() {
+            self.pull.banners.update(cx, |banners, cx| {
                 banners.hide(BannerKind::LocalCopyFailed, cx)
             });
             self.set_status(Status::Failed(copy_failed), cx);
             return;
         }
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
@@ -1246,14 +1353,14 @@ impl PrTab {
 
     /// GitHub's diff wasn't read, to save the requests GitHub allows without signing in.
     fn github_diff_not_read(&mut self, cx: &mut Context<Self>) {
-        self.github_failed = true;
-        if self.diff.is_some() {
+        self.pull.github_failed = true;
+        if self.pull.diff.is_some() {
             return;
         }
-        if let Some(copy_failed) = self.copy_failed.clone() {
+        if let Some(copy_failed) = self.pull.copy_failed.clone() {
             self.set_status(Status::Failed(copy_failed), cx);
         }
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
@@ -1278,7 +1385,7 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let Some((why, left)) = problem else {
-            self.banners.update(cx, |banners, cx| {
+            self.pull.banners.update(cx, |banners, cx| {
                 banners.hide(BannerKind::LocalCopyFailed, cx)
             });
             return;
@@ -1290,7 +1397,7 @@ impl PrTab {
         };
         let meanwhile = self.meanwhile();
         let text = format!("Lo couldn't copy this pull request locally: {why}. {when}{meanwhile}");
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(BannerKind::LocalCopyFailed, Severity::Warning, text, cx)
         });
         let step = match left {
@@ -1303,10 +1410,10 @@ impl PrTab {
     /// What the tab shows until the local copy's diff is ready, if it shows GitHub's or an older
     /// copy.
     fn meanwhile(&self) -> String {
-        if self.diff_source == Some(DiffSource::GitHub) {
+        if self.pull.diff_source == Some(DiffSource::GitHub) {
             " Until then, this is GitHub's diff: changed lines only.".to_string()
         } else if self.shows_older_copy() {
-            let shown = self.head.as_deref().map(short).unwrap_or_default();
+            let shown = self.pull.head.as_deref().map(short).unwrap_or_default();
             format!(" Until then, this is the local copy of {shown}, an older push.")
         } else {
             String::new()
@@ -1322,16 +1429,16 @@ impl PrTab {
         retry: oneshot::Sender<()>,
         cx: &mut Context<Self>,
     ) {
-        self.retry_copy = Some(retry);
+        self.pull.retry_copy = Some(retry);
         let text = format!(
             "Lo stopped trying to copy this pull request locally after {tries} tries: {why}.{}",
             self.meanwhile()
         );
-        let tab = cx.weak_entity();
+        let pull = self.handle(cx);
         let action = BannerAction::new("Retry", move |_, cx| {
-            tab.update(cx, |tab, cx| tab.retry_copy(cx)).ok();
+            pull.update(cx, |tab, cx| tab.retry_copy(cx)).ok();
         });
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show_with(
                 BannerKind::LocalCopyFailed,
                 Severity::Error,
@@ -1344,11 +1451,11 @@ impl PrTab {
             // The banner's button tries the copy again.
             self.keep_older_copy(why, cx);
             return;
-        } else if self.diff.is_some() {
+        } else if self.pull.diff.is_some() {
             Status::Ready
-        } else if self._github_diff.is_some() && !self.github_failed {
+        } else if self.pull._github_diff.is_some() && !self.pull.github_failed {
             // GitHub's diff shows when it arrives, and it's all there is until a retry.
-            self.copy_failed = Some(why.to_string().into());
+            self.pull.copy_failed = Some(why.to_string().into());
             Status::Loading("Reading GitHub's diff…".into())
         } else {
             Status::Failed(why.to_string().into())
@@ -1358,15 +1465,15 @@ impl PrTab {
 
     /// Tries copying the pull request locally again, after Lo stopped trying.
     pub(crate) fn retry_copy(&mut self, cx: &mut Context<Self>) {
-        let Some(retry) = self.retry_copy.take() else {
+        let Some(retry) = self.pull.retry_copy.take() else {
             return;
         };
         retry.send(()).ok();
-        self.copy_failed = None;
-        if self.showing_copy == Some(OlderCopy::NewerNotCopied) {
-            self.showing_copy = None;
+        self.pull.copy_failed = None;
+        if self.pull.showing_copy == Some(OlderCopy::NewerNotCopied) {
+            self.pull.showing_copy = None;
         }
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.hide(BannerKind::LocalCopyFailed, cx)
         });
         self.set_status(Status::Loading("Copying it locally…".into()), cx);
@@ -1375,17 +1482,17 @@ impl PrTab {
     /// Whether the diff on screen is a local copy of an older head than the one GitHub gave
     /// this load, as when the copy shown offline waits for a newer push to be copied.
     fn shows_older_copy(&self) -> bool {
-        self.diff_source == Some(DiffSource::LocalCopy)
-            && self.api_head.is_some()
-            && self.head != self.api_head
+        self.pull.diff_source == Some(DiffSource::LocalCopy)
+            && self.pull.api_head.is_some()
+            && self.pull.head != self.pull.api_head
     }
 
     /// GitHub gave a newer head than the local copy on screen, and copying it failed for `why`:
     /// the older copy stays, read-only, saying so.
     fn keep_older_copy(&mut self, why: &str, cx: &mut Context<Self>) {
-        self.showing_copy = Some(OlderCopy::NewerNotCopied);
-        let latest = self.api_head.as_deref().map(short).unwrap_or_default();
-        let shown = self.head.as_deref().map(short).unwrap_or_default();
+        self.pull.showing_copy = Some(OlderCopy::NewerNotCopied);
+        let latest = self.pull.api_head.as_deref().map(short).unwrap_or_default();
+        let shown = self.pull.head.as_deref().map(short).unwrap_or_default();
         let why = why.trim_end().trim_end_matches('.');
         let text = format!(
             "GitHub has {latest}, but Lo couldn't copy it: {why}. This is the local copy of \
@@ -1396,7 +1503,7 @@ impl PrTab {
 
     /// Shows that the local copy's diff is loading file `file` of its `total`, counting from 1.
     pub(crate) fn loading_diff(&mut self, file: usize, total: usize, cx: &mut Context<Self>) {
-        let what = if self.diff_source == Some(DiffSource::GitHub) {
+        let what = if self.pull.diff_source == Some(DiffSource::GitHub) {
             "the local copy's diff"
         } else {
             "the diff"
@@ -1410,6 +1517,9 @@ impl PrTab {
     /// Every file is in the local copy's diff.
     pub(crate) fn diff_loaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_status(Status::Ready, cx);
+        if let Some(diff) = &self.pull.diff {
+            diff_decorations::redecorate(diff, Redecorate::Loaded, window, cx);
+        }
         // A file added while the whitespace key was pressed may show the other way.
         self.sync_whitespace(window, cx);
     }
@@ -1417,21 +1527,22 @@ impl PrTab {
     /// Loading failed with `error`. GitHub's diff, if it shows or is on its way, stays, with a
     /// banner saying why the local copy's won't come; otherwise the tab says why it couldn't open.
     fn load_failed(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
-        let github_coming =
-            self.diff.is_none() && self._github_diff.is_some() && !self.github_failed;
-        if self.diff.is_none() && !github_coming {
-            self.action = Some(TabAction::TryAgain);
+        let github_coming = self.pull.diff.is_none()
+            && self.pull._github_diff.is_some()
+            && !self.pull.github_failed;
+        if self.pull.diff.is_none() && !github_coming {
+            self.pull.action = Some(TabAction::TryAgain);
             self.set_status(Status::Failed(format!("{error:#}").into()), cx);
             return;
         }
         if self.shows_older_copy() {
-            self.action = Some(TabAction::TryAgain);
+            self.pull.action = Some(TabAction::TryAgain);
             self.keep_older_copy(&format!("{error:#}"), cx);
             return;
         }
         if github_coming {
-            self.copy_failed = Some(format!("{error:#}").into());
-            self.banners.update(cx, |banners, cx| {
+            self.pull.copy_failed = Some(format!("{error:#}").into());
+            self.pull.banners.update(cx, |banners, cx| {
                 banners.show(
                     BannerKind::LocalCopyFailed,
                     Severity::Error,
@@ -1445,14 +1556,14 @@ impl PrTab {
             self.set_status(Status::Loading("Reading GitHub's diff…".into()), cx);
             return;
         }
-        let text = match self.diff_source {
+        let text = match self.pull.diff_source {
             Some(DiffSource::GitHub) => format!(
                 "Lo couldn't show the local copy's diff, so this is GitHub's diff: changed \
                  lines only. {error:#}"
             ),
             _ => format!("Lo couldn't finish loading this pull request: {error:#}"),
         };
-        self.banners.update(cx, |banners, cx| {
+        self.pull.banners.update(cx, |banners, cx| {
             banners.show(BannerKind::LocalCopyFailed, Severity::Error, text, cx)
         });
         self.set_status(Status::Ready, cx);
@@ -1468,66 +1579,70 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let focused = self.focus_handle.contains_focused(window, cx);
-        if let Some(old) = self.diff.as_ref().filter(|old| **old != editor) {
+        if let Some(old) = self.pull.diff.as_ref().filter(|old| **old != editor) {
             shown_files::release_images(old, Some(window), cx);
         }
         // Loads into a diff no longer shown stop, and let it go.
         let shown = editor.entity_id();
-        self.loading.retain(|(diff, _), _| *diff == shown);
-        self._diff_watch = vec![
+        self.pull.loading.retain(|(diff, _), _| *diff == shown);
+        self.pull._diff_watch = vec![
             cx.observe_in(&editor, window, |_, diff, window, cx| {
-                shown_files::sync_side_by_side(&diff, window, cx)
+                diff_decorations::sync_split(&diff, window, cx)
             }),
-            cx.subscribe_in(&editor, window, |_, diff, event: &EditorEvent, _, cx| {
-                if let EditorEvent::BufferFoldToggled { ids, folded } = event {
-                    shown_files::fold_toggled(diff, ids, *folded, cx);
-                }
-            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |_, diff, event: &EditorEvent, window, cx| {
+                    if let EditorEvent::BufferFoldToggled { ids, folded } = event {
+                        shown_files::fold_toggled(diff, ids, *folded, window, cx);
+                    }
+                },
+            ),
         ];
         let rhs = editor.read(cx).rhs_editor().clone();
         if let Some(history) = self.nav_history.clone() {
             rhs.update(cx, |editor, _| editor.set_nav_history(Some(history)));
         }
-        self._diff_cursor = Some(cx.subscribe_in(
+        // The diff's pull request's, whether the tab shows it or keeps it by then.
+        let id = self.pull.id;
+        self.pull._diff_cursor = Some(cx.subscribe_in(
             &rhs,
             window,
-            |this, _, event: &EditorEvent, window, cx| match event {
-                EditorEvent::SelectionsChanged { .. } => this.diff_cursor_moved(cx),
-                EditorEvent::ScrollPositionChanged { .. } => this.select_shown_file(cx),
-                EditorEvent::BufferRangesUpdated { .. } => this.park_cursor(window, cx),
-                _ => {}
+            move |this, _, event: &EditorEvent, window, cx| {
+                this.with_pull(id, cx, |this, cx| match event {
+                    EditorEvent::SelectionsChanged { .. } => this.diff_cursor_moved(cx),
+                    EditorEvent::ScrollPositionChanged { .. } => this.select_shown_file(cx),
+                    EditorEvent::BufferRangesUpdated { .. } => this.park_cursor(window, cx),
+                    _ => {}
+                });
             },
         ));
-        self.parked_cursor = None;
-        self.diff = Some(editor.clone());
-        self.diff_source = Some(source);
+        self.pull.parked_cursor = None;
+        self.pull.diff = Some(editor.clone());
+        self.pull.diff_source = Some(source);
         if source == DiffSource::LocalCopy {
-            self._github_diff = None;
-            self.banners.update(cx, |banners, cx| {
+            self.pull._github_diff = None;
+            self.pull.banners.update(cx, |banners, cx| {
                 banners.hide(BannerKind::GithubDiffFailed, cx);
                 banners.hide(BannerKind::GithubDiffCut, cx);
             });
         }
         // A diff with its files in already, as when the local copy's replaces GitHub's, sends no
         // event as they arrive, so its cursor would stay at its end, in the last file.
-        self.cursor_moved = false;
+        self.pull.cursor_moved = false;
         self.park_cursor(window, cx);
-        if focused && !self.file_list_focus.contains_focused(window, cx) {
+        if focused && self.shows_pull() && !self.file_list_focus.contains_focused(window, cx) {
             window.focus(&editor.focus_handle(cx), cx);
         }
+        self.emit(PrTabEvent::ComparisonChanged, cx);
         cx.notify();
     }
 
-    /// Replaces GitHub's diff with the local copy's, `editor` of `head`, at the same file and
-    /// line, and says so if GitHub's diff showed another head.
-    pub(crate) fn switch_diff(
-        &mut self,
-        editor: Entity<SplittableEditor>,
-        head: &Oid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Says, when GitHub's diff showed another head than `head`, the one the local copy's diff
+    /// shows, that the pull request moved on while it loaded.
+    pub(crate) fn say_if_moved_on(&mut self, head: &Oid, cx: &mut Context<Self>) {
         let moved_on = self
+            .pull
             .github_head
             .as_deref()
             .filter(|github_head| *github_head != head.as_str())
@@ -1539,11 +1654,21 @@ impl PrTab {
                     short(github_head)
                 )
             });
-        self.banners.update(cx, |banners, cx| match moved_on {
+        self.pull.banners.update(cx, |banners, cx| match moved_on {
             Some(text) => banners.show(BannerKind::MovedOn, Severity::Warning, text, cx),
             None => banners.hide(BannerKind::MovedOn, cx),
         });
-        let (position, cursor) = match &self.diff {
+    }
+
+    /// Replaces the diff shown, GitHub's or the local copy's, with `editor`, the local copy's, at
+    /// the same file and line, with files open or folded as the reviewer left them.
+    pub(crate) fn switch_diff(
+        &mut self,
+        editor: Entity<SplittableEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (position, cursor) = match &self.pull.diff {
             Some(diff) => (
                 pr_diff::scroll_position(diff, cx),
                 pr_diff::cursor_position(diff, cx),
@@ -1552,7 +1677,7 @@ impl PrTab {
         };
         // Files stay open or folded as the reviewer left them, before the view scrolls to the
         // same line.
-        let to_load = match self.diff.clone() {
+        let to_load = match self.pull.diff.clone() {
             Some(old) => {
                 // The file the reviewer is reading, as `e` and alt-a see it.
                 let shown = diff_cursor::shown_file(&old, cx).map(|(_, path)| path);
@@ -1585,6 +1710,7 @@ impl PrTab {
         if let Some(cursor) = cursor {
             pr_diff::put_cursor(&editor, &cursor, window, cx);
         }
+        diff_decorations::redecorate(&editor, Redecorate::Replaced, window, cx);
     }
 
     /// Watches the pull request with its account's poller, once GitHub confirmed it exists, and
@@ -1599,7 +1725,7 @@ impl PrTab {
     ) {
         // A load as another account, or by the repository's name now, stops the watch before,
         // and another account's marks go with it.
-        if let Some((old, old_pull)) = self.watched.take() {
+        if let Some((old, old_pull)) = self.pull.watched.take() {
             if old != poller || old_pull != pull {
                 old.update(cx, |old, cx| old.unwatch(&old_pull, cx));
             }
@@ -1608,50 +1734,56 @@ impl PrTab {
                 .login()
                 .eq_ignore_ascii_case(poller.read(cx).login())
             {
-                self.marks = ViewedMarks::default();
-                self.viewed_at.clear();
-                self.node_id = None;
-                self.files.set_viewed(&self.marks.shown());
+                self.pull.marks = ViewedMarks::default();
+                self.pull.viewed_at.clear();
+                self.pull.node_id = None;
+                self.pull.files.set_viewed(&self.pull.marks.shown());
             }
         }
         if let Some(records) = &records {
             match records.heads(poller.read(cx).login(), &pull) {
-                Ok(heads) => self.viewed_at = heads,
+                Ok(heads) => self.pull.viewed_at = heads,
                 Err(error) => log::error!("{pull}: reading where files were viewed: {error:#}"),
             }
         }
-        self.records = records;
+        self.pull.records = records;
         poller.update(cx, |poller, cx| poller.watch(pull.clone(), cx));
-        self.poll.status = poller.read(cx).status().clone();
-        self._poller_subscriptions = vec![
-            cx.observe(&poller, |this, poller, cx| {
+        self.pull.poll.status = poller.read(cx).status().clone();
+        // What the poller says goes to this pull request, whether the tab shows it or keeps it.
+        let id = self.pull.id;
+        self.pull._poller_subscriptions = vec![
+            cx.observe(&poller, move |this, poller, cx| {
                 let status = poller.read(cx).status().clone();
-                if this.poll.status != status {
-                    this.poll.status = status;
-                    cx.notify();
-                }
+                this.with_pull(id, cx, |this, cx| {
+                    if this.pull.poll.status != status {
+                        this.pull.poll.status = status;
+                        cx.notify();
+                    }
+                });
             }),
-            cx.subscribe(&poller, |this, _, event, cx| this.poll_event(event, cx)),
+            cx.subscribe(&poller, move |this, _, event, cx| {
+                this.with_pull(id, cx, |this, cx| this.poll_event(event, cx));
+            }),
         ];
-        self.watched = Some((poller, pull));
+        self.pull.watched = Some((poller, pull));
     }
 
     fn poll_event(&mut self, event: &PollEvent, cx: &mut Context<Self>) {
-        let Some((_, watched)) = &self.watched else {
+        let Some((_, watched)) = &self.pull.watched else {
             return;
         };
         match event {
             PollEvent::Details { pull, details } if pull == watched => {
-                self.poll.details_at = Some(SystemTime::now());
+                self.pull.poll.details_at = Some(SystemTime::now());
                 self.poll_succeeded(cx);
                 self.set_details(details, cx);
             }
             PollEvent::Summary { pull, summary } if pull == watched => {
-                self.note_latest_head(&summary.head.sha, SystemTime::now());
+                self.note_latest_head(&summary.head.sha, SystemTime::now(), cx);
                 self.poll_succeeded(cx);
                 let title = window_title::without_bidi(&summary.title);
-                if self.header.title.as_ref() != Some(&title) {
-                    self.header.title = Some(title);
+                if self.pull.header.title.as_ref() != Some(&title) {
+                    self.pull.header.title = Some(title);
                     self.changed(cx);
                 }
             }
@@ -1661,7 +1793,7 @@ impl PrTab {
                 error,
             } if pull == watched => {
                 log::warn!("polling {pull}: {error}");
-                self.poll.failure = Some(error.clone());
+                self.pull.poll.failure = Some(error.clone());
                 cx.notify();
             }
             _ => {}
@@ -1669,37 +1801,39 @@ impl PrTab {
     }
 
     fn poll_succeeded(&mut self, cx: &mut Context<Self>) {
-        if self.poll.failure.take().is_some() {
+        if self.pull.poll.failure.take().is_some() {
             cx.notify();
         }
     }
 
     /// GitHub said at `at` that the pull request's head is `head`. Something it said earlier
-    /// doesn't replace something it said later.
-    fn note_latest_head(&mut self, head: &str, at: SystemTime) {
-        if self
-            .latest_head
-            .as_ref()
-            .is_none_or(|(_, seen_at)| at >= *seen_at)
-        {
-            self.latest_head = Some((head.to_string(), at));
+    /// doesn't replace something it said later. Features hear of a new head.
+    fn note_latest_head(&mut self, head: &str, at: SystemTime, cx: &mut Context<Self>) {
+        let latest = &mut self.pull.latest_head;
+        if latest.as_ref().is_some_and(|(_, seen_at)| at < *seen_at) {
+            return;
+        }
+        let changed = latest.as_ref().is_none_or(|(latest, _)| latest != head);
+        *latest = Some((head.to_string(), at));
+        if changed {
+            self.emit(PrTabEvent::HeadChanged, cx);
         }
     }
 
     /// The diff shows the pull request at `head`, which GitHub gave at `given_at`.
     fn set_head(&mut self, head: &str, given_at: SystemTime) {
-        if self.head.as_deref() != Some(head) {
-            self.head = Some(head.to_string());
-            self.head_at = Some(given_at);
+        if self.pull.head.as_deref() != Some(head) {
+            self.pull.head = Some(head.to_string());
+            self.pull.head_at = Some(given_at);
         }
     }
 
     /// GitHub's latest head, when GitHub gave it no earlier than it gave the head on screen and
     /// it isn't that head.
     fn newer_head(&self) -> Option<&str> {
-        let (latest, at) = self.latest_head.as_ref()?;
-        let newer =
-            Some(latest) != self.head.as_ref() && self.head_at.is_none_or(|head_at| *at >= head_at);
+        let (latest, at) = self.pull.latest_head.as_ref()?;
+        let newer = Some(latest) != self.pull.head.as_ref()
+            && self.pull.head_at.is_none_or(|head_at| *at >= head_at);
         newer.then_some(latest.as_str())
     }
 
@@ -1708,21 +1842,21 @@ impl PrTab {
         window_title::for_pull_request(
             &self.repo_name(),
             self.link().number,
-            self.header.title.as_deref(),
+            self.pull.header.title.as_deref(),
         )
     }
 
     /// Whether this is the window's active tab. The account's poller polls the active tab's pull
     /// request most often.
     fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
-        let Some((poller, pull)) = self.watched.clone() else {
+        let Some((poller, pull)) = self.pull.watched.clone() else {
             return;
         };
         let is_open = poller.read(cx).open() == Some(&pull);
         if active && !is_open {
             let answer = poller.update(cx, |poller, cx| poller.set_open(Some(pull), cx));
             if let Some(answer) = answer {
-                self.poll.details_at = Some(answer.fetched_at);
+                self.pull.poll.details_at = Some(answer.fetched_at);
                 let login = poller.read(cx).login().to_string();
                 self.take_details(&answer.details, answer.fetched_at, Some(&login), cx);
             }
@@ -1732,19 +1866,19 @@ impl PrTab {
     }
 
     fn apply_diff_style(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             shown_files::set_style(diff, self.diff_style, window, cx);
         }
     }
 
     /// Brings each of the diff's files in line with whether whitespace changes are hidden.
     pub(crate) fn sync_whitespace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff.clone() else {
+        let Some(diff) = self.pull.diff.clone() else {
             return;
         };
         let hide = self.hide_whitespace;
         // Replacing the task stops the one before, so no file is changed by two at once.
-        self._whitespace = Some(cx.spawn_in(window, async move |_, cx| {
+        self.pull._whitespace = Some(cx.spawn_in(window, async move |_, cx| {
             shown_files::hide_whitespace(diff, hide, cx).await
         }));
     }
@@ -1759,7 +1893,7 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let key = (diff.entity_id(), path.clone());
-        if self.loading.contains_key(&key) {
+        if self.pull.loading.contains_key(&key) {
             return;
         }
         let Some(project) = self
@@ -1770,15 +1904,16 @@ impl PrTab {
             return;
         };
         let hide = self.hide_whitespace;
+        let this = self.handle(cx);
         let task = cx.spawn_in(window, {
             let key = key.clone();
-            async move |this, cx| {
+            async move |_, cx| {
                 let loaded = pr_diff::load_large_file(diff, project, path.clone(), hide, cx).await;
                 this.update_in(cx, |this, window, cx| {
-                    this.loading.remove(&key);
+                    this.pull.loading.remove(&key);
                     if let Err(error) = loaded {
                         log::error!("can't load {path}: {error:#}");
-                        this.banners.update(cx, |banners, cx| {
+                        this.pull.banners.update(cx, |banners, cx| {
                             banners.show(
                                 BannerKind::LoadFileFailed,
                                 Severity::Warning,
@@ -1793,26 +1928,26 @@ impl PrTab {
                 .ok();
             }
         });
-        self.loading.insert(key, task);
+        self.pull.loading.insert(key, task);
     }
 
     /// The file `e` and the movement keys act on: the one the diff shows
     /// ([`diff_cursor::shown_file`]), by its position in review order and its path. `None` until
     /// the diff shows a file.
     fn shown_file(&self, cx: &mut App) -> Option<(usize, String)> {
-        diff_cursor::shown_file(self.diff.as_ref()?, cx)
+        diff_cursor::shown_file(self.pull.diff.as_ref()?, cx)
     }
 
     /// The path GitHub knows the listed file at `path` by ([`ViewedMarks::github_path`]).
     fn github_path(&self, path: &str) -> Option<String> {
-        let previous = self.files.entry(path)?.file.previous_path.as_deref();
-        self.marks.github_path(path, previous)
+        let previous = self.pull.files.entry(path)?.file.previous_path.as_deref();
+        self.pull.marks.github_path(path, previous)
     }
 
     /// Where `path`'s file starts in the diff, once it's there.
     fn location_in_diff(&self, path: &str, cx: &App) -> Option<Anchor> {
-        let diff = self.diff.as_ref()?;
-        let position = self.files.review_position(path)?;
+        let diff = self.pull.diff.as_ref()?;
+        let position = self.pull.files.review_position(path)?;
         let key = pr_diff::path_key(position, RelPath::from_unix_str(path).ok()?.into_arc());
         let multi_buffer = diff.read(cx).rhs_editor().read(cx).buffer().clone();
         multi_buffer.read(cx).location_for_path(&key, cx)
@@ -1820,7 +1955,7 @@ impl PrTab {
 
     /// The diff's cursor head, on its right side.
     fn diff_cursor(&self, cx: &App) -> Option<Anchor> {
-        let diff = self.diff.as_ref()?.read(cx);
+        let diff = self.pull.diff.as_ref()?.read(cx);
         Some(diff.rhs_editor().read(cx).selections.newest_anchor().head())
     }
 
@@ -1828,18 +1963,18 @@ impl PrTab {
     /// first file in review order whichever file arrived first. An empty editor's cursor sits at
     /// its end, which would otherwise leave it in the last file.
     fn park_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cursor_moved {
+        if self.pull.cursor_moved {
             return;
         }
-        let (Some(diff), Some(head)) = (&self.diff, self.diff_cursor(cx)) else {
+        let (Some(diff), Some(head)) = (&self.pull.diff, self.diff_cursor(cx)) else {
             return;
         };
         // Moved since it was parked, though the move's event hasn't arrived yet.
-        if self.parked_cursor.is_some_and(|parked| parked != head) {
+        if self.pull.parked_cursor.is_some_and(|parked| parked != head) {
             return;
         }
         let rhs = diff.read(cx).rhs_editor().clone();
-        self.parked_cursor = Some(rhs.update(cx, |editor, cx| {
+        self.pull.parked_cursor = Some(rhs.update(cx, |editor, cx| {
             editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
                 selections.select_ranges([Point::zero()..Point::zero()])
             });
@@ -1850,12 +1985,12 @@ impl PrTab {
     /// The diff's cursor moved: the list selects the file the diff shows. Where the tab parked it
     /// isn't a move, but the first real move ends the parking, even one back to the same place.
     fn diff_cursor_moved(&mut self, cx: &mut Context<Self>) {
-        if !self.cursor_moved {
-            if self.diff_cursor(cx) == self.parked_cursor {
+        if !self.pull.cursor_moved {
+            if self.diff_cursor(cx) == self.pull.parked_cursor {
                 return;
             }
-            self.cursor_moved = true;
-            self.parked_cursor = None;
+            self.pull.cursor_moved = true;
+            self.pull.parked_cursor = None;
         }
         self.select_shown_file(cx);
     }
@@ -1865,8 +2000,8 @@ impl PrTab {
         let Some((_, path)) = self.shown_file(cx) else {
             return;
         };
-        if self.files.selected().map(FileEntry::path) != Some(path.as_str()) {
-            self.files.select_path(&path);
+        if self.pull.files.selected().map(FileEntry::path) != Some(path.as_str()) {
+            self.pull.files.select_path(&path);
             self.scroll_to_selected();
             cx.notify();
         }
@@ -1888,7 +2023,11 @@ impl PrTab {
     }
 
     fn scroll_to_selected(&self) {
-        if let Some(row) = self.files.selected_row() {
+        // A kept pull request's list scrolls to its selection when it shows.
+        if !self.shows_pull() {
+            return;
+        }
+        if let Some(row) = self.pull.files.selected_row() {
             self.file_list_scroll
                 .scroll_to_item(row, gpui::ScrollStrategy::Center);
         }
@@ -1902,7 +2041,7 @@ impl PrTab {
 
     /// Scrolls the diff to the selected file.
     fn reveal_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(diff), Some(entry)) = (&self.diff, self.files.selected()) else {
+        let (Some(diff), Some(entry)) = (&self.pull.diff, self.pull.files.selected()) else {
             return;
         };
         let Some(location) = self.location_in_diff(entry.path(), cx) else {
@@ -1922,7 +2061,7 @@ impl PrTab {
 
     /// `owner/repo`, as GitHub names it now once it's said.
     fn repo_name(&self) -> String {
-        self.header.repo.clone().unwrap_or_else(|| {
+        self.pull.header.repo.clone().unwrap_or_else(|| {
             let link = self.link();
             format!("{}/{}", link.owner, link.repo)
         })
@@ -1931,14 +2070,19 @@ impl PrTab {
     /// GitHub's links for fixing why the tab stopped, and its button to try again or choose an
     /// account.
     fn render_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let links = self.help_links.iter().enumerate().map(|(index, link)| {
-            let url = link.url().to_string();
-            Button::new(("help-link", index), link.label())
-                .style(ButtonStyle::Filled)
-                .on_click(move |_, _, cx| cx.open_url(&url))
-                .into_any_element()
-        });
-        let action = self.action.map(|action| {
+        let links = self
+            .pull
+            .help_links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                let url = link.url().to_string();
+                Button::new(("help-link", index), link.label())
+                    .style(ButtonStyle::Filled)
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+                    .into_any_element()
+            });
+        let action = self.pull.action.map(|action| {
             Button::new("tab-action", action.label())
                 .on_click(cx.listener(|this, _, window, cx| this.load_again(window, cx)))
                 .into_any_element()
@@ -2055,21 +2199,21 @@ fn merge_into_twin(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> bool {
-    let key = tab.read(cx).key.clone();
+    let key = tab.read(cx).pull.key.clone();
     let Some(twin) = workspace
         .items_of_type::<PrTab>(cx)
-        .find(|other| other != tab && other.read(cx).key.is_same_pull_request(&key))
+        .find(|other| other != tab && other.read(cx).pull.key.is_same_pull_request(&key))
     else {
         return false;
     };
     log::info!(
         "{} is {} by another name; keeping that tab",
         key.opened_as,
-        twin.read(cx).key.opened_as
+        twin.read(cx).pull.key.opened_as
     );
     twin.update(cx, |twin, cx| {
-        twin.key.merge(key);
-        if twin.status.tries_again() {
+        twin.pull.key.merge(key);
+        if twin.pull.status.tries_again() {
             twin.start_again(cx);
             twin.load(window, cx);
         }
@@ -2092,12 +2236,7 @@ async fn saved_details(link: &PrLink, cx: &mut AsyncWindowContext) -> Option<Sav
 }
 
 /// The tab failed to load: says why, with GitHub's links to fix it.
-fn failed(
-    this: &WeakEntity<PrTab>,
-    link: &PrLink,
-    error: anyhow::Error,
-    cx: &mut AsyncWindowContext,
-) {
+fn failed(this: &PullHandle, link: &PrLink, error: anyhow::Error, cx: &mut AsyncWindowContext) {
     log::error!("{link}: {error:#}");
     let waitable = is_waitable(&error);
     let text = if waitable {
@@ -2106,8 +2245,8 @@ fn failed(
         format!("{}.", sentence(&error))
     };
     this.update(cx, |this, cx| {
-        this.help_links = help_links(&error);
-        this.action = (!waitable).then(|| action_for(&error));
+        this.pull.help_links = help_links(&error);
+        this.pull.action = (!waitable).then(|| action_for(&error));
         this.show_saved_banner(false, cx);
         this.set_status(Status::Failed(text.into()), cx)
     })
@@ -2156,7 +2295,7 @@ fn jitter_sample() -> f64 {
 /// locally and shows its diff. What Lo `saved` about it shows until GitHub answers. When
 /// several accounts can see it and none was chosen, it asks which to use only if it `may_ask`.
 async fn load(
-    this: WeakEntity<PrTab>,
+    this: PullHandle,
     link: PrLink,
     trust: Trust,
     opened: Instant,
@@ -2185,7 +2324,7 @@ async fn load(
             None => None,
         };
         // A recent row's account, if it can still see the repository.
-        let preferred = this.read_with(cx, |this, _| this.preferred.clone())?;
+        let preferred = this.read_with(cx, |pull, _| pull.preferred.clone())?;
         let preferred = preferred.and_then(|login| {
             found
                 .as_ref()?
@@ -2270,7 +2409,7 @@ async fn load(
     })?;
     // Opened by a name the repository no longer has, it's listed once, by its name now.
     if let Some(layer) = &layer {
-        let other_names = this.read_with(cx, |this, _| this.key.other_names())?;
+        let other_names = this.read_with(cx, |pull, _| pull.key.other_names())?;
         cx.update(|_, cx| {
             for (owner, name) in other_names {
                 let old = PullRef::new(owner, name, pull.number);
@@ -2281,14 +2420,14 @@ async fn load(
     // GitHub's diff shows while the local copy loads, unless a diff, such as the copy shown
     // offline, is on screen until the new copy replaces it.
     this.update_in(cx, |this, window, cx| {
-        if this.diff.is_none() {
+        if this.pull.diff.is_none() {
             this.load_github_diff(reader, &pull_request, window, cx)
         }
     })?;
 
     // A tab opened by another of the repository's names may show it already.
-    let workspace = this.read_with(cx, |this, _| this.workspace.clone())?;
-    let tab = this.upgrade().context("the tab closed")?;
+    let workspace = this.update(cx, |this, _| this.workspace.clone())?;
+    let tab = this.tab().upgrade().context("the tab closed")?;
     if workspace.update_in(cx, |workspace, window, cx| {
         merge_into_twin(workspace, &tab, window, cx)
     })? {
@@ -2434,7 +2573,7 @@ fn is_retryable(error: &anyhow::Error) -> bool {
 /// copy, if it has the head Lo `saved`, with the saved details and their age (design §11
 /// "Offline"). Without a copy, it's `offline` again, and the tab shows the saved details alone.
 async fn show_offline(
-    this: WeakEntity<PrTab>,
+    this: PullHandle,
     link: PrLink,
     opened: Instant,
     saved: Option<Saved>,
@@ -2447,7 +2586,7 @@ async fn show_offline(
     let workspace = this.update(cx, |this, cx| {
         // `e` says why it won't mark the copy's files as they arrive, and their notes say what
         // changed since this Mac recorded them viewed.
-        this.showing_copy = Some(if is_offline(&offline) {
+        this.pull.showing_copy = Some(if is_offline(&offline) {
             OlderCopy::Unreachable
         } else {
             OlderCopy::NotLoaded
@@ -2468,7 +2607,7 @@ async fn show_offline(
         if shown {
             this.showing_copy_because(&offline, cx);
         } else {
-            this.showing_copy = None;
+            this.pull.showing_copy = None;
         }
     })?;
     if shown { Ok(()) } else { Err(offline) }
@@ -2489,7 +2628,7 @@ fn question_subject(found: &RepoAccount) -> String {
 /// owner's account can't see it. `None` when an account was added or signed in meanwhile, so
 /// which accounts can see it should be checked again.
 async fn ask_for_account(
-    this: &WeakEntity<PrTab>,
+    this: &PullHandle,
     link: &PrLink,
     found: &RepoAccount,
     logins: Vec<String>,
@@ -2538,6 +2677,29 @@ async fn ask_for_account(
     }
 }
 
+/// The trusted checkouts the pull requests of `workspace`'s tabs other than `tab` use.
+fn other_tabs_checkouts(
+    workspace: Option<&Entity<Workspace>>,
+    tab: EntityId,
+    cx: &App,
+) -> Vec<WorktreeId> {
+    let Some(workspace) = workspace else {
+        return Vec::new();
+    };
+    workspace
+        .read(cx)
+        .items_of_type::<PrTab>(cx)
+        .filter(|other| other.entity_id() != tab)
+        .flat_map(|other| {
+            let other = other.read(cx);
+            other
+                .pulls()
+                .filter_map(|pull| pull.checkout)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 impl Focusable for PrTab {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -2547,7 +2709,7 @@ impl Focusable for PrTab {
 impl Render for PrTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = cx.theme().colors().editor_background;
-        let github = self.diff_source == Some(DiffSource::GitHub);
+        let github = self.pull.diff_source == Some(DiffSource::GitHub);
         v_flex()
             .key_context(keys::tab_context(&self.middle))
             .track_focus(&self.focus_handle)
@@ -2568,7 +2730,7 @@ impl Render for PrTab {
             .bg(background)
             .child(self.render_header(cx))
             .children(self.render_status(cx))
-            .children(pr_banner::render(self.banners.read(cx).messages()))
+            .children(pr_banner::render(self.pull.banners.read(cx).messages()))
             .child(
                 h_flex()
                     .flex_1()
@@ -2587,7 +2749,7 @@ impl Item for PrTab {
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
         let repo = self.repo_name();
         let name = repo.rsplit('/').next().unwrap_or(&repo);
-        tab_title(name, self.link().number, self.header.title.as_deref()).into()
+        tab_title(name, self.link().number, self.pull.header.title.as_deref()).into()
     }
 
     fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> AnyElement {
@@ -2599,7 +2761,7 @@ impl Item for PrTab {
 
     fn tab_tooltip_text(&self, _: &App) -> Option<SharedString> {
         let pull = format!("{}#{}", self.repo_name(), self.link().number);
-        Some(match &self.header.title {
+        Some(match &self.pull.header.title {
             Some(title) => format!("{pull}: {title}").into(),
             None => pull.into(),
         })
@@ -2611,7 +2773,8 @@ impl Item for PrTab {
 
     fn to_item_events(event: &PrTabEvent, f: &mut dyn FnMut(ItemEvent)) {
         match event {
-            PrTabEvent::Changed => f(ItemEvent::UpdateTab),
+            PrTabEvent::Changed | PrTabEvent::PullChanged => f(ItemEvent::UpdateTab),
+            PrTabEvent::HeadChanged | PrTabEvent::ComparisonChanged => {}
         }
     }
 
@@ -2624,7 +2787,7 @@ impl Item for PrTab {
         _: &Entity<Self>,
         _: &App,
     ) -> Option<Box<dyn workspace::searchable::SearchableItemHandle>> {
-        Some(Box::new(self.diff.clone()?))
+        Some(Box::new(self.pull.diff.clone()?))
     }
 
     fn act_as_type<'a>(
@@ -2636,16 +2799,24 @@ impl Item for PrTab {
         if type_id == std::any::TypeId::of::<Self>() {
             Some(self_handle.clone().into())
         } else if type_id == std::any::TypeId::of::<SplittableEditor>() {
-            Some(self.diff.clone()?.into())
+            Some(self.pull.diff.clone()?.into())
         } else if type_id == std::any::TypeId::of::<Editor>() {
-            Some(self.diff.as_ref()?.read(cx).rhs_editor().clone().into())
+            Some(
+                self.pull
+                    .diff
+                    .as_ref()?
+                    .read(cx)
+                    .rhs_editor()
+                    .clone()
+                    .into(),
+            )
         } else {
             None
         }
     }
 
     fn deactivated(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             diff.update(cx, |diff, cx| diff.deactivated(window, cx));
         }
     }
@@ -2660,14 +2831,14 @@ impl Item for PrTab {
         if !self.middle.shows_diff() {
             return false;
         }
-        match &self.diff {
+        match &self.pull.diff {
             Some(diff) => diff.update(cx, |diff, cx| diff.navigate(data, window, cx)),
             None => false,
         }
     }
 
     fn set_nav_history(&mut self, history: ItemNavHistory, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             let editor = diff.read(cx).rhs_editor().clone();
             editor.update(cx, |editor, _| {
                 editor.set_nav_history(Some(history.clone()))

@@ -5,6 +5,7 @@ pub mod account;
 pub mod account_picker;
 pub mod api_diff;
 pub mod diff_cursor;
+mod diff_decorations;
 mod file_display;
 pub mod file_list;
 pub mod github_api;
@@ -23,6 +24,7 @@ pub mod pr_tab;
 mod preview_pool;
 mod read_only;
 pub mod recent_prs;
+pub mod shown_comparison;
 mod shown_files;
 pub mod tabs;
 #[cfg(test)]

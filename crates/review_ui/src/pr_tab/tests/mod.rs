@@ -26,6 +26,7 @@ use crate::file_list::FileOrder;
 use workspace::notifications::NotificationId;
 
 mod accounts;
+mod events;
 mod github_diff;
 mod keys;
 mod navigation;
@@ -33,6 +34,7 @@ mod offline;
 mod open;
 mod parts;
 mod read_only;
+mod swap;
 mod viewed;
 
 fn link(link: &str) -> PrLink {
@@ -221,7 +223,7 @@ fn two_hours_ago() -> SystemTime {
 }
 
 fn action(tab: &Entity<PrTab>, cx: &mut VisualTestContext) -> Option<TabAction> {
-    tab.read_with(cx, |tab, _| tab.action)
+    tab.read_with(cx, |tab, _| tab.pull.action)
 }
 
 /// The details an account's poller hands the tab, as GitHub's GraphQL API answers.
@@ -491,7 +493,7 @@ async fn signed_in_diff<'a>(
 /// Selects `path` in the list, which moves the diff there.
 fn go_to(tab: &Entity<PrTab>, path: &str, cx: &mut VisualTestContext) {
     tab.update_in(cx, |tab, window, cx| {
-        tab.files.select_path(path);
+        tab.pull.files.select_path(path);
         tab.selection_moved(window, cx);
     });
     cx.run_until_parked();

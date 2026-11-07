@@ -268,7 +268,7 @@ fn parse_raw_header(header: &str) -> Result<RawHeader, Error> {
     })
 }
 
-fn parse_mode(mode: &str) -> Result<Option<FileMode>, Error> {
+pub(crate) fn parse_mode(mode: &str) -> Result<Option<FileMode>, Error> {
     Ok(Some(match mode {
         "000000" => return Ok(None),
         "100644" => FileMode::Regular,

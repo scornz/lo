@@ -284,7 +284,7 @@ async fn the_file_list_keeps_its_selection_when_the_local_copy_reorders_it(
     };
     tab.update(cx, |tab, cx| {
         tab.copied(entries(None), &head, SystemTime::now(), cx);
-        tab.files.select_path("a.pb.go");
+        tab.pull.files.select_path("a.pb.go");
     });
     assert_eq!(
         tab.read_with(cx, |tab, _| tab.files().selected_row()),

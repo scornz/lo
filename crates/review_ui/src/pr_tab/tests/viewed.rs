@@ -250,7 +250,7 @@ async fn an_older_head_from_before_the_diff_loaded_doesnt_stop_e(cx: &mut TestAp
     // What Lo saved, from before this diff's head was pushed.
     let saved_at = SystemTime::now() - Duration::from_secs(3600);
     tab.update(cx, |tab, cx| {
-        tab.latest_head = None;
+        tab.pull.latest_head = None;
         tab.take_details(
             &details_at(
                 "1111111111111111111111111111111111111111",
@@ -420,7 +420,8 @@ async fn marks_cleared_or_set_elsewhere_update_this_macs_records(cx: &mut TestAp
         cx,
     )
     .await;
-    let viewed_at = |cx: &mut VisualTestContext| tab.read_with(cx, |tab, _| tab.viewed_at.clone());
+    let viewed_at =
+        |cx: &mut VisualTestContext| tab.read_with(cx, |tab, _| tab.pull.viewed_at.clone());
     let both = HashMap::from([
         ("a.rs".to_string(), R1.to_string()),
         ("b.rs".to_string(), R1.to_string()),
@@ -515,7 +516,7 @@ async fn each_failed_write_has_its_own_toast_and_the_selection_stays(cx: &mut Te
 async fn while_github_cant_be_reached_e_marks_nothing_and_stays(cx: &mut TestAppContext) {
     let (_, tab, github, cx) = three_files("e_offline", &[], &[("a.rs", "UNVIEWED")], cx).await;
     tab.update(cx, |tab, _| {
-        tab.poll.status.offline = Some(github::poll::Offline {
+        tab.pull.poll.status.offline = Some(github::poll::Offline {
             since: SystemTime::now(),
             retry_at: SystemTime::now() + Duration::from_secs(30),
             error: "the network is down".into(),
@@ -794,7 +795,7 @@ async fn a_file_that_changed_since_it_was_viewed_says_so_when_opened(cx: &mut Te
     // With the revision this Mac recorded among the pull request's, it's named.
     tab.update(cx, |tab, _| {
         let at = |secs: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + secs);
-        tab.revisions = Some(build_revisions(
+        tab.pull.revisions = Some(build_revisions(
             &[
                 PushRecord::Polled {
                     head: VIEWED_AT.into(),

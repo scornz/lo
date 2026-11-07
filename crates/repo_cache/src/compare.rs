@@ -41,9 +41,10 @@ pub struct Comparison {
     /// The files that changed, as [`Repo::changed_files`] lists them, from [`Self::old`] to
     /// [`Self::new`]; and after a conflicted replay, every file it conflicted on.
     pub files: Vec<ComparedFile>,
-    /// What the old side's files are read from with [`Repo::read_file`]: after a clean replay
-    /// ([`Replay::Clean`] or [`Replay::Retargeted`]), the tree of the old revision's changes
-    /// replayed onto the new base; otherwise the old head.
+    /// The old side: after a clean replay ([`Replay::Clean`] or [`Replay::Retargeted`]), the
+    /// tree of the old revision's changes replayed onto the new base; otherwise the old head. The
+    /// old blobs [`Self::files`] lists are this tree's; [`Repo::read_file`] reads any other path
+    /// in it.
     pub old: Oid,
     /// What the new side's files are read from: the new head.
     pub new: Oid,

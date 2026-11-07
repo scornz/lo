@@ -52,7 +52,7 @@ impl PrTab {
         };
         // GitHub's view didn't load, so neither would a write: the local copy shows, read-only.
         // One older than GitHub's newest head gets the newer push's refusal below.
-        let why = match self.showing_copy {
+        let why = match self.pull.showing_copy {
             Some(OlderCopy::Unreachable) => Some(format!(
                 "Lo can't reach GitHub, so it can't mark {path} viewed until it's back"
             )),
@@ -69,7 +69,7 @@ impl PrTab {
             );
             return;
         }
-        let Some((poller, pull)) = self.watched.clone() else {
+        let Some((poller, pull)) = self.pull.watched.clone() else {
             self.toast(
                 "Sign in to mark files viewed: this pull request opened without an account.".into(),
                 cx,
@@ -78,14 +78,14 @@ impl PrTab {
         };
         // Every write would fail; marking ahead of GitHub would move past files whose marks then
         // go back.
-        if self.poll.status.offline.is_some() {
+        if self.pull.poll.status.offline.is_some() {
             self.toast(
                 format!("Lo can't reach GitHub, so it can't mark {path} viewed until it's back."),
                 cx,
             );
             return;
         }
-        if self.poll.status.signed_out {
+        if self.pull.poll.status.signed_out {
             let login = poller.read(cx).login().to_string();
             self.toast(
                 format!(
@@ -96,7 +96,7 @@ impl PrTab {
             );
             return;
         }
-        let Some(node_id) = self.node_id.clone() else {
+        let Some(node_id) = self.pull.node_id.clone() else {
             self.toast(
                 format!(
                     "Couldn't mark {path} viewed: GitHub hasn't sent this pull request's details \
@@ -120,16 +120,17 @@ impl PrTab {
         // GitHub marks a file as of the pull request's latest head (`markFileAsViewed` takes no
         // commit), so a file is marked only while that's the head on screen. A push inside the
         // poll interval can still slip through.
-        let marks = self.marks.state(&github_path) != Some(ViewedState::Viewed);
+        let marks = self.pull.marks.state(&github_path) != Some(ViewedState::Viewed);
         if marks && self.newer_head().is_some() {
             self.newer_push_toast(&path, cx);
             return;
         }
-        let toggle = self.marks.toggle(&github_path);
-        self.files.set_viewed(&self.marks.shown());
+        let toggle = self.pull.marks.toggle(&github_path);
+        self.pull.files.set_viewed(&self.pull.marks.shown());
         if toggle.mark {
             // Only to a file the diff shows; the others are still loading.
             let unviewed: Vec<String> = self
+                .pull
                 .files
                 .unviewed_after(&path)
                 .map(|entry| entry.path().to_string())
@@ -139,7 +140,7 @@ impl PrTab {
                 .find(|next| self.location_in_diff(next, cx).is_some())
             {
                 Some(next) => {
-                    self.files.select_path(next);
+                    self.pull.files.select_path(next);
                     self.selection_moved(window, cx);
                 }
                 None => {
@@ -157,14 +158,14 @@ impl PrTab {
         }
         let (mark, github_path) = (toggle.mark, toggle.path.clone());
         let written = ViewedWrite {
-            record: match (toggle.mark, &self.head) {
+            record: match (toggle.mark, &self.pull.head) {
                 (true, Some(head)) => RecordChange::Record(head.clone()),
                 (true, None) => RecordChange::Keep,
                 (false, _) => RecordChange::Forget,
             },
             toggle,
             pressed_at: SystemTime::now(),
-            records: self.records.clone(),
+            records: self.pull.records.clone(),
             login: poller.read(cx).login().to_string(),
             pull: pull.clone(),
             workspace: self.workspace.clone(),
@@ -183,7 +184,9 @@ impl PrTab {
                 cx,
             )
         });
-        cx.spawn(async move |this, cx| {
+        // The mark is this pull request's, whether the tab shows it or keeps it by then.
+        let this = self.handle(cx);
+        cx.spawn(async move |_, cx| {
             let result = write.await;
             this.update(cx, |this, cx| {
                 this.viewed_written(&written, result.is_ok(), cx)
@@ -199,17 +202,18 @@ impl PrTab {
     /// A toggle's write finished: the file shows the new mark, or GitHub's again if the write
     /// failed, and on success the tab knows where this Mac records the file was viewed.
     fn viewed_written(&mut self, written: &ViewedWrite, succeeded: bool, cx: &mut Context<Self>) {
-        self.marks
+        self.pull
+            .marks
             .finish(&written.toggle, succeeded, SystemTime::now());
-        self.files.set_viewed(&self.marks.shown());
+        self.pull.files.set_viewed(&self.pull.marks.shown());
         if succeeded {
             let path = written.toggle.path.clone();
             match &written.record {
                 RecordChange::Record(head) => {
-                    self.viewed_at.insert(path, head.clone());
+                    self.pull.viewed_at.insert(path, head.clone());
                 }
                 RecordChange::Forget => {
-                    self.viewed_at.remove(&path);
+                    self.pull.viewed_at.remove(&path);
                 }
                 RecordChange::Keep => {}
             }

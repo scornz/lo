@@ -121,7 +121,7 @@ impl PrTab {
     pub(super) fn focus_middle(&self, window: &mut Window, cx: &mut App) -> bool {
         match &self.middle {
             Middle::Diff => {
-                let Some(diff) = &self.diff else {
+                let Some(diff) = &self.pull.diff else {
                     return false;
                 };
                 window.focus(&diff.focus_handle(cx), cx);
@@ -145,7 +145,7 @@ impl PrTab {
 
     /// The diff, or why the pull request couldn't open.
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let diff: AnyElement = match (&self.diff, &self.status) {
+        let diff: AnyElement = match (&self.pull.diff, &self.pull.status) {
             (_, Status::Failed(error)) => v_flex()
                 .size_full()
                 .p_4()
@@ -162,7 +162,7 @@ impl PrTab {
 
     /// `tab`: side by side, moves the cursor to the diff's other side.
     fn switch_side(&mut self, _: &SwitchSide, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             shown_files::switch_side(diff, window, cx);
         }
     }
@@ -197,11 +197,12 @@ impl PrTab {
     /// Opens, loads or shows the whole of the file selected in the file list, when it has focus,
     /// or else the file the diff shows, which `e` acts on too.
     fn expand_file(&mut self, _: &ExpandFile, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff.clone() else {
+        let Some(diff) = self.pull.diff.clone() else {
             return;
         };
         let in_file_list = self.file_list_focus.contains_focused(window, cx);
         let selected = self
+            .pull
             .files
             .selected()
             .filter(|_| in_file_list)
@@ -221,9 +222,9 @@ impl PrTab {
         let github_path = self.github_path(&path)?;
         let none = Revisions::default();
         let note = changed_since_viewed(
-            self.revisions.as_ref().unwrap_or(&none),
-            self.marks.state(&github_path),
-            self.viewed_at.get(&github_path).map(String::as_str),
+            self.pull.revisions.as_ref().unwrap_or(&none),
+            self.pull.marks.state(&github_path),
+            self.pull.viewed_at.get(&github_path).map(String::as_str),
         )?;
         Some((path, note))
     }
@@ -235,16 +236,16 @@ impl PrTab {
             return;
         };
         let positions: Vec<usize> = match forward {
-            true => (current + 1..self.files.len()).collect(),
+            true => (current + 1..self.pull.files.len()).collect(),
             false => (0..current).rev().collect(),
         };
         let target = positions
             .into_iter()
-            .filter_map(|position| self.files.at_review_position(position))
+            .filter_map(|position| self.pull.files.at_review_position(position))
             .map(|entry| entry.path().to_string())
             .find(|path| self.location_in_diff(path, cx).is_some());
         if let Some(path) = target {
-            self.files.select_path(&path);
+            self.pull.files.select_path(&path);
             self.selection_moved(window, cx);
         }
     }
@@ -259,13 +260,13 @@ impl PrTab {
 
     /// `]c` and `[c`: the next or previous change, across files. The list follows the cursor.
     fn next_change(&mut self, _: &NextChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             diff_cursor::go_to_change(diff, Direction::Next, window, cx);
         }
     }
 
     fn previous_change(&mut self, _: &PreviousChange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(diff) = &self.diff {
+        if let Some(diff) = &self.pull.diff {
             diff_cursor::go_to_change(diff, Direction::Prev, window, cx);
         }
     }

@@ -57,7 +57,7 @@ impl PrTab {
 
     /// The header's title: the pull request's, once known.
     pub fn title(&self) -> String {
-        match (&self.header.title, &self.status) {
+        match (&self.pull.header.title, &self.pull.status) {
             (Some(title), _) => title.clone(),
             (None, Status::Failed(_)) => "Not opened".to_string(),
             (None, _) => "Loading…".to_string(),
@@ -66,7 +66,7 @@ impl PrTab {
 
     /// Who the header says the tab acts as.
     pub fn acting_text(&self) -> String {
-        match &self.acting {
+        match &self.pull.acting {
             Some(Acting::Account(login)) => format!("as {login}"),
             Some(Acting::Anonymous) => "not signed in".to_string(),
             None => String::new(),
@@ -75,9 +75,9 @@ impl PrTab {
 
     /// What the header says about how polling the pull request goes, if anything's wrong.
     pub fn poll_note(&self) -> Option<PollNote> {
-        let login = self.acting.as_ref()?.login()?;
-        self.watched.as_ref()?;
-        poll_state::note(login, &self.poll, SystemTime::now())
+        let login = self.pull.acting.as_ref()?.login()?;
+        self.pull.watched.as_ref()?;
+        poll_state::note(login, &self.pull.poll, SystemTime::now())
     }
 
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -119,7 +119,7 @@ impl PrTab {
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
-                            .children(self.header.author.as_ref().map(|author| {
+                            .children(self.pull.header.author.as_ref().map(|author| {
                                 Label::new(format!("by {author}"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted)
@@ -153,6 +153,7 @@ impl PrTab {
             HeaderSlot::Stack | HeaderSlot::PendingReview => None,
             HeaderSlot::Revisions => {
                 let revision = self
+                    .pull
                     .revisions
                     .as_ref()
                     .and_then(|revisions| {
@@ -173,14 +174,14 @@ impl PrTab {
     }
 
     pub(super) fn render_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let step = match &self.status {
+        let step = match &self.pull.status {
             Status::Ready => None,
             Status::Loading(step) => Some((IconName::ArrowCircle, Color::Muted, step.clone())),
             Status::Offline(why) => Some((IconName::Warning, Color::Warning, why.clone())),
             Status::Failed(error) => Some((IconName::Warning, Color::Error, error.clone())),
         };
-        let offline = matches!(self.status, Status::Offline(_));
-        let github = self.diff_source == Some(DiffSource::GitHub);
+        let offline = matches!(self.pull.status, Status::Offline(_));
+        let github = self.pull.diff_source == Some(DiffSource::GitHub);
         let whitespace = self.hide_whitespace;
         if step.is_none() && !github && !whitespace {
             return None;
