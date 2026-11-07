@@ -8,7 +8,7 @@
 //!
 //! Vim's keys bind at the depth of the editor they work in, and before Lo's. So in the diff, Lo's
 //! keys bind at the depth of its editors too ([`DIFF_CONTEXT`]), where Lo's win, being bound
-//! later.
+//! later. [`OVER_VIM`] and [`UNDER_VIM`] list where Lo's keys and vim's meet.
 
 use std::any::Any;
 
@@ -40,6 +40,30 @@ pub(crate) const READING_CONTEXT: &str = "PrTab && !(Editor && (mode != full || 
 /// The tab outside any editor while it shows the diff, such as in the file list: where keys for
 /// reading the diff work besides the diff itself ([`DIFF_CONTEXT`]). A text box types them.
 pub(crate) const DIFF_READING_CONTEXT: &str = "PrTab && middle == diff && !Editor";
+
+/// Lo's keys that win over vim's where both hold, hiding vim's meaning there: by keystrokes and
+/// Lo's action. CLAUDE.md's "Keys" table says what each hides, and `key_clashes::with_vim` checks
+/// the list on the tab's places.
+#[cfg(test)]
+pub(crate) const OVER_VIM: &[(&str, &str)] = &[
+    // vim::NextWordEnd.
+    ("e", "review_ui::ToggleViewed"),
+    // workspace::FollowNextCollaborator, for both.
+    ("] f", "review_ui::NextFile"),
+    ("[ f", "review_ui::PreviousFile"),
+    // editor::GoToHunk and editor::GoToPreviousHunk, which stay in the file.
+    ("] c", "review_ui::NextChange"),
+    ("[ c", "review_ui::PreviousChange"),
+    // vim::Tab.
+    ("tab", "review_ui::SwitchSide"),
+];
+
+/// Vim's keys that win over Lo's where both hold: by keystrokes and vim's action.
+#[cfg(test)]
+pub(crate) const UNDER_VIM: &[(&str, &str)] = &[
+    // In insert mode, a normal-mode command, over pane::GoBack.
+    ("ctrl-o", "vim::TemporaryNormal"),
+];
 
 /// The tab's root context: [`KEY_CONTEXT`], and what its middle shows.
 pub(crate) fn tab_context(middle: &Middle) -> KeyContext {

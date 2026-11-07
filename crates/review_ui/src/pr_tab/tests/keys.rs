@@ -206,8 +206,9 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
 /// Each of Lo's keys does one thing wherever it's typed: on the context stack of every place in the
 /// window that takes keys, read from a window showing it, no two of Lo's bindings hold with the
 /// same keystrokes, or with one's starting the other's (see [`crate::key_clashes`]). Every binding
-/// holds in one of the places, so a binding in a new context needs a place here. The `lo` crate
-/// checks its Accounts modal the same way.
+/// holds in one of the places, so a binding in a new context needs a place here. Where one of
+/// Lo's and one of vim's fight, `keys::OVER_VIM` or `keys::UNDER_VIM` says which wins. The `lo`
+/// crate checks its Accounts modal the same way.
 #[gpui::test]
 async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppContext) {
     let (workspace, cx) = workspace(cx).await;
@@ -252,6 +253,18 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
     tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
     places.push(focused("the diff", "Editor", cx));
     let diff_stack = places.last().unwrap().stack.clone();
+    // Vim's other modes in the diff, and while it waits for the rest of a command.
+    for (name, keys) in [
+        ("the diff in vim's visual mode", "v"),
+        ("the diff in vim's insert mode", "i"),
+        ("the diff after vim's `y`", "y"),
+        ("the diff after vim's `f`", "f"),
+        ("the diff with a count", "3"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        places.push(focused(name, "Editor", cx));
+        cx.simulate_keystrokes("escape");
+    }
     cx.update(|window, cx| {
         let left = diff.read(cx).lhs_editor().unwrap().focus_handle(cx);
         window.focus(&left, cx)
@@ -266,11 +279,15 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
     tab.update_in(cx, |tab, window, cx| {
         tab.show_middle(Middle::Diff, window, cx)
     });
-    // A text box in the diff, such as a comment box, and a line of text in the tab.
+    // A text box in the diff, such as a comment box, with vim's keys, and a line of text in the
+    // tab. While the box has focus, Zed leaves the diff's own context out of the stack, `PrDiff`
+    // and vim's included.
     for (name, editor) in [
         (
             "a text box in the diff",
-            cx.update(|window, cx| cx.new(|cx| Editor::auto_height(1, 10, window, cx))),
+            cx.update(|window, cx| {
+                cx.new(|cx| crate::vim_mode::modal(Editor::auto_height(1, 10, window, cx)))
+            }),
         ),
         (
             "a line of text in the tab",
@@ -278,8 +295,9 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         ),
     ] {
         let mut stack = diff_stack.clone();
-        if name.ends_with("in the tab") {
-            stack.pop();
+        stack.pop();
+        if name.ends_with("in the diff") {
+            stack.push(gpui::KeyContext::parse("Editor mode=full multibuffer").unwrap());
         }
         stack.push(
             cx.update(|window, cx| editor.update(cx, |editor, cx| editor.key_context(window, cx))),
@@ -305,12 +323,22 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         // Lo's bindings alone.
         cx.clear_key_bindings();
         crate::bind_keys(cx);
-        let keymap = cx.key_bindings();
-        let keymap = keymap.borrow();
-        assert!(keymap.bindings().len() > 30);
-        let unplaced = crate::key_clashes::unplaced(keymap.bindings(), &places);
+        let lo: Vec<gpui::KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
+        assert!(lo.len() > 30);
+        let unplaced = crate::key_clashes::unplaced(&lo, &places);
         assert!(unplaced.is_empty(), "{unplaced:#?}");
-        let clashes = crate::key_clashes::clashes(keymap.bindings(), &places);
+        let clashes = crate::key_clashes::clashes(&lo, &places);
         assert!(clashes.is_empty(), "{clashes:#?}");
+        // And with vim's.
+        let vim = crate::key_clashes::vim_bindings(cx);
+        assert!(vim.len() > 300);
+        let fights = crate::key_clashes::with_vim(
+            &lo,
+            &vim,
+            &places,
+            crate::pr_tab::keys::OVER_VIM,
+            crate::pr_tab::keys::UNDER_VIM,
+        );
+        assert!(fights.is_empty(), "{fights:#?}");
     });
 }
