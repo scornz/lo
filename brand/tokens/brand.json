@@ -1,0 +1,40 @@
+{
+  "color": {
+    "ink": "#15161D",
+    "cream": "#F4ECDE",
+    "dark": {
+      "ground": "#15161D",
+      "text": "#F4ECDE",
+      "muted": "#A7A398",
+      "rule": "#33353D",
+      "accent": "#A5C5E9",
+      "onAccent": "#15161D",
+      "mark": "#F4ECDE"
+    },
+    "light": {
+      "ground": "#F4ECDE",
+      "text": "#15161D",
+      "muted": "#66625A",
+      "rule": "#DCD2C1",
+      "accent": "#0664B2",
+      "onAccent": "#F4ECDE",
+      "mark": "#15161D"
+    }
+  },
+  "font": {
+    "sans": "Host Grotesk",
+    "mono": "Fragment Mono",
+    "wordmark": "Host Grotesk ExtraBold, tracked -2%"
+  },
+  "type": {
+    "display": { "size": 48, "lineHeight": 1.05, "weight": 800 },
+    "title": { "size": 28, "lineHeight": 1.2, "weight": 700 },
+    "body": { "size": 17, "lineHeight": 1.5, "weight": 400 },
+    "small": { "size": 14, "lineHeight": 1.4, "weight": 400 },
+    "code": { "size": 14, "lineHeight": 1.5, "weight": 400, "font": "mono" }
+  },
+  "logo": {
+    "clearSpace": "the ball's radius on every side (21 of 76, about 28% of the mark's height)",
+    "minimumSize": "16px for the mark, 20px tall for the lockup"
+  }
+}

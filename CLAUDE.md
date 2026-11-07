@@ -81,6 +81,9 @@ These bind every change (design §1).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
 - `docs/`: the design, plan, status and decisions.
+- `brand/`: Lo's visual identity: the mark, wordmark, lockups, the README's banner, and color and
+  type tokens. `brand/README.md` holds the rules for the mark, colors and type; follow it in
+  anything that shows them.
 - `.claude/skills/`: skills for every agent. `.agents/skills` links to it for Codex.
 
 ## Set up
