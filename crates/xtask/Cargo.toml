@@ -1,4 +1,4 @@
-# Its own workspace, so `cargo xtask` builds without resolving rozed's, which needs Zed's checkout
+# Its own workspace, so `cargo xtask` builds without resolving Lo's, which needs Zed's checkout
 # and the Cargo settings xtask copies from it.
 [workspace]
 

@@ -1,4 +1,4 @@
-; rozed's additions to the TypeScript and JavaScript tags queries, for what they leave out. Their
+; Lo's additions to the TypeScript and JavaScript tags queries, for what they leave out. Their
 ; own patterns come first, so they win when both tag the same name. For the TypeScript and TSX
 ; grammars, and so for JavaScript, which Zed reads with the TSX grammar.
 

@@ -241,7 +241,7 @@ impl<'s> Converter<'_, 's> {
 
 /// Whether a node is a comment. Grammars name comments `comment` or `…_comment`, and make them
 /// extras, nodes that can appear anywhere. difftastic also uses each grammar's highlighting
-/// queries, which rozed doesn't have here.
+/// queries, which Lo doesn't have here.
 fn is_comment(node: &TsNode) -> bool {
     let kind = node.kind();
     !node.is_error() && (node.is_extra() || kind == "comment" || kind.ends_with("_comment"))

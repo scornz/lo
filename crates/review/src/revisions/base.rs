@@ -5,7 +5,7 @@
 //! forward since and doesn't contain the pull request's commits, which is the usual case. It
 //! doesn't for a pull request merged with a merge commit or by a fast-forward, whose base branch
 //! now holds its revisions, nor for a stacked or retargeted pull request, whose base branch was
-//! force-pushed or replaced. [`base_tip_at`] picks the tip then from what GitHub and rozed saw.
+//! force-pushed or replaced. [`base_tip_at`] picks the tip then from what GitHub and Lo saw.
 
 use std::time::{Duration, SystemTime};
 
@@ -49,7 +49,7 @@ pub enum BaseRecord {
         after: Option<String>,
         at: SystemTime,
     },
-    /// A tip rozed saw itself, and when it first saw it, such as a head of the pull request below
+    /// A tip Lo saw itself, and when it first saw it, such as a head of the pull request below
     /// in a stack, whose branch is this one's base. The branch was there by then, or had moved on
     /// unseen.
     Seen {
@@ -105,7 +105,7 @@ pub struct BaseHistory {
     pub records: Vec<BaseRecord>,
 }
 
-/// The base branch's tip when a revision was pushed, and how rozed knows it.
+/// The base branch's tip when a revision was pushed, and how Lo knows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseTip {
     /// The tip's SHA.
@@ -134,7 +134,7 @@ pub enum BaseTipSource {
     /// The latest force-push of the branch at or before the revision, from its timeline event.
     /// The branch can have moved forward after it.
     ForcePush,
-    /// A tip rozed saw at or before the revision's push. The branch can have moved forward after
+    /// A tip Lo saw at or before the revision's push. The branch can have moved forward after
     /// it.
     Seen,
     /// The branch's tip now, or the pull request's base branch's when that isn't known, though
@@ -157,7 +157,7 @@ pub enum BaseTipSource {
 /// - **Moving forward only:** the branch's tip now, when no source says it was force-pushed,
 ///   deleted or re-created since, and it doesn't hold the pull request's commits. For a branch
 ///   the pull request no longer targets, that's its latest push the activity API read.
-/// - **Otherwise,** the latest force-push event or tip rozed saw at or before the push, and failing
+/// - **Otherwise,** the latest force-push event or tip Lo saw at or before the push, and failing
 ///   those, the branch's tip now, flagged [`BaseTipSource::Uncertain`].
 /// - **Never one holding the revision.** `contains(tip, head)` says whether commit `tip` has the
 ///   revision's head, `head`, in its history (`Repo::is_ancestor(head, tip)` in the local copy).
@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tip_rozed_saw_is_the_last_resort_before_today_s() {
+    fn a_tip_lo_saw_is_the_last_resort_before_today_s() {
         let history = BaseHistory {
             branch: "lower".into(),
             tip: Some("l3".into()),

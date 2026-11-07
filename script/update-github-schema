@@ -5,7 +5,7 @@
 #
 # Usage: script/update-github-schema [<github/docs commit>]
 #
-# Without a commit, it takes the head of github/docs's main branch. It then validates rozed's
+# Without a commit, it takes the head of github/docs's main branch. It then validates Lo's
 # queries against the new schema and builds the github crate, so a schema change that breaks a
 # query fails here, and in the PR that commits the new schema.
 set -eu

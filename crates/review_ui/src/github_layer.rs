@@ -1,4 +1,4 @@
-//! rozed's GitHub layer as its tabs use it: the signed-in accounts, the cache of GitHub's answers,
+//! Lo's GitHub layer as its tabs use it: the signed-in accounts, the cache of GitHub's answers,
 //! and one poller per account.
 
 use std::collections::HashMap;
@@ -8,14 +8,14 @@ use futures::FutureExt as _;
 use futures::future::Shared;
 use github::accounts::{Accounts, RepoAccount};
 use github::cache::{PrCache, RECENT_PRS, RecentPr};
-use github::db::RozedDb;
+use github::db::LoDb;
 use github::poll::{PollConfig, Poller, RequestQueue};
 use github::queries::PullRequestData;
 use github::viewed::ViewedRecords;
 use github::{PullRef, Target};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
-/// A pull request's details as rozed saved them.
+/// A pull request's details as Lo saved them.
 #[derive(Clone, Debug)]
 pub struct Saved {
     /// The account they were fetched with, whose viewed marks they hold.
@@ -25,7 +25,7 @@ pub struct Saved {
     pub fetched_at: SystemTime,
 }
 
-/// The accounts, the cache and the pollers, once rozed's database is open.
+/// The accounts, the cache and the pollers, once Lo's database is open.
 pub struct GithubLayer {
     accounts: Entity<Accounts>,
     cache: PrCache,
@@ -33,7 +33,7 @@ pub struct GithubLayer {
     viewed: ViewedRecords,
     /// One per account that has a tab, by lowercased login.
     pollers: HashMap<String, Entity<Poller>>,
-    /// Whether rozed is in the foreground, for pollers yet to start.
+    /// Whether Lo is in the foreground, for pollers yet to start.
     foreground: bool,
 }
 
@@ -46,7 +46,7 @@ impl Global for GlobalLayer {}
 
 /// Sets the layer up from `accounts`, which resolves to the loaded accounts and their database, or
 /// to `None` when the database couldn't be opened.
-pub fn init(accounts: Task<Option<(Entity<Accounts>, RozedDb)>>, cx: &mut App) {
+pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
     let ready = cx
         .spawn(async move |cx| {
             let (accounts, db) = accounts.await?;
@@ -108,7 +108,7 @@ impl GithubLayer {
             .clone()
     }
 
-    /// The pull requests opened recently with any account, newest first. It's read from rozed's
+    /// The pull requests opened recently with any account, newest first. It's read from Lo's
     /// database, so it's there at once, online or not.
     pub fn recent(&self) -> Vec<RecentPr> {
         self.cache
@@ -129,8 +129,8 @@ impl GithubLayer {
         .detach();
     }
 
-    /// What rozed saved about `pull` most recently, whichever account fetched it, so the newest
-    /// head shows. The viewed marks in it are that account's. It's read from rozed's database,
+    /// What Lo saved about `pull` most recently, whichever account fetched it, so the newest
+    /// head shows. The viewed marks in it are that account's. It's read from Lo's database,
     /// so it's there at once, online or not.
     pub fn saved_details(&self, pull: &PullRef, cx: &App) -> Option<Saved> {
         let target = Target::Pull(pull.clone());
@@ -146,7 +146,7 @@ impl GithubLayer {
                         fetched_at: saved.fetched_at,
                     }),
                     Err(error) => {
-                        log::warn!("reading what rozed saved about {pull}: {error:#}");
+                        log::warn!("reading what Lo saved about {pull}: {error:#}");
                         None
                     }
                 }
@@ -186,7 +186,7 @@ impl GithubLayer {
         })
     }
 
-    /// Tells every poller whether rozed is in the foreground. In the background they all slow to
+    /// Tells every poller whether Lo is in the foreground. In the background they all slow to
     /// every 5 minutes.
     pub fn set_foreground(&mut self, foreground: bool, cx: &mut Context<Self>) {
         self.foreground = foreground;

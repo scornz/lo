@@ -1,5 +1,5 @@
 //! The PR tab: one pull request's header, its files in review order, its side-by-side diff and its
-//! threads (design §10 "Window"). rozed's window has one tab per pull request, and opening a pull
+//! threads (design §10 "Window"). Lo's window has one tab per pull request, and opening a pull
 //! request that's already open switches to its tab.
 
 use std::collections::{HashMap, HashSet};
@@ -280,14 +280,14 @@ pub enum Status {
     Loading(SharedString),
     /// Every file is in the diff.
     Ready,
-    /// GitHub's view didn't load, and the diff is the local copy's, read-only, while rozed keeps
+    /// GitHub's view didn't load, and the diff is the local copy's, read-only, while Lo keeps
     /// trying. Says so, and why.
     Offline(SharedString),
     Failed(SharedString),
 }
 
 impl Status {
-    /// Whether opening the tab's link again loads it again: it failed, or showed only what rozed
+    /// Whether opening the tab's link again loads it again: it failed, or showed only what Lo
     /// had while offline.
     fn tries_again(&self) -> bool {
         matches!(self, Self::Failed(_) | Self::Offline(_))
@@ -334,7 +334,7 @@ pub struct PrTab {
     node_id: Option<String>,
     /// The head on screen: GitHub's at first, then the one the local copy fetched.
     head: Option<String>,
-    /// When rozed learned the head on screen. What GitHub said about its head before then is
+    /// When Lo learned the head on screen. What GitHub said about its head before then is
     /// older news.
     head_at: Option<SystemTime>,
     /// GitHub's latest head for the pull request, from its details or its summary, and when GitHub
@@ -356,7 +356,7 @@ pub struct PrTab {
     /// Whether GitHub gave this load the pull request, so anything that fails after is the local
     /// copy's.
     answered: bool,
-    /// The account and the time of the details rozed saved, while the tab shows them instead of
+    /// The account and the time of the details Lo saved, while the tab shows them instead of
     /// GitHub's answer.
     saved: Option<(String, SystemTime)>,
     /// What the tab should tell about what its diff shows, under its header.
@@ -407,7 +407,7 @@ pub struct PrTab {
     api_head: Option<String>,
     /// The head GitHub's diff was listed at, once it shows and if GitHub's links say.
     github_head: Option<String>,
-    /// Tries copying again, when rozed stopped trying after failures it doesn't know.
+    /// Tries copying again, when Lo stopped trying after failures it doesn't know.
     retry_copy: Option<oneshot::Sender<()>>,
     _subscriptions: Vec<Subscription>,
     /// What the tab hears from the poller it watches with, replaced when it watches with another.
@@ -514,7 +514,7 @@ impl PrTab {
             // How many times GitHub was checked since a load last worked, so the waits keep
             // growing across loads that fail again.
             let mut checks = 0;
-            // Only the load the user started may ask which account to use; one rozed starts by
+            // Only the load the user started may ask which account to use; one Lo starts by
             // itself never puts the picker up.
             let mut may_ask = true;
             loop {
@@ -741,7 +741,7 @@ impl PrTab {
         self.set_status(Status::Loading("Asking GitHub for it…".into()), cx);
     }
 
-    /// Shows what rozed saved about the pull request, at once and online or not, until GitHub
+    /// Shows what Lo saved about the pull request, at once and online or not, until GitHub
     /// answers.
     pub(crate) fn show_saved(&mut self, saved: &Saved, cx: &mut Context<Self>) {
         self.take_details(&saved.details, saved.fetched_at, Some(&saved.login), cx);
@@ -749,7 +749,7 @@ impl PrTab {
         self.show_saved_banner(true, cx);
     }
 
-    /// The tab shows the local copy's diff with what rozed saved, because loading from GitHub
+    /// The tab shows the local copy's diff with what Lo saved, because loading from GitHub
     /// failed with `why`: with GitHub's links to fix it, and when waiting won't fix it, a button
     /// to try again.
     fn showing_copy_because(&mut self, why: &anyhow::Error, cx: &mut Context<Self>) {
@@ -767,23 +767,23 @@ impl PrTab {
         let text = if offline {
             format!(
                 "Offline: {reason}. This is the local copy's diff, read-only, until GitHub \
-                 answers again; rozed keeps trying."
+                 answers again; Lo keeps trying."
             )
         } else if is_retryable(why) {
             format!(
                 "GitHub didn't answer: {reason}. This is the local copy's diff, read-only, until \
-                 it does; rozed keeps trying."
+                 it does; Lo keeps trying."
             )
         } else if waitable {
             format!(
-                "rozed couldn't load the pull request from GitHub: {reason}. This is the local \
-                 copy's diff, read-only; rozed keeps trying."
+                "Lo couldn't load the pull request from GitHub: {reason}. This is the local \
+                 copy's diff, read-only; Lo keeps trying."
             )
         } else if self.action == Some(TabAction::ChooseAccount) {
             format!("{reason}. This is the local copy's diff, read-only.")
         } else {
             format!(
-                "rozed couldn't load the pull request from GitHub: {reason}. This is the local \
+                "Lo couldn't load the pull request from GitHub: {reason}. This is the local \
                  copy's diff, read-only."
             )
         };
@@ -805,9 +805,9 @@ impl PrTab {
         cx: &mut Context<Self>,
     ) {
         let text = if asking {
-            format!("Choose the account rozed uses for {subject}…")
+            format!("Choose the account Lo uses for {subject}…")
         } else {
-            format!("Waiting to ask which account rozed uses for {subject}…")
+            format!("Waiting to ask which account Lo uses for {subject}…")
         };
         self.set_status(Status::Loading(text.into()), cx);
     }
@@ -840,7 +840,7 @@ impl PrTab {
             return;
         };
         let mut text = format!(
-            "Showing what rozed saved for {login} {}",
+            "Showing what Lo saved for {login} {}",
             poll_state::ago(*fetched_at, SystemTime::now())
         );
         text.push_str(if asking {
@@ -918,7 +918,7 @@ impl PrTab {
     }
 
     /// Takes the pull request's details as GitHub gave them at `fetched_at` to `login`, from the
-    /// poller or from what rozed saved.
+    /// poller or from what Lo saved.
     fn take_details(
         &mut self,
         details: &PullRequestData,
@@ -959,7 +959,7 @@ impl PrTab {
         self.changed(cx);
     }
 
-    /// GitHub's `marks`, read at `head`, changed in ways rozed's own writes don't explain, so this
+    /// GitHub's `marks`, read at `head`, changed in ways Lo's own writes don't explain, so this
     /// Mac's records follow them (design §6): a file GitHub says isn't viewed has no record, and a
     /// file marked viewed again elsewhere is recorded at `head`. A file changed since viewed keeps
     /// its record, which is what it's for.
@@ -1028,7 +1028,7 @@ impl PrTab {
     ) -> Vec<usize> {
         self.list(entries);
         self.set_head(head.as_str(), polled_at);
-        // Until rozed reads the branch's push history (milestone 6), the head the local copy
+        // Until Lo reads the branch's push history (milestone 6), the head the local copy
         // fetched is the one revision it knows.
         let records = [PushRecord::Polled {
             head: head.as_str().to_string(),
@@ -1203,7 +1203,7 @@ impl PrTab {
             && head != api_head
         {
             let text = format!(
-                "This pull request moved on while rozed read it. GitHub's diff shows {}, and the \
+                "This pull request moved on while Lo read it. GitHub's diff shows {}, and the \
                  local copy's diff shows {} once it's ready.",
                 short(head),
                 short(api_head)
@@ -1238,7 +1238,7 @@ impl PrTab {
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
                 format!(
-                    "rozed couldn't read GitHub's diff, and tries again until the local copy's \
+                    "Lo couldn't read GitHub's diff, and tries again until the local copy's \
                      diff is ready: {error}"
                 ),
                 cx,
@@ -1265,7 +1265,7 @@ impl PrTab {
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
                 format!(
-                    "rozed couldn't read GitHub's diff, so the diff shows once the local copy is \
+                    "Lo couldn't read GitHub's diff, so the diff shows once the local copy is \
                      ready: {error}"
                 ),
                 cx,
@@ -1286,7 +1286,7 @@ impl PrTab {
             banners.show(
                 BannerKind::GithubDiffFailed,
                 Severity::Info,
-                "rozed didn't read GitHub's diff, to keep the few requests GitHub allows without \
+                "Lo didn't read GitHub's diff, to keep the few requests GitHub allows without \
                  signing in for opening pull requests. The diff shows once the local copy is \
                  ready.",
                 cx,
@@ -1318,8 +1318,7 @@ impl PrTab {
             None => "Trying again now.".to_string(),
         };
         let meanwhile = self.meanwhile();
-        let text =
-            format!("rozed couldn't copy this pull request locally: {why}. {when}{meanwhile}");
+        let text = format!("Lo couldn't copy this pull request locally: {why}. {when}{meanwhile}");
         self.banners.update(cx, |banners, cx| {
             banners.show(BannerKind::LocalCopyFailed, Severity::Warning, text, cx)
         });
@@ -1343,7 +1342,7 @@ impl PrTab {
         }
     }
 
-    /// Says rozed stopped trying to copy the pull request locally after `tries` failures for
+    /// Says Lo stopped trying to copy the pull request locally after `tries` failures for
     /// `why`, a reason it doesn't know, with a button that tries again through `retry`.
     pub(crate) fn copy_stopped(
         &mut self,
@@ -1354,7 +1353,7 @@ impl PrTab {
     ) {
         self.retry_copy = Some(retry);
         let text = format!(
-            "rozed stopped trying to copy this pull request locally after {tries} tries: {why}.{}",
+            "Lo stopped trying to copy this pull request locally after {tries} tries: {why}.{}",
             self.meanwhile()
         );
         let tab = cx.weak_entity();
@@ -1386,7 +1385,7 @@ impl PrTab {
         self.set_status(status, cx);
     }
 
-    /// Tries copying the pull request locally again, after rozed stopped trying.
+    /// Tries copying the pull request locally again, after Lo stopped trying.
     pub(crate) fn retry_copy(&mut self, cx: &mut Context<Self>) {
         let Some(retry) = self.retry_copy.take() else {
             return;
@@ -1418,7 +1417,7 @@ impl PrTab {
         let shown = self.head.as_deref().map(short).unwrap_or_default();
         let why = why.trim_end().trim_end_matches('.');
         let text = format!(
-            "GitHub has {latest}, but rozed couldn't copy it: {why}. This is the local copy of \
+            "GitHub has {latest}, but Lo couldn't copy it: {why}. This is the local copy of \
              {shown}, read-only."
         );
         self.set_status(Status::Offline(text.into()), cx);
@@ -1466,7 +1465,7 @@ impl PrTab {
                     BannerKind::LocalCopyFailed,
                     Severity::Error,
                     format!(
-                        "rozed couldn't show the local copy's diff, so this is GitHub's diff: \
+                        "Lo couldn't show the local copy's diff, so this is GitHub's diff: \
                          changed lines only. {error:#}"
                     ),
                     cx,
@@ -1477,10 +1476,10 @@ impl PrTab {
         }
         let text = match self.diff_source {
             Some(DiffSource::GitHub) => format!(
-                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed \
+                "Lo couldn't show the local copy's diff, so this is GitHub's diff: changed \
                  lines only. {error:#}"
             ),
-            _ => format!("rozed couldn't finish loading this pull request: {error:#}"),
+            _ => format!("Lo couldn't finish loading this pull request: {error:#}"),
         };
         self.banners.update(cx, |banners, cx| {
             banners.show(BannerKind::LocalCopyFailed, Severity::Error, text, cx)
@@ -1917,7 +1916,7 @@ impl PrTab {
                             banners.show(
                                 BannerKind::LoadFileFailed,
                                 Severity::Warning,
-                                format!("rozed couldn't load {path}: {error:#}"),
+                                format!("Lo couldn't load {path}: {error:#}"),
                                 cx,
                             )
                         });
@@ -2077,10 +2076,10 @@ impl PrTab {
         // One older than GitHub's newest head gets the newer push's refusal below.
         let why = match self.showing_copy {
             Some(OlderCopy::Unreachable) => Some(format!(
-                "rozed can't reach GitHub, so it can't mark {path} viewed until it's back"
+                "Lo can't reach GitHub, so it can't mark {path} viewed until it's back"
             )),
             Some(OlderCopy::NotLoaded) => Some(format!(
-                "GitHub's view of this pull request didn't load, so rozed can't mark {path} \
+                "GitHub's view of this pull request didn't load, so Lo can't mark {path} \
                  viewed until it does"
             )),
             Some(OlderCopy::NewerNotCopied) | None => None,
@@ -2103,9 +2102,7 @@ impl PrTab {
         // go back.
         if self.poll.status.offline.is_some() {
             self.toast(
-                format!(
-                    "rozed can't reach GitHub, so it can't mark {path} viewed until it's back."
-                ),
+                format!("Lo can't reach GitHub, so it can't mark {path} viewed until it's back."),
                 cx,
             );
             return;
@@ -2114,8 +2111,8 @@ impl PrTab {
             let login = poller.read(cx).login().to_string();
             self.toast(
                 format!(
-                    "{login} is signed out, so rozed can't mark {path} viewed. Sign in again \
-                     from Accounts… in the rozed menu."
+                    "{login} is signed out, so Lo can't mark {path} viewed. Sign in again \
+                     from Accounts… in the Lo menu."
                 ),
                 cx,
             );
@@ -2135,7 +2132,7 @@ impl PrTab {
             self.file_toast(
                 &path,
                 format!(
-                    "GitHub doesn't list {path} in this pull request, so rozed can't mark it \
+                    "GitHub doesn't list {path} in this pull request, so Lo can't mark it \
                      viewed. GitHub and the local copy see this file's change differently."
                 ),
                 cx,
@@ -2267,7 +2264,7 @@ impl PrTab {
             &self.workspace,
             toast_id(cx.entity_id(), None),
             format!(
-                "There's a newer push to this pull request than the one on screen, so rozed \
+                "There's a newer push to this pull request than the one on screen, so Lo \
                  didn't mark {path} viewed: GitHub would mark it as of that push. Load it to mark \
                  files viewed."
             ),
@@ -2843,7 +2840,7 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// GitHub's viewed mark as rozed's review model has it.
+/// GitHub's viewed mark as Lo's review model has it.
 /// Every path GitHub lists for the pull request, when its details list them all: GitHub caps a
 /// pull request's files, and leaves out what it couldn't show.
 fn listed_paths(details: &PullRequestData) -> Option<HashSet<String>> {
@@ -2990,7 +2987,7 @@ fn merge_into_twin(
     true
 }
 
-/// What rozed saved about `link`'s pull request, with any account.
+/// What Lo saved about `link`'s pull request, with any account.
 async fn saved_details(link: &PrLink, cx: &mut AsyncWindowContext) -> Option<Saved> {
     let layer = cx.update(|_, cx| github_layer::ready(cx)).ok()?.await?;
     let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number).ok()?);
@@ -3008,7 +3005,7 @@ fn failed(
     log::error!("{link}: {error:#}");
     let waitable = is_waitable(&error);
     let text = if waitable {
-        format!("{}. rozed keeps trying GitHub.", sentence(&error))
+        format!("{}. Lo keeps trying GitHub.", sentence(&error))
     } else {
         format!("{}.", sentence(&error))
     };
@@ -3060,7 +3057,7 @@ fn jitter_sample() -> f64 {
 }
 
 /// Loads `link`'s pull request into `this`: picks the account, reads the pull request, copies it
-/// locally and shows its diff. What rozed `saved` about it shows until GitHub answers. When
+/// locally and shows its diff. What Lo `saved` about it shows until GitHub answers. When
 /// several accounts can see it and none was chosen, it asks which to use only if it `may_ask`.
 async fn load(
     this: WeakEntity<PrTab>,
@@ -3073,7 +3070,7 @@ async fn load(
 ) -> anyhow::Result<()> {
     let layer = cx.update(|_, cx| github_layer::ready(cx))?.await;
     let pull = PullRef::new(&link.owner, &link.repo, i64::try_from(link.number)?);
-    // What rozed saved shows at once, and offline.
+    // What Lo saved shows at once, and offline.
     if let Some(saved) = saved {
         this.update(cx, |this, cx| this.show_saved(saved, cx))?;
     }
@@ -3113,7 +3110,7 @@ async fn load(
             (None, AccountDecision::Ask(_), Some(found)) => {
                 return Err(AccountNeeded {
                     message: format!(
-                        "Choose which account rozed uses for {}",
+                        "Choose which account Lo uses for {}",
                         question_subject(found)
                     ),
                 }
@@ -3299,7 +3296,7 @@ enum OlderCopy {
 pub enum TabAction {
     /// Loading again, as reopening the link does.
     TryAgain,
-    /// Asking which account to use, which rozed doesn't do by itself.
+    /// Asking which account to use, which Lo doesn't do by itself.
     ChooseAccount,
 }
 
@@ -3312,7 +3309,7 @@ impl TabAction {
     }
 }
 
-/// The tab needs the user to choose which account to use for `subject`: rozed's own load didn't
+/// The tab needs the user to choose which account to use for `subject`: Lo's own load didn't
 /// ask, or the user dismissed the picker.
 #[derive(Debug)]
 struct AccountNeeded {
@@ -3338,7 +3335,7 @@ fn is_retryable(error: &anyhow::Error) -> bool {
 }
 
 /// When GitHub couldn't be reached (`offline`), shows the pull request's diff from the local
-/// copy, if it has the head rozed `saved`, with the saved details and their age (design §11
+/// copy, if it has the head Lo `saved`, with the saved details and their age (design §11
 /// "Offline"). Without a copy, it's `offline` again, and the tab shows the saved details alone.
 async fn show_offline(
     this: WeakEntity<PrTab>,
@@ -3392,7 +3389,7 @@ fn question_subject(found: &RepoAccount) -> String {
 
 /// Asks which of `logins`, the accounts that can see `link`'s repository, to open it with
 /// (design §3 "Which account"). The picker remembers the answer: for the repository's owner,
-/// as GitHub names it now, so rozed asks once per owner; or for the repository alone, when the
+/// as GitHub names it now, so Lo asks once per owner; or for the repository alone, when the
 /// owner's account can't see it. `None` when an account was added or signed in meanwhile, so
 /// which accounts can see it should be checked again.
 async fn ask_for_account(
@@ -3432,7 +3429,7 @@ async fn ask_for_account(
         }
         Ok(Err(NotChosen::NoneLeft { subject })) => anyhow::bail!(
             "No account that can see {subject} is signed in any more. Sign in from Accounts… in \
-             the rozed menu, then try again"
+             the Lo menu, then try again"
         ),
         Ok(Err(NotChosen::Dismissed { subject })) => Err(AccountNeeded {
             message: format!("No account was chosen for {subject}"),
@@ -3459,7 +3456,7 @@ impl Render for PrTab {
                 .size_full()
                 .p_4()
                 .gap_2()
-                .child(Label::new("rozed couldn't open this pull request").color(Color::Error))
+                .child(Label::new("Lo couldn't open this pull request").color(Color::Error))
                 .child(Label::new(error.clone()).size(LabelSize::Small))
                 .child(h_flex().gap_2().children(self.render_actions(cx)))
                 .into_any_element(),
@@ -3745,7 +3742,7 @@ mod tests {
         }
     }
 
-    /// Opens `link` and loads it, as rozed does.
+    /// Opens `link` and loads it, as Lo does.
     fn open_loaded(
         workspace: &Entity<Workspace>,
         link: &str,
@@ -3833,7 +3830,7 @@ mod tests {
         let shown = banners(&tab, cx);
         assert!(
             shown.iter().any(|banner| banner.starts_with(
-                "rozed couldn't read GitHub's diff, and tries again until the local copy's diff \
+                "Lo couldn't read GitHub's diff, and tries again until the local copy's diff \
                  is ready: GitHub answered 502"
             )),
             "{shown:#?}"
@@ -3979,7 +3976,7 @@ mod tests {
         let banners = banners(&two, cx);
         assert!(
             banners.iter().any(|banner| banner.starts_with(
-                "rozed didn't read GitHub's diff, to keep the few requests GitHub allows"
+                "Lo didn't read GitHub's diff, to keep the few requests GitHub allows"
             )),
             "{banners:#?}"
         );
@@ -4418,7 +4415,7 @@ mod tests {
         assert_eq!(picker(&workspace, cx), None);
         assert_eq!(
             status(&secret, cx),
-            Status::Loading("Waiting to ask which account rozed uses for acme/secret…".into())
+            Status::Loading("Waiting to ask which account Lo uses for acme/secret…".into())
         );
         activate(&workspace, &secret, cx);
         assert_eq!(
@@ -4498,7 +4495,7 @@ mod tests {
         assert_eq!(owners_account.as_deref(), Some("work"));
         assert_eq!(
             status(&secret, cx),
-            Status::Loading("Choose the account rozed uses for acme/secret…".into())
+            Status::Loading("Choose the account Lo uses for acme/secret…".into())
         );
 
         cx.simulate_keystrokes("enter");
@@ -4668,7 +4665,7 @@ mod tests {
         );
         assert_eq!(
             status(&acme, cx),
-            Status::Loading("Waiting to ask which account rozed uses for acme…".into())
+            Status::Loading("Waiting to ask which account Lo uses for acme…".into())
         );
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
@@ -4728,9 +4725,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn a_poller_started_while_rozed_is_in_the_background_starts_slow(
-        cx: &mut TestAppContext,
-    ) {
+    async fn a_poller_started_while_lo_is_in_the_background_starts_slow(cx: &mut TestAppContext) {
         let (_workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         sign_in(&github, &[("home", "gho_HOME")], cx).await;
@@ -4808,7 +4803,7 @@ mod tests {
             panic!("the tab opened: {:?}", status(&tab, cx));
         };
         assert!(
-            message.starts_with("work, the account rozed uses for acme, couldn't check acme/api"),
+            message.starts_with("work, the account Lo uses for acme, couldn't check acme/api"),
             "{message}"
         );
         assert_eq!(
@@ -4834,7 +4829,7 @@ mod tests {
         assert_eq!(help_links(&tab, cx), Vec::<String>::new());
     }
 
-    /// `rozed-dev/playground#2` on the fake GitHub, which `rozed-bot` can see, with what rozed
+    /// `rozed-dev/playground#2` on the fake GitHub, which `rozed-bot` can see, with what Lo
     /// saved about it for `rozed-bot` two hours ago.
     async fn playground_seen_two_hours_ago(
         github: &FakeGithub,
@@ -4877,7 +4872,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn offline_what_rozed_saved_shows_with_its_age(cx: &mut TestAppContext) {
+    async fn offline_what_lo_saved_shows_with_its_age(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -4896,7 +4891,7 @@ mod tests {
         );
         assert_eq!(
             banners(&tab, cx),
-            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+            ["Showing what Lo saved for rozed-bot 2 hours ago."]
         );
         // There's no local copy, so no diff.
         tab.read_with(cx, |tab, _| {
@@ -4928,7 +4923,7 @@ mod tests {
     }
 
     /// `rozed-dev/playground#2`, opened once online, which copied it, and closed; with what
-    /// rozed saved about it for `rozed-bot` two hours ago, `saved` from the pull request on the
+    /// Lo saved about it for `rozed-bot` two hours ago, `saved` from the pull request on the
     /// fake GitHub. Then offline, GitHub's git server included.
     async fn playground_copied_then_offline(
         workspace: &Entity<Workspace>,
@@ -4967,7 +4962,7 @@ mod tests {
         pull
     }
 
-    /// What rozed saved about `pull`: its head and base as GitHub gave them.
+    /// What Lo saved about `pull`: its head and base as GitHub gave them.
     fn saved_as_given(pull: &FakePull) -> PullRequestData {
         details_based("Add b", "VIEWED", &pull.head, &pull.base_branch, &pull.base)
     }
@@ -5008,12 +5003,12 @@ mod tests {
         assert!(message.starts_with("Offline: "), "{message}");
         assert!(message.contains("couldn't reach GitHub"), "{message}");
         assert!(
-            message.ends_with("until GitHub answers again; rozed keeps trying."),
+            message.ends_with("until GitHub answers again; Lo keeps trying."),
             "{message}"
         );
         assert_eq!(
             banners(&tab, cx),
-            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+            ["Showing what Lo saved for rozed-bot 2 hours ago."]
         );
         tab.read_with(cx, |tab, cx| {
             assert!(tab.diff().is_some());
@@ -5086,7 +5081,7 @@ mod tests {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
-        // GitHub had a newer head when rozed last saved the details.
+        // GitHub had a newer head when Lo last saved the details.
         let newer = "e".repeat(40);
         playground_copied_then_offline(
             &workspace,
@@ -5105,7 +5100,7 @@ mod tests {
         assert!(message.contains("couldn't reach GitHub"), "{message}");
         assert_eq!(
             banners(&tab, cx),
-            ["Showing what rozed saved for rozed-bot 2 hours ago."]
+            ["Showing what Lo saved for rozed-bot 2 hours ago."]
         );
         tab.read_with(cx, |tab, cx| {
             assert!(tab.diff().is_none());
@@ -5220,7 +5215,7 @@ mod tests {
         };
         assert!(message.starts_with("GitHub didn't answer: "), "{message}");
         assert!(message.contains("operation timed out"), "{message}");
-        assert!(message.ends_with("rozed keeps trying."), "{message}");
+        assert!(message.ends_with("Lo keeps trying."), "{message}");
         tab.read_with(cx, |tab, _| assert!(tab.diff().is_some()));
 
         // Once it answers in time, the tab loads by itself.
@@ -5259,7 +5254,7 @@ mod tests {
             message.starts_with("home's check got no answer"),
             "{message}"
         );
-        assert!(message.ends_with("rozed keeps trying GitHub."), "{message}");
+        assert!(message.ends_with("Lo keeps trying GitHub."), "{message}");
         assert_eq!(acting(&tab, cx), None);
         let requests = github.requests();
         assert!(
@@ -5319,7 +5314,7 @@ mod tests {
         );
         assert_eq!(
             banners(&tab, cx),
-            ["Showing what rozed saved for home an hour ago."]
+            ["Showing what Lo saved for home an hour ago."]
         );
     }
 
@@ -5431,7 +5426,7 @@ mod tests {
     #[gpui::test]
     async fn the_window_is_titled_after_the_active_pull_request(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
-        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+        assert_eq!(cx.window_title().as_deref(), Some("Lo"));
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
         public_pull(&github, &git, "sharkdp/fd", 2212);
@@ -5476,10 +5471,10 @@ mod tests {
             Some("sharkdp/fd#2212 — Honor explicit use-jemalloc requests")
         );
 
-        // With none open, it's rozed's.
+        // With none open, it's Lo's.
         close(&workspace, fd, cx);
         close(&workspace, bat, cx);
-        assert_eq!(cx.window_title().as_deref(), Some("rozed"));
+        assert_eq!(cx.window_title().as_deref(), Some("Lo"));
     }
 
     #[gpui::test]
@@ -5520,11 +5515,9 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn with_rozeds_title_format_a_new_folder_doesnt_retitle_the_window(
-        cx: &mut TestAppContext,
-    ) {
+    async fn with_los_title_format_a_new_folder_doesnt_retitle_the_window(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
-        // As rozed's forced settings have it.
+        // As Lo's forced settings have it.
         cx.update(|_, cx| {
             cx.update_global::<settings::SettingsStore, _>(|store, cx| {
                 let format =
@@ -5594,7 +5587,7 @@ mod tests {
         assert_eq!(paths(&tab, cx), ["a.rs"]);
         close(&workspace, tab, cx);
 
-        // What rozed saved says main, at the tip the copy fetched first.
+        // What Lo saved says main, at the tip the copy fetched first.
         let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3_600 + 30);
         cache
             .put(
@@ -5640,7 +5633,7 @@ mod tests {
             panic!("expected the local copy: {:?}", status(&tab, cx));
         };
         assert!(
-            message.starts_with("rozed couldn't load the pull request from GitHub: "),
+            message.starts_with("Lo couldn't load the pull request from GitHub: "),
             "{message}"
         );
         assert!(message.contains("502"), "{message}");
@@ -5683,7 +5676,7 @@ mod tests {
             panic!("expected the local copy: {:?}", status(&tab, cx));
         };
         assert!(
-            message.starts_with("rozed couldn't load the pull request from GitHub: "),
+            message.starts_with("Lo couldn't load the pull request from GitHub: "),
             "{message}"
         );
         assert!(
@@ -5740,7 +5733,7 @@ mod tests {
         }));
         assert_eq!(
             status(&tab, cx),
-            Status::Loading("Waiting to ask which account rozed uses for acme…".into())
+            Status::Loading("Waiting to ask which account Lo uses for acme…".into())
         );
 
         cx.simulate_keystrokes("escape");
@@ -5781,9 +5774,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn a_load_rozed_starts_never_asks_which_account_and_escape_sticks(
-        cx: &mut TestAppContext,
-    ) {
+    async fn a_load_lo_starts_never_asks_which_account_and_escape_sticks(cx: &mut TestAppContext) {
         let (workspace, cx) = workspace(cx).await;
         let github = FakeGithub::default();
         let git = GitServer::start(cx);
@@ -5812,7 +5803,7 @@ mod tests {
         let tab = open_loaded(&workspace, link, cx);
         assert!(matches!(status(&tab, cx), Status::Offline(_)));
 
-        // Back online, rozed loads it again by itself, but doesn't put the picker up.
+        // Back online, Lo loads it again by itself, but doesn't put the picker up.
         github.set_offline(false);
         git.restore("acme/app");
         cx.executor().advance_clock(Duration::from_secs(5));
@@ -5821,7 +5812,7 @@ mod tests {
         assert_eq!(
             status(&tab, cx),
             Status::Offline(
-                "Choose which account rozed uses for acme. This is the local copy's diff, \
+                "Choose which account Lo uses for acme. This is the local copy's diff, \
                  read-only."
                     .into()
             )
@@ -5874,7 +5865,7 @@ mod tests {
             panic!("expected the local copy: {:?}", status(&tab, cx));
         };
         assert!(
-            message.starts_with("rozed couldn't load the pull request from GitHub: "),
+            message.starts_with("Lo couldn't load the pull request from GitHub: "),
             "{message}"
         );
         assert!(
@@ -6044,7 +6035,7 @@ mod tests {
         cx.run_until_parked();
         assert!(matches!(status(&tab, cx), Status::Failed(_)));
 
-        // rozed's own load once GitHub answers uses acme's account.
+        // Lo's own load once GitHub answers uses acme's account.
         github.set_offline(false);
         cx.executor().advance_clock(Duration::from_secs(5));
         cx.run_until_parked();
@@ -6075,7 +6066,7 @@ mod tests {
         let tab = open_loaded(&workspace, link, cx);
         assert_eq!(status(&tab, cx), Status::Ready);
         close(&workspace, tab, cx);
-        // What rozed saved last is another account's, with its viewed marks.
+        // What Lo saved last is another account's, with its viewed marks.
         let target = Target::Pull(PullRef::new("rozed-dev", "playground", 2));
         cache
             .put(
@@ -6132,7 +6123,7 @@ mod tests {
         github.add_pull(pull.clone());
         github.let_see("gho_BOT", "rozed-dev/playground");
         let (_, cache) = sign_in(&github, &[("rozed-bot", "gho_BOT")], cx).await;
-        // What rozed saved for the account, with its viewed marks.
+        // What Lo saved for the account, with its viewed marks.
         let target = Target::Pull(PullRef::new("rozed-dev", "playground", 2));
         cache
             .put(
@@ -6185,7 +6176,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Offline, the local copy shows with the marks rozed saved, and `e` marks nothing and
+        // Offline, the local copy shows with the marks Lo saved, and `e` marks nothing and
         // says why.
         github.set_offline(true);
         let tab = open_row(cx);
@@ -6200,7 +6191,7 @@ mod tests {
         assert_eq!(
             toasts(cx),
             [
-                "rozed can't reach GitHub, so it can't mark a.rs viewed until it's back. Until \
+                "Lo can't reach GitHub, so it can't mark a.rs viewed until it's back. Until \
                  then, this is the local copy, read-only."
             ]
         );
@@ -6228,7 +6219,7 @@ mod tests {
         let tab = open_loaded(&workspace, link, cx);
         assert_eq!(status(&tab, cx), Status::Ready);
         close(&workspace, tab, cx);
-        // What rozed saved at that head, with no file viewed yet.
+        // What Lo saved at that head, with no file viewed yet.
         let target = Target::Pull(PullRef::new("rozed-dev", "playground", 2));
         let saved = details_based(
             "Add b",
@@ -6267,7 +6258,7 @@ mod tests {
         };
         assert!(
             text.starts_with(&format!(
-                "GitHub has {}, but rozed couldn't copy it: ",
+                "GitHub has {}, but Lo couldn't copy it: ",
                 &newer[..7]
             )),
             "{text}"
@@ -6330,7 +6321,7 @@ mod tests {
         assert_eq!(
             status(&tab, cx),
             Status::Offline(
-                "GitHub has 3333333, but rozed couldn't copy it: the disk is full. This is the \
+                "GitHub has 3333333, but Lo couldn't copy it: the disk is full. This is the \
                  local copy of 2222222, read-only."
                     .into()
             )
@@ -6765,7 +6756,7 @@ mod tests {
         pull: PullRef,
         accounts: Entity<github::accounts::Accounts>,
         cache: github::cache::PrCache,
-        /// The account's poller, which rozed's GitHub layer keeps after its tabs close.
+        /// The account's poller, which Lo's GitHub layer keeps after its tabs close.
         _poller: Entity<Poller>,
     }
 
@@ -6777,7 +6768,7 @@ mod tests {
         cx: &mut VisualTestContext,
     ) -> SignedIn {
         let github = std::sync::Arc::new(WriteGithub::default());
-        let db = github::db::RozedDb::open_test(name).await;
+        let db = github::db::LoDb::open_test(name).await;
         let store = std::sync::Arc::new(
             credentials_provider::test_support::FakeCredentialsProvider::default(),
         );
@@ -7152,7 +7143,7 @@ mod tests {
         let toast = toast_log(cx).pop().unwrap();
         assert_eq!(
             toast.1,
-            "There's a newer push to this pull request than the one on screen, so rozed didn't \
+            "There's a newer push to this pull request than the one on screen, so Lo didn't \
              mark a.rs viewed: GitHub would mark it as of that push. Load it to mark files viewed."
         );
         assert_eq!(toast.2.as_deref(), Some("Load the newer push"));
@@ -7196,7 +7187,7 @@ mod tests {
     async fn an_older_head_from_before_the_diff_loaded_doesnt_stop_e(cx: &mut TestAppContext) {
         let (_, tab, github, cx) =
             three_files("e_after_saved", &[], &[("a.rs", "UNVIEWED")], cx).await;
-        // What rozed saved, from before this diff's head was pushed.
+        // What Lo saved, from before this diff's head was pushed.
         let saved_at = SystemTime::now() - Duration::from_secs(3600);
         tab.update(cx, |tab, cx| {
             tab.latest_head = None;
@@ -7261,7 +7252,7 @@ mod tests {
         assert_eq!(
             toasts(cx),
             [
-                "GitHub doesn't list c.rs in this pull request, so rozed can't mark it viewed. \
+                "GitHub doesn't list c.rs in this pull request, so Lo can't mark it viewed. \
               GitHub and the local copy see this file's change differently."
             ]
         );
@@ -7482,7 +7473,7 @@ mod tests {
         assert_eq!(cursor_file(&tab, cx).as_deref(), Some("a.rs"));
         assert_eq!(
             toasts(cx),
-            ["rozed can't reach GitHub, so it can't mark a.rs viewed until it's back."]
+            ["Lo can't reach GitHub, so it can't mark a.rs viewed until it's back."]
         );
     }
 
@@ -7737,7 +7728,7 @@ mod tests {
         assert_eq!(
             note(cx).as_deref(),
             Some(
-                "Changed since it was viewed. rozed can't show only what changed since then yet, \
+                "Changed since it was viewed. Lo can't show only what changed since then yet, \
                  so this is the file's whole diff."
             ),
             "the head this Mac recorded isn't a revision the tab knows"
@@ -7765,7 +7756,7 @@ mod tests {
         assert_eq!(
             note(cx).as_deref(),
             Some(
-                "Changed since you viewed it in r1. rozed can't show only what changed since \
+                "Changed since you viewed it in r1. Lo can't show only what changed since \
                  then yet, so this is the file's whole diff."
             )
         );
@@ -8005,7 +7996,7 @@ mod tests {
                 .concat(),
             );
             let line = stack(&[&tab[..], &["Editor mode=single_line"]].concat());
-            let rozed = |input: &'static str, contexts: &[gpui::KeyContext]| {
+            let lo = |input: &'static str, contexts: &[gpui::KeyContext]| {
                 let keystrokes: Vec<gpui::Keystroke> = input
                     .split(' ')
                     .map(|key| gpui::Keystroke::parse(key).unwrap())
@@ -8027,20 +8018,16 @@ mod tests {
                 ("[ c", "review_ui::PreviousChange"),
                 ("alt-o", "review_ui::ToggleFileOrder"),
             ] {
-                assert_eq!(rozed(keys, &diff).0, [action], "{keys} in the diff");
-                assert_eq!(
-                    rozed(keys, &file_list).0,
-                    [action],
-                    "{keys} in the file list"
-                );
+                assert_eq!(lo(keys, &diff).0, [action], "{keys} in the diff");
+                assert_eq!(lo(keys, &file_list).0, [action], "{keys} in the file list");
                 for contexts in [&text_box, &line] {
-                    assert_eq!(rozed(keys, contexts).0, [""; 0], "{keys} in a text box");
+                    assert_eq!(lo(keys, contexts).0, [""; 0], "{keys} in a text box");
                 }
             }
             // A bracket types at once, not waiting for a second key.
             for prefix in ["]", "["] {
-                assert!(rozed(prefix, &diff).1, "{prefix} waits in the diff");
-                assert!(!rozed(prefix, &text_box).1, "{prefix} types in a text box");
+                assert!(lo(prefix, &diff).1, "{prefix} waits in the diff");
+                assert!(!lo(prefix, &text_box).1, "{prefix} types in a text box");
             }
         });
     }
@@ -8441,7 +8428,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        // A checkout, which rozed trusts and opens as a folder of the project, with
+        // A checkout, which Lo trusts and opens as a folder of the project, with
         // rust-analyzer running.
         cx.update(|_, cx| crate::trust::trust_checkout(&project, Path::new("/elsewhere"), cx))
             .unwrap();
@@ -8556,7 +8543,7 @@ mod tests {
         assert_eq!(status(&tab, cx), Status::Ready);
         assert_eq!(
             note(&tab, cx).as_deref(),
-            Some("rozed couldn't update this pull request: Not Found")
+            Some("Lo couldn't update this pull request: Not Found")
         );
 
         github.set_offline(true);
@@ -8582,7 +8569,7 @@ mod tests {
             note(&tab, cx).as_deref(),
             Some(
                 "Signed out: GitHub refused rozed-bot's token. Sign in again from Accounts… in \
-                 the rozed menu."
+                 the Lo menu."
             )
         );
     }
@@ -8656,7 +8643,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn rozeds_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
+    fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
         init(cx);
         cx.update(|cx| {
             let keymap = cx.key_bindings();
@@ -8677,7 +8664,7 @@ mod tests {
             let full_comment = ["Workspace", "Pane", "PrTab", "Editor mode=full"];
             let elsewhere = ["Workspace", "Pane", "Editor mode=full multibuffer"];
 
-            // Zed's keys are bound, and rozed's, bound after, win where both apply.
+            // Zed's keys are bound, and Lo's, bound after, win where both apply.
             assert_eq!(first("tab", &elsewhere), Some("editor::Tab"));
             assert_eq!(first("tab", &diff), Some("review_ui::SwitchSide"));
             assert_eq!(first("tab", &comment), Some("editor::Tab"));
@@ -8894,7 +8881,7 @@ mod tests {
         let banners = banners(&tab, cx);
         assert!(
             banners.contains(
-                &"This pull request moved on while rozed read it. GitHub's diff shows ddddddd, \
+                &"This pull request moved on while Lo read it. GitHub's diff shows ddddddd, \
                   and the local copy's diff shows ccccccc once it's ready."
                     .to_string()
             ),
@@ -9239,7 +9226,7 @@ mod tests {
         assert_eq!(
             banners(&tab, cx),
             [format!(
-                "rozed couldn't copy this pull request locally: {why}. Trying again in 5 s. \
+                "Lo couldn't copy this pull request locally: {why}. Trying again in 5 s. \
                  Until then, this is GitHub's diff: changed lines only."
             )]
         );
@@ -9282,7 +9269,7 @@ mod tests {
         let shown = tab.read_with(cx, |tab, cx| tab.banners().read(cx).messages().to_vec());
         assert_eq!(
             shown[0].text.as_ref(),
-            "rozed stopped trying to copy this pull request locally after 5 tries: can't fetch \
+            "Lo stopped trying to copy this pull request locally after 5 tries: can't fetch \
              pull request #1: fatal: unable to access 'https://github.com/owner/repo.git/'. \
              Until then, this is GitHub's diff: changed lines only."
         );
@@ -9440,7 +9427,7 @@ mod tests {
         assert_eq!(
             banners(&tab, cx),
             [
-                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
+                "Lo couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
               only. the repository doesn't exist, or the account can't see it"
             ]
         );
@@ -9484,7 +9471,7 @@ mod tests {
         assert_eq!(
             banners(&tab, cx),
             [
-                "rozed couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
+                "Lo couldn't show the local copy's diff, so this is GitHub's diff: changed lines \
               only. the repository doesn't exist, or the account can't see it"
             ]
         );
@@ -9507,7 +9494,7 @@ mod tests {
         });
         let banners = banners(&tab, cx);
         assert!(
-            banners[0].starts_with("rozed couldn't show the local copy's diff"),
+            banners[0].starts_with("Lo couldn't show the local copy's diff"),
             "{banners:#?}"
         );
     }

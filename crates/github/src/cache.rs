@@ -1,5 +1,5 @@
-//! GitHub's answers, cached per account in rozed's database (design §3 "Local data"): a reopened
-//! PR shows at once, its first poll can still be a free `304`, and an offline rozed shows what it
+//! GitHub's answers, cached per account in Lo's database (design §3 "Local data"): a reopened
+//! PR shows at once, its first poll can still be a free `304`, and an offline Lo shows what it
 //! last saw with how old it is (design §11 "Offline").
 //!
 //! Each row is one answer about one pull request, or about a repository as a whole, fetched with
@@ -18,7 +18,7 @@ use sqlez_macros::sql;
 
 use crate::client::API_VERSION;
 use crate::credentials::HOST;
-use crate::db::RozedDb;
+use crate::db::LoDb;
 use crate::pulls::{ListedPulls, PullRef, PullSummary, Target};
 use crate::queries::{
     MAX_OPEN_PULL_REQUESTS, OpenPullRequestList, PAGE_SIZE, PullRequestCheckData, PullRequestData,
@@ -30,7 +30,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     /// The name its rows are stored under.
     const NAME: &'static str;
 
-    /// Everything the shape of its stored JSON depends on: the JSON schema of a type rozed
+    /// Everything the shape of its stored JSON depends on: the JSON schema of a type Lo
     /// defines ([`schema_shape`]), the text of the GraphQL query a generated type comes from, and
     /// anything else that changes what a stored answer means.
     fn shape() -> String;
@@ -44,7 +44,7 @@ pub trait CacheEntry: Serialize + DeserializeOwned {
     }
 }
 
-/// The shape of a type rozed defines: its JSON schema, with keys sorted, and without
+/// The shape of a type Lo defines: its JSON schema, with keys sorted, and without
 /// documentation or type names, which change nothing that's stored.
 pub fn schema_shape<T: JsonSchema>() -> String {
     let mut schema = schemars::schema_for!(T).to_value();
@@ -192,10 +192,10 @@ pub struct Row {
     etag: Option<String>,
 }
 
-/// The cache, over rozed's database. Clones share the connection.
+/// The cache, over Lo's database. Clones share the connection.
 #[derive(Clone)]
 pub struct PrCache {
-    db: RozedDb,
+    db: LoDb,
 }
 
 pub(crate) fn to_secs(time: SystemTime) -> i64 {
@@ -225,11 +225,11 @@ fn key<T: CacheEntry>(
 }
 
 impl PrCache {
-    pub fn new(db: RozedDb) -> Self {
+    pub fn new(db: LoDb) -> Self {
         Self { db }
     }
 
-    pub(crate) fn db(&self) -> &RozedDb {
+    pub(crate) fn db(&self) -> &LoDb {
         &self.db
     }
 
@@ -528,8 +528,8 @@ mod tests {
         }
     }
 
-    async fn cache(name: &str) -> (PrCache, RozedDb) {
-        let db = RozedDb::open_test(name).await;
+    async fn cache(name: &str) -> (PrCache, LoDb) {
+        let db = LoDb::open_test(name).await;
         db.save_account(account("bot")).await.unwrap();
         db.save_account(account("other")).await.unwrap();
         (PrCache::new(db.clone()), db)
@@ -765,7 +765,7 @@ mod tests {
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
-                ("OpenPullRequests", "aa53551d0f81d4ee".to_string()),
+                ("OpenPullRequests", "a228c23b9720c0a4".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
             ]
         );
@@ -814,7 +814,7 @@ mod tests {
         }
     }
 
-    async fn refuse_rows(db: &RozedDb) {
+    async fn refuse_rows(db: &LoDb) {
         db.connection()
             .write(|connection| {
                 connection.exec(

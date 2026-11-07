@@ -1,13 +1,13 @@
 # Third-party notices
 
-rozed includes code from the projects below, under their licenses.
+Lo includes code from the projects below, under their licenses.
 
 ## difftastic
 
 [difftastic](https://github.com/Wilfred/difftastic), at commit
 `87aad1aea4aacdf3cab68d2006e614d4994ece69`.
 
-`crates/diff_extras/src/syntax/` ports difftastic's structural diff, rewritten for rozed. Each file
+`crates/diff_extras/src/syntax/` ports difftastic's structural diff, rewritten for Lo. Each file
 taken from difftastic starts with the notice below and names the difftastic files it ports.
 
 ```text

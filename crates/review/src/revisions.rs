@@ -2,7 +2,7 @@
 //! (design §6, "Revisions" and "Viewed marks").
 //!
 //! No single GitHub source lists every push. The repository activity API does when it's available;
-//! otherwise force-push events, reviews, check suites and rozed's own poller each saw some heads.
+//! otherwise force-push events, reviews, check suites and Lo's own poller each saw some heads.
 //! [`build_revisions`] merges what they saw into one list, keyed by head SHA and ordered oldest
 //! first. Revisions are stored by head SHA and numbered r1, r2… only for display, because a source
 //! that reports late can insert one. [`default_comparison`] picks what the pull request compares
@@ -94,7 +94,7 @@ pub enum PushRecord {
         next: String,
         at: SystemTime,
     },
-    /// A head rozed's poller saw (`head.sha`), and when it first saw it.
+    /// A head Lo's poller saw (`head.sha`), and when it first saw it.
     Polled { head: String, at: SystemTime },
 }
 
@@ -126,7 +126,7 @@ pub enum Source {
     ReviewedCommit,
     /// A check suite started by the push.
     CheckSuite,
-    /// rozed's poller.
+    /// Lo's poller.
     Poller,
     /// The pull request's current head (`headRefOid`), which is always the latest revision.
     Head,
@@ -137,7 +137,7 @@ pub enum Source {
 pub enum PushedAt {
     /// The push's time, from the activity API, or else a force-push event.
     Exact(SystemTime),
-    /// It was pushed at or before this time: the earliest a review, check suite or rozed's poller
+    /// It was pushed at or before this time: the earliest a review, check suite or Lo's poller
     /// saw the head, or a later head's push time.
     By(SystemTime),
     /// No source dates it.
@@ -162,8 +162,8 @@ pub struct Revision {
     pub pushed_at: PushedAt,
     /// The sources that saw this head.
     pub sources: BTreeSet<Source>,
-    /// Whether rozed can still get the head commit. Revisions start out available; the caller
-    /// flags one GitHub no longer has, and that rozed never fetched, with
+    /// Whether Lo can still get the head commit. Revisions start out available; the caller
+    /// flags one GitHub no longer has, and that Lo never fetched, with
     /// [`Revisions::mark_unavailable`]. It stays in the list, shown as "no longer available".
     pub available: bool,
 }
@@ -244,7 +244,7 @@ impl Revisions {
         self.positions.get(head).copied()
     }
 
-    /// The nearest revision at or before `index` that rozed can still get.
+    /// The nearest revision at or before `index` that Lo can still get.
     fn available_from(&self, index: usize) -> Option<&Revision> {
         self.list[..=index]
             .iter()

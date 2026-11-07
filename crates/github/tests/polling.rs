@@ -16,7 +16,7 @@ use futures::future::BoxFuture;
 use github::accounts::Accounts;
 use github::cache::PrCache;
 use github::cassette::{self, Interaction};
-use github::db::{AccountSource, RozedDb};
+use github::db::{AccountSource, LoDb};
 use github::poll::{
     CachedRead, LowLimit, Offline, PauseReason, PollConfig, PollEvent, PollStatus, Poller,
     RateLimitState, WallClock,
@@ -124,7 +124,7 @@ struct Polling {
     poller: Entity<Poller>,
     accounts: Entity<Accounts>,
     http: Arc<Logged>,
-    db: RozedDb,
+    db: LoDb,
     store: Arc<FakeCredentialsProvider>,
     cache: PrCache,
     events: Rc<RefCell<Vec<PollEvent>>>,
@@ -169,7 +169,7 @@ impl Polling {
             offline: AtomicBool::new(false),
             delay,
         });
-        let db = RozedDb::open_test(name).await;
+        let db = LoDb::open_test(name).await;
         let store = Arc::new(FakeCredentialsProvider::default());
         let accounts = cx
             .update(|cx| Accounts::load(db.clone(), store.clone(), http.clone(), cx))
@@ -229,8 +229,8 @@ impl Polling {
         self.executor.run_until_parked();
     }
 
-    /// Replaces the accounts and the poller, as when rozed starts again: no token has been read.
-    fn restart_rozed(&mut self) {
+    /// Replaces the accounts and the poller, as when Lo starts again: no token has been read.
+    fn restart_lo(&mut self) {
         let (db, store, http) = (self.db.clone(), self.store.clone(), self.http.clone());
         self.accounts = self
             .cx
@@ -1706,9 +1706,9 @@ async fn a_refused_token_signs_the_account_out_until_it_signs_in_again(cx: &mut 
 #[gpui::test]
 async fn a_token_that_cant_be_read_is_tried_again(cx: &mut TestAppContext) {
     let mut t = Polling::new("token_unreadable", recorded(), cx).await;
-    // The Keychain is locked when rozed starts, or its prompt was dismissed.
+    // The Keychain is locked when Lo starts, or its prompt was dismissed.
     t.store.state.lock().fail_reads = true;
-    t.restart_rozed();
+    t.restart_lo();
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
     let status = t.status();
     assert!(!status.signed_out);

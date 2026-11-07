@@ -1,8 +1,8 @@
 //! Importing accounts from the `gh` CLI.
 //!
-//! rozed asks `gh` itself rather than reading its files or Keychain items, whose format is `gh`'s
+//! Lo asks `gh` itself rather than reading its files or Keychain items, whose format is `gh`'s
 //! own business: `gh auth status --json hosts` lists the accounts without their tokens, and
-//! `gh auth token --user <login>` prints one account's token, which rozed reads through a pipe.
+//! `gh auth token --user <login>` prints one account's token, which Lo reads through a pipe.
 //! `GH_TOKEN` and `GITHUB_TOKEN` are removed from `gh`'s environment, so it reports the accounts
 //! it stores rather than whatever token the environment holds.
 
@@ -39,9 +39,9 @@ const GH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the login shell gets to say where `gh` is.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where to look for `gh`, in order: `$GH_PATH`, the folders on `path` (rozed's own `PATH`), then
+/// Where to look for `gh`, in order: `$GH_PATH`, the folders on `path` (Lo's own `PATH`), then
 /// the usual places. An app started from the Finder gets launchd's minimal `PATH`, without
-/// Homebrew, so rozed looks in those itself; started from a terminal, it finds the `gh` the user
+/// Homebrew, so Lo looks in those itself; started from a terminal, it finds the `gh` the user
 /// runs, rather than an older one left in `/usr/local/bin`.
 pub fn gh_candidates(
     gh_path: Option<OsString>,
@@ -73,7 +73,7 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Finds `gh`: `$GH_PATH`, rozed's `PATH`, Homebrew's folders and `~/.local/bin`, then the login
+/// Finds `gh`: `$GH_PATH`, Lo's `PATH`, Homebrew's folders and `~/.local/bin`, then the login
 /// shell's `PATH`. Blocks while the shell runs, for at most 10 seconds.
 pub fn find_gh() -> Option<PathBuf> {
     let candidates = gh_candidates(
@@ -131,7 +131,7 @@ pub struct GhAccount {
     /// `success` when `gh` could use the token just now.
     pub state: String,
     pub scopes: Vec<String>,
-    /// A short-lived token that `gh` refreshes; rozed's copy expires within hours.
+    /// A short-lived token that `gh` refreshes; Lo's copy expires within hours.
     pub refreshable: bool,
 }
 
@@ -140,7 +140,7 @@ impl GhAccount {
         self.state == "success"
     }
 
-    /// rozed's scopes the token lacks. `gh` doesn't ask for `workflow` unless told to, so its
+    /// Lo's scopes the token lacks. `gh` doesn't ask for `workflow` unless told to, so its
     /// tokens can't merge PRs that change GitHub Actions workflows.
     pub fn missing_scopes(&self) -> Vec<&'static str> {
         missing_scopes(&self.scopes)
@@ -172,7 +172,7 @@ struct StatusEntry {
 /// Parses `gh auth status --json hosts`, skipping tokens that come from the environment.
 pub fn parse_status(json: &[u8]) -> Result<Vec<GhAccount>> {
     let status: StatusJson =
-        serde_json::from_slice(json).context("gh's account list isn't the JSON rozed expects")?;
+        serde_json::from_slice(json).context("gh's account list isn't the JSON Lo expects")?;
     let mut accounts: Vec<GhAccount> = Vec::new();
     for entry in status.hosts.get(HOST).into_iter().flatten() {
         if TOKEN_ENV.contains(&entry.token_source.as_str())
@@ -223,7 +223,7 @@ fn run(mut command: Command, what: &str, timeout: Duration) -> Result<Vec<u8>> {
             child.kill().ok();
             child.wait().ok();
             bail!(
-                "gh didn't {what} within {} s, so rozed stopped it",
+                "gh didn't {what} within {} s, so Lo stopped it",
                 timeout.as_secs_f32()
             );
         }
@@ -235,7 +235,7 @@ fn run(mut command: Command, what: &str, timeout: Duration) -> Result<Vec<u8>> {
         let stderr = String::from_utf8_lossy(&stderr);
         let stderr = stderr.trim();
         if stderr.contains("unknown flag: --json") {
-            bail!("rozed needs gh 2.80 or later to list its accounts. Update gh and try again.");
+            bail!("Lo needs gh 2.80 or later to list its accounts. Update gh and try again.");
         }
         bail!("gh couldn't {what}: {stderr}");
     }
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn looks_in_gh_path_then_path_then_homebrew_then_local_bin() {
-        // A gh on the PATH rozed was started with, as from a terminal, is the one the user runs,
+        // A gh on the PATH Lo was started with, as from a terminal, is the one the user runs,
         // so it comes before an older one Homebrew may have left in /usr/local/bin.
         assert_eq!(
             gh_candidates(
@@ -333,7 +333,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
         assert_eq!(
             error.to_string(),
-            "gh didn't list its accounts within 0.2 s, so rozed stopped it"
+            "gh didn't list its accounts within 0.2 s, so Lo stopped it"
         );
     }
 

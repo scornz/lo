@@ -1,47 +1,47 @@
-//! rozed's command-line flags that return without opening a window.
+//! Lo's command-line flags that return without opening a window.
 //!
-//! Each child runs with the guard that stops a rozed started by another rozed, so a broken flag
+//! Each child runs with the guard that stops a Lo started by another Lo, so a broken flag
 //! fails the test instead of opening the app.
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixListener;
 use std::process::{Command, Output, Stdio};
 
-fn rozed_command(args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rozed"));
+fn lo_command(args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lo"));
     command
         .args(args)
-        .env("ROZED_PARENT_PID", "test")
-        .env("ROZED_CLI_TEST", "printed");
+        .env("LO_PARENT_PID", "test")
+        .env("LO_CLI_TEST", "printed");
     command
 }
 
-fn rozed(args: &[&str]) -> Output {
-    rozed_command(args).output().expect("running rozed")
+fn lo(args: &[&str]) -> Output {
+    lo_command(args).output().expect("running Lo")
 }
 
 #[test]
 fn printenv_prints_the_environment_as_json() {
-    // Zed's shell-environment capture runs `rozed --printenv` inside the user's shell and reads
+    // Zed's shell-environment capture runs `lo --printenv` inside the user's shell and reads
     // this JSON back.
-    let output = rozed(&["--printenv"]);
+    let output = lo(&["--printenv"]);
     assert!(output.status.success(), "{output:?}");
     let env: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&output.stdout).expect("--printenv printed a JSON object");
-    assert_eq!(env["ROZED_CLI_TEST"], "printed");
+    assert_eq!(env["LO_CLI_TEST"], "printed");
 }
 
 #[test]
 fn version_prints_the_version() {
-    let output = rozed(&["--version"]);
+    let output = lo(&["--version"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        format!("rozed {}\n", env!("CARGO_PKG_VERSION"))
+        format!("Lo {}\n", env!("CARGO_PKG_VERSION"))
     );
 }
 
-/// Plays the running rozed's side of askpass: reads one prompt from the socket, which ends with a
+/// Plays the running Lo's side of askpass: reads one prompt from the socket, which ends with a
 /// NUL byte, and answers it.
 fn answer_one_prompt(
     listener: UnixListener,
@@ -61,13 +61,13 @@ fn answer_one_prompt(
 
 #[test]
 fn askpass_relays_a_prompt_and_prints_the_answer() {
-    // Git and ssh run Zed's askpass script, which pipes the prompt into `rozed --askpass=<socket>`.
+    // Git and ssh run Zed's askpass script, which pipes the prompt into `lo --askpass=<socket>`.
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("askpass.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let prompt = answer_one_prompt(listener, "hunter2\n");
 
-    let mut child = rozed_command(&[&format!("--askpass={}", socket.display())])
+    let mut child = lo_command(&[&format!("--askpass={}", socket.display())])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -91,7 +91,7 @@ fn askpass_relays_a_prompt_and_prints_the_answer() {
 
 #[test]
 fn askpass_without_a_socket_is_an_error() {
-    let output = rozed(&["--askpass="]);
+    let output = lo(&["--askpass="]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("--askpass needs a socket"), "{stderr}");
@@ -99,7 +99,7 @@ fn askpass_without_a_socket_is_an_error() {
 
 #[test]
 fn an_unknown_option_is_an_error() {
-    let output = rozed(&["--no-such-flag"]);
+    let output = lo(&["--no-such-flag"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
@@ -109,9 +109,9 @@ fn an_unknown_option_is_an_error() {
 }
 
 #[test]
-fn rozed_does_not_start_inside_rozed() {
+fn lo_does_not_start_inside_lo() {
     for args in [&[][..], &["https://github.com/sharkdp/fd/pull/2212"]] {
-        let output = rozed(args);
+        let output = lo(args);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("not starting"), "{stderr}");
@@ -121,34 +121,34 @@ fn rozed_does_not_start_inside_rozed() {
 #[test]
 fn an_argument_that_isnt_a_pull_request_link_is_refused_with_usage() {
     for arg in ["https://github.com/sharkdp/fd/issues/1", "sharkdp/fd#2212"] {
-        let output = rozed(&[arg]);
+        let output = lo(&[arg]);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains(&format!("can't open `{arg}`")), "{stderr}");
-        assert!(stderr.contains("usage: rozed"), "{stderr}");
+        assert!(stderr.contains("usage: lo"), "{stderr}");
     }
 }
 
-/// Runs `rozed --render-preview` on `request`, as the preview pool does, and returns its stdout.
+/// Runs `lo --render-preview` on `request`, as the preview pool does, and returns its stdout.
 fn render_preview(request: &[u8]) -> Output {
-    let mut child = rozed_command(&["--render-preview"])
+    let mut child = lo_command(&["--render-preview"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("running rozed");
+        .expect("running Lo");
     child.stdin.take().unwrap().write_all(request).unwrap();
     child.wait_with_output().unwrap()
 }
 
 #[test]
 fn render_preview_draws_an_image_and_never_starts_the_app() {
-    // The guard that stops a rozed started by another rozed is set, as it is for the helper:
+    // The guard that stops a Lo started by another Lo is set, as it is for the helper:
     // the helper must run anyway, and never open a window.
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2" fill="blue"/></svg>"#;
     let output = render_preview(&[b"svg 2 2\n".as_slice(), svg].concat());
     assert!(output.status.success(), "{output:?}");
-    let magic = b"\nROZED-PREVIEW-REPLY 1\nok 2 1\n";
+    let magic = b"\nLO-PREVIEW-REPLY 1\nok 2 1\n";
     assert!(output.stdout.starts_with(magic), "{output:?}");
     // Two pixels, BGRA: blue first.
     assert_eq!(
@@ -160,6 +160,6 @@ fn render_preview_draws_an_image_and_never_starts_the_app() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "\nROZED-PREVIEW-REPLY 1\nerr no format \"bmp\"\n"
+        "\nLO-PREVIEW-REPLY 1\nerr no format \"bmp\"\n"
     );
 }

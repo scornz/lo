@@ -1,5 +1,5 @@
 # A repository's open pull requests, with what stack detection needs: branches, head commits and
-# native stack membership. A page at a time, newest first: rozed reads at most 1,000, and when a
+# native stack membership. A page at a time, newest first: Lo reads at most 1,000, and when a
 # repository has more, the oldest are the ones to leave out. Creation time doesn't change while
 # paging, unlike the time of the last update.
 query OpenPullRequests($owner: String!, $name: String!, $first: Int!, $after: String) {

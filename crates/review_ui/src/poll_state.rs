@@ -47,14 +47,14 @@ pub fn note(login: &str, state: &PollState, now: SystemTime) -> Option<PollNote>
             Severity::Error,
             format!(
                 "Signed out: GitHub refused {login}'s token. Sign in again from Accounts… in the \
-                 rozed menu."
+                 Lo menu."
             ),
         ));
     }
     if let RateLimitState::Paused { until, reason } = &status.rate_limit {
         let why = match reason {
             PauseReason::UsedUp { .. } => "GitHub's rate limit is used up",
-            PauseReason::Secondary => "GitHub asked rozed to slow down",
+            PauseReason::Secondary => "GitHub asked Lo to slow down",
         };
         return Some(PollNote::new(
             Severity::Warning,
@@ -72,7 +72,7 @@ pub fn note(login: &str, state: &PollState, now: SystemTime) -> Option<PollNote>
         return Some(PollNote::new(
             Severity::Warning,
             format!(
-                "Offline since {}.{details} rozed tries again {}.",
+                "Offline since {}.{details} Lo tries again {}.",
                 ago(offline.since, now),
                 in_words(offline.retry_at, now)
             ),
@@ -81,7 +81,7 @@ pub fn note(login: &str, state: &PollState, now: SystemTime) -> Option<PollNote>
     if let Some(error) = &state.failure {
         return Some(PollNote {
             severity: Severity::Warning,
-            text: format!("rozed couldn't update this pull request: {error}"),
+            text: format!("Lo couldn't update this pull request: {error}"),
             link: error.help_link(),
         });
     }
@@ -89,7 +89,7 @@ pub fn note(login: &str, state: &PollState, now: SystemTime) -> Option<PollNote>
         RateLimitState::Slowed(low) | RateLimitState::OpenOnly(low) => Some(PollNote::new(
             Severity::Info,
             format!(
-                "GitHub's rate limit is low, so rozed checks less often until it resets {}.",
+                "GitHub's rate limit is low, so Lo checks less often until it resets {}.",
                 in_words(low.reset, now)
             ),
         )),
@@ -188,7 +188,7 @@ mod tests {
             Some((
                 Severity::Error,
                 "Signed out: GitHub refused rozed-bot's token. Sign in again from Accounts… in \
-                 the rozed menu."
+                 the Lo menu."
                     .into()
             ))
         );
@@ -218,7 +218,7 @@ mod tests {
         );
         assert_eq!(
             note_for(paused(PauseReason::Secondary)).unwrap().1,
-            "GitHub asked rozed to slow down, so nothing updates until it resets in 25 minutes."
+            "GitHub asked Lo to slow down, so nothing updates until it resets in 25 minutes."
         );
         let low = LowLimit {
             resource: "core".into(),
@@ -233,7 +233,7 @@ mod tests {
             })),
             Some((
                 Severity::Info,
-                "GitHub's rate limit is low, so rozed checks less often until it resets in 2 \
+                "GitHub's rate limit is low, so Lo checks less often until it resets in 2 \
                  hours."
                     .into()
             ))
@@ -258,7 +258,7 @@ mod tests {
             note_for(offline),
             Some((
                 Severity::Warning,
-                "Offline since 3 minutes ago. These details are from 2 hours ago. rozed tries \
+                "Offline since 3 minutes ago. These details are from 2 hours ago. Lo tries \
                  again in 2 minutes."
                     .into()
             ))
@@ -278,7 +278,7 @@ mod tests {
         let note = note("rozed-bot", &state, at(NOW)).unwrap();
         assert_eq!(
             note.text,
-            "rozed couldn't update this pull request: Resource protected by organization SAML \
+            "Lo couldn't update this pull request: Resource protected by organization SAML \
              enforcement."
         );
         assert_eq!(

@@ -1,23 +1,23 @@
-//! Running git: finding it, checking its version, and running it in an environment of rozed's own.
+//! Running git: finding it, checking its version, and running it in an environment of Lo's own.
 //!
-//! rozed runs the git CLI as a child process. Every git it runs gets the same environment, built
+//! Lo runs the git CLI as a child process. Every git it runs gets the same environment, built
 //! from nothing rather than inherited and patched:
 //!
 //! - Only `PATH`, `TMPDIR`, `DEVELOPER_DIR` and the network variables (proxies and CA bundles) come
-//!   from rozed's own environment. Everything else is dropped, including every `GIT_*` variable, so
+//!   from Lo's own environment. Everything else is dropped, including every `GIT_*` variable, so
 //!   nothing adds config (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`), points git at another
 //!   repository, template, program or attribute source (`GIT_DIR`, `GIT_TEMPLATE_DIR`,
 //!   `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, `GIT_ATTR_SOURCE`) or prompts (`SSH_ASKPASS`).
-//! - `HOME` is a folder of rozed's, so git and its HTTP library read none of the user's files there
+//! - `HOME` is a folder of Lo's, so git and its HTTP library read none of the user's files there
 //!   (`~/.gitconfig`, `~/.config/git/attributes`, `~/.netrc`).
 //! - No system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`), no
-//!   credential helper but rozed's, and no prompts (`GIT_TERMINAL_PROMPT=0`, no askpass). The
+//!   credential helper but Lo's, and no prompts (`GIT_TERMINAL_PROMPT=0`, no askpass). The
 //!   only credential git gets is the token, from a helper scoped to the remote's own URL
 //!   (`https://github.com`), which reads it from a variable set only on that git. A proxy that
 //!   asks for a password, or a host a request is redirected to, matches no helper, and git fails
-//!   rather than prompting. Redirects are off anyway: rozed always fetches a repository by its
+//!   rather than prompting. Redirects are off anyway: Lo always fetches a repository by its
 //!   canonical name.
-//! - No hooks, no file-system monitor, no attributes but rozed's (none: not the user's file, and not
+//! - No hooks, no file-system monitor, no attributes but Lo's (none: not the user's file, and not
 //!   a repository's own `.gitattributes`, in a clone or a checkout), no replace refs, and literal
 //!   pathspecs.
 //! - Nothing a server offers sends git to another host: no bundle URIs, promisor remotes or
@@ -27,9 +27,9 @@
 //!   that's half deleted is an error, never a reason to use some repository further up, such as
 //!   dotfiles kept in the home folder, with its own remote and config.
 //! - HTTPS only. [`crate::RepoCache::with_remote_base`] allows another protocol for tests.
-//! - `LC_ALL=C`, so the messages rozed reads are in English.
+//! - `LC_ALL=C`, so the messages Lo reads are in English.
 //!
-//! The user's git config is never read or written, and nothing in it or in rozed's environment
+//! The user's git config is never read or written, and nothing in it or in Lo's environment
 //! (URL rewrites, credential helpers, filters, hooks) changes what this crate's git fetches or
 //! runs.
 
@@ -51,7 +51,7 @@ pub struct GitVersion {
 }
 
 impl GitVersion {
-    /// The oldest git rozed runs: 2.41 added `--attr-source`, which keeps a repository's own
+    /// The oldest git Lo runs: 2.41 added `--attr-source`, which keeps a repository's own
     /// `.gitattributes` out of its checkouts (2.40 added `git merge-tree --write-tree
     /// --merge-base`, which rebase-aware comparison needs).
     pub const MINIMUM: GitVersion = GitVersion {
@@ -120,12 +120,12 @@ impl fmt::Debug for Token {
     }
 }
 
-/// The git rozed runs. Its `Debug` hides the proxy variables' values, which can hold a password.
+/// The git Lo runs. Its `Debug` hides the proxy variables' values, which can hold a password.
 #[derive(Clone)]
 pub struct Git {
     program: PathBuf,
     version: GitVersion,
-    /// The variables every git inherits from rozed's environment (see [`inherited_env`]).
+    /// The variables every git inherits from Lo's environment (see [`inherited_env`]).
     inherited: Vec<(OsString, OsString)>,
 }
 
@@ -154,10 +154,10 @@ impl fmt::Debug for Git {
 /// The empty tree's ID, which git knows without having it.
 pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/// Where rozed looks for git first: Apple's, from the Xcode Command Line Tools.
+/// Where Lo looks for git first: Apple's, from the Xcode Command Line Tools.
 const SYSTEM_GIT: &str = "/usr/bin/git";
 
-/// The variables git inherits from rozed's environment. Everything else is dropped.
+/// The variables git inherits from Lo's environment. Everything else is dropped.
 const INHERITED_VARS: &[&str] = &[
     "PATH",
     "TMPDIR",
@@ -180,16 +180,16 @@ const INHERITED_VARS: &[&str] = &[
 
 /// The variable the credential helper reads the token from. It's set only on git children that
 /// sign in.
-pub(crate) const TOKEN_VAR: &str = "ROZED_GIT_TOKEN";
+pub(crate) const TOKEN_VAR: &str = "LO_GIT_TOKEN";
 
 /// The credential helper, a shell function git runs with the action (`get`, `store` or `erase`)
 /// as its argument. It answers `get` with the token in [`TOKEN_VAR`], and nothing else.
 const CREDENTIAL_HELPER: &str = "!f() { test \"$1\" = get || exit 0; \
-     printf 'username=x-access-token\\npassword=%s\\n' \"$ROZED_GIT_TOKEN\"; }; f";
+     printf 'username=x-access-token\\npassword=%s\\n' \"$LO_GIT_TOKEN\"; }; f";
 
 impl Git {
     /// Finds git, `/usr/bin/git` first and then each `git` on `PATH`, and checks that it's new
-    /// enough. rozed runs this at launch, and shows the error, which says how to fix it, if
+    /// enough. Lo runs this at launch, and shows the error, which says how to fix it, if
     /// there's no usable git.
     pub fn find() -> Result<Self, Error> {
         let env: Vec<_> = std::env::vars_os().collect();
@@ -219,7 +219,7 @@ impl Git {
         Self::with_env(program.into(), std::env::vars_os().collect())
     }
 
-    /// The git at `program`, as if rozed's environment were `env`.
+    /// The git at `program`, as if Lo's environment were `env`.
     pub(crate) fn with_env(
         program: PathBuf,
         env: Vec<(OsString, OsString)>,
@@ -275,19 +275,19 @@ impl Git {
         self.version
     }
 
-    /// This git, as if it were `version`, for tests of what rozed does differently on older git.
+    /// This git, as if it were `version`, for tests of what Lo does differently on older git.
     #[cfg(test)]
     pub(crate) fn with_version(mut self, version: GitVersion) -> Self {
         self.version = version;
         self
     }
 
-    /// A git command with rozed's environment (see the module docs), working on the repository
+    /// A git command with Lo's environment (see the module docs), working on the repository
     /// at `location`, which git is always told so it never looks for one. `home` is the empty
     /// folder git gets as its `HOME`, and git never looks for a repository in `ceiling` or above
     /// it. With `auth`, git signs in with its token when the remote asks, and only then.
     ///
-    /// `config` is extra `name=value` config, which wins over rozed's own: tests allow `file://`.
+    /// `config` is extra `name=value` config, which wins over Lo's own: tests allow `file://`.
     pub(crate) fn command(
         &self,
         location: Location<'_>,
@@ -326,7 +326,7 @@ impl Git {
             }
         }
         command.args([
-            // No credential helper, prompt or redirect: only rozed's helper, added below for the
+            // No credential helper, prompt or redirect: only Lo's helper, added below for the
             // remote's URL, gives git a credential.
             "-c",
             "credential.helper=",
@@ -352,7 +352,7 @@ impl Git {
             // checkout points outside it.
             "-c",
             "core.symlinks=false",
-            // No garbage collection or maintenance in the background, behind rozed's back.
+            // No garbage collection or maintenance in the background, behind Lo's back.
             "-c",
             "gc.auto=0",
             "-c",
@@ -363,7 +363,7 @@ impl Git {
             "http.lowSpeedLimit=1",
             "-c",
             "http.lowSpeedTime=60",
-            // Nothing in a repository or rozed's environment makes git run a program: no hooks
+            // Nothing in a repository or Lo's environment makes git run a program: no hooks
             // (a checkout runs post-checkout) and no file-system monitor.
             "-c",
             "core.hooksPath=/dev/null",
@@ -475,7 +475,7 @@ impl GitCommand {
         self
     }
 
-    /// The command as rozed logs it: `git` and the arguments rozed added.
+    /// The command as Lo logs it: `git` and the arguments Lo added.
     pub fn display(&self) -> String {
         format!("git {}", self.args.join(" "))
     }
@@ -678,7 +678,7 @@ mod tests {
             ("GIT_ASKPASS", "/tmp/steal"),
             ("SSH_ASKPASS", "/tmp/steal"),
             ("HTTP_PROXY", "http://from-a-header"),
-            ("ROZED_GITHUB_TOKEN", "secret"),
+            ("LO_GITHUB_TOKEN", "secret"),
             ("LANG", "fr_FR.UTF-8"),
         ]);
         let all = kept.iter().chain(&dropped).cloned();
@@ -692,10 +692,10 @@ mod tests {
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
-            .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_NAME", "Lo test")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
+            .env("GIT_COMMITTER_NAME", "Lo test")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(
@@ -720,7 +720,7 @@ mod tests {
         /// `first` read as `second`.
         work: PathBuf,
         first: String,
-        /// rozed's own `HOME` for git.
+        /// Lo's own `HOME` for git.
         home: PathBuf,
         env: Vec<(OsString, OsString)>,
     }
@@ -816,7 +816,7 @@ mod tests {
                 ("GIT_ATTR_SOURCE", &second),
                 ("GIT_PROTOCOL_FROM_USER", "1"),
             ]);
-            let home = root.join("rozed-home");
+            let home = root.join("lo-home");
             fs::create_dir(&home).unwrap();
             let url = format!("file://{}", root.join("remote.git").display());
             Self {
@@ -829,7 +829,7 @@ mod tests {
             }
         }
 
-        /// git run by rozed from inside the hostile environment.
+        /// git run by Lo from inside the hostile environment.
         fn git(&self, location: Location<'_>, config: &[&str]) -> GitCommand {
             let config: Vec<String> = config.iter().map(|c| c.to_string()).collect();
             Git::with_env(Git::find().unwrap().program, self.env.clone())
@@ -866,7 +866,7 @@ mod tests {
                 .contains("refs/heads/trunk")
         );
 
-        // git sees no config but rozed's own.
+        // git sees no config but Lo's own.
         let config = hostile
             .git(Location::Nowhere, &[])
             .args(["config", "--list", "--show-origin"])
@@ -943,7 +943,7 @@ mod tests {
             ("ssh://git@example.invalid/a/b.git", "ssh"),
             ("git@example.invalid:a/b.git", "ssh"),
             ("git://example.invalid/a/b.git", "git"),
-            ("ext::sh -c touch% /tmp/rozed-ext", "ext"),
+            ("ext::sh -c touch% /tmp/lo-ext", "ext"),
         ] {
             let error = hostile
                 .git(Location::Nowhere, &[])

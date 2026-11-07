@@ -1,6 +1,6 @@
 //! Keeping clones fast: repacking the packs every fetch and download adds.
 //!
-//! rozed turns git's own background maintenance off (`gc.auto=0`, `maintenance.auto=false`), so
+//! Lo turns git's own background maintenance off (`gc.auto=0`, `maintenance.auto=false`), so
 //! that nothing runs behind its back. Every fetch, every batch of files a diff downloads and every
 //! file read on its own adds a pack, and every pin a loose ref, so a repository reviewed every day
 //! would end up with thousands of packs, each of which every object lookup searches. At launch,
@@ -125,10 +125,10 @@ mod tests {
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
-            .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_NAME", "Lo test")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
+            .env("GIT_COMMITTER_NAME", "Lo test")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(
@@ -251,7 +251,7 @@ mod tests {
             // Every pack is still a promisor pack, so what isn't downloaded stays downloadable.
             assert!(after.iter().all(|(_, promisor)| *promisor), "{after:?}");
             // The refs are packed.
-            let loose_refs = f.git_dir().join("refs/rozed");
+            let loose_refs = f.git_dir().join("refs/lo");
             assert!(
                 !loose_refs.exists() || fs::read_dir(&loose_refs).unwrap().count() == 0,
                 "{version}"
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(f.cache.maintain(before).unwrap(), Vec::<String>::new());
         assert_eq!(f.packs().len(), before);
 
-        // Another rozed holds the clone's lock.
+        // Another Lo holds the clone's lock.
         let lock = File::create(f.cache.lock_path("owner", "repo")).unwrap();
         lock.lock().unwrap();
         assert_eq!(f.cache.maintain(1).unwrap(), Vec::<String>::new());

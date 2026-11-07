@@ -1,7 +1,7 @@
-//! GitHub's GraphQL responses, decoded with rozed's own envelope.
+//! GitHub's GraphQL responses, decoded with Lo's own envelope.
 //!
 //! `graphql_client`'s `Response` drops the `type` GitHub puts on each error (`NOT_FOUND`,
-//! `FORBIDDEN`, …), so rozed decodes the envelope itself.
+//! `FORBIDDEN`, …), so Lo decodes the envelope itself.
 
 use serde::Deserialize;
 

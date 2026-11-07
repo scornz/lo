@@ -391,7 +391,7 @@ pub(crate) fn patch_text(patch: &str, deleted: bool, why: &str) -> FilePlan {
         warning: Some(Warning {
             label: GITHUBS_PATCH.into(),
             detail: format!(
-                "This is GitHub's patch of this file, as text: rozed can't show it as a diff, \
+                "This is GitHub's patch of this file, as text: Lo can't show it as a diff, \
                  since {why}. The diff shows once the local copy is ready."
             )
             .into(),
@@ -424,7 +424,7 @@ pub(crate) fn plan(file: &PullFile) -> FilePlan {
         },
         Some(Err(error)) => left_out(
             deleted,
-            format!("rozed couldn't read GitHub's diff of this file ({error})"),
+            format!("Lo couldn't read GitHub's diff of this file ({error})"),
         ),
         // GitHub gives no patch for a rename alone, nor for a binary file renamed and changed.
         _ if file.changes == 0 && file.status == FileStatus::Renamed => FilePlan::placeholder(
@@ -574,7 +574,7 @@ mod tests {
         })
     }
 
-    /// GitHub's patches for two files in rozed's history.
+    /// GitHub's patches for two files in Lo's history.
     const SHIP: &str = include_str!("../tests/fixtures/github_patches/fc5ac97-ship.rs.patch");
     const OPEN_PULL_REQUESTS: &str =
         include_str!("../tests/fixtures/github_patches/94c4db2-open-pull-requests.json.patch");
@@ -873,7 +873,7 @@ mod tests {
 
         let unreadable = plan_of(FileStatus::Modified, Some("@@ -1 +1 @@\n*x"));
         assert!(
-            placeholder(&unreadable).starts_with("(rozed couldn't read GitHub's diff"),
+            placeholder(&unreadable).starts_with("(Lo couldn't read GitHub's diff"),
             "{unreadable:?}"
         );
         assert!(unreadable.warning.is_some());

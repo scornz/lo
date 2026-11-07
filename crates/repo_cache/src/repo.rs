@@ -24,18 +24,18 @@ use crate::{Error, FetchFailure};
 /// call them from a background task, one step at a time: fetch, list the changed files, read
 /// them, and check out only for a trusted repository.
 ///
-/// Everything rozed fetches goes under its own refs, keyed by pull request so that no two branch
+/// Everything Lo fetches goes under its own refs, keyed by pull request so that no two branch
 /// names can collide, and nothing fetched is ever lost to a force-push:
 ///
-/// - `refs/rozed/pull/<n>/head` and `refs/rozed/pull/<n>/base`: pull request `n`'s head and its
+/// - `refs/lo/pull/<n>/head` and `refs/lo/pull/<n>/base`: pull request `n`'s head and its
 ///   base branch's tip, as last fetched.
-/// - `refs/rozed/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
-/// - `refs/rozed/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
-/// - `refs/rozed/pull/<n>/branch-bases/<hash>`: the tip of each branch pull request `n` was
+/// - `refs/lo/pull/<n>/revs/<oid>`: every head of pull request `n` ever fetched.
+/// - `refs/lo/pull/<n>/bases/<oid>`: every tip of its base branch ever fetched.
+/// - `refs/lo/pull/<n>/branch-bases/<hash>`: the tip of each branch pull request `n` was
 ///   fetched against, as last fetched, by the SHA-256 of the branch's name (any branch name fits
 ///   in one ref then, and none is another's folder).
-/// - `refs/rozed/commits/<oid>`: commits fetched by ID.
-/// - `refs/rozed/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
+/// - `refs/lo/commits/<oid>`: commits fetched by ID.
+/// - `refs/lo/replays/<tree>/<process ID>`: a tree [`Repo::compare_revisions`] replayed,
 ///   while that process has the clone open (see [`crate::Comparison`]).
 #[derive(Clone)]
 pub struct Repo {
@@ -75,7 +75,7 @@ pub(crate) enum Access {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequestRefs {
     pub number: u64,
-    /// `head.sha`: the head GitHub showed, which rozed checks the fetched head against.
+    /// `head.sha`: the head GitHub showed, which Lo checks the fetched head against.
     pub head: Option<Oid>,
     /// `base.ref`: the branch it merges into.
     pub base_branch: String,
@@ -189,15 +189,15 @@ impl Repo {
     /// Fetches a pull request's head and its base branch's tip in one fetch, and pins both.
     ///
     /// The head comes from `refs/pull/<n>/head`, which holds the head of a pull request from a
-    /// fork too. When GitHub's API reported another head, rozed fetches that one by ID and uses it,
+    /// fork too. When GitHub's API reported another head, Lo fetches that one by ID and uses it,
     /// since it's what GitHub shows; [`FetchedPull::head_source`] says which it used. When the
     /// base branch is gone, the API's base commit stands in for its tip.
     pub fn fetch_pull(&self, pull: &PullRequestRefs) -> Result<FetchedPull, Error> {
         self.check_branch_name(&pull.base_branch)?;
         let number = pull.number;
         let what = format!("pull request #{number}");
-        let head_ref = format!("refs/rozed/pull/{number}/head");
-        let base_ref = format!("refs/rozed/pull/{number}/base");
+        let head_ref = format!("refs/lo/pull/{number}/head");
+        let base_ref = format!("refs/lo/pull/{number}/base");
         let head_spec = format!("+refs/pull/{number}/head:{head_ref}");
         let branch = format!("refs/heads/{}", pull.base_branch);
 
@@ -271,7 +271,7 @@ impl Repo {
         let output = self.run(self.git().args([
             "for-each-ref",
             "--format=%(objectname)",
-            &format!("refs/rozed/pull/{number}/revs/"),
+            &format!("refs/lo/pull/{number}/revs/"),
         ]))?;
         String::from_utf8_lossy(&output)
             .lines()
@@ -364,7 +364,7 @@ impl Repo {
     }
 
     /// Makes sure commit `oid` is in the clone, fetching it by ID if it isn't, and pins it at
-    /// `refs/rozed/commits/<oid>`. For a revision rozed knows from GitHub's API but never fetched.
+    /// `refs/lo/commits/<oid>`. For a revision Lo knows from GitHub's API but never fetched.
     /// Fails with [`Error::Unavailable`] when GitHub no longer has it.
     pub fn fetch_commit(&self, oid: &Oid) -> Result<(), Error> {
         let _lock = self.lock()?;
@@ -372,12 +372,12 @@ impl Repo {
         self.fetch_by_id_locked(
             &format!("commit {}", oid.short(7)),
             oid,
-            &format!("refs/rozed/commits/{oid}"),
+            &format!("refs/lo/commits/{oid}"),
         )
     }
 
     /// Makes sure every head in `heads` is in the clone and pins each at
-    /// `refs/rozed/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
+    /// `refs/lo/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
     /// the clone lacks are fetched by ID in one fetch. Returns the ones GitHub no longer has
     /// (design §11, "Missing revisions"), which are left out; any other failure fails the whole
     /// fetch.
@@ -911,12 +911,12 @@ fn is_lost_commit(message: &str, oid: &Oid) -> bool {
 
 /// Where pull request `number`'s head `oid` is pinned.
 fn revision_ref(number: u64, oid: &Oid) -> String {
-    format!("refs/rozed/pull/{number}/revs/{oid}")
+    format!("refs/lo/pull/{number}/revs/{oid}")
 }
 
 /// Where pull request `number`'s base tip `oid` is pinned.
 fn base_ref_for(number: u64, oid: &Oid) -> String {
-    format!("refs/rozed/pull/{number}/bases/{oid}")
+    format!("refs/lo/pull/{number}/bases/{oid}")
 }
 
 /// Where the tip of `branch`, as last fetched as pull request `number`'s base, is pinned.
@@ -925,12 +925,12 @@ fn branch_base_ref(number: u64, branch: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    format!("refs/rozed/pull/{number}/branch-bases/{hash}")
+    format!("refs/lo/pull/{number}/branch-bases/{hash}")
 }
 
 /// The folder in a clone where each pull request's heads GitHub no longer has are noted, one
 /// file per pull request.
-const UNAVAILABLE_DIR: &str = "rozed-unavailable";
+const UNAVAILABLE_DIR: &str = "lo-unavailable";
 
 /// The variable that stops git downloading what a partial clone lacks.
 pub(crate) const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";
@@ -998,10 +998,10 @@ mod tests {
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "rozed test")
-            .env("GIT_AUTHOR_EMAIL", "test@rozed.invalid")
-            .env("GIT_COMMITTER_NAME", "rozed test")
-            .env("GIT_COMMITTER_EMAIL", "test@rozed.invalid")
+            .env("GIT_AUTHOR_NAME", "Lo test")
+            .env("GIT_AUTHOR_EMAIL", "test@lo.invalid")
+            .env("GIT_COMMITTER_NAME", "Lo test")
+            .env("GIT_COMMITTER_EMAIL", "test@lo.invalid")
             .output()
             .unwrap();
         assert!(

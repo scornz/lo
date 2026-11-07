@@ -82,7 +82,7 @@ pub struct ActivityPage {
     pub entries: Vec<ActivityEntry>,
 }
 
-/// A branch's pushes, as far as rozed read them.
+/// A branch's pushes, as far as Lo read them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BranchActivity {
     pub branch: String,
@@ -287,7 +287,7 @@ fn page_from(
     if response.status == StatusCode::NOT_MODIFIED {
         return known.cloned().map(Page::Unchanged).ok_or_else(|| {
             GithubError::Inconsistent(format!(
-                "GitHub said {url} hadn't changed, but rozed never read it"
+                "GitHub said {url} hadn't changed, but Lo never read it"
             ))
         });
     }

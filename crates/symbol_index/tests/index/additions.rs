@@ -1,4 +1,4 @@
-//! What rozed's own queries add to each grammar's.
+//! What Lo's own queries add to each grammar's.
 
 use symbol_index::FileSymbols;
 

@@ -1,4 +1,4 @@
-//! Indexing stays fast on thousands of real files: rozed's own Rust and Zed's, from the
+//! Indexing stays fast on thousands of real files: Lo's own Rust and Zed's, from the
 //! `third_party/zed` submodule the workspace builds against.
 
 use std::{
@@ -108,11 +108,7 @@ fn thousands_of_files_index_quickly_and_a_new_commit_reads_only_its_changes() {
     assert!(next < limit(Duration::from_millis(50)), "took {next:?}");
 
     let start = Instant::now();
-    let found = index.definitions(
-        "added",
-        "crates/rozed/src/main.rs",
-        "use symbol_index::added;",
-    );
+    let found = index.definitions("added", "crates/lo/src/main.rs", "use symbol_index::added;");
     let lookup = start.elapsed();
     // Zed has other functions named `added`; the import ranks this one first.
     assert!(found.len() > 1);

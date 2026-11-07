@@ -16,7 +16,7 @@ pub enum MergeStatus {
     Ready,
     /// Only things waiting will fix block it. With `auto_merge`, auto-merge is on, so it merges,
     /// or joins the queue, once they clear, while it stays on: GitHub turns it off when someone
-    /// without write access pushes. With `partial`, rozed may not see every rule behind
+    /// without write access pushes. With `partial`, Lo may not see every rule behind
     /// GitHub's block ([`may_not_see_every_rule`]), so these may be only part of why.
     Waiting {
         blockers: Vec<Blocker>,
@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_pull_request_says_when_rozed_may_not_see_every_rule() {
+    fn a_waiting_pull_request_says_when_lo_may_not_see_every_rule() {
         let snapshot = MergeSnapshot {
             sees_every_rule: false,
             ..checks(&[("test", CheckState::Running)])

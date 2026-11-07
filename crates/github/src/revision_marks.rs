@@ -1,4 +1,4 @@
-//! What rozed saw of each pull request's revisions on this Mac (design §6, "Revisions").
+//! What Lo saw of each pull request's revisions on this Mac (design §6, "Revisions").
 //!
 //! - **Seen heads:** every head an account's poller saw, and when it first saw it. They're one of
 //!   the sources a pull request's revisions are built from (`review::revisions::PushRecord::
@@ -18,7 +18,7 @@ use sqlez_macros::sql;
 
 use crate::cache::{CacheEntry as _, from_secs, to_secs};
 use crate::credentials::HOST;
-use crate::db::RozedDb;
+use crate::db::LoDb;
 use crate::pulls::{PullRef, PullSummary};
 
 /// Where a cached summary says whether a pull request is closed, and when it was last updated.
@@ -35,17 +35,17 @@ pub struct SeenHead {
     pub first_seen: SystemTime,
 }
 
-/// Seen heads and "last seen here", in rozed's database.
+/// Seen heads and "last seen here", in Lo's database.
 #[derive(Clone)]
 pub struct RevisionMarks {
-    db: RozedDb,
+    db: LoDb,
 }
 
 impl RevisionMarks {
     /// How long a pull request's rows are kept after it closed.
     pub const KEPT_AFTER_CLOSING: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-    pub fn new(db: RozedDb) -> Self {
+    pub fn new(db: LoDb) -> Self {
         Self { db }
     }
 
@@ -221,8 +221,8 @@ mod tests {
         }
     }
 
-    async fn marks(name: &str, logins: &[&str]) -> (RozedDb, RevisionMarks) {
-        let db = RozedDb::open_test(name).await;
+    async fn marks(name: &str, logins: &[&str]) -> (LoDb, RevisionMarks) {
+        let db = LoDb::open_test(name).await;
         for login in logins {
             db.save_account(account(login)).await.unwrap();
         }

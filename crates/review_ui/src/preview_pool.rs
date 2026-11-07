@@ -1,10 +1,10 @@
-//! Running the preview helper, `rozed --render-preview` (see [`crate::image_preview`]), for each
+//! Running the preview helper, `lo --render-preview` (see [`crate::image_preview`]), for each
 //! image a diff shows, and watching it.
 //!
 //! At most [`HELPERS`] run at once, from a queue. Each gets [`Limits::deadline`] of wall-clock
 //! time and [`Limits::max_resident`] of memory, polled while it runs, and is killed past either.
 //! Dropping a request takes it off the queue, or kills its helper. Whatever goes wrong, the image
-//! shows why it couldn't be previewed; rozed itself never decodes a pull request's image.
+//! shows why it couldn't be previewed; Lo itself never decodes a pull request's image.
 
 use std::future::Future;
 use std::io::{Read as _, Write as _};
@@ -215,7 +215,7 @@ fn helper_command() -> std::io::Result<Command> {
     Ok(command)
 }
 
-/// In tests, the test binary stands in for rozed: its `helper_process` test serves the request
+/// In tests, the test binary stands in for Lo: its `helper_process` test serves the request
 /// when it's told to.
 #[cfg(test)]
 fn helper_command() -> std::io::Result<Command> {
@@ -267,10 +267,10 @@ fn run_watched(
         return Err("it's too large to read".to_string());
     }
     let header = image_preview::request_header(job.format, job.fit)
-        .ok_or("rozed doesn't preview this format")?;
+        .ok_or("Lo doesn't preview this format")?;
     let mut command = helper_command().map_err(|error| format!("no helper: {error}"))?;
     command
-        .env_remove("ROZED_PARENT_PID")
+        .env_remove("LO_PARENT_PID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -414,14 +414,14 @@ pub(crate) mod tests {
     use crate::image_preview::tests::png_of_zeros;
 
     /// Set in the test binary's environment when it runs as the helper.
-    pub(crate) const HELPER_ENV: &str = "ROZED_TEST_PREVIEW_HELPER";
+    pub(crate) const HELPER_ENV: &str = "LO_TEST_PREVIEW_HELPER";
 
     /// Makes the helper crash.
-    const ABORT_ENV: &str = "ROZED_TEST_PREVIEW_ABORT";
+    const ABORT_ENV: &str = "LO_TEST_PREVIEW_ABORT";
 
     /// Makes the helper enter its sandbox and try to read this file and the network, exiting 0
     /// when neither works.
-    const PROBE_ENV: &str = "ROZED_TEST_PREVIEW_PROBE";
+    const PROBE_ENV: &str = "LO_TEST_PREVIEW_PROBE";
 
     /// The helper, when the test binary runs as one; otherwise nothing.
     #[test]
@@ -442,7 +442,7 @@ pub(crate) mod tests {
     }
 
     /// Set when a test runs alone, in a process of its own.
-    const ALONE_ENV: &str = "ROZED_TEST_ALONE";
+    const ALONE_ENV: &str = "LO_TEST_ALONE";
 
     /// Whether this is `test` running alone in a process of its own, where other tests don't
     /// move the process's memory. Otherwise, runs it so, checks it passed, and returns false.
@@ -596,10 +596,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat() {
-        if !alone(
-            "preview_pool::tests::bombs_end_within_the_deadline_and_leave_rozed_s_memory_flat",
-        ) {
+    fn bombs_end_within_the_deadline_and_leave_lo_s_memory_flat() {
+        if !alone("preview_pool::tests::bombs_end_within_the_deadline_and_leave_lo_s_memory_flat") {
             return;
         }
         let limits = Limits {
@@ -632,7 +630,7 @@ pub(crate) mod tests {
             ));
         }
         report.push_str(&format!(
-            "rozed's own memory grew at most {} MiB\n",
+            "Lo's own memory grew at most {} MiB\n",
             parent / MIB
         ));
         eprintln!("{report}");

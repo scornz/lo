@@ -7,10 +7,10 @@ use serde::Deserialize;
 
 use crate::graphql::GraphQlError;
 
-/// rozed's OAuth app's client ID.
+/// Lo's OAuth app's client ID.
 pub const CLIENT_ID: &str = "Ov23liBORqwRdiPzqsPP";
 
-/// The page where a user asks an organization to approve rozed: it lists each org with a
+/// The page where a user asks an organization to approve Lo: it lists each org with a
 /// Request button.
 pub fn approval_url() -> String {
     format!("https://github.com/settings/connections/applications/{CLIENT_ID}")
@@ -30,7 +30,7 @@ pub enum GithubError {
         url: Option<String>,
     },
 
-    /// An organization restricts OAuth apps and hasn't approved rozed.
+    /// An organization restricts OAuth apps and hasn't approved Lo.
     #[error("{message}")]
     OAuthAppRestricted {
         message: String,
@@ -77,11 +77,9 @@ pub enum GithubError {
     #[error("GitHub's pages didn't fit together: {0}")]
     Inconsistent(String),
 
-    /// A request to somewhere other than GitHub's API. rozed sends its token nowhere else, so
+    /// A request to somewhere other than GitHub's API. Lo sends its token nowhere else, so
     /// it never sent this one.
-    #[error(
-        "rozed sends GitHub requests only to api.github.com and uploads.github.com, not {host}"
-    )]
+    #[error("Lo sends GitHub requests only to api.github.com and uploads.github.com, not {host}")]
     RefusedUrl { host: String },
 
     /// The request didn't get an answer.
@@ -93,7 +91,7 @@ pub enum GithubError {
     #[error("couldn't read the account's token: {0}")]
     TokenUnavailable(String),
 
-    /// The answer wasn't what rozed expected.
+    /// The answer wasn't what Lo expected.
     #[error("couldn't read GitHub's answer: {0}")]
     Decode(String),
 }
@@ -108,7 +106,7 @@ fn graphql_messages(errors: &[GraphQlError]) -> String {
 }
 
 /// A link that helps the user fix an error, labelled for a button. It's always an `https` page
-/// on github.com: GitHub's answers can name a link, such as the single sign-on URL, and rozed
+/// on github.com: GitHub's answers can name a link, such as the single sign-on URL, and Lo
 /// opens nothing else they name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelpLink {
@@ -140,7 +138,7 @@ impl HelpLink {
 
 impl GithubError {
     /// GitHub's link for fixing this error: authorizing single sign-on, or asking an organization
-    /// to approve rozed.
+    /// to approve Lo.
     pub fn help_link(&self) -> Option<HelpLink> {
         match self {
             Self::SsoRequired { url: Some(url), .. } => {
@@ -266,7 +264,7 @@ impl GithubError {
     }
 
     /// The error for a GraphQL response's `errors`, which come with HTTP 200. Every error is
-    /// looked at, and the one rozed can say most about wins: single sign-on, then an org's
+    /// looked at, and the one Lo can say most about wins: single sign-on, then an org's
     /// OAuth restriction, then the rate limit, then not found.
     pub fn from_graphql(errors: Vec<GraphQlError>, headers: &HeaderMap) -> Self {
         let header = |name: &str| {
@@ -392,7 +390,7 @@ impl SsoHeader {
     }
 }
 
-/// Whether an HTTP client's `error` says no connection could be made. rozed's client is
+/// Whether an HTTP client's `error` says no connection could be made. Lo's client is
 /// reqwest, built on hyper-util, which wraps everything that goes wrong before a request is sent
 /// in `client error (Connect)`: looking up the host, opening the TCP connection, the TLS
 /// handshake and a proxy's answer to `CONNECT`. Only the first two mean the network is missing,

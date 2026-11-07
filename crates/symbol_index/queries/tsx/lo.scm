@@ -1,4 +1,4 @@
-; rozed's additions for JSX, which only the TSX grammar has: components used as elements. HTML
+; Lo's additions for JSX, which only the TSX grammar has: components used as elements. HTML
 ; elements, which are lowercase, aren't references.
 
 (jsx_opening_element

@@ -1,8 +1,8 @@
-# Builds rozed against Zed's latest release every week, so each Zed bump starts with a known list of
-# breakages. script/zed-latest.sh does the work: it replays rozed's patches onto the release in a
+# Builds Lo against Zed's latest release every week, so each Zed bump starts with a known list of
+# breakages. script/zed-latest.sh does the work: it replays Lo's patches onto the release in a
 # scratch copy of Zed and runs CI's checks there. Nothing is pushed.
 #
-# While the latest release breaks rozed, one open issue labelled zed-update holds the latest report.
+# While the latest release breaks Lo, one open issue labelled zed-update holds the latest report.
 # The run itself stays green; it fails only when the script can't run, such as on a failed download.
 name: weekly-zed
 
@@ -52,7 +52,7 @@ jobs:
           install_args: cmake
           cache: false
 
-      # rozed's toolchain, which runs `cargo xtask`. The script installs the release's if it differs.
+      # Lo's toolchain, which runs `cargo xtask`. The script installs the release's if it differs.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install && rustc --version && cmake --version
 
@@ -68,7 +68,7 @@ jobs:
             skip_pinned=false
           else
             tag=$(gh api repos/zed-industries/zed/releases/latest --jq .tag_name)
-            # When it's the release rozed pins, ci.yml already builds it.
+            # When it's the release Lo pins, ci.yml already builds it.
             skip_pinned=true
           fi
           pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-pre)?$'
@@ -82,7 +82,7 @@ jobs:
             echo "skip_pinned=$skip_pinned"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build rozed against it
+      - name: Build Lo against it
         id: build
         env:
           TAG: ${{ steps.release.outputs.tag }}
@@ -102,7 +102,7 @@ jobs:
             0) result=pass ;;
             1)
               result=broken
-              echo "::warning title=Zed $TAG breaks rozed::The job summary has the report."
+              echo "::warning title=Zed $TAG breaks Lo::The job summary has the report."
               ;;
             *) exit "$status" ;;
           esac
@@ -116,8 +116,8 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
-  # Opens or updates the zed-update issue while the latest release breaks rozed, and closes it once
-  # rozed builds. It runs no repository code. Only the weekly check manages the issue: not a run of
+  # Opens or updates the zed-update issue while the latest release breaks Lo, and closes it once
+  # Lo builds. It runs no repository code. Only the weekly check manages the issue: not a run of
   # another branch's copy of this workflow, and not a dispatch against a tag of someone's choosing.
   issue:
     name: issue
@@ -143,7 +143,7 @@ jobs:
 
           if [ "$RESULT" = pass ]; then
             for issue in $issues; do
-              gh issue close "$issue" --comment "rozed builds and passes its checks against Zed $TAG ([run]($RUN_URL))."
+              gh issue close "$issue" --comment "Lo builds and passes its checks against Zed $TAG ([run]($RUN_URL))."
             done
             exit 0
           fi
@@ -160,11 +160,11 @@ jobs:
               if length > 60000;
           ' >> "$body"
 
-          title="Zed $TAG breaks rozed"
+          title="Zed $TAG breaks Lo"
           oldest=$(printf '%s\n' "$issues" | head -n 1)
           if [ -z "$oldest" ]; then
             if [ "$(gh label list --search zed-update --json name --jq 'any(.[]; .name == "zed-update")')" != true ]; then
-              gh label create zed-update --color d93f0b --description "rozed doesn't build against Zed's latest release"
+              gh label create zed-update --color d93f0b --description "Lo doesn't build against Zed's latest release"
             fi
             gh issue create --title "$title" --label zed-update --body-file "$body"
             exit 0
@@ -172,9 +172,9 @@ jobs:
 
           old_title=$(gh issue view "$oldest" --json title --jq .title)
           gh issue edit "$oldest" --title "$title" --body-file "$body"
-          # Editing notifies nobody, so say when a newer release breaks rozed too.
+          # Editing notifies nobody, so say when a newer release breaks Lo too.
           if [ "$old_title" != "$title" ]; then
-            gh issue comment "$oldest" --body "Zed $TAG breaks rozed too. The description has its report ([run]($RUN_URL))."
+            gh issue comment "$oldest" --body "Zed $TAG breaks Lo too. The description has its report ([run]($RUN_URL))."
           fi
           # The oldest holds the report; any others are duplicates of it.
           for issue in $(printf '%s\n' "$issues" | tail -n +2); do

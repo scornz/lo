@@ -104,7 +104,7 @@ pub enum FileStatus {
     /// The file's type or mode changed.
     Changed,
     Unchanged,
-    /// A status this version of rozed doesn't know.
+    /// A status this version of Lo doesn't know.
     #[serde(other)]
     Other,
 }

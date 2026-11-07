@@ -1091,7 +1091,7 @@ mod tests {
 
     const PULL: &str = "https://github.com/owner/repo/pull/1";
 
-    /// rozed's window with a tab for [`PULL`], wide enough to show its diff side by side.
+    /// Lo's window with a tab for [`PULL`], wide enough to show its diff side by side.
     async fn tab(cx: &mut TestAppContext) -> (Entity<PrTab>, &mut VisualTestContext) {
         crate::trust::tests::init_test(cx);
         cx.update(|cx| {
@@ -1575,7 +1575,7 @@ mod tests {
     #[gpui::test]
     async fn the_reviewer_is_told_when_gitattributes_couldnt_be_read(cx: &mut TestAppContext) {
         let (tab, cx) = tab(cx).await;
-        // A file under more folders with a .gitattributes than rozed reads, which don't change.
+        // A file under more folders with a .gitattributes than Lo reads, which don't change.
         let folders: Vec<String> = (1..=repo_cache::MAX_ATTRIBUTE_FILES + 1)
             .map(|depth| "d/".repeat(depth))
             .collect();
@@ -1975,7 +1975,7 @@ mod tests {
         assert!(split(cx));
     }
 
-    /// Zed binds `tab` to indent in every editor, and rozed binds it after.
+    /// Zed binds `tab` to indent in every editor, and Lo binds it after.
     #[gpui::test]
     async fn tab_switches_sides_with_zeds_keymap_too(cx: &mut TestAppContext) {
         let (tab, cx) = tab(cx).await;

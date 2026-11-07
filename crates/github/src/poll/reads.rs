@@ -67,7 +67,7 @@ pub(crate) fn stamp(check: &serde_json::Value, watched: &[&str]) -> String {
 /// A read's value, whatever its type.
 pub(crate) type Value = Arc<dyn Any + Send + Sync>;
 
-/// Runs a read with the account's client and the value rozed has.
+/// Runs a read with the account's client and the value Lo has.
 pub(crate) type ReadFn = Arc<
     dyn Fn(GithubClient, Option<Value>) -> BoxFuture<'static, Result<Value, GithubError>>
         + Send

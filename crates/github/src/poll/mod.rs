@@ -1,4 +1,4 @@
-//! Polling GitHub for changes to the pull requests rozed has open (design §3 "GitHub API").
+//! Polling GitHub for changes to the pull requests Lo has open (design §3 "GitHub API").
 
 mod governor;
 mod poller;

@@ -1,9 +1,9 @@
 [workspace]
 members = ["crates/*"]
 exclude = [
-    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates rozed
-    # depends on by path members of rozed's workspace, and their `workspace = true` keys fail to
-    # inherit from rozed's root. Excluded, they inherit from Zed's.
+    # Required for Zed's crates (third_party/zed). Without it, cargo makes the Zed crates Lo
+    # depends on by path members of Lo's workspace, and their `workspace = true` keys fail to
+    # inherit from Lo's root. Excluded, they inherit from Zed's.
     "third_party",
     # xtask is its own workspace, so it runs when this one can't resolve.
     "crates/xtask",
@@ -53,13 +53,13 @@ theme = { path = "third_party/zed/crates/theme" }
 theme_settings = { path = "third_party/zed/crates/theme_settings" }
 ui = { path = "third_party/zed/crates/ui" }
 # debug-embed compiles Zed's assets into debug builds too. Without it, debug builds look for them
-# under rozed's root and panic.
+# under Lo's root and panic.
 util = { path = "third_party/zed/crates/util", features = ["debug-embed"] }
 workspace = { path = "third_party/zed/crates/workspace" }
 zed_actions = { path = "third_party/zed/crates/zed_actions" }
 zlog = { path = "third_party/zed/crates/zlog" }
 
-# rozed's crates.
+# Lo's crates.
 github = { path = "crates/github" }
 repo_cache = { path = "crates/repo_cache" }
 review = { path = "crates/review" }

@@ -1,15 +1,15 @@
-//! The Rust toolchain rust-analyzer runs cargo and rustc from, chosen by rozed rather than the
+//! The Rust toolchain rust-analyzer runs cargo and rustc from, chosen by Lo rather than the
 //! repository.
 //!
 //! rust-analyzer runs `cargo` and `rustc` in the checkout. With rustup, those are proxies that
 //! follow the repository's `rust-toolchain.toml`, and may first download and install the toolchain
-//! it names. rozed's forced settings ([`crate::forced_settings`]) give rust-analyzer
+//! it names. Lo's forced settings ([`crate::forced_settings`]) give rust-analyzer
 //! `RUSTUP_TOOLCHAIN`, which rustup prefers to any toolchain file, set to the toolchain [`find`]
 //! returns, and `RUSTUP_AUTO_INSTALL=0` in any case, so rustup never installs one.
 
 use std::process::{Command, Stdio};
 
-/// The toolchain rust-analyzer should use: the one rozed itself was started with, as `cargo run`
+/// The toolchain rust-analyzer should use: the one Lo itself was started with, as `cargo run`
 /// does, or else rustup's default. `None` when there's neither, or no rustup.
 pub fn find() -> Option<String> {
     if let Some(toolchain) = std::env::var("RUSTUP_TOOLCHAIN")

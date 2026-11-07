@@ -1,7 +1,7 @@
-//! Your pending review, and what rozed sends GitHub to comment and to submit a review (design §8,
+//! Your pending review, and what Lo sends GitHub to comment and to submit a review (design §8,
 //! "Reviews"; §11, "Acting on what you saw").
 //!
-//! Comments collect into a pending review, which GitHub stores, so it survives quitting rozed and
+//! Comments collect into a pending review, which GitHub stores, so it survives quitting Lo and
 //! shows as pending on the web. GitHub keeps at most one per person per pull request.
 //! [`YourReview`] holds yours and plans each step as a [`Mutation`]: `c` adds a comment to it,
 //! starting it on the first; `C` posts one comment at once; the submit dialog submits it, or
@@ -85,7 +85,7 @@ pub struct PendingReview {
     /// that were current when they were added, so they may be on later revisions.
     pub commit: String,
     /// `comments.totalCount`: its threads and replies. [`YourReview::accepted`] counts the ones
-    /// rozed adds. Deleting a pending comment isn't a mutation here, so the GitHub layer reads the
+    /// Lo adds. Deleting a pending comment isn't a mutation here, so the GitHub layer reads the
     /// pending review again after one.
     pub comments: usize,
 }
@@ -208,7 +208,7 @@ pub enum Posting {
     Pending(Mutation),
 }
 
-/// Why rozed won't send a comment or a review.
+/// Why Lo won't send a comment or a review.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// The comment is blank, which GitHub refuses.

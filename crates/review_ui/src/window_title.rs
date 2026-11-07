@@ -1,8 +1,8 @@
-//! The window's title: the active pull request's, or "rozed" when none is open (design §10
+//! The window's title: the active pull request's, or "Lo" when none is open (design §10
 //! "Window"). With an empty pane active, as after a split, it's the pull request last active.
 //!
 //! Zed's workspace titles the window from its project's folders, which say "empty project" in
-//! rozed. rozed forces Zed's title to read "rozed" (the app's forced settings), so the workspace
+//! Lo. Lo forces Zed's title to read "Lo" (the app's forced settings), so the workspace
 //! never sets it again, and sets it here whenever the active tab or a pull request's title
 //! changes.
 
@@ -12,7 +12,7 @@ use workspace::Workspace;
 use crate::pr_tab::PrTab;
 
 /// The title with no pull request open.
-pub const NO_PULL_REQUEST: &str = "rozed";
+pub const NO_PULL_REQUEST: &str = "Lo";
 
 /// The title for a pull request: `owner/repo#n — title`, or `owner/repo#n` until its title is
 /// known.
