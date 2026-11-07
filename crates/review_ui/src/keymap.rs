@@ -1,5 +1,5 @@
 //! Lo's key bindings: Zed's default macOS keymap, and vim's when vim is on, minus every binding
-//! that would open, create or write files, or take a key Lo binds.
+//! that would open, create or write files, run a shell, or take a key Lo binds.
 //!
 //! Lo is read-only (design §1). Its buffers are read-only too, but Zed's open, new and save
 //! actions work on the workspace, not a buffer: cmd-O opens any file on disk, cmd-N creates one,
@@ -11,14 +11,15 @@ use settings::{KeybindSource, KeymapFile, KeymapFileLoadResult, SettingsAssets};
 use vim_mode_setting::{HelixModeSetting, VimModeSetting};
 
 use crate::read_only::FileActions;
+use crate::vim_mode::refusals;
 
 /// Zed's actions that Lo leaves unbound because their keys are Lo's. Zed binds `cmd-enter` and
 /// `cmd-shift-enter` to these in every full-size editor, the diff's included, where they'd beat
 /// Lo's keys for the tab, which bind at the tab's depth.
 const TAKE_LOS_KEYS: &[&str] = &["editor::NewlineBelow", "editor::NewlineAbove"];
 
-/// Binds Zed's default macOS keymap, with vim's when vim is on, without [`FileActions`] and
-/// [`TAKE_LOS_KEYS`]. Vim's goes between Zed's keymap and its macOS overrides, as Zed binds it.
+/// Binds Zed's default macOS keymap, with vim's when vim is on, without what
+/// [`without_dropped`] drops. Vim's goes between Zed's keymap and its macOS overrides, as Zed binds it.
 pub fn load(cx: &mut App) {
     let vim = VimModeSetting::is_enabled(cx) || HelixModeSetting::is_enabled(cx);
     let mut bindings = bindings_in(settings::DEFAULT_KEYMAP_PATH, KeybindSource::Default, cx);
@@ -38,8 +39,7 @@ pub(crate) fn vim_bindings(cx: &App) -> Vec<KeyBinding> {
     bindings_in(settings::VIM_KEYMAP_PATH, KeybindSource::Vim, cx)
 }
 
-/// The keymap at `path` in Zed's assets, from `source`, without [`FileActions`] and
-/// [`TAKE_LOS_KEYS`]. Bindings for actions from Zed crates Lo doesn't include (the agent,
+/// The keymap at `path` in Zed's assets, from `source`, without what [`without_dropped`] drops. Bindings for actions from Zed crates Lo doesn't include (the agent,
 /// terminal, debugger and so on) are skipped.
 fn bindings_in(path: &str, source: KeybindSource, cx: &App) -> Vec<KeyBinding> {
     let content = util::asset_str::<SettingsAssets>(path);
@@ -64,13 +64,17 @@ fn bindings_in(path: &str, source: KeybindSource, cx: &App) -> Vec<KeyBinding> {
     bindings
 }
 
-/// Drops the bindings for [`FileActions`] and [`TAKE_LOS_KEYS`].
+/// Drops the bindings for [`FileActions`], for closing with a save (vim's `ZZ`), for vim's shell
+/// keys (`!`) and for [`TAKE_LOS_KEYS`].
 fn without_dropped(bindings: Vec<KeyBinding>) -> impl Iterator<Item = KeyBinding> {
     let file_actions = FileActions::names();
     bindings.into_iter().filter(move |binding| {
         let name = binding.action().name();
-        if file_actions.contains(&name) {
+        if file_actions.contains(&name) || refusals::saves_on_close(binding.action()) {
             log::debug!("not binding {name}: it opens, creates or writes files");
+            false
+        } else if refusals::SHELL_ACTIONS.contains(&name) {
+            log::debug!("not binding {name}: it runs a shell");
             false
         } else if TAKE_LOS_KEYS.contains(&name) {
             log::debug!("not binding {name}: its keys are Lo's");
@@ -155,11 +159,21 @@ mod tests {
             ];
             assert_binds(&zeds(path, cx), path, &newlines);
             let path = settings::VIM_KEYMAP_PATH;
-            let vim_file_actions = [
+            let vim_drops = [
                 ("ctrl-w n", "workspace::NewFileSplitHorizontal"),
                 ("g f", "editor::OpenSelectedFilename"),
+                ("!", "vim::PushShellCommand"),
+                ("!", "vim::ShellCommand"),
             ];
-            assert_binds(&zeds(path, cx), path, &vim_file_actions);
+            assert_binds(&zeds(path, cx), path, &vim_drops);
+            let vims = zeds(path, cx);
+            let zz = Keystroke::parse("shift-z").unwrap();
+            assert!(
+                vims.iter()
+                    .any(|binding| refusals::saves_on_close(binding.action())
+                        && binding.match_keystrokes(&[zz.clone(), zz.clone()]) == Some(false)),
+                "{path} no longer binds ZZ to close saving"
+            );
         });
     }
 
@@ -214,6 +228,11 @@ mod tests {
                     .bindings()
                     .any(|binding| file_actions.contains(&binding.action().name()))
             );
+            // Nor runs a shell (vim's `!`), nor closes saving first (vim's `ZZ`).
+            assert!(!keymap.bindings().any(|binding| {
+                refusals::SHELL_ACTIONS.contains(&binding.action().name())
+                    || refusals::saves_on_close(binding.action())
+            }));
             // And vim's come from vim.
             assert!(keymap.bindings().any(|binding| {
                 binding.action().name() == "vim::Down"

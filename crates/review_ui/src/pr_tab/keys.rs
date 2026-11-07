@@ -12,7 +12,7 @@
 
 use std::any::Any;
 
-use editor::{Addon, SplittableEditor};
+use editor::{Addon, Editor, SplittableEditor};
 use gpui::{Action, App, Context, Div, Entity, KeyBinding, KeyContext};
 
 use super::{Middle, PrTab, left, middle, right, viewed};
@@ -61,7 +61,8 @@ pub(crate) const OVER_VIM: &[(&str, &str)] = &[
 /// Vim's keys that win over Lo's where both hold: by keystrokes and vim's action.
 #[cfg(test)]
 pub(crate) const UNDER_VIM: &[(&str, &str)] = &[
-    // In insert mode, a normal-mode command, over pane::GoBack.
+    // In insert mode, in a text box such as a comment box: a normal-mode command, over
+    // pane::GoBack.
     ("ctrl-o", "vim::TemporaryNormal"),
 ];
 
@@ -143,6 +144,11 @@ impl Addon for DiffKeyContext {
     fn to_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Whether `editor` is one of the diff's ([`mark_diff`]).
+pub(crate) fn is_diff(editor: &Editor) -> bool {
+    editor.addon::<DiffKeyContext>().is_some()
 }
 
 /// Gives `diff`'s editors, both sides, the diff's context, [`PR_DIFF`]. Call it whenever the

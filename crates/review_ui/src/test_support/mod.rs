@@ -15,9 +15,21 @@ pub use github::{Answer, FakeGithub, FakePull, WriteAnswer, anonymous, sign_in, 
 /// Sets the app up as Lo does: the command palette, the editor, Zed's keymap with the tab's
 /// keys over it, and Lo's changes to every workspace.
 pub fn init(cx: &mut TestAppContext) {
+    init_app(false, cx);
+}
+
+/// [`init`], with Zed's command palette itself, where vim's `:` commands run, as in Lo.
+pub fn init_with_palette(cx: &mut TestAppContext) {
+    init_app(true, cx);
+}
+
+fn init_app(palette: bool, cx: &mut TestAppContext) {
     crate::trust::tests::init_test(cx);
     cx.update(|cx| {
-        command_palette_hooks::init(cx);
+        match palette {
+            true => command_palette::init(cx),
+            false => command_palette_hooks::init(cx),
+        }
         editor::init(cx);
         crate::init_workspaces(cx);
     });
@@ -27,6 +39,18 @@ pub fn init(cx: &mut TestAppContext) {
 /// actions.
 pub async fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
     init(cx);
+    window(cx).await
+}
+
+/// [`workspace`], with Zed's command palette.
+pub async fn workspace_with_palette(
+    cx: &mut TestAppContext,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
+    init_with_palette(cx);
+    window(cx).await
+}
+
+async fn window(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
     let fs = FakeFs::new(cx.executor());
     // A repository elsewhere on disk, which nothing in Lo should open.
     fs.insert_tree(

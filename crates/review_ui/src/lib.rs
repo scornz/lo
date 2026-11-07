@@ -12,6 +12,7 @@ pub mod github_layer;
 mod image_preview;
 pub mod key_clashes;
 mod keymap;
+pub mod links;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;

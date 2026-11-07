@@ -253,10 +253,10 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
     tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
     places.push(focused("the diff", "Editor", cx));
     let diff_stack = places.last().unwrap().stack.clone();
-    // Vim's other modes in the diff, and while it waits for the rest of a command.
+    // Vim's other modes in the diff, and while it waits for the rest of a command. The diff
+    // never enters insert mode.
     for (name, keys) in [
         ("the diff in vim's visual mode", "v"),
-        ("the diff in vim's insert mode", "i"),
         ("the diff after vim's `y`", "y"),
         ("the diff after vim's `f`", "f"),
         ("the diff with a count", "3"),
@@ -276,6 +276,27 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         tab.show_middle(Middle::View(PartView::new(&view, cx)), window, cx)
     });
     places.push(focused("a view in the diff's place", "Probe", cx));
+    // A text box with vim's keys, typing, in a view in the diff's place.
+    let text_box = cx.update(|window, cx| {
+        cx.new(|cx| crate::vim_mode::modal(Editor::auto_height(1, 10, window, cx)))
+    });
+    tab.update_in(cx, |tab, window, cx| {
+        tab.show_middle(Middle::View(PartView::new(&text_box, cx)), window, cx)
+    });
+    cx.simulate_keystrokes("i");
+    places.push(focused("a text box in vim's insert mode", "Editor", cx));
+    assert_eq!(
+        places
+            .last()
+            .unwrap()
+            .stack
+            .last()
+            .unwrap()
+            .get("vim_mode")
+            .map(|m| m.as_ref()),
+        Some("insert")
+    );
+    cx.simulate_keystrokes("escape");
     tab.update_in(cx, |tab, window, cx| {
         tab.show_middle(Middle::Diff, window, cx)
     });
