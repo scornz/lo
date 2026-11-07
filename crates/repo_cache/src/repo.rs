@@ -377,7 +377,7 @@ impl Repo {
     }
 
     /// Makes sure every head in `heads` is in the clone and pins each at
-    /// `refs/rozed/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
+    /// `refs/lo/pull/<number>/revs/<oid>`, as one of pull request `number`'s revisions. Those
     /// the clone lacks are fetched by ID in one fetch. Returns the ones GitHub no longer has
     /// (design §11, "Missing revisions"), which are left out; any other failure fails the whole
     /// fetch.
@@ -930,7 +930,7 @@ fn branch_base_ref(number: u64, branch: &str) -> String {
 
 /// The folder in a clone where each pull request's heads GitHub no longer has are noted, one
 /// file per pull request.
-const UNAVAILABLE_DIR: &str = "rozed-unavailable";
+const UNAVAILABLE_DIR: &str = "lo-unavailable";
 
 /// The variable that stops git downloading what a partial clone lacks.
 pub(crate) const NO_LAZY_FETCH_VAR: &str = "GIT_NO_LAZY_FETCH";

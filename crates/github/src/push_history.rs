@@ -340,7 +340,7 @@ impl PushHistory {
     }
 
     /// What every source saw on the head branch, for `review::revisions::build_revisions`, with
-    /// the heads rozed's pollers saw (`seen`):
+    /// the heads Lo's pollers saw (`seen`):
     ///
     /// - the head branch's pushes from the activity API, but deletions, and pushes after the pull
     ///   request was closed, which belong to whatever reused the branch;
@@ -475,7 +475,7 @@ impl PushHistory {
     }
 
     /// What's known of the base branches over time, for `review::revisions::base_tip_at`, with
-    /// `tip` the base branch's tip as the local copy last fetched it. Tips rozed saw itself, such
+    /// `tip` the base branch's tip as the local copy last fetched it. Tips Lo saw itself, such
     /// as the heads of the pull request below in a stack, can be added to its records.
     pub fn base_history(&self, tip: Option<&str>) -> BaseHistory {
         let merge = (self.merge_commit.as_ref())
@@ -690,7 +690,7 @@ impl GithubClient {
                 Err(error) => Err(error.to_string()),
                 Ok(response) if response.status == StatusCode::NOT_MODIFIED => {
                     known_page.cloned().ok_or_else(|| {
-                        format!("GitHub said {current} hadn't changed, but rozed never read it")
+                        format!("GitHub said {current} hadn't changed, but Lo never read it")
                     })
                 }
                 Ok(response) => timeline_page(&response, current),

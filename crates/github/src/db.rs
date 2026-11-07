@@ -755,19 +755,19 @@ mod tests {
         });
     }
 
-    /// rozed's database as it was before revision marks: with accounts per repository.
+    /// Lo's database as it was before revision marks: with accounts per repository.
     struct BeforeRevisionMarks;
 
     impl Domain for BeforeRevisionMarks {
-        const NAME: &str = RozedDb::NAME;
+        const NAME: &str = LoDb::NAME;
         // The first four steps.
-        const MIGRATIONS: &[&str] = RozedDb::MIGRATIONS.split_at(4).0;
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(4).0;
     }
 
     #[test]
     fn upgrades_a_database_from_before_revision_marks() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rozed.sqlite");
+        let path = dir.path().join("lo.sqlite");
         futures::executor::block_on(async {
             let old =
                 ThreadSafeConnection::builder::<BeforeRevisionMarks>(&path.to_string_lossy(), true)
@@ -794,7 +794,7 @@ mod tests {
             .unwrap();
             drop(old);
 
-            let db = RozedDb::open(&path).await.unwrap();
+            let db = LoDb::open(&path).await.unwrap();
             assert_eq!(
                 db.repo_account("github.com", "acme", "secret")
                     .unwrap()

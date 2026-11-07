@@ -622,13 +622,13 @@ impl Poller {
     }
 
     /// Reads something about `pull` with `request`, keeping it in the cache as `T`, watching
-    /// `pull` if it wasn't. Returns what rozed has at once, if anything: what was read before, or
+    /// `pull` if it wasn't. Returns what Lo has at once, if anything: what was read before, or
     /// what's in the cache, even from before a restart.
     ///
     /// While `pull` is the open pull request, `request` runs in the account's queue, after the
-    /// open PR's poll: when rozed has nothing yet, when a field `T` watches in the open PR's check
+    /// open PR's poll: when Lo has nothing yet, when a field `T` watches in the open PR's check
     /// ([`CachedRead::WATCHED`]) is no longer what it was when `T` was read, and, like the details,
-    /// on the 5-minute refresh in the foreground. `request` is given the value rozed has, so it can
+    /// on the 5-minute refresh in the foreground. `request` is given the value Lo has, so it can
     /// ask GitHub whether that changed. Each time the value changes, [`PollEvent::Read`] says so.
     /// A read is kept for as long as `pull` is watched; asking again replaces its `request`.
     pub fn read_cached<T, F, Fut>(

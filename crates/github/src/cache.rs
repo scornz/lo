@@ -229,7 +229,7 @@ impl PrCache {
         Self { db }
     }
 
-    pub(crate) fn db(&self) -> &RozedDb {
+    pub(crate) fn db(&self) -> &LoDb {
         &self.db
     }
 
