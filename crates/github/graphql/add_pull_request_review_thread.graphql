@@ -1,0 +1,39 @@
+# Adds a thread to your pending review $pullRequestReviewId: on lines, or on the whole file with
+# `subjectType: FILE`. GitHub puts it on the pull request's current head, whatever the review's
+# commit, and refuses a line outside the diff by answering `thread: null` with no error. `side` and
+# `startSide` default to RIGHT, so a range from the base starts with `startSide: LEFT`.
+mutation AddPullRequestReviewThread(
+  $pullRequestReviewId: ID!
+  $path: String!
+  $body: String!
+  $subjectType: PullRequestReviewThreadSubjectType!
+  $line: Int
+  $side: DiffSide
+  $startLine: Int
+  $startSide: DiffSide
+) {
+  addPullRequestReviewThread(
+    input: {
+      pullRequestReviewId: $pullRequestReviewId
+      path: $path
+      body: $body
+      subjectType: $subjectType
+      line: $line
+      side: $side
+      startLine: $startLine
+      startSide: $startSide
+    }
+  ) {
+    thread {
+      id
+      comments(first: 1) {
+        nodes {
+          id
+          pullRequestReview {
+            id
+          }
+        }
+      }
+    }
+  }
+}

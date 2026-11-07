@@ -1,0 +1,112 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "PullRequestCheck",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "e2e",
+      "number": 23
+    },
+    "query_sha256": "ac60175b0801cac9e8d49be73f236d916d35795a5ce5ef1971e0a672a1fcb9ba"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4933",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "67"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4933,
+          "used": 67,
+          "resetAt": "2026-11-07T07:38:10Z"
+        },
+        "repository": {
+          "pullRequest": {
+            "updatedAt": "2026-11-07T07:06:11Z",
+            "state": "OPEN",
+            "isDraft": false,
+            "baseRefName": "e11/base",
+            "baseRefOid": "5055651e117287d286d48a0eb3fa757ca359715f",
+            "headRefOid": "5a48d2255817f0f19dfdfc3168925f0cdb85c630",
+            "reviewDecision": null,
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": null,
+            "mergeQueueEntry": null,
+            "timelineItems": {
+              "updatedAt": "2026-11-07T07:06:11Z",
+              "totalCount": 10
+            },
+            "revisionEvents": {
+              "filteredCount": 0
+            },
+            "commits": {
+              "totalCount": 1
+            },
+            "reviews": {
+              "totalCount": 7
+            },
+            "submittedReviews": {
+              "totalCount": 7
+            },
+            "reviewThreads": {
+              "totalCount": 5,
+              "nodes": [
+                {
+                  "isResolved": false,
+                  "comments": {
+                    "totalCount": 3
+                  }
+                },
+                {
+                  "isResolved": false,
+                  "comments": {
+                    "totalCount": 2
+                  }
+                },
+                {
+                  "isResolved": false,
+                  "comments": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "isResolved": false,
+                  "comments": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "isResolved": false,
+                  "comments": {
+                    "totalCount": 1
+                  }
+                }
+              ]
+            },
+            "viewerPendingReview": {
+              "nodes": []
+            },
+            "comments": {
+              "totalCount": 2
+            },
+            "changedFiles": 2,
+            "lastEditedAt": null,
+            "timelineEvents": {
+              "filteredCount": 9,
+              "updatedAt": "2026-11-07T07:06:11Z"
+            }
+          }
+        }
+      }
+    }
+  }
+}

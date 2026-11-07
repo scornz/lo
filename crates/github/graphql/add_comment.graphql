@@ -1,0 +1,11 @@
+# Comments on a pull request itself, in its conversation, as the box at the bottom of its timeline
+# does. $subjectId is the pull request's node ID.
+mutation AddComment($subjectId: ID!, $body: String!) {
+  addComment(input: { subjectId: $subjectId, body: $body }) {
+    commentEdge {
+      node {
+        id
+      }
+    }
+  }
+}

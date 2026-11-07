@@ -1,0 +1,25 @@
+# Replies to a thread: in your pending review $pullRequestReviewId, or, without it, posted at once as
+# a review of its own. Sent without a review id while you have one pending, GitHub quietly adds it
+# to that one instead.
+mutation AddPullRequestReviewThreadReply(
+  $pullRequestReviewThreadId: ID!
+  $body: String!
+  $pullRequestReviewId: ID
+) {
+  addPullRequestReviewThreadReply(
+    input: {
+      pullRequestReviewThreadId: $pullRequestReviewThreadId
+      body: $body
+      pullRequestReviewId: $pullRequestReviewId
+    }
+  ) {
+    comment {
+      id
+      state
+      pullRequestReview {
+        id
+        state
+      }
+    }
+  }
+}

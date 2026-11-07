@@ -4,12 +4,20 @@
 //! here. `graphql_client` generates the query's Rust types from `graphql/schema.graphql`, and the
 //! module names them and holds the [`GithubClient`](crate::GithubClient) methods that run the
 //! query. Generated fields GitHub deprecates carry `#[deprecated]`, so after a schema refresh CI's
-//! clippy fails on any use of one.
+//! clippy fails on any use of one. The mutations that comment and review are run by
+//! [`crate::review_writes`], which explains what GitHub refuses.
 
 use std::collections::HashSet;
 
 use crate::error::GithubError;
 
+pub mod add_comment;
+pub mod add_pull_request_review;
+pub mod add_pull_request_review_thread;
+pub mod add_pull_request_review_thread_reply;
+pub mod delete_issue_comment;
+pub mod delete_pull_request_review;
+pub mod delete_pull_request_review_comment;
 pub mod mark_file_as_viewed;
 pub mod merge_checks;
 pub mod merge_queue;
@@ -20,14 +28,27 @@ pub mod pending_review;
 pub mod pull_request;
 pub mod pull_request_check;
 pub mod pull_request_revisions;
+pub mod resolve_review_thread;
+pub mod review_state;
 pub mod review_thread_comments;
 pub mod review_threads;
 pub mod stack_layers;
+pub mod submit_pull_request_review;
 pub mod timeline;
 pub mod trunk_rules;
 pub mod unmark_file_as_viewed;
+pub mod unresolve_review_thread;
+pub mod update_issue_comment;
+pub mod update_pull_request_review_comment;
 pub mod viewer;
 
+pub use add_comment::AddComment;
+pub use add_pull_request_review::AddPullRequestReview;
+pub use add_pull_request_review_thread::AddPullRequestReviewThread;
+pub use add_pull_request_review_thread_reply::AddPullRequestReviewThreadReply;
+pub use delete_issue_comment::DeleteIssueComment;
+pub use delete_pull_request_review::DeletePullRequestReview;
+pub use delete_pull_request_review_comment::DeletePullRequestReviewComment;
 pub use mark_file_as_viewed::MarkFileAsViewed;
 pub use merge_checks::MergeChecks;
 pub use merge_queue::{MergeQueue, MergeQueueEntry, MergeQueueList};
@@ -46,12 +67,18 @@ pub use pull_request_check::{
     PullRequestReviewDecision, StatusState,
 };
 pub use pull_request_revisions::{PullRequestRevisions, PullRequestRevisionsData};
+pub use resolve_review_thread::ResolveReviewThread;
+pub use review_state::ReviewState;
 pub use review_thread_comments::ReviewThreadComments;
 pub use review_threads::{ReviewThread, ReviewThreadList, ReviewThreads};
 pub use stack_layers::{StackLayer, StackLayerList, StackLayers, ViewedFiles};
+pub use submit_pull_request_review::SubmitPullRequestReview;
 pub use timeline::{PullRequestTimeline, Timeline, TimelineEntry, TimelineItem};
 pub use trunk_rules::{TrunkRuleList, TrunkRules};
 pub use unmark_file_as_viewed::UnmarkFileAsViewed;
+pub use unresolve_review_thread::UnresolveReviewThread;
+pub use update_issue_comment::UpdateIssueComment;
+pub use update_pull_request_review_comment::UpdatePullRequestReviewComment;
 pub use viewer::{Viewer, ViewerData};
 
 // GitHub's custom scalars, as the generated code names them.

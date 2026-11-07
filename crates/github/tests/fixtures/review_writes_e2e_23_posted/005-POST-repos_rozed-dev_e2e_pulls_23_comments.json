@@ -1,0 +1,92 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/23/comments",
+    "body_sha256": "76e38edcb8a72016d5baf84d0f1339db8bc0e9f1c71bf078f4fd34ccffebca59"
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"4aa674b567400fbf51b5e0c41a3075ebad0dd20f5eaebbb22d9084fee266904f\"",
+      "location": "https://api.github.com/repos/rozed-dev/e2e/pulls/comments/4500596312",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4998",
+      "x-ratelimit-reset": "1794038733",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "2"
+    },
+    "body": {
+      "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/comments/4500596312",
+      "pull_request_review_id": 5810702935,
+      "id": 4500596312,
+      "node_id": "PRRC_kwDOVleUfc8AAAABDEGmWA",
+      "diff_hunk": "",
+      "path": "e11/notes.md",
+      "commit_id": "5a48d2255817f0f19dfdfc3168925f0cdb85c630",
+      "original_commit_id": "5a48d2255817f0f19dfdfc3168925f0cdb85c630",
+      "user": {
+        "login": "rozed-bot",
+        "id": 353226052,
+        "node_id": "U_kgDOFQ3NRA",
+        "avatar_url": "https://avatars.githubusercontent.com/u/353226052?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/rozed-bot",
+        "html_url": "https://github.com/rozed-bot",
+        "followers_url": "https://api.github.com/users/rozed-bot/followers",
+        "following_url": "https://api.github.com/users/rozed-bot/following{/other_user}",
+        "gists_url": "https://api.github.com/users/rozed-bot/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/rozed-bot/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/rozed-bot/subscriptions",
+        "organizations_url": "https://api.github.com/users/rozed-bot/orgs",
+        "repos_url": "https://api.github.com/users/rozed-bot/repos",
+        "events_url": "https://api.github.com/users/rozed-bot/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/rozed-bot/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Fixture E11: a file-level comment posted at once, through REST.",
+      "created_at": "2026-11-07T07:05:43Z",
+      "updated_at": "2026-11-07T07:05:43Z",
+      "html_url": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500596312",
+      "pull_request_url": "https://api.github.com/repos/rozed-dev/e2e/pulls/23",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/rozed-dev/e2e/pulls/comments/4500596312"
+        },
+        "html": {
+          "href": "https://github.com/rozed-dev/e2e/pull/23#discussion_r4500596312"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/rozed-dev/e2e/pulls/23"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/comments/4500596312/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 1,
+      "original_line": 1,
+      "side": "RIGHT",
+      "author_association": "MEMBER",
+      "original_position": 1,
+      "position": 1,
+      "subject_type": "file",
+      "is_copilot_code_review": false,
+      "copilot_code_review_sources": []
+    }
+  }
+}

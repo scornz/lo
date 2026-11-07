@@ -6,6 +6,7 @@ use http_client::http::HeaderMap;
 use serde::Deserialize;
 
 use crate::graphql::GraphQlError;
+use crate::review_writes::Rejection;
 
 /// Lo's OAuth app's client ID.
 pub const CLIENT_ID: &str = "Ov23liBORqwRdiPzqsPP";
@@ -71,6 +72,12 @@ pub enum GithubError {
     /// A GraphQL response's errors, when none of the cases above fits.
     #[error("{}", graphql_messages(.errors))]
     GraphQl { errors: Vec<GraphQlError> },
+
+    /// GitHub refused a comment, a review or an edit of one, as it explains in words: GraphQL's
+    /// `UNPROCESSABLE`, REST's `422`, or a mutation that answered nothing without an error
+    /// ([`crate::review_writes`]).
+    #[error("{0}")]
+    Rejected(Rejection),
 
     /// GitHub's pages didn't fit together: a cursor that doesn't move on, or a pull request that
     /// kept changing while its pages were read. Trying again later may work.
@@ -167,10 +174,11 @@ impl GithubError {
         }
     }
 
-    /// Whether trying again soon may get an answer: GitHub couldn't be reached
+    /// For a read: whether trying again soon may get an answer: GitHub couldn't be reached
     /// ([`Self::is_unreachable`]), or a request got no answer in time or lost its connection, as
     /// on a connection kept from before the Mac slept. A TLS failure or a proxy's refusal isn't:
-    /// waiting doesn't fix those.
+    /// waiting doesn't fix those. Never use it to send a write again: a write that lost its answer
+    /// may have been done ([`Self::may_have_posted`]).
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Network(error) => is_connection_failure(error) || is_lost_answer(error),
@@ -178,14 +186,39 @@ impl GithubError {
         }
     }
 
-    /// Whether waiting may fix it, with nothing for the user to do: [`Self::is_retryable`], a
-    /// rate limit, or a server error or `429` from GitHub. A refused token, single sign-on, an
-    /// organization's restriction or "not found" isn't.
+    /// For a read: whether waiting may fix it, with nothing for the user to do:
+    /// [`Self::is_retryable`], a rate limit, or a server error or `429` from GitHub. A refused
+    /// token, single sign-on, an organization's restriction or "not found" isn't. Never use it to
+    /// send a write again: GitHub may have done a write it answered with a server error
+    /// ([`Self::may_have_posted`]).
     pub fn is_waitable(&self) -> bool {
         match self {
             Self::RateLimited { .. } => true,
             Self::Api { status, .. } => *status >= 500 || *status == 429,
             _ => self.is_retryable(),
+        }
+    }
+
+    /// For a write, such as a comment or a review: whether GitHub may have done it though it
+    /// failed, so it mustn't be sent again before checking whether it was, or it may post twice.
+    /// Lo never sends a write again by itself.
+    ///
+    /// It may have whenever the request may have reached GitHub and its answer didn't reach Lo,
+    /// or didn't make sense: a [`Self::Network`] error other than a failure to connect (a lost
+    /// connection, a timeout after sending, or Lo stopping before the write finished), a server
+    /// error (`5xx`), an answer Lo couldn't read ([`Self::Decode`]), or GitHub's GraphQL saying
+    /// something went wrong while running it, which a timeout inside GitHub gives. An answer that
+    /// refuses the write, a rate limit, a refused token, single sign-on, "not found", or a
+    /// connection that never opened means it wasn't done.
+    pub fn may_have_posted(&self) -> bool {
+        match self {
+            Self::Network(error) => !self.is_unreachable() && !never_connected(error),
+            Self::Api { status, .. } => *status >= 500,
+            Self::Decode(_) => true,
+            Self::GraphQl { errors } => (errors.iter()).any(|error| {
+                error.r#type.is_none() && error.message.contains("Something went wrong")
+            }),
+            _ => false,
         }
     }
 
@@ -427,6 +460,15 @@ pub fn is_connection_failure(error: &anyhow::Error) -> bool {
 /// that died while the Mac slept, or a proxy couldn't open the tunnel to GitHub (reqwest's
 /// `unsuccessful tunnel`, which a proxy that can't reach GitHub answers with, or `unexpected eof
 /// while tunneling`).
+/// Whether `error` came before the request was sent: hyper-util wraps every failure to open a
+/// connection, look up its host, finish the TLS handshake or get a proxy's tunnel in
+/// `client error (Connect)`.
+fn never_connected(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string() == "client error (Connect)")
+}
+
 fn is_lost_answer(error: &anyhow::Error) -> bool {
     use std::io::ErrorKind;
     error.chain().any(|cause| {
@@ -526,6 +568,70 @@ mod tests {
                 documentation_url: None
             }
             .is_unreachable()
+        );
+    }
+
+    #[test]
+    fn a_write_may_have_been_done_when_its_answer_was_lost() {
+        let network = |error: anyhow::Error| GithubError::Network(error);
+        let io = |kind: std::io::ErrorKind| anyhow::Error::new(std::io::Error::from(kind));
+        // Sent, and then no answer: it may have been done.
+        let slow = anyhow::anyhow!("operation timed out")
+            .context("error sending request for url (https://api.github.com/graphql)");
+        assert!(network(slow).may_have_posted());
+        assert!(network(io(std::io::ErrorKind::ConnectionReset)).may_have_posted());
+        // As Poller::write says when Lo stops before the write's answer.
+        let stopped = anyhow::anyhow!("Lo stopped before the write finished");
+        assert!(network(stopped).may_have_posted());
+        // Never sent: no network, or a connection that never opened.
+        assert!(!network(io(std::io::ErrorKind::NetworkDown)).may_have_posted());
+        let dns = anyhow::anyhow!("failed to lookup address information")
+            .context("dns error")
+            .context("client error (Connect)");
+        assert!(!network(dns).may_have_posted());
+        let tls = anyhow::anyhow!("invalid peer certificate").context("client error (Connect)");
+        assert!(!network(tls).may_have_posted());
+
+        let api = |status| GithubError::Api {
+            status,
+            message: "x".into(),
+            documentation_url: None,
+            errors: Vec::new(),
+        };
+        assert!(api(502).may_have_posted());
+        assert!(!api(422).may_have_posted());
+        assert!(GithubError::Decode("the response had no data".into()).may_have_posted());
+        let graphql = |message: &str, kind: Option<&str>| GithubError::GraphQl {
+            errors: vec![GraphQlError {
+                message: message.into(),
+                r#type: kind.map(str::to_string),
+                path: Vec::new(),
+                extensions: None,
+            }],
+        };
+        let timeout = "Something went wrong while executing your query. This may be the result \
+                       of a timeout, or it could be a GitHub bug.";
+        assert!(graphql(timeout, None).may_have_posted());
+        assert!(
+            !graphql("Resource not accessible by integration", Some("FORBIDDEN")).may_have_posted()
+        );
+        // Refused, or never run.
+        assert!(!GithubError::Rejected(Rejection::NotInDiff).may_have_posted());
+        assert!(
+            !GithubError::RateLimited {
+                message: "x".into(),
+                secondary: true,
+                reset: None,
+                retry_after: None,
+                resource: None,
+            }
+            .may_have_posted()
+        );
+        assert!(
+            !GithubError::Unauthorized {
+                message: "Bad credentials".into()
+            }
+            .may_have_posted()
         );
     }
 

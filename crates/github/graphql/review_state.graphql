@@ -1,0 +1,10 @@
+# The state of a review a thread or a reply was sent to, after GitHub answered it with null and no
+# error: it answers a review submitted since that way, as it answers a line outside the diff.
+query ReviewState($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on PullRequestReview {
+      state
+    }
+  }
+}

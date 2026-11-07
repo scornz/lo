@@ -13,6 +13,7 @@ mod client;
 pub mod credentials;
 pub mod db;
 pub mod device_flow;
+pub mod drafts;
 mod error;
 pub mod files;
 pub mod gh_import;
@@ -28,6 +29,7 @@ mod rate_limit;
 pub mod record;
 #[cfg(any(test, feature = "test-support"))]
 pub mod replay;
+pub mod review_writes;
 pub mod revision_marks;
 mod token;
 pub mod trunks;

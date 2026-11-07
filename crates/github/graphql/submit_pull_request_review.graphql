@@ -1,0 +1,16 @@
+# Submits your pending review with an event and a summary, which may be empty when it holds a
+# comment.
+mutation SubmitPullRequestReview(
+  $pullRequestReviewId: ID!
+  $event: PullRequestReviewEvent!
+  $body: String
+) {
+  submitPullRequestReview(
+    input: { pullRequestReviewId: $pullRequestReviewId, event: $event, body: $body }
+  ) {
+    pullRequestReview {
+      id
+      state
+    }
+  }
+}

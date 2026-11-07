@@ -1,0 +1,9 @@
+# Unresolves a review thread.
+mutation UnresolveReviewThread($threadId: ID!) {
+  unresolveReviewThread(input: { threadId: $threadId }) {
+    thread {
+      id
+      isResolved
+    }
+  }
+}

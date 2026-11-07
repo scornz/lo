@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "UpdateIssueComment",
+    "variables": {
+      "id": "IC_kwDOVleUfc8AAAABj5Kehg",
+      "body": "Fixture E11: a comment on the pull request itself, edited."
+    },
+    "query_sha256": "ff9a3647710236e00fefb5b3316eb70f22498ab689f339ab7d03e60884712de5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4932",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "68"
+    },
+    "body": {
+      "data": {
+        "updateIssueComment": {
+          "issueComment": {
+            "id": "IC_kwDOVleUfc8AAAABj5Kehg"
+          }
+        }
+      }
+    }
+  }
+}
