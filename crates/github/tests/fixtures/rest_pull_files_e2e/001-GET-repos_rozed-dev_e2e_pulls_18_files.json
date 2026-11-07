@@ -1,0 +1,118 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/18/files?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"c400570997ccfd2abc57dbda4e1faf022e633720b80c23b045fdabfc55359aa7\"",
+      "last-modified": "Sat, 07 Nov 2026 02:14:59 GMT",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4908",
+      "x-ratelimit-reset": "1794031039",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "92"
+    },
+    "body": [
+      {
+        "sha": "a0baef23c1af9970e3089e4fdc9bd990968eeb0c",
+        "filename": "e6/go/main.go",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "changes": 2,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fgo%2Fmain.go",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fgo%2Fmain.go",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fgo%2Fmain.go?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -4,7 +4,7 @@ package main\n import \"fmt\"\n \n func main() {\n-\tfmt.Println(greeting(\"world\"))\n+\tfmt.Println(greeting(shout(\"world\")))\n }\n \n func greeting(name string) string {"
+      },
+      {
+        "sha": "eed004fb070c4cdb8b87d4c28d2f15112dc1b0d5",
+        "filename": "e6/go/util.go",
+        "status": "added",
+        "additions": 8,
+        "deletions": 0,
+        "changes": 8,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fgo%2Futil.go",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fgo%2Futil.go",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fgo%2Futil.go?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -0,0 +1,8 @@\n+package main\n+\n+import \"strings\"\n+\n+// shout upper-cases name and adds an exclamation mark.\n+func shout(name string) string {\n+\treturn strings.ToUpper(name) + \"!\"\n+}"
+      },
+      {
+        "sha": "73ca659841f0b462e32fbde5bb5445229dcea7a6",
+        "filename": "e6/py/app.py",
+        "status": "modified",
+        "additions": 6,
+        "deletions": 2,
+        "changes": 8,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fpy%2Fapp.py",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fpy%2Fapp.py",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fpy%2Fapp.py?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -1,7 +1,11 @@\n \"\"\"Fixture E6: a Python app that uses util.\"\"\"\n \n-from util import slugify\n+from util import slugify, truncate\n \n \n def page_path(title):\n-    return \"/pages/\" + slugify(title)\n+    return \"/pages/\" + slugify(truncate(title, 40))\n+\n+\n+def page_link(title):\n+    return f'<a href=\"{page_path(title)}\">{title}</a>'"
+      },
+      {
+        "sha": "dbab70afc1d55411745fb8e10d18db77da7a2674",
+        "filename": "e6/py/util.py",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 0,
+        "changes": 4,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fpy%2Futil.py",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fpy%2Futil.py",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fpy%2Futil.py?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -3,3 +3,7 @@\n \n def slugify(text):\n     return \"-\".join(text.lower().split())\n+\n+\n+def truncate(text, limit):\n+    return text if len(text) <= limit else text[: limit - 3] + \"...\""
+      },
+      {
+        "sha": "36cdc28dac2231352fda7b5689ece02460166c45",
+        "filename": "e6/rust/src/lib.rs",
+        "status": "modified",
+        "additions": 19,
+        "deletions": 5,
+        "changes": 24,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Frust%2Fsrc%2Flib.rs",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Frust%2Fsrc%2Flib.rs",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Frust%2Fsrc%2Flib.rs?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -1,13 +1,27 @@\n //! Fixture E6: Rust code for Lo's code navigation.\n \n+use serde::Deserialize;\n+\n pub mod parse;\n+pub mod render {\n+    pub mod parse;\n+}\n+\n+/// A document to describe. serde is never installed, so `Deserialize` never resolves.\n+#[derive(Deserialize)]\n+pub struct Document {\n+    pub title: String,\n+    pub body: String,\n+}\n \n-/// Summarises `text` by its word count.\n-pub fn summarize(text: &str) -> String {\n+/// Describes `text` by its word count. It was `summarize`.\n+pub fn describe(text: &str) -> String {\n     format!(\"{} words\", parse::count(text))\n }\n \n-/// Summarises a document's body.\n-pub fn run(body: &str) -> String {\n-    summarize(body)\n+/// Describes a document: its title as HTML, then its body.\n+pub fn run(doc: &Document) -> String {\n+    let title = render::parse::parse(&doc.title);\n+    let words = parse::parse(&doc.body);\n+    format!(\"{title} {} (first word: {:?})\", describe(&doc.body), words.first())\n }"
+      },
+      {
+        "sha": "81dcc4b1c5040b7556a2531bd759e4afdfde4337",
+        "filename": "e6/rust/src/render/parse.rs",
+        "status": "added",
+        "additions": 7,
+        "deletions": 0,
+        "changes": 7,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Frust%2Fsrc%2Frender%2Fparse.rs",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Frust%2Fsrc%2Frender%2Fparse.rs",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Frust%2Fsrc%2Frender%2Fparse.rs?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -0,0 +1,7 @@\n+//! Renders a title as HTML. Its `parse` shares a name with `crate::parse::parse`.\n+\n+/// Parses `title` into an HTML heading, escaping angle brackets.\n+pub fn parse(title: &str) -> String {\n+    let escaped = title.replace('<', \"&lt;\").replace('>', \"&gt;\");\n+    format!(\"<h1>{escaped}</h1>\")\n+}"
+      },
+      {
+        "sha": "114e8381ea99ba109cfe8259f254dc43d95a3cf2",
+        "filename": "e6/ts/src/index.ts",
+        "status": "modified",
+        "additions": 8,
+        "deletions": 2,
+        "changes": 10,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fts%2Fsrc%2Findex.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fts%2Fsrc%2Findex.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fts%2Fsrc%2Findex.ts?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -1,5 +1,11 @@\n-import { fullName, type User } from \"./user\";\n+import { initials } from \"./names\";\n+import { fullName, isAdmin, type User } from \"./user\";\n \n export function greet(user: User): string {\n-  return `Hello, ${fullName(user)}!`;\n+  const badge = isAdmin(user) ? \" (admin)\" : \"\";\n+  return `Hello, ${fullName(user)}${badge}!`;\n+}\n+\n+export function monogram(user: User): string {\n+  return initials(fullName(user));\n }"
+      },
+      {
+        "sha": "a27e198c693679fd4dd94f660f220c7a69fc9c11",
+        "filename": "e6/ts/src/user.ts",
+        "status": "modified",
+        "additions": 5,
+        "deletions": 0,
+        "changes": 5,
+        "blob_url": "https://github.com/rozed-dev/e2e/blob/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fts%2Fsrc%2Fuser.ts",
+        "raw_url": "https://github.com/rozed-dev/e2e/raw/e184ac6eb139fbe4843f4a0afa00ff2992603ed0/e6%2Fts%2Fsrc%2Fuser.ts",
+        "contents_url": "https://api.github.com/repos/rozed-dev/e2e/contents/e6%2Fts%2Fsrc%2Fuser.ts?ref=e184ac6eb139fbe4843f4a0afa00ff2992603ed0",
+        "patch": "@@ -3,8 +3,13 @@ import { capitalize } from \"./names\";\n export interface User {\n   first: string;\n   last: string;\n+  admin?: boolean;\n }\n \n export function fullName(user: User): string {\n   return `${capitalize(user.first)} ${capitalize(user.last)}`;\n }\n+\n+export function isAdmin(user: User): boolean {\n+  return user.admin === true;\n+}"
+      }
+    ]
+  }
+}

@@ -273,3 +273,91 @@ fn a_patch_downloads_only_its_files_two_versions() {
     f.patch("lines.txt", None);
     assert_eq!(packs(f.repo.git_dir()), before + 1);
 }
+
+/// The files of a pull request in `rozed-dev/e2e` as GitHub listed them, from the github crate's
+/// `rest_pull_files_e2e` cassette: its `number`th answer.
+fn github_files(number: usize) -> Vec<serde_json::Value> {
+    let cassette = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../github/tests/fixtures/rest_pull_files_e2e");
+    let prefix = format!("{number:03}-");
+    let file = (std::fs::read_dir(&cassette).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .find(|path| (path.file_name().unwrap().to_str().unwrap()).starts_with(&prefix))
+        .unwrap();
+    let interaction: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    interaction["response"]["body"].as_array().unwrap().clone()
+}
+
+/// Writes `side` of the fixture `tree` (`e9_tree`, say) into `work`, with
+/// `script/e2e/trees.sh`, which writes what the fixtures script pushed, byte for byte.
+fn write_tree(tree: &str, side: &str, work: &std::path::Path) {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../script/e2e/trees.sh");
+    let status = std::process::Command::new("bash")
+        .args(["-c", r#"set -euo pipefail; . "$0"; "$1" "$2" "$3""#])
+        .arg(&script)
+        .args([tree, side])
+        .arg(work)
+        .env("LC_ALL", "C")
+        .status()
+        .unwrap();
+    assert!(status.success(), "{tree} {side}");
+}
+
+/// Compares `Repo::patch` with GitHub's patch for each file of the `rozed-dev/e2e` pull request
+/// whose files are the cassette's `answer`th, and whose sides `tree` writes.
+fn matches_github(tree: &str, answer: usize) {
+    let server = Server::new();
+    let remote = server.repo("rozed-dev", "e2e");
+    write_tree(tree, "base", &remote.work);
+    let base = remote.commit("base");
+    remote.publish("refs/heads/main");
+    write_tree(tree, "head", &remote.work);
+    let head = remote.commit("head");
+    remote.publish("refs/pull/1/head");
+    let (_cache_dir, cache) = server.cache();
+    let repo = cache.open("rozed-dev", "e2e", None).unwrap();
+    repo.fetch_pull(&repo_cache::PullRequestRefs {
+        number: 1,
+        head: Some(head.clone()),
+        base_branch: "main".into(),
+        base: None,
+    })
+    .unwrap();
+
+    let files = github_files(answer);
+    assert!(!files.is_empty());
+    for file in files {
+        let path = file["filename"].as_str().unwrap();
+        // The tree is the one the fixtures script pushed.
+        let blob = git(&remote.work, &["rev-parse", &format!("{head}:{path}")]);
+        assert_eq!(
+            Some(blob.as_str()),
+            file["sha"].as_str(),
+            "{path} changed since"
+        );
+        let old_path = file["previous_filename"].as_str();
+        let ours = repo
+            .patch(&base, &head, path.as_bytes(), old_path.map(str::as_bytes))
+            .unwrap();
+        let ours = String::from_utf8(ours).unwrap();
+        // GitHub's patch is the hunks, without the last line's newline.
+        let theirs = file["patch"].as_str().unwrap();
+        assert_eq!(hunks(&ours), format!("{theirs}\n"), "{path}");
+    }
+}
+
+#[test]
+fn patches_match_githubs_for_e6s_code() {
+    matches_github("e6_tree", 1);
+}
+
+#[test]
+fn patches_match_githubs_for_e9s_moves_and_large_file() {
+    matches_github("e9_tree", 2);
+}
+
+#[test]
+fn patches_match_githubs_for_e12s_languages() {
+    matches_github("e12_tree", 3);
+}

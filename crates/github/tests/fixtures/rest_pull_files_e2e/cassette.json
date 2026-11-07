@@ -1,0 +1,6 @@
+{
+  "description": "The files of rozed-dev/e2e's #18 (E6), #20 (E9) and #22 (E12), each with GitHub's patch: script/e2e/trees.sh writes both sides of each, so repo_cache compares its own patches with these",
+  "recorded_at": "2026-11-07T05:17:13Z",
+  "repo": "rozed-dev/e2e",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

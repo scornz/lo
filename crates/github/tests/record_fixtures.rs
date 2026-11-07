@@ -817,3 +817,48 @@ fn timeline_e2e() {
         },
     );
 }
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn rest_pull_files_e2e() {
+    record_repo(
+        "rest_pull_files_e2e",
+        "The files of rozed-dev/e2e's #18 (E6), #20 (E9) and #22 (E12), each with GitHub's patch: \
+         script/e2e/trees.sh writes both sides of each, so repo_cache compares its own patches \
+         with these",
+        "rozed-dev/e2e",
+        |client| async move {
+            for number in [18, 20, 22] {
+                let files = client
+                    .pull_files(&PullRef::new("rozed-dev", "e2e", number))
+                    .await
+                    .unwrap();
+                assert!(!files.is_empty());
+            }
+        },
+    );
+}
+
+#[test]
+#[ignore = "records from GitHub; run by hand"]
+fn rest_pull_files_berry_7077() {
+    record_repo(
+        "rest_pull_files_berry_7077",
+        "yarnpkg/berry#7077's files as rozed-bot, read only, and its .gitattributes at the pull \
+         request's head: .pnp.cjs and packages/yarnpkg-pnp/sources/hook.js are marked binary, yet \
+         GitHub gives .pnp.cjs a text patch. hook.js, one line of 140 kB, gets none",
+        "yarnpkg/berry",
+        |client| async move {
+            let pull = PullRef::new("yarnpkg", "berry", 7077);
+            let summary: serde_json::Value = client.get(&pull.rest_path()).await.unwrap();
+            let head = summary["head"]["sha"].as_str().unwrap();
+            client.pull_files(&pull).await.unwrap();
+            client
+                .get::<serde_json::Value>(&format!(
+                    "/repos/yarnpkg/berry/contents/.gitattributes?ref={head}"
+                ))
+                .await
+                .unwrap();
+        },
+    );
+}

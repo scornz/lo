@@ -802,6 +802,8 @@ impl Repo {
     /// - It's git's myers diff, with the indent heuristic, as git diffs by default, and with no
     ///   diff settings but these: not the user's (no git Lo runs reads them), and not any the
     ///   clone has. No external diff, no text conversion, no color.
+    /// - Like GitHub's, it ignores the repository's attributes. GitHub gives a text patch for a
+    ///   file `.gitattributes` marks `binary` (`-diff`), such as yarnpkg/berry's `.pnp.cjs`.
     ///
     /// It downloads the file's two versions, if they aren't here. It's empty when the file is
     /// the same on both sides, or in neither. A binary file has no hunks: git says only that it
@@ -823,6 +825,7 @@ impl Repo {
             "--no-textconv",
             "--no-color",
             "--no-renames",
+            "--ignore-submodules=none",
             "--submodule=short",
             "--src-prefix=a/",
             "--dst-prefix=b/",
@@ -838,7 +841,7 @@ impl Repo {
                 && old.is_blob()
                 && new.is_blob()
             {
-                return self.run(command.args([old.oid.as_str(), new.oid.as_str()]));
+                return self.run(command.args([old.oid.as_str(), new.oid.as_str(), "--"]));
             }
         }
         self.run(
