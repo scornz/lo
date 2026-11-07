@@ -53,10 +53,7 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
 pub fn init_workspaces(cx: &mut App) {
     // Of two bindings for a key in the same place, the later one wins: Lo's.
     keymap::load(cx);
-    pr_tab::bind_keys(cx);
-    account_picker::bind_keys(cx);
-    recent_prs::bind_keys(cx);
-    open_box::bind_keys(cx);
+    bind_keys(cx);
     read_only::hide_from_palette(cx);
     cx.observe_new(|workspace: &mut Workspace, window, cx| {
         let Some(window) = window else {
@@ -82,6 +79,15 @@ pub fn init_workspaces(cx: &mut App) {
         .detach();
     })
     .detach();
+}
+
+/// Lo's own keys, which go over Zed's. Each module binds its own, and CLAUDE.md's "Keys" table lists
+/// them.
+fn bind_keys(cx: &mut App) {
+    pr_tab::bind_keys(cx);
+    account_picker::bind_keys(cx);
+    recent_prs::bind_keys(cx);
+    open_box::bind_keys(cx);
 }
 
 /// Keeps the window's tabs, panes and title as Lo has them when the workspace changes.

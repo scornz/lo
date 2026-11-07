@@ -168,3 +168,35 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
         }
     });
 }
+
+/// Each of Lo's keys does one thing where it works: of two bindings with the same keystrokes and
+/// context, the one bound later would quietly win.
+#[gpui::test]
+fn no_two_of_los_bindings_share_a_keystroke_and_a_context(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        // The test app starts with no keymap, so these are Lo's bindings alone.
+        crate::bind_keys(cx);
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let mut bound = HashMap::new();
+        for binding in keymap.bindings() {
+            let keys: Vec<String> = binding
+                .keystrokes()
+                .iter()
+                .map(|keystroke| keystroke.inner().unparse(gpui::OperatingSystem::Mac))
+                .collect();
+            let context = binding
+                .predicate()
+                .map(|predicate| predicate.to_string())
+                .unwrap_or_default();
+            let action = binding.action().name();
+            if let Some(earlier) = bound.insert((keys.join(" "), context.clone()), action) {
+                panic!(
+                    "`{}` in `{context}` is bound to both {earlier} and {action}",
+                    keys.join(" ")
+                );
+            }
+        }
+        assert!(bound.len() > 30, "only {} bindings", bound.len());
+    });
+}
