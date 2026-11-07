@@ -10,25 +10,25 @@
       "after": null,
       "merged": 20
     },
-    "query_sha256": "664e34cc1c8f14f95b471432cb68cd52acf3cf705d2af31cf5b65211365e636d"
+    "query_sha256": "94116bbea7c4d0e8d36757ca81ed11a47120822096ec9936d6149436cb54e5c8"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4971",
+      "x-ratelimit-remaining": "4961",
       "x-ratelimit-reset": "1794016455",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "29"
+      "x-ratelimit-used": "39"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4971,
-          "used": 29,
+          "remaining": 4961,
+          "used": 39,
           "resetAt": "2026-11-07T01:54:15Z"
         },
         "repository": {

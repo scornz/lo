@@ -776,7 +776,7 @@ mod tests {
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
-                ("OpenPullRequests", "af1d1e34e2bad5d5".to_string()),
+                ("OpenPullRequests", "5cce48362c768327".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
                 ("StackLayers", "a404ac19cb8d7d00".to_string()),
             ]
