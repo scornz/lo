@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 480" width="1600" height="480" role="img" aria-label="Lo">
+  <title>Lo</title>
+  <!--
+    The README banner, light: the lockup, ink on cream, with corner ticks. It plays once and rests.
+    The L fades in, the ball rises out of its socket into its lifted place, then the wordmark
+    slides in. The ball starts well clear of the socket, so it never seats. Every element's own
+    style is the final frame, so with reduced motion, or anywhere animation doesn't run, the
+    banner shows the finished lockup. Rules: brand/README.md.
+  -->
+  <style>
+    .socket { animation: fade 0.6s ease-out 0.15s both; }
+    .ball { animation: lift 1.4s cubic-bezier(0.3, 0, 0.2, 1) 0.45s both, fade 0.5s ease-out 0.45s both; }
+    .word { animation: enter 0.8s cubic-bezier(0.33, 1, 0.68, 1) 1.05s both; }
+    .ticks { animation: fade 1s ease-out both; }
+    @keyframes fade { from { opacity: 0; } }
+    @keyframes lift { from { transform: translate(-4.25px, 4.25px); } }
+    @keyframes enter { from { opacity: 0; transform: translateX(-8px); } }
+    @media (prefers-reduced-motion: reduce) {
+      .socket, .ball, .word, .ticks { animation: none; }
+    }
+  </style>
+  <rect width="1600" height="480" fill="#F4ECDE"/>
+  <path class="ticks" d="M24 42V24H42M1558 24H1576V42M1576 438V456H1558M42 456H24V438" fill="none" stroke="#66625A" stroke-opacity="0.5" stroke-width="2"/>
+  <g transform="translate(546.797 126) scale(3)" fill="#15161D">
+    <g transform="translate(-12 -12)">
+      <path class="socket" d="M12 21A9 9 0 0 1 30 21V44A26 26 0 0 0 56 70H79A9 9 0 0 1 79 88H20Q12 88 12 80Z"/>
+      <circle class="ball" cx="65" cy="35" r="21"/>
+    </g>
+    <g class="word">
+      <g transform="translate(93.598 63.333) scale(0.072381)">
+        <path d="M47 0V-700H187V-109H493V0Z"/>
+        <path d="M772 12Q697 12 636.5 -21Q576 -54 540.5 -113Q505 -172 505 -248Q505 -325 540.5 -383.5Q576 -442 637 -475Q698 -508 772 -508Q847 -508 907.5 -475Q968 -442 1003.5 -383.5Q1039 -325 1039 -248Q1039 -172 1003.5 -113Q968 -54 907.5 -21Q847 12 772 12ZM772 -109Q806 -109 834 -124.5Q862 -140 878.5 -171Q895 -202 895 -248Q895 -294 878 -325Q861 -356 833.5 -371.5Q806 -387 773 -387Q739 -387 711 -371.5Q683 -356 666 -325.5Q649 -295 649 -248Q649 -202 665.5 -171Q682 -140 710 -124.5Q738 -109 772 -109Z"/>
+      </g>
+    </g>
+  </g>
+</svg>

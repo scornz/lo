@@ -1,0 +1,50 @@
+/* Lo brand tokens. Dark is the default; light follows the system or data-theme="light". */
+
+:root {
+  color-scheme: dark light;
+
+  /* Fixed brand colors */
+  --lo-ink: #15161D;
+  --lo-cream: #F4ECDE;
+
+  /* Dark theme (default) */
+  --lo-ground: var(--lo-ink);
+  --lo-text: var(--lo-cream);
+  --lo-muted: #A7A398;      /* Stone, 7.2:1 on ink */
+  --lo-rule: #33353D;
+  --lo-accent: #A5C5E9;     /* Powder, 10.1:1 on ink */
+  --lo-on-accent: #15161D;
+  --lo-mark: var(--lo-cream);
+
+  /* Type */
+  --lo-font-sans: "Host Grotesk", system-ui, sans-serif;
+  --lo-font-mono: "Fragment Mono", ui-monospace, monospace;
+
+  --lo-size-display: 48px;  --lo-leading-display: 1.05; --lo-weight-display: 800;
+  --lo-size-title: 28px;    --lo-leading-title: 1.2;    --lo-weight-title: 700;
+  --lo-size-body: 17px;     --lo-leading-body: 1.5;     --lo-weight-body: 400;
+  --lo-size-small: 14px;    --lo-leading-small: 1.4;
+  --lo-size-code: 14px;     --lo-leading-code: 1.5;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --lo-ground: var(--lo-cream);
+    --lo-text: var(--lo-ink);
+    --lo-muted: #66625A;    /* Umber, 5.2:1 on cream */
+    --lo-rule: #DCD2C1;
+    --lo-accent: #0664B2;   /* Deep powder, 5.2:1 on cream */
+    --lo-on-accent: #F4ECDE;
+    --lo-mark: var(--lo-ink);
+  }
+}
+
+:root[data-theme="light"] {
+  --lo-ground: var(--lo-cream);
+  --lo-text: var(--lo-ink);
+  --lo-muted: #66625A;
+  --lo-rule: #DCD2C1;
+  --lo-accent: #0664B2;
+  --lo-on-accent: #F4ECDE;
+  --lo-mark: var(--lo-ink);
+}

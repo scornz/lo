@@ -81,6 +81,9 @@ These bind every change (design §1).
 - `third_party/zed/`: Zed, as a submodule. See "Zed submodule".
 - `script/`: repo scripts, including the git hooks (`script/hooks/`) and CI checks.
 - `docs/`: the design, plan, status and decisions.
+- `brand/`: Lo's visual identity: the mark, wordmark, lockups, the README's banner, and color and
+  type tokens. `brand/README.md` holds the rules for the mark, colors and type; follow it in
+  anything that shows them.
 - `.claude/skills/`: skills for every agent. `.agents/skills` links to it for Codex.
 
 ## Set up
@@ -102,6 +105,16 @@ cmake, because Zed's tree-sitter builds wasmtime. If your shell doesn't activate
 Node and pnpm through `mise exec --` (e.g. `mise exec -- cargo build -p lo`). mise's cmake shim
 fails when a build script calls it from outside the repo, so cargo needs mise's real cmake on
 `PATH`, which activation or `mise exec` provides.
+
+gpui finds the Metal compiler through the active developer directory, which must be Xcode's, and
+Xcode 26 and later download the Metal Toolchain separately. Without either, the build fails with
+`unable to find utility "metal"`. Zed's `docs/src/development/macos.md` gives the fix:
+
+```sh
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+xcodebuild -downloadComponent MetalToolchain  # Xcode 26 and later; if it fails, run
+                                              # xcodebuild -runFirstLaunch and try again
+```
 
 ## Build, test and run
 

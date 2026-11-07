@@ -11,8 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files, the license
-  # or the e2e fixture scripts skip the Rust job. ci-ok passes when it's skipped.
+  # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files, the license,
+  # the brand assets or the e2e fixture scripts skip the Rust job. ci-ok passes when it's skipped.
+  # Nothing the build reads lives in brand/ yet. Once the app icon there feeds the build, narrow
+  # brand/* so changes to it run the Rust job.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -35,7 +37,7 @@ jobs:
           rust=false
           while IFS= read -r file; do
             case "$file" in
-              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE | script/e2e/*) ;;
+              '' | docs/* | *.md | .claude/* | .agents/* | LICENSE | brand/* | script/e2e/*) ;;
               *)
                 echo "$file changed, so the Rust job runs."
                 rust=true
