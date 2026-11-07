@@ -4,19 +4,34 @@
 //! Like viewed records ([`crate::viewed::ViewedRecords`]), drafts aren't cached answers: clearing
 //! the cache keeps them, and removing the account removes its rows. Each row's comment box is
 //! [`Place`] as JSON, written the same way each time, so it's part of the row's key.
+//!
+//! A draft is marked when it's sent ([`DraftStore::set_sent`]) and goes once it's posted. A write
+//! that fails may still have posted ([`crate::GithubError::may_have_posted`]), and Lo may stop
+//! before the answer comes, so a draft still marked sent at launch, or after such a failure, is
+//! checked against your newest comments before the UI offers to send it again.
+//!
+//! Drafts aren't pruned by age: text typed on an open pull request is kept however old, since
+//! losing it is worse than keeping it. A closed pull request's drafts go a month after it closed
+//! ([`DraftStore::prune_closed`]), as its revision marks do, which also takes replies and edits
+//! whose thread or comment was deleted.
 
 use std::future::Future;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use review::drafts::{DraftKey, Drafts, Place, PullRequestId};
-use review::threads::{DiffSide, Line, Lines};
+use review::threads::{Line, Lines};
 use serde::{Deserialize, Serialize};
 use sqlez_macros::sql;
 
-use crate::cache::to_secs;
+use crate::cache::{CacheEntry as _, from_secs, to_secs};
 use crate::credentials::HOST;
 use crate::db::LoDb;
+use crate::pulls::PullSummary;
+use crate::revision_marks::{CLOSED, STATE, UPDATED_AT};
+
+/// Where a new thread's revision is in a row's comment box.
+const THREAD_COMMIT: &str = "$.thread.commit";
 
 /// The drafts in Lo's database.
 #[derive(Clone)]
@@ -24,25 +39,58 @@ pub struct DraftStore {
     db: LoDb,
 }
 
+/// A draft marked sent ([`DraftStore::set_sent`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentDraft {
+    pub key: DraftKey,
+    pub text: String,
+    /// When it was sent.
+    pub sent_at: SystemTime,
+}
+
+type Row = (String, String, String, i64, String, String, Option<i64>);
+
 impl DraftStore {
+    /// How long a closed pull request's drafts are kept after it closed.
+    pub const KEPT_AFTER_CLOSING: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
     pub fn new(db: LoDb) -> Self {
         Self { db }
     }
 
-    /// Every draft saved on this Mac, by any account. A row whose comment box Lo can't read, as
-    /// from a later version, is left out and kept.
+    /// Every draft saved on this Mac, by any account. A row whose comment box Lo can't read, or
+    /// wouldn't write the same way, as from another version, is left out and kept.
     pub fn load(&self) -> Result<Drafts> {
-        let rows = self
-            .db
-            .connection()
-            .select_bound::<&str, (String, String, String, i64, String, String)>(sql!(
-                SELECT account, owner, repo, number, place, text FROM drafts WHERE host = ?1
-            ))?(HOST)?;
+        Ok((self.rows()?.into_iter())
+            .map(|(key, text, _)| (key, text))
+            .collect())
+    }
+
+    /// The drafts marked sent, with their text, for the UI to check against your newest comments
+    /// before it offers to send them again.
+    pub fn sent(&self) -> Result<Vec<SentDraft>> {
+        Ok((self.rows()?.into_iter())
+            .filter_map(|(key, text, sent_at)| {
+                Some(SentDraft {
+                    key,
+                    text,
+                    sent_at: sent_at?,
+                })
+            })
+            .collect())
+    }
+
+    fn rows(&self) -> Result<Vec<(DraftKey, String, Option<SystemTime>)>> {
+        let rows = self.db.connection().select_bound::<&str, Row>(sql!(
+            SELECT account, owner, repo, number, place, text, sent_at FROM drafts WHERE host = ?1
+        ))?(HOST)?;
         Ok(rows
             .into_iter()
-            .filter_map(|(account, owner, repo, number, place, text)| {
-                let place = (serde_json::from_str::<StoredPlace>(&place))
-                    .inspect_err(|error| log::warn!("a draft's comment box Lo can't read: {error}"))
+            .filter_map(|(account, owner, repo, number, place, text, sent_at)| {
+                let place = (read_place(&place))
+                    .inspect_err(|error| {
+                        log::warn!("a draft's comment box Lo can't read: {error:#}")
+                    })
                     .ok()?;
                 let key = DraftKey {
                     account,
@@ -51,15 +99,15 @@ impl DraftStore {
                         repo,
                         number: u64::try_from(number).ok()?,
                     },
-                    place: place.into(),
+                    place,
                 };
-                Some((key, text))
+                Some((key, text, sent_at.map(from_secs)))
             })
             .collect())
     }
 
     /// Keeps `text` as the draft at `key`, changed at `at`, as [`Drafts::set`] keeps it: blank
-    /// text removes the draft.
+    /// text removes the draft. Other text than it had clears its mark as sent.
     pub async fn save(&self, key: &DraftKey, text: &str, at: SystemTime) -> Result<()> {
         if text.trim().is_empty() {
             return self.remove(key).await;
@@ -72,8 +120,25 @@ impl DraftStore {
                     INSERT INTO drafts(host, account, owner, repo, number, place, text, saved_at)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                     ON CONFLICT(host, account, owner, repo, number, place) DO UPDATE SET
+                        sent_at = CASE WHEN text = excluded.text THEN sent_at ELSE NULL END,
                         text = excluded.text,
                         saved_at = excluded.saved_at
+                ))?(row)
+            })
+            .await
+    }
+
+    /// Marks the draft at `key` sent at `at`, just before its write, or with `None` not sent, once
+    /// the UI knows GitHub didn't take it. Posting it removes it ([`Self::remove`]).
+    pub async fn set_sent(&self, key: &DraftKey, at: Option<SystemTime>) -> Result<()> {
+        let row = (at.map(to_secs), columns(key)?);
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    UPDATE drafts SET sent_at = ?1
+                    WHERE host = ?2 AND account = ?3 AND owner = ?4 AND repo = ?5 AND number = ?6
+                        AND place = ?7
                 ))?(row)
             })
             .await
@@ -107,12 +172,12 @@ impl DraftStore {
         let commits = self
             .db
             .connection()
-            .select_bound::<(&str, &str, &str, i64), String>(sql!(
-                SELECT DISTINCT json_extract(place, "$.thread.commit") FROM drafts
+            .select_bound::<(&str, &str, &str, i64, &str), String>(sql!(
+                SELECT DISTINCT json_extract(place, ?5) FROM drafts
                 WHERE host = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4
-                    AND json_extract(place, "$.thread.commit") IS NOT NULL
+                    AND json_extract(place, ?5) IS NOT NULL
             ))
-            .and_then(|mut select| select((HOST, &pull.0, &pull.1, pull.2)));
+            .and_then(|mut select| select((HOST, &pull.0, &pull.1, pull.2, THREAD_COMMIT)));
         let gone = commits.map(|commits| {
             (commits.into_iter())
                 .filter(|commit| !exists(commit))
@@ -131,7 +196,7 @@ impl DraftStore {
                         let rows = connection.select_bound::<_, i64>(sql!(
                             DELETE FROM drafts
                             WHERE host = ?1 AND owner = ?2 AND repo = ?3 AND number = ?4
-                                AND json_extract(place, "$.thread.commit") = ?5
+                                AND json_extract(place, ?6) = ?5
                             RETURNING number
                         ))?((
                             HOST,
@@ -139,6 +204,7 @@ impl DraftStore {
                             pull.1.as_str(),
                             pull.2,
                             commit.as_str(),
+                            THREAD_COMMIT,
                         ))?;
                         removed += rows.len();
                     }
@@ -147,20 +213,59 @@ impl DraftStore {
                 .await
         }
     }
+
+    /// Forgets the drafts on every pull request closed before [`Self::KEPT_AFTER_CLOSING`] ago, at
+    /// `now`, that were saved before then too, as [`crate::revision_marks::RevisionMarks::prune`]
+    /// forgets marks: it's closed when every account's cached summary of it says so. A pull
+    /// request with no summary in the cache, or one any account's summary says is open or was
+    /// updated since, keeps its drafts.
+    pub async fn prune_closed(&self, now: SystemTime) -> Result<()> {
+        let cutoff = now - Self::KEPT_AFTER_CLOSING;
+        let cutoff_secs = to_secs(cutoff);
+        let cutoff = chrono::DateTime::<chrono::Utc>::from(cutoff)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let bindings = (
+            PullSummary::NAME,
+            cutoff,
+            STATE,
+            CLOSED,
+            UPDATED_AT,
+            cutoff_secs,
+        );
+        self.db
+            .connection()
+            .write(move |connection| {
+                connection.exec_bound(sql!(
+                    DELETE FROM drafts WHERE saved_at < ?6 AND EXISTS (
+                        SELECT pull.number FROM pr_cache AS pull
+                        WHERE pull.host = drafts.host AND pull.owner = drafts.owner
+                            AND pull.repo = drafts.repo AND pull.number = drafts.number
+                            AND pull.query = ?1
+                    ) AND NOT EXISTS (
+                        SELECT pull.number FROM pr_cache AS pull
+                        WHERE pull.host = drafts.host AND pull.owner = drafts.owner
+                            AND pull.repo = drafts.repo AND pull.number = drafts.number
+                            AND pull.query = ?1
+                            AND (json_extract(pull.json, ?3) IS NOT ?4
+                                OR json_extract(pull.json, ?5) >= ?2)
+                    )
+                ))?(bindings)
+            })
+            .await
+    }
 }
 
 /// A draft's key as the table's columns, its login, owner and repository lowercased as
 /// [`Drafts`] keeps them.
 fn columns(key: &DraftKey) -> Result<(String, String, String, String, i64, String)> {
     let (owner, repo, number) = pull_request_columns(&key.pull_request);
-    let place = serde_json::to_string(&StoredPlace::from(&key.place))?;
     Ok((
         HOST.to_string(),
         key.account.to_ascii_lowercase(),
         owner,
         repo,
         number,
-        place,
+        write_place(&key.place)?,
     ))
 }
 
@@ -172,9 +277,30 @@ fn pull_request_columns(pull_request: &PullRequestId) -> (String, String, i64) {
     )
 }
 
+fn write_place(place: &Place) -> Result<String> {
+    Ok(serde_json::to_string(&StoredPlace::from(place))?)
+}
+
+/// The comment box a row's `place` holds. It fails unless Lo would write that box the same way,
+/// so a row is never read under a key that would miss it: removing a posted draft, or saving it
+/// again, would leave the row behind.
+fn read_place(text: &str) -> Result<Place> {
+    let stored: StoredPlace = serde_json::from_str(text)?;
+    let place = Place::try_from(stored)?;
+    let written = write_place(&place)?;
+    anyhow::ensure!(
+        written == text,
+        "Lo would write it as {written}, not as it's stored, {text}"
+    );
+    Ok(place)
+}
+
 /// [`Place`] as the table holds it: `{"thread": {"commit", "path", "lines"}}`,
 /// `{"reply": {"thread"}}`, `{"edit": {"comment"}}`, `"summary"` or `"conversation"`. Its fields
-/// are written in this order, so one box is always the same text.
+/// are written in this order, so one box is always the same text, and it's part of the row's
+/// key. So a field added later must be optional and left out when it's unset
+/// (`skip_serializing_if`), or come with a migration that rewrites the rows' `place`: a row Lo
+/// wouldn't write the same way is left out.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum StoredPlace {
@@ -238,12 +364,16 @@ impl From<&Place> for StoredPlace {
     }
 }
 
-impl From<StoredPlace> for Place {
-    fn from(place: StoredPlace) -> Self {
-        // A side Lo doesn't know reads as the head's, as a thread's does.
-        let line =
-            |line: StoredLine| Line::new(line.side.parse().unwrap_or(DiffSide::Right), line.line);
-        match place {
+impl TryFrom<StoredPlace> for Place {
+    type Error = anyhow::Error;
+
+    /// The box, failing on a side Lo doesn't know rather than guessing one.
+    fn try_from(place: StoredPlace) -> Result<Self> {
+        let line = |line: StoredLine| -> Result<Line> {
+            let side = (line.side.parse()).with_context(|| format!("side {:?}", line.side))?;
+            Ok(Line::new(side, line.line))
+        };
+        Ok(match place {
             StoredPlace::Thread {
                 commit,
                 path,
@@ -251,16 +381,19 @@ impl From<StoredPlace> for Place {
             } => Self::Thread {
                 commit,
                 path,
-                lines: lines.map(|lines| Lines {
-                    start: lines.start.map(line),
-                    end: line(lines.end),
-                }),
+                lines: match lines {
+                    Some(lines) => Some(Lines {
+                        start: lines.start.map(line).transpose()?,
+                        end: line(lines.end)?,
+                    }),
+                    None => None,
+                },
             },
             StoredPlace::Reply { thread } => Self::Reply { thread },
             StoredPlace::Edit { comment } => Self::Edit { comment },
             StoredPlace::Summary => Self::Summary,
             StoredPlace::Conversation => Self::Conversation,
-        }
+        })
     }
 }
 
@@ -474,23 +607,130 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_box_lo_cant_read_is_left_out() {
+    fn a_comment_box_lo_cant_read_or_would_write_otherwise_is_left_out_and_kept() {
         block_on(async {
             let (db, store) = store("drafts_unknown_place", &["bot"]).await;
             store
                 .save(&key("bot", 23, Place::Summary), "Summary", at(1))
                 .await
                 .unwrap();
-            db.connection()
-                .write(|connection| {
-                    connection.exec_bound::<&str>(sql!(
-                        INSERT INTO drafts(host, account, owner, repo, number, place, text, saved_at)
-                        VALUES ("github.com", "bot", "rozed-dev", "e2e", 23, ?1, "?", 1)
-                    ))?(r#"{"poll":{}}"#)
-                })
-                .await
-                .unwrap();
+            let unknown_side = r#"{"thread":{"commit":"a3","path":"e11/review.txt","lines":{"start":null,"end":{"side":"MIDDLE","line":10}}}}"#;
+            // Fields in another order: read as it stands, it would be saved and removed as
+            // another row.
+            let reordered = r#"{"thread":{"path":"e11/review.txt","commit":"a3","lines":null}}"#;
+            for place in [r#"{"poll":{}}"#, unknown_side, reordered] {
+                db.connection()
+                    .write(move |connection| {
+                        connection.exec_bound::<&str>(sql!(
+                            INSERT INTO drafts(host, account, owner, repo, number, place, text, saved_at)
+                            VALUES ("github.com", "bot", "rozed-dev", "e2e", 23, ?1, "?", 1)
+                        ))?(place)
+                    })
+                    .await
+                    .unwrap();
+            }
             assert_eq!(store.load().unwrap().len(), 1);
+            let kept = db
+                .connection()
+                .select::<i64>(sql!(SELECT count(*) FROM drafts))
+                .unwrap()();
+            assert_eq!(kept.unwrap(), [4]);
+        });
+    }
+
+    #[test]
+    fn a_draft_marked_sent_stays_so_until_its_text_changes() {
+        block_on(async {
+            let (_, store) = store("drafts_sent", &["bot"]).await;
+            let line = key("bot", 23, thread("a3", Some(Lines::one(Line::right(10)))));
+            let summary = key("bot", 23, Place::Summary);
+            store.save(&line, "Off by one?", at(1)).await.unwrap();
+            store.save(&summary, "Looks good.", at(1)).await.unwrap();
+            assert_eq!(store.sent().unwrap(), []);
+
+            store.set_sent(&line, Some(at(5))).await.unwrap();
+            let sent = SentDraft {
+                key: line.clone(),
+                text: "Off by one?".into(),
+                sent_at: at(5),
+            };
+            assert_eq!(store.sent().unwrap(), std::slice::from_ref(&sent));
+            // Saving the same text again, as a box does when it's shown, keeps the mark.
+            store.save(&line, "Off by one?", at(6)).await.unwrap();
+            assert_eq!(store.sent().unwrap(), [sent]);
+            // New text is a draft not yet sent.
+            store.save(&line, "Off by two?", at(7)).await.unwrap();
+            assert_eq!(store.sent().unwrap(), []);
+
+            store.set_sent(&line, Some(at(8))).await.unwrap();
+            store.set_sent(&line, None).await.unwrap();
+            assert_eq!(store.sent().unwrap(), []);
+            assert_eq!(store.load().unwrap().len(), 2);
+        });
+    }
+
+    /// GitHub's summary of a pull request in `state`, last updated `days` days before `now`.
+    fn summary(number: i64, state: &str, days: u64, now: SystemTime) -> crate::PullSummary {
+        let updated =
+            chrono::DateTime::<chrono::Utc>::from(now - Duration::from_secs(days * 86_400));
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "title": "t",
+            "state": state,
+            "updated_at": updated.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "head": {"ref": "h", "sha": "h1"},
+            "base": {"ref": "main", "sha": "m1"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn drafts_on_pull_requests_closed_a_month_ago_are_forgotten() {
+        block_on(async {
+            let (db, store) = store("drafts_prune_closed", &["bot", "other"]).await;
+            let cache = PrCache::new(db);
+            let now = at(100 * 86_400);
+            let saved = now - Duration::from_secs(45 * 86_400);
+            // Closed 40 days ago; closed 10 days ago; open but untouched for 40; never
+            // summarized; closed as one account last saw it, but open as the other sees it now;
+            // and closed 40 days ago but written in since.
+            let pulls = [
+                (1, vec![summary(1, "closed", 40, now)], saved),
+                (2, vec![summary(2, "closed", 10, now)], saved),
+                (3, vec![summary(3, "open", 40, now)], saved),
+                (4, vec![], saved),
+                (
+                    5,
+                    vec![summary(5, "closed", 40, now), summary(5, "open", 1, now)],
+                    saved,
+                ),
+                (6, vec![summary(6, "closed", 40, now)], now),
+            ];
+            for (number, summaries, saved_at) in &pulls {
+                let reply = Place::Reply {
+                    thread: "PRRT_1".into(),
+                };
+                let number = u64::try_from(*number).unwrap();
+                store
+                    .save(&key("bot", number, reply), "A reply", *saved_at)
+                    .await
+                    .unwrap();
+                let pull = crate::PullRef::new("rozed-dev", "e2e", i64::try_from(number).unwrap());
+                for (summary, account) in summaries.iter().zip(["bot", "other"]) {
+                    let target = pull.clone().into();
+                    cache
+                        .put(account, &target, summary, None, now)
+                        .await
+                        .unwrap();
+                }
+            }
+
+            store.prune_closed(now).await.unwrap();
+
+            let kept: Vec<u64> = (store.load().unwrap().iter())
+                .map(|(key, _)| key.pull_request.number)
+                .collect();
+            assert_eq!(kept, [2, 3, 4, 5, 6]);
         });
     }
 }

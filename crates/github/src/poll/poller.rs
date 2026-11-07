@@ -487,12 +487,16 @@ impl Poller {
                 this.wake();
             }
         });
-        // Long-closed pull requests' revision marks go at launch, as unused clones do.
+        // Long-closed pull requests' revision marks and drafts go at launch, as unused clones do.
         let marks = RevisionMarks::new(cache.db().clone());
+        let drafts = crate::drafts::DraftStore::new(cache.db().clone());
         let (pruning, now) = (marks.clone(), config.wall_clock.now());
         cx.background_spawn(async move {
             if let Err(error) = pruning.prune(now).await {
                 log::warn!("forgetting closed pull requests' revisions: {error:#}");
+            }
+            if let Err(error) = drafts.prune_closed(now).await {
+                log::warn!("forgetting closed pull requests' drafts: {error:#}");
             }
         })
         .detach();

@@ -22,9 +22,9 @@ use crate::db::LoDb;
 use crate::pulls::{PullRef, PullSummary};
 
 /// Where a cached summary says whether a pull request is closed, and when it was last updated.
-const STATE: &str = "$.state";
-const CLOSED: &str = "closed";
-const UPDATED_AT: &str = "$.updated_at";
+pub(crate) const STATE: &str = "$.state";
+pub(crate) const CLOSED: &str = "closed";
+pub(crate) const UPDATED_AT: &str = "$.updated_at";
 
 /// A head a poller saw on a pull request.
 #[derive(Clone, Debug, PartialEq, Eq)]

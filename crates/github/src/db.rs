@@ -170,6 +170,10 @@ impl Domain for LoDb {
                 text TEXT NOT NULL,
                 // When it last changed, in seconds since the Unix epoch.
                 saved_at INTEGER NOT NULL,
+                // When it was sent, in seconds since the Unix epoch, while Lo doesn't know whether
+                // GitHub took it: from just before its write until it's posted (and the row goes)
+                // or known not to have been. Changing its text clears it.
+                sent_at INTEGER,
                 PRIMARY KEY(host, account, owner, repo, number, place),
                 FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
             ) STRICT;
@@ -894,11 +898,11 @@ mod tests {
                 },
                 place: review::drafts::Place::Summary,
             };
-            drafts
-                .save(&key, "Looks good.", std::time::SystemTime::now())
-                .await
-                .unwrap();
+            let now = std::time::SystemTime::now();
+            drafts.save(&key, "Looks good.", now).await.unwrap();
             assert_eq!(drafts.load().unwrap().get(&key), Some("Looks good."));
+            drafts.set_sent(&key, Some(now)).await.unwrap();
+            assert_eq!(drafts.sent().unwrap().len(), 1);
         });
     }
 
