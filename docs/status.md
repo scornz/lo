@@ -8,11 +8,9 @@ Kept current by the overseer session. A fresh session should be able to resume f
 
 ## Current milestone
 
-- **Done and on `main`:** 1 Bootstrap, 2 Spike, 3 GitHub layer, 4 Local copy.
-- **5. The PR tab:** all five PRs written and reviewed. #15 (5a), #17 (5b) and #18 (5c) are fixed
-  and green, and are being brought up to date as the bottom of one stack. #23 (5e) is in its second
-  round of fixes, and #25 (5d) is in fixes after review.
-- **Planned:** milestones 6–9 in detail (`plan.md`). The e2e fixtures script (E1–E3) is in progress.
+- **Done and on `main`:** 1 Bootstrap, 2 Spike, 3 GitHub layer, 4 Local copy, 5 The PR tab.
+- **5. The PR tab:** merged as stack #32 and verified on screen.
+- **Planned:** milestones 6–9 in detail (`plan.md`). The e2e fixtures (E1–E3) are live on `rozed-dev/e2e` (#29).
 - **Logic built ahead of its milestone, on `main`:** review order (#6), revisions (#8), merge
   logic (#12), threads and the pending review (#21), rebase-aware comparison (#20), stacks (#7, #11),
   moved code (#9), syntax-aware diff (#14), symbol index (#16).
@@ -25,13 +23,8 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
 
 | PR | What | Base | State |
 |---|---|---|---|
-| #15 | PR tab (5a) | `integration/pr-tab` | Ready; lands once its base's branches are on `main`. |
-| #17 | GitHub's diff first (5b) | `feat/pr-tab` | Ready. |
-| #18 | Viewed marks (5c) | `feat/pr-tab` | Ready; combine with #17 using the two edits in Notes. |
-| #23 | Recent PRs, account picker, window title, offline diff (5e) | `feat/pr-tab` | All 11 findings fixed; the re-review found 8 more (an offline reload can drop the local diff, a sticky account, offline classification, picker focus). Round-two fixes in progress. Its migration becomes step 3 when it lands above #18. |
-| #25 | Collapse, images, renames, view keys (5d) | `feat/api-diff` | Reviewed: 13 findings (SVG local-file reads, image bombs, `alt-w` unfolding, Unicode whitespace). Fixes in progress. |
-| #19 | Dependabot: `jdx/mise-action` 5.2.6 | `main` | Being brought up to date; lands next. |
-| #27 | Weekly build against Zed's latest release (13.1) | `main` | Reviewed (no blockers; two medium: infrastructure failures read as "Zed breaks rozed", relative `--dir`). Fixes in progress. |
+| #33 | Rename the project to Lo (`refactor/rename-lo`, lane-1) | `main` | Reviewed: sound, but behind `main` (#31's code still says rozed). Fixes: merge `main` and rename #31's names, a `--check` CI guard, safer handling of Markdown and fixtures. |
+| 7a | Stack data layer (`feat/stack-data`, lane-2) | `main` | In progress. |
 | #2 | The docs (`docs/status`) | `main` | Land last; its branch keeps moving. |
 
 ### How a line lands
@@ -55,15 +48,39 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
 - #20 `feat(repo_cache): compare revisions across a rebase` → `dfd4f92` (2026-11-06).
 - #7 `feat(stacks): find stacks among a repository's pull requests` → `4b484ad`, and #11 `feat(stacks): plan turning a chain into a GitHub stack` → `0ead135`, as stack #28 (2026-11-06).
 - #9 `feat(diff_extras): detect moved blocks of code` → `7b6c53a`, #14 `feat(diff_extras): compare files by syntax` → `7d27f64`, #16 `feat(symbol_index): index definitions and references by name` → `6da6849`, as stack #30 (2026-11-06). All logic built ahead of its milestone is on `main`.
+- #27 `ci: build weekly against Zed's latest release` → `66efea3` (2026-11-06). Verified on GitHub's runner: the latest release (v1.27.0) is skipped as pinned and the issue job does nothing; `v1.28.0-pre` reports "breaks rozed" with the worktree-settings patch's conflict and a green run, the issue job skipped for a tagged dispatch. Task 13.1's weekly job is done; the release workflow is still to come in milestone 13.
+- #19 `chore(deps): bump jdx/mise-action from 5.2.0 to 5.2.6` → `66eba59` (2026-11-06). `weekly-zed.yml` still pins 5.2.0; Dependabot's next run should bump it.
+- #29 `test: script the review fixtures on rozed-dev/e2e` → `32cec21` (2026-11-06). CI now skips the Rust job for `script/e2e/` and shellchecks it.
+- Stack #32, milestone 5, the PR tab (2026-11-06):
+  - #15 → `cfad45b`
+  - #17 → `5ad3cbf`
+  - #18 → `b5ae7fb`
+  - #23 → `3e62fec`
+  - #25 → `d14286a`
+
+  `main`'s tree equals #25's head. The async merge reported `failed` although every commit landed.
+  #15 shows as merged; #17, #18, #23 and #25 were closed with a comment naming their commits, and the
+  stack shows closed. See Notes.
+- #31 `feat(github): read a pull request's push history` (6c) → `7fbc54c` (2026-11-06), after two rounds of review fixes.
+- **Milestone 5 verified on screen** at `36f9980` (evidence in `evidence/milestone-5/verify/`):
+  - Every acceptance check passed, including the image-bomb fixture (`rozed-dev/e2e#17`, helper
+    killed at 512 MiB, rozed at 128 MB).
+  - Partial: the recent list across several accounts, since only one account was available.
+  - Follow-ups are listed under Next.
 
 ## Next
 
-1. Land #19 and #27, then milestone 5 as one stack, **#15 → #17 → #18 → #23 →
-   #25**, then #2. Building the stack:
-   - #18 merges `feat/api-diff` in, with the two edits in Notes;
-   - #23 merges `feat/viewed-marks` in and moves `repo_accounts` to migration index 3;
-   - #25 merges `feat/recent-prs` in.
-   This order lets #18 and #23 be combined while #25's fixes are still running.
+1. Rename to Lo (`refactor/rename-lo`), then milestone 6 per `plan.md`: #31 (6c) merges `main` and
+   its review fixes, then 6a and 6b in lane 1.
+   Milestone 5 follow-ups, to fold into 6a/6b:
+   - **Focus:** clicking the title bar takes focus out of the diff, so the `alt` view keys and `tab`
+     do nothing until you click in the diff.
+   - **`tab`:** it lands at the other editor's own cursor, not the same row.
+   - **Offline header:** it drops "as <account>".
+   - **Accounts window:** it shows a refused account as signed in until its token is used.
+   - **Quit:** every quit logs "timed out waiting on app_will_quit".
+   - **Path order:** the diff stays in review order; only the list re-sorts.
+   - **Added files:** the left side shows an empty line 1.
 2. After milestone 5, the UI milestones wire in the logic already built: 6 revisions (picker,
    rebase-aware view), 7 stacks (tree sidebar, `]s`/`[s`, layer diffs), 8 comments and reviews
    (threads in the diff, comment box, submit dialog, timeline, attachments), 9 merging (status
@@ -85,6 +102,22 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
   [`research/github-checks.md`](research/github-checks.md).
 
 ## Waiting on the user
+
+- **For the rename to Lo:** the repo already shows as `scornz/lo`, and the OAuth app shows as "Lo";
+  both done.
+- **Five merged branches to delete, if you want:** `feat/pr-tab`, `feat/api-diff`,
+  `feat/viewed-marks`, `feat/recent-prs` and `feat/diff-display`. Their content is on `main`, but
+  stack #32's merge stopped before GitHub's auto-delete ran. Deleting them was refused as
+  destructive, so it's yours to do or leave.
+
+- **Later, for milestones 10–13** (see `plan.md`; none blocks current work):
+  - **Nightly e2e:** a `ROZED_BOT_TOKEN` Actions secret on `scornz/lo`.
+  - **Homebrew:** `scornz/homebrew-tap` with a `TAP_TOKEN`.
+  - **Fork fixture:** an OK for a fork under `rozed-bot` (E7). Until then `fd#2212` stands in.
+  - **Icon:** an app icon. A placeholder ships until then.
+  - **Intel:** whether Intel (x86_64) builds ship. The plan is arm64 only.
+  - **Fallback runner:** a self-hosted runner, if hosted runners can't draw with Metal for the app
+    smoke test.
 
 - **Apple Developer account:** the user will set it up later; until then builds stay unsigned. Release
   secrets when it exists: `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`, `NOTARY_KEY_ID`,
@@ -116,6 +149,10 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
 - `rozed-dev/playground` also has branches `review-checks` and `review-checks-base` and a closed PR #4
   from the live review-API checks; harmless.
 
+- **Memory:** the computer-use MCP servers (`~/.local/share/computer-use-mcp`, node) leak: each
+  reaches about 40 GB of footprint (mostly swap; `ps` RSS hides it, `footprint -p` shows it), and
+  three running together filled swap and raised macOS's "out of application memory" dialog.
+
 - **Disk:** each worktree's `target/` holds 30–90 GB of Zed builds. Delete a worktree's `target/`
   once its PR merges; keep an eye on free space (`df -h ~`).
 
@@ -128,6 +165,16 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
 
 - `rozed-dev/playground` has a branch `probe/if-modified-since` left from a live check; harmless.
 
+- **e2e fixtures (`rozed-dev/e2e`, from `script/e2e/fixtures.sh`):**
+  - **E1:** #16 (`e1/revisions-4`) is open at r3 with the bot's COMMENT review on r2. #14 is closed
+    and has the full r1–r6 run: the server-side rebase is r4 `28b21f2` → r5 `7513db3`, then r6
+    `adb7208` changes one line of `e1/a.txt`. #1 and #13 are older closed runs.
+  - **E2:** #2 a → main, #3 b → a, #4 c → b, #5 e → b, #6 d → main (contains c), and native stack #9
+    (#7 s1, #8 s2).
+  - **E3:** #10 x squash-merged; #11 y still targets `e3/x`.
+  - **`main` moves only through merged PRs,** never a direct push. Once E4 adds rulesets on `main`,
+    `rebase-r5` and E3 need the bot to be able to merge.
+
 - **Runaway processes:** Zed captures the shell environment by running the current executable with
   `--printenv`. rozed must handle that flag, and refuses to start under a rozed parent
   (`ROZED_PARENT_PID`). Never remove either.
@@ -137,6 +184,13 @@ Every PR is reviewed by an independent agent and its findings fixed before it la
   window is re-activated (virtual display). Click the wallpaper twice, then rozed's title bar.
 - **Builds need mise** (`mise exec -- cargo ...`) for the pinned cmake.
 
+- **The bot's OAuth tokens were revoked on 2026-11-06,** around when the OAuth app was renamed "Lo".
+  The grant survived. The milestone 5 verification signed `rozed-bot` in again through rozed's device
+  flow, in a fresh Playwright profile. The working token is in rozed's debug store,
+  `~/.config/rozed/credentials.json`. `~/.config/rozed-dev/oauth-token` still holds the revoked one;
+  the PAT in `bot.env` works.
+- **A stack's async merge can report `failed` after landing every commit.** Stack #32's merge did. Check
+  `main` and each PR's state rather than the status alone.
 - The bot's device-flow token for rozed's OAuth app is in `~/.config/rozed-dev/oauth-token` (mode
   600). Approving it granted rozed's OAuth app access to `rozed-dev`, which restricts OAuth apps by
   default; revoke it in the org's settings if needed.

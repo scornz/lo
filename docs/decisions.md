@@ -434,6 +434,20 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   include it. When the remembered account can't see one repo, rozed asks for that repo alone and
   remembers it per repository, leaving the owner's choice alone. Pickers queue per owner; another
   dialog or click never cancels a waiting tab.
+- **Only failed connections and DNS lookups count as offline.** TLS failures and proxy refusals
+  are errors, and timeouts and lost connections are retryable. A tab that has shown the local copy
+  keeps it through any later failure, says why and keeps checking; "failed" is only for a load that
+  never showed a copy.
+- **Rozed retries by itself only what waiting can fix** (network failures, 5xx, 429, a proxy's 503).
+  Failures only the user can fix (no account chosen, refusals, SSO) keep the copy, stop retrying and
+  show their help links; an automatic reload never opens the account picker, it offers a button.
+- **`e` marks only the head on screen.** When GitHub reports a newer head than the diff shown, the
+  newer head is recorded as the latest and `e` is refused with the "newer push" message until that
+  head's diff is up.
+- **A `0-dev` database from a single milestone 5 branch may not open in the combined build**
+  ("Migration changed at step 2"); unreleased, so delete `~/Library/Application Support/rozed/db/0-dev/rozed.sqlite`.
+- **The account picker asks only for the active tab** and keeps focus until it's answered or
+  dismissed; a background tab says "Waiting to ask…" until it's selected.
 - **Offline means rozed reads only what the copy already holds:** the saved head and saved base when
   both are pinned (else the details-only view), with lazy downloads off (`GIT_NO_LAZY_FETCH=1` on git
   2.44+, a missing-object check before reading on older git) and no write lock. An offline tab keeps
@@ -463,11 +477,22 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
   hides whitespace-only changes, `alt-a` opens a folded file, loads a large one, or switches between
   its changes and the whole file. Files whose text didn't change fold with "no changes". Milestone 12
   revisits keys with vim.
+- **PR image previews are decoded in a helper process** (a hidden mode of the rozed binary), never in
+  the app. It has a big-stack thread, a deadline of about 3 s and a memory watchdog of about
+  512 MiB, and at most two run at once; closing the tab kills them. A crafted SVG under 2 KB can
+  overflow a worker's stack, take 6 GB or burn a CPU for hours inside usvg/resvg, and no in-process
+  cap stops that. The app itself reads only capped image headers.
 - **PR images are decoded by rozed, never by gpui's loaders.** SVGs are parsed with rozed's own
   `usvg::Options` that resolve no file or remote hrefs (gpui's defaults read any local path), and
   rasterized with `resvg`. Every image is capped from its header (8192 px a side, 40 MP), decoded
   with explicit `image::Limits`, GIFs to frame 0 only, and kept downscaled to the panel's size.
   Milestone 8's comment images must go through the same safe path.
+- **Size limits:**
+  - `alt-a` refuses files over 50 MiB or with a line over 1 MiB ("too large to show").
+  - `.gitattributes` files are found with `ls-tree` and downloaded in one batch. Past 200 of them,
+    attributes are skipped with a warning.
+- **Zed's base keymap loads before rozed's,** so rozed's keys win at equal depth. `tab` binds only in
+  full-size diff editors, and the `alt` view keys bind only in the diff and the file list.
 - **Hiding whitespace ignores only space, tab, CR and LF,** as `git diff -w` and GitHub do; other
   Unicode whitespace (U+2028, NBSP) can change meaning and stays visible.
 - **Images are read from git only (never the trusted checkout), decoded in the background,** and shown
@@ -591,7 +616,35 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 
 ## Project
 
-- **The name stays "rozed":** the user checked Zed's trademark terms (2026-11-06).
+- **The project is renamed "Lo"** (as in "lo and behold", an old word for "look"), chosen by the user
+  on 2026-11-06. The repository becomes `scornz/lo`, the app's name is "Lo", the CLI and crate are
+  `lo`, the Homebrew name is `lo`; the user may get `getlo.dev` for a website and would like `lo.dev`
+  eventually. It replaces the earlier "rozed"
+  (which the user had cleared against Zed's trademark terms). The rename lands as one PR right after
+  milestone 5. Choices made for it:
+  - **"Lo", capital L, in everything a person reads:** menus and the Quit item, window titles, error
+    and status messages, sign-in prompts, Keychain item labels, and docs prose, even mid-sentence
+    ("Lo couldn't find gh"). A lowercase l reads as a capital I in sans-serif fonts.
+  - **Lowercase `lo` only for names that are code:** the crate, binary and command, the Homebrew
+    cask, the repo, git refs (`refs/lo/…`), the URL scheme (`lo://`), the config folder
+    (`~/.config/lo`), the user agent, and environment variables (`LO_*`).
+  - macOS folders follow Zed's convention: `~/Library/Application Support/Lo` and
+    `~/Library/Caches/Lo` (Zed's `paths` patch sets the app name to "Lo").
+  - A binary run outside an app bundle embeds an `Info.plist` with `CFBundleName` "Lo", so the menu
+    bar says "Lo". No bundle ID is set until the real bundle, since gpui turns on bundle-only
+    features when one exists.
+  - The CLI's own messages start with the command's name, lowercase (`lo: …`), and say "Lo" in the
+    sentence; `lo --version` prints "Lo 0.1.0".
+  - The bundle ID is `com.scornz.lo`, from `lo.scornz.com`, confirmed by the user (2026-11-06). It's
+    code, so it's lowercase. Changing it after the first release would orphan users' Keychain items
+    and preferences, so a move to a domain like `lo.dev` must happen before milestone 13's release.
+  - The debug build's Keychain prefix `rozed-dev://` becomes `lo-dev://`. `rozed-dev` stays only
+    where it names the test org or its secrets folder, `~/.config/rozed-dev/`.
+  - the Zed fork's branch `rozed/v1.27.0` keeps its name (older commits pin it); later bumps use
+    `lo/v<version>`;
+  - the test org `rozed-dev`, its secrets folder `~/.config/rozed-dev/` and the account `rozed-bot`
+    keep their names: they're fixtures, and renaming the org would break their URLs.
+  Nothing has shipped, so no saved data is migrated; local dev state is moved or recreated.
 - **End-to-end fixtures live in the public `rozed-dev/e2e`** (merge queues need a public org repo);
   the private `rozed-dev/playground` stays for quick live checks.
 - **Rozed writes only to `rozed-dev` repos while testing.** `sharkdp/fd#2212` and other third-party
@@ -600,6 +653,43 @@ Judgment calls made where the design is silent, newest last. Each has a line of 
 - **Fixtures never force-push.** A rebased revision comes from GitHub's server-side rebase
   (`updatePullRequestBranch(updateMethod: REBASE)`); a conflicted rebase is checked read-only on a
   public PR and in GPUI tests.
+
+## Push history (PR #31)
+
+- **Both branches' activity is read newest first.** The head branch goes back to the push the PR
+  opened with (at most 10 pages, marked truncated beyond); the base branch goes back to the PR's
+  first revision (at most 3 pages). Read oldest first, a busy or long-lived branch reaches back
+  years.
+- **A merge commit's first parent is the base only when its second parent is the head.**
+  Otherwise the base is the `before` of the push that merged it, or uncertain. It is never today's
+  tip.
+- **After a failure, a read waits** (the open PR's interval, doubling to 5 minutes) and an incomplete
+  read is kept without a stamp, so it's retried.
+- **The push history re-reads only when** `headRefOid`, `baseRefName`, `state`, the submitted-review
+  count or a count of the four revision event types changes, not on every comment.
+- **`304`s on `/activity` didn't count against the rate limit** in recordings, so pages are stored
+  with their URL, ETag and next link and re-validated cheaply.
+- **Head pushes after the PR closed are dropped** (a reused branch name would mix in another PR's
+  pushes); check suites count only when `push.nextSha` is their own commit on the head branch.
+- **A head or base repo that's gone or unreadable gives no pushes plus a reason, not an error**
+  (404, SSO, OAuth restriction, 403/409/410/451).
+- **`seen_heads` rows are per account** (removed with it) and merged across accounts on read; only
+  watched PRs' heads are recorded.
+- **`Poller::read_cached` names a read by its type's `CacheEntry::NAME`** and watches JSON-pointer
+  fields of the open PR's check; the value is stored with those fields so a restart doesn't re-read.
+- **`github` depends on `review`** (which has no dependencies), so GitHub's answers map straight into
+  the review model.
+- **Lost heads are remembered per PR in the clone,** so later opens don't refetch them; a force-push
+  whose new commit GitHub lost shows as an unavailable revision. A review on a commit that was never
+  pushed is kept as a `ReviewedCommit` record (for "your last review"), not a pushed revision.
+- **`seen_heads` and `last_seen` are pruned** for PRs closed more than 30 days ago, when every
+  account's cached summary agrees, keeping marks noted after the cutoff.
+- **A lost force-push head is named from the REST issue timeline** (read with ETags), matched within
+  the same second after dropping commits other events already name.
+- **Check suites with no `push` count as "head by then"** only when the head branch's log is
+  incomplete (deleted fork, unreadable repo or truncated read).
+- **A base tip that already contains the revision's head is flagged uncertain,** as after a git-flow
+  back-merge.
 
 ## Milestones 6–9 (planning)
 
