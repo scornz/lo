@@ -81,6 +81,19 @@ jobs:
       - name: Check the agent symlinks
         run: script/check-symlinks.sh
 
+  # Fails while a line still uses the project's first name outside the names the rename keeps, such
+  # as one from a branch merged without script/rename-to-lo.sh. Goes when that script does.
+  rename:
+    name: rename
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that only the kept names use the first name
+        run: script/rename-to-lo.sh --check
+
   # The e2e fixture scripts skip the Rust job, so this is their only check. ubuntu-latest ships
   # shellcheck.
   shellcheck:
@@ -163,7 +176,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, commitlint, symlinks, shellcheck, rust]
+    needs: [changes, commitlint, symlinks, rename, shellcheck, rust]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any job failed or was cancelled
