@@ -12,13 +12,15 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
+use http_client::http::StatusCode;
+use http_client::{Method, Url};
 use review::revisions::{BaseHistory, BaseRecord, Merge, PushRecord, Retarget};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::activity::{ActivityEntry, BranchActivity, Direction};
 use crate::cache::{CacheEntry, schema_shape};
-use crate::client::{API_VERSION, GithubClient};
+use crate::client::{API_URL, API_VERSION, GithubClient, RestResponse};
 use crate::error::GithubError;
 use crate::poll::CachedRead;
 use crate::pulls::{PullRef, RepoRef};
@@ -77,6 +79,41 @@ pub struct PushHistory {
     /// Heads of force-pushes GitHub no longer has, named by the issue timeline.
     #[serde(default)]
     pub lost_heads: Vec<String>,
+    /// The issue timeline's force-pushes, read only when GraphQL's events lost a head.
+    #[serde(default)]
+    pub lost_head_timeline: Option<TimelineForcePushes>,
+}
+
+/// The REST issue timeline's force-pushes of the head branch, page by page with ETags.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TimelineForcePushes {
+    pub pages: Vec<TimelinePage>,
+    /// Why the latest read failed, for a reason that may pass. The pages from the one that failed
+    /// on are an earlier read's, if there was one.
+    pub failed: Option<String>,
+}
+
+/// One page of the issue timeline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TimelinePage {
+    /// The URL it was read from.
+    pub url: String,
+    pub etag: Option<String>,
+    /// The next page's URL, from the `Link` header, which a `304` leaves out.
+    pub next: Option<String>,
+    /// How many events of every kind it holds, which says whether it was full.
+    pub events: usize,
+    /// Its `head_ref_force_pushed` events.
+    pub force_pushes: Vec<NamedForcePush>,
+}
+
+/// A force-push of the head, as the issue timeline names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NamedForcePush {
+    #[schemars(with = "String")]
+    pub at: DateTime<Utc>,
+    /// Its head (`commit_id`), named even when GitHub no longer has it.
+    pub commit: String,
 }
 
 /// A repository holding a head branch.
@@ -177,6 +214,7 @@ impl CachedRead for PushHistory {
     fn is_complete(&self) -> bool {
         (std::iter::once(&self.head_activity).chain(&self.base_activity))
             .all(|activity| activity.failed.is_none())
+            && (self.lost_head_timeline.as_ref()).is_none_or(|timeline| timeline.failed.is_none())
     }
 }
 
@@ -228,6 +266,7 @@ impl PushHistory {
                 .next_back(),
             check_suites: Vec::new(),
             lost_heads: Vec::new(),
+            lost_head_timeline: None,
         };
         for event in data
             .timeline_items
@@ -403,9 +442,35 @@ impl PushHistory {
 
     /// The heads GitHub no longer has, which its force-push events name only through the issue
     /// timeline: `review::revisions::Revisions::mark_unavailable` shows them as no longer
-    /// available (design §11).
+    /// available (design §11). The local copy can still have one it fetched before, so a caller
+    /// marks only those it lacks too (`repo_cache::Repo::fetch_commits`).
     pub fn unavailable_heads(&self) -> &[String] {
         &self.lost_heads
+    }
+
+    /// Names the heads of force-pushes GitHub lost from the issue timeline's force-pushes, by
+    /// time. A timeline force-push whose head another event already names is left out first, so
+    /// two in the same second can't give a lost one the head of one GitHub kept; the rest pair
+    /// up in order.
+    fn name_lost_heads(&mut self, timeline: &TimelineForcePushes) {
+        let known: Vec<String> = (self.head_force_pushes.iter())
+            .filter_map(|push| push.after.clone())
+            .collect();
+        let mut candidates: Vec<&NamedForcePush> = (timeline.pages.iter())
+            .flat_map(|page| &page.force_pushes)
+            .filter(|named| !known.contains(&named.commit))
+            .collect();
+        self.lost_heads.clear();
+        for push in &mut self.head_force_pushes {
+            if push.after.is_some() {
+                continue;
+            }
+            if let Some(index) = candidates.iter().position(|named| named.at == push.at) {
+                let commit = candidates.remove(index).commit.clone();
+                self.lost_heads.push(commit.clone());
+                push.after = Some(commit);
+            }
+        }
     }
 
     /// What's known of the base branches over time, for `review::revisions::base_tip_at`, with
@@ -508,7 +573,10 @@ impl GithubClient {
             .iter()
             .any(|push| push.after.is_none())
         {
-            self.name_lost_heads(pull, &mut history).await?;
+            let known = known.and_then(|known| known.lost_head_timeline.as_ref());
+            let timeline = self.timeline_force_pushes(pull, known).await?;
+            history.name_lost_heads(&timeline);
+            history.lost_head_timeline = Some(timeline);
         }
         // Newest first, back to the push the pull request opened with: a long-lived branch, or
         // one a bot reuses for every release, can have far more pushes from before.
@@ -552,59 +620,94 @@ impl GithubClient {
 /// The most pages of the issue timeline read for the heads of force-pushes GitHub lost.
 const MAX_TIMELINE_PAGES: usize = 10;
 
+/// The REST path of the first page of `pull`'s issue timeline.
+fn timeline_path(pull: &PullRef) -> String {
+    let mut url = Url::parse(API_URL).expect("the API's URL parses");
+    url.path_segments_mut()
+        .expect("the API's URL has a path")
+        .clear()
+        .extend([
+            "repos",
+            &pull.repo.owner,
+            &pull.repo.name,
+            "issues",
+            &pull.number.to_string(),
+            "timeline",
+        ]);
+    format!("{}?per_page={PAGE_SIZE}", url.path())
+}
+
+/// A page of the issue timeline from GitHub's answer, or why it isn't one.
+fn timeline_page(response: &RestResponse, url: String) -> Result<TimelinePage, String> {
+    let events: Vec<serde_json::Value> = response.json().map_err(|error| error.to_string())?;
+    let force_pushes = (events.iter())
+        .filter(|event| event["event"] == "head_ref_force_pushed")
+        .filter_map(|event| {
+            Some(NamedForcePush {
+                at: event["created_at"].as_str()?.parse().ok()?,
+                commit: event["commit_id"].as_str()?.to_string(),
+            })
+        })
+        .collect();
+    Ok(TimelinePage {
+        url,
+        etag: response.etag().map(str::to_string),
+        next: response.header("link").and_then(crate::activity::next_link),
+        events: events.len(),
+        force_pushes,
+    })
+}
+
 impl GithubClient {
-    /// Names the heads of `history`'s force-pushes whose commit GitHub lost, from the REST issue
-    /// timeline, whose `head_ref_force_pushed` events keep `commit_id` when GraphQL's
-    /// `afterCommit` is null (`docs/research/revisions.md` §6). They're matched by time. Only the
-    /// network, the rate limit and the token fail the read; anything else leaves them unnamed.
-    async fn name_lost_heads(
+    /// The force-pushes of `pull`'s head in the REST issue timeline, whose
+    /// `head_ref_force_pushed` events keep `commit_id` when GraphQL's `afterCommit` is null
+    /// (`docs/research/revisions.md` §6). Each page `known` has is asked about with its ETag. Only
+    /// the network, the rate limit and the token fail the read; anything else, a page that isn't
+    /// a list of events included, keeps the pages read and what `known` had for the rest, and
+    /// flags the read `failed`, so the push history is read again after a wait.
+    async fn timeline_force_pushes(
         &self,
         pull: &PullRef,
-        history: &mut PushHistory,
-    ) -> Result<(), GithubError> {
-        let mut url = Some(format!(
-            "/repos/{}/{}/issues/{}/timeline?per_page={PAGE_SIZE}",
-            pull.repo.owner, pull.repo.name, pull.number
-        ));
-        let mut named: Vec<(DateTime<Utc>, String)> = Vec::new();
-        for _ in 0..MAX_TIMELINE_PAGES {
-            let Some(current) = url.take() else {
+        known: Option<&TimelineForcePushes>,
+    ) -> Result<TimelineForcePushes, GithubError> {
+        let known_pages = known.map_or(&[][..], |known| &known.pages[..]);
+        let mut read = TimelineForcePushes::default();
+        let mut url = Some(timeline_path(pull));
+        while let Some(current) = url.take() {
+            if read.pages.len() >= MAX_TIMELINE_PAGES {
                 break;
-            };
-            let response = match self
-                .send(http_client::Method::GET, &current, None, None)
-                .await
-            {
-                Ok(response) => response,
+            }
+            let index = read.pages.len();
+            let known_page = known_pages.get(index).filter(|page| page.url == current);
+            // A 304 leaves out the Link header, so a full last page is asked for in full.
+            let refetch_in_full = known_page
+                .is_some_and(|page| page.next.is_none() && page.events >= PAGE_SIZE as usize);
+            let etag =
+                (known_page.filter(|_| !refetch_in_full)).and_then(|page| page.etag.as_deref());
+            let page = match self.send(Method::GET, &current, None, etag).await {
                 Err(error) if stops_the_read(&error) => return Err(error),
-                Err(error) => {
-                    log::warn!("reading {pull}'s timeline for lost heads: {error:#}");
-                    return Ok(());
+                Err(error) => Err(error.to_string()),
+                Ok(response) if response.status == StatusCode::NOT_MODIFIED => {
+                    known_page.cloned().ok_or_else(|| {
+                        format!("GitHub said {current} hadn't changed, but rozed never read it")
+                    })
                 }
+                Ok(response) => timeline_page(&response, current),
             };
-            let events: Vec<serde_json::Value> = response.json()?;
-            for event in events {
-                if event["event"] == "head_ref_force_pushed"
-                    && let Some(commit) = event["commit_id"].as_str()
-                    && let Some(at) = event["created_at"].as_str()
-                    && let Ok(at) = at.parse::<DateTime<Utc>>()
-                {
-                    named.push((at, commit.to_string()));
+            match page {
+                Ok(page) => {
+                    url = page.next.clone();
+                    read.pages.push(page);
+                }
+                Err(reason) => {
+                    log::warn!("reading {pull}'s timeline for lost heads: {reason}");
+                    read.pages.extend(known_pages.iter().skip(index).cloned());
+                    read.failed = Some(reason);
+                    break;
                 }
             }
-            url = response.header("link").and_then(crate::activity::next_link);
         }
-        for push in &mut history.head_force_pushes {
-            if push.after.is_some() {
-                continue;
-            }
-            if let Some(index) = named.iter().position(|(at, _)| *at == push.at) {
-                let (_, commit) = named.remove(index);
-                history.lost_heads.push(commit.clone());
-                push.after = Some(commit);
-            }
-        }
-        Ok(())
+        Ok(read)
     }
 
     /// [`GithubClient::branch_activity`], newest first. An error that isn't the network's, the

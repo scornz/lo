@@ -1139,3 +1139,146 @@ fn every_branch_the_pull_request_targeted_is_read_back_to_its_first_revision() {
         sha(2)
     );
 }
+
+const TIMELINE: &str = "https://api.github.com/repos/rozed-dev/e2e/issues/14/timeline?per_page=100";
+
+/// A page of e2e#14's issue timeline at `url`, holding `events`.
+fn timeline_page(
+    url: &str,
+    etag: &str,
+    next: Option<&str>,
+    events: serde_json::Value,
+) -> Interaction {
+    let mut interaction = page(url, etag, next, &[]);
+    interaction.response.body = Some(events);
+    interaction
+}
+
+fn force_pushed(commit: &str, at: &str) -> serde_json::Value {
+    serde_json::json!({"event": "head_ref_force_pushed", "commit_id": commit, "created_at": at})
+}
+
+/// e2e#14 with its fork gone, r5's head lost, and a second force-push in the same second as r5's,
+/// whose head GitHub kept: `after`, from r5.
+fn lost_with_a_kept_twin(pull: &mut serde_json::Value, after: &str) {
+    pull["headRepository"] = serde_json::Value::Null;
+    pull["timelineItems"]["nodes"][0]["afterCommit"] = serde_json::Value::Null;
+    pull["timelineItems"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "__typename": "HeadRefForcePushedEvent",
+            "createdAt": "2026-11-06T19:28:48Z",
+            "beforeCommit": {"oid": R5},
+            "afterCommit": {"oid": after},
+        }));
+}
+
+#[test]
+fn a_lost_head_is_never_given_the_head_of_a_force_push_github_kept() {
+    // Both force-pushes happened in the same second, and the timeline lists the kept one first.
+    let timeline = timeline_page(
+        TIMELINE,
+        "\"t1\"",
+        None,
+        serde_json::json!([
+            force_pushed(&sha(8), "2026-11-06T19:28:48Z"),
+            force_pushed(R5, "2026-11-06T19:28:48Z"),
+        ]),
+    );
+    let (history, _) = e2e_14_with(
+        |interaction| {
+            if let Some(pull) = graphql_pull(interaction) {
+                lost_with_a_kept_twin(pull, &sha(8));
+            }
+        },
+        vec![timeline],
+    );
+
+    assert_eq!(history.unavailable_heads(), [R5.to_string()]);
+    let afters: Vec<Option<&str>> = (history.head_force_pushes.iter())
+        .map(|push| push.after.as_deref())
+        .collect();
+    assert_eq!(afters, [Some(R5), Some(sha(8).as_str())]);
+}
+
+#[test]
+fn a_timeline_page_that_fails_keeps_the_pages_before_it_and_is_read_again() {
+    use github::poll::CachedRead as _;
+
+    let second = format!("{TIMELINE}&page=2");
+    let first = timeline_page(
+        TIMELINE,
+        "\"t1\"",
+        Some(&second),
+        serde_json::json!([force_pushed(R5, "2026-11-06T19:28:48Z")]),
+    );
+    let lost = |interaction: &mut Interaction| {
+        if let Some(pull) = graphql_pull(interaction) {
+            pull["headRepository"] = serde_json::Value::Null;
+            pull["timelineItems"]["nodes"][0]["afterCommit"] = serde_json::Value::Null;
+        }
+    };
+    for failure in [
+        timeline_page(
+            &second,
+            "",
+            None,
+            serde_json::json!({"message": "Bad Gateway"}),
+        ),
+        timeline_page(
+            &second,
+            "",
+            None,
+            serde_json::json!({"message": "not a list"}),
+        ),
+    ] {
+        let mut failure = failure;
+        if failure.response.body.as_ref().unwrap()["message"] == "Bad Gateway" {
+            failure.response.status = 502;
+        }
+        let (history, _) = e2e_14_with(lost, vec![first.clone(), failure]);
+
+        assert_eq!(history.unavailable_heads(), [R5.to_string()]);
+        let timeline = history.lost_head_timeline.as_ref().unwrap();
+        assert!(timeline.failed.is_some());
+        assert!(!history.is_complete());
+    }
+}
+
+#[test]
+fn reading_the_timeline_again_asks_with_its_etag() {
+    let page = timeline_page(
+        TIMELINE,
+        "\"t1\"",
+        None,
+        serde_json::json!([force_pushed(R5, "2026-11-06T19:28:48Z")]),
+    );
+    let (_, recorded) =
+        cassette::read_cassette(&cassette::fixtures_dir().join("push_history_e2e_14")).unwrap();
+    let mut interactions: Vec<Interaction> = (recorded.into_iter())
+        .map(|(_, interaction)| interaction)
+        .filter(|interaction| !interaction.request.url.contains("revisions-3"))
+        .collect();
+    for interaction in &mut interactions {
+        if let Some(pull) = graphql_pull(interaction) {
+            pull["headRepository"] = serde_json::Value::Null;
+            pull["timelineItems"]["nodes"][0]["afterCommit"] = serde_json::Value::Null;
+        }
+    }
+    interactions.push(page);
+    interactions.push(not_modified(TIMELINE, "\"t1\""));
+    let http =
+        Arc::new(ReplayHttpClient::from_interactions("timeline_etag", interactions).unwrap());
+    let client = client(http.clone());
+
+    let first = block_on(client.push_history(&e2e(14), BOT, None)).unwrap();
+    let again = block_on(client.push_history(&e2e(14), BOT, Some(&first))).unwrap();
+
+    assert_eq!(again, first);
+    let timeline: Vec<bool> = (http.seen().iter())
+        .filter(|seen| seen.url.contains("/timeline"))
+        .map(|seen| seen.header("if-none-match").is_some())
+        .collect();
+    assert_eq!(timeline, [false, true]);
+}
