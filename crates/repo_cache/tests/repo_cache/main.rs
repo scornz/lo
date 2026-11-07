@@ -4,6 +4,7 @@ mod cleanup;
 mod compare;
 mod fetch;
 mod offline;
+mod patch;
 mod read;
 mod revisions;
 mod support;

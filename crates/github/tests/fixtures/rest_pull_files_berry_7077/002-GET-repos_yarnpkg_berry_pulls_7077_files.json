@@ -1,0 +1,81 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/yarnpkg/berry/pulls/7077/files?per_page=100"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "\"bc4cbb25edfeff21429314a9d255317e5f339c6c37bf7f3ed4ca24c2b49e039d\"",
+      "last-modified": "Fri, 28 Aug 2026 13:15:41 GMT",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4904",
+      "x-ratelimit-reset": "1794031039",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "96"
+    },
+    "body": [
+      {
+        "sha": "09e1a7fe1a6ce98cd23001da841dbba675278d40",
+        "filename": ".pnp.cjs",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 3,
+        "changes": 7,
+        "blob_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.pnp.cjs",
+        "raw_url": "https://github.com/yarnpkg/berry/raw/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.pnp.cjs",
+        "contents_url": "https://api.github.com/repos/yarnpkg/berry/contents/.pnp.cjs?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+        "patch": "@@ -44815,9 +44815,9 @@ Instead change the require of ${basename} in ${parentPath} to a dynamic import()\n   err.code = `ERR_REQUIRE_ESM`;\n   return err;\n }\n-function reportRequiredFilesToWatchMode(files) {\n+function reportRequiredFilesToWatchMode(paths) {\n   if (process.env.WATCH_REPORT_DEPENDENCIES && process.send) {\n-    files = files.map((filename) => npath.fromPortablePath(VirtualFS.resolveVirtual(npath.toPortablePath(filename))));\n+    const files = paths.map((filename) => npath.fromPortablePath(VirtualFS.resolveVirtual(filename)));\n     if (WATCH_MODE_MESSAGE_USES_ARRAYS) {\n       process.send({ \"watch:require\": files });\n     } else {\n@@ -46460,9 +46460,10 @@ Required by: ${issuerLocator.name}@${issuerLocator.reference} (via ${issuerForDi\n     const candidates = [];\n     const qualifiedPath = applyNodeExtensionResolution(unqualifiedPath, candidates, { extensions });\n     if (qualifiedPath) {\n+      reportRequiredFilesToWatchMode([qualifiedPath]);\n       return ppath.normalize(qualifiedPath);\n     } else {\n-      reportRequiredFilesToWatchMode(candidates.map((candidate) => npath.fromPortablePath(candidate)));\n+      reportRequiredFilesToWatchMode(candidates);\n       const unqualifiedPathForDisplay = getPathForDisplay(unqualifiedPath);\n       const containingPackage = findPackageLocator(unqualifiedPath);\n       if (containingPackage) {"
+      },
+      {
+        "sha": "22e76f05f959adf3dd5b842a555037d5b05559ab",
+        "filename": ".yarn/versions/c071c1e5.yml",
+        "status": "added",
+        "additions": 27,
+        "deletions": 0,
+        "changes": 27,
+        "blob_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.yarn%2Fversions%2Fc071c1e5.yml",
+        "raw_url": "https://github.com/yarnpkg/berry/raw/ba5cb1ecc74e5078f61ada5b8f0282385896c702/.yarn%2Fversions%2Fc071c1e5.yml",
+        "contents_url": "https://api.github.com/repos/yarnpkg/berry/contents/.yarn%2Fversions%2Fc071c1e5.yml?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+        "patch": "@@ -0,0 +1,27 @@\n+releases:\n+  \"@yarnpkg/cli\": patch\n+  \"@yarnpkg/plugin-pnp\": patch\n+  \"@yarnpkg/pnp\": patch\n+\n+declined:\n+  - \"@yarnpkg/plugin-compat\"\n+  - \"@yarnpkg/plugin-constraints\"\n+  - \"@yarnpkg/plugin-dlx\"\n+  - \"@yarnpkg/plugin-essentials\"\n+  - \"@yarnpkg/plugin-init\"\n+  - \"@yarnpkg/plugin-interactive-tools\"\n+  - \"@yarnpkg/plugin-nm\"\n+  - \"@yarnpkg/plugin-npm-cli\"\n+  - \"@yarnpkg/plugin-pack\"\n+  - \"@yarnpkg/plugin-patch\"\n+  - \"@yarnpkg/plugin-pnpm\"\n+  - \"@yarnpkg/plugin-stage\"\n+  - \"@yarnpkg/plugin-typescript\"\n+  - \"@yarnpkg/plugin-version\"\n+  - \"@yarnpkg/plugin-workspace-tools\"\n+  - \"@yarnpkg/builder\"\n+  - \"@yarnpkg/core\"\n+  - \"@yarnpkg/doctor\"\n+  - \"@yarnpkg/nm\"\n+  - \"@yarnpkg/pnpify\"\n+  - \"@yarnpkg/sdks\""
+      },
+      {
+        "sha": "2a02d53bff841762da629cb42d2e00d315e1291e",
+        "filename": "packages/yarnpkg-pnp/sources/hook.js",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "changes": 2,
+        "blob_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Fhook.js",
+        "raw_url": "https://github.com/yarnpkg/berry/raw/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Fhook.js",
+        "contents_url": "https://api.github.com/repos/yarnpkg/berry/contents/packages%2Fyarnpkg-pnp%2Fsources%2Fhook.js?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702"
+      },
+      {
+        "sha": "1d6fa1a4103b15267ea1d1eb02d2695c5756f531",
+        "filename": "packages/yarnpkg-pnp/sources/loader/makeApi.ts",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "changes": 3,
+        "blob_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FmakeApi.ts",
+        "raw_url": "https://github.com/yarnpkg/berry/raw/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FmakeApi.ts",
+        "contents_url": "https://api.github.com/repos/yarnpkg/berry/contents/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FmakeApi.ts?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+        "patch": "@@ -829,9 +829,10 @@ export function makeApi(runtimeState: RuntimeState, opts: MakeApiOptions): PnpAp\n     const qualifiedPath = applyNodeExtensionResolution(unqualifiedPath, candidates, {extensions});\n \n     if (qualifiedPath) {\n+      nodeUtils.reportRequiredFilesToWatchMode([qualifiedPath]);\n       return ppath.normalize(qualifiedPath);\n     } else {\n-      nodeUtils.reportRequiredFilesToWatchMode(candidates.map(candidate => npath.fromPortablePath(candidate)));\n+      nodeUtils.reportRequiredFilesToWatchMode(candidates);\n \n       const unqualifiedPathForDisplay = getPathForDisplay(unqualifiedPath);\n "
+      },
+      {
+        "sha": "98a1751ecd484c6a405522e85756de3c5acfa20c",
+        "filename": "packages/yarnpkg-pnp/sources/loader/nodeUtils.ts",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 3,
+        "changes": 7,
+        "blob_url": "https://github.com/yarnpkg/berry/blob/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FnodeUtils.ts",
+        "raw_url": "https://github.com/yarnpkg/berry/raw/ba5cb1ecc74e5078f61ada5b8f0282385896c702/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FnodeUtils.ts",
+        "contents_url": "https://api.github.com/repos/yarnpkg/berry/contents/packages%2Fyarnpkg-pnp%2Fsources%2Floader%2FnodeUtils.ts?ref=ba5cb1ecc74e5078f61ada5b8f0282385896c702",
+        "patch": "@@ -1,4 +1,5 @@\n-import {NativePath, npath, VirtualFS}   from '@yarnpkg/fslib';\n+import type {NativePath, PortablePath}  from '@yarnpkg/fslib';\n+import {npath, VirtualFS}               from '@yarnpkg/fslib';\n import fs                               from 'fs';\n import path                             from 'path';\n \n@@ -54,9 +55,9 @@ Instead change the require of ${basename} in ${parentPath} to a dynamic import()\n \n // https://github.com/nodejs/node/pull/44366\n // https://github.com/nodejs/node/pull/45348\n-export function reportRequiredFilesToWatchMode(files: Array<NativePath>) {\n+export function reportRequiredFilesToWatchMode(paths: Array<PortablePath>) {\n   if (process.env.WATCH_REPORT_DEPENDENCIES && process.send) {\n-    files = files.map(filename => npath.fromPortablePath(VirtualFS.resolveVirtual(npath.toPortablePath(filename))));\n+    const files = paths.map(filename => npath.fromPortablePath(VirtualFS.resolveVirtual(filename)));\n     if (WATCH_MODE_MESSAGE_USES_ARRAYS) {\n       process.send({'watch:require': files});\n     } else {"
+      }
+    ]
+  }
+}

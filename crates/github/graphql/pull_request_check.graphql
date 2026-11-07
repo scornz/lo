@@ -1,9 +1,10 @@
 # The cheap poll: enough to tell whether a pull request changed, for 1 point. A PR's updatedAt
 # doesn't move when it joins a stack, but its timeline's does, so this asks for both. It also holds
 # what the UI shows without the details and that moves nothing else: the checks' combined state,
-# the review decision, the merge state, which review threads are resolved (the first 100), and the
-# merge queue entry. Reads kept current with the open PR watch some of it, such as how many
-# force-pushes and retargets the timeline has.
+# the review decision, the merge state, which review threads are resolved and how many comments
+# each has (the first 100), the merge queue entry, and how many comments your pending review
+# holds. Reads kept current with the open PR watch some of it, such as how many force-pushes and
+# retargets the timeline has.
 query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
   rateLimit {
     cost
@@ -55,16 +56,74 @@ query PullRequestCheck($owner: String!, $name: String!, $number: Int!) {
       submittedReviews: reviews(states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
         totalCount
       }
+      # A reply or a deleted comment moves a thread's count, and nothing else here.
       reviewThreads(first: 100) {
         totalCount
         nodes {
           isResolved
+          comments {
+            totalCount
+          }
+        }
+      }
+      # Your pending review, which only you can see: none, or one with its comments. Only a
+      # trigger: the pending review's count comes from PendingReview, which asks for yours by
+      # login.
+      viewerPendingReview: reviews(states: [PENDING], first: 1) {
+        nodes {
+          viewerDidAuthor
+          comments {
+            totalCount
+          }
         }
       }
       comments {
         totalCount
       }
       changedFiles
+      # When the description was last edited.
+      lastEditedAt
+      # The timeline's items that the timeline shows (queries/timeline.rs), without mentions,
+      # subscriptions and the like. Its updatedAt is the latest item's, edits included, unlike
+      # the whole timeline's.
+      timelineEvents: timelineItems(
+        itemTypes: [
+          ISSUE_COMMENT
+          PULL_REQUEST_REVIEW
+          PULL_REQUEST_COMMIT
+          HEAD_REF_FORCE_PUSHED_EVENT
+          BASE_REF_FORCE_PUSHED_EVENT
+          LABELED_EVENT
+          UNLABELED_EVENT
+          ASSIGNED_EVENT
+          UNASSIGNED_EVENT
+          REVIEW_REQUESTED_EVENT
+          REVIEW_REQUEST_REMOVED_EVENT
+          CROSS_REFERENCED_EVENT
+          MERGED_EVENT
+          ADDED_TO_MERGE_QUEUE_EVENT
+          REMOVED_FROM_MERGE_QUEUE_EVENT
+          DEPLOYED_EVENT
+          DEPLOYMENT_ENVIRONMENT_CHANGED_EVENT
+          CONVERT_TO_DRAFT_EVENT
+          READY_FOR_REVIEW_EVENT
+          CLOSED_EVENT
+          REOPENED_EVENT
+          BASE_REF_CHANGED_EVENT
+          AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT
+          AUTOMATIC_BASE_CHANGE_FAILED_EVENT
+          REVIEW_DISMISSED_EVENT
+          AUTO_MERGE_ENABLED_EVENT
+          AUTO_MERGE_DISABLED_EVENT
+          AUTO_REBASE_ENABLED_EVENT
+          AUTO_SQUASH_ENABLED_EVENT
+          ADDED_TO_STACK_EVENT
+          REMOVED_FROM_STACK_EVENT
+        ]
+      ) {
+        filteredCount
+        updatedAt
+      }
     }
   }
 }

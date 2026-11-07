@@ -1,0 +1,6 @@
+{
+  "description": "yarnpkg/berry#7077's files as rozed-bot, read only, and its .gitattributes at the pull request's head: .pnp.cjs and packages/yarnpkg-pnp/sources/hook.js are marked binary, yet GitHub gives .pnp.cjs a text patch. hook.js, one line of 140 kB, gets none",
+  "recorded_at": "2026-11-07T05:17:14Z",
+  "repo": "yarnpkg/berry",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

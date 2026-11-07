@@ -1,0 +1,6 @@
+{
+  "description": "sharkdp/fd#2212's timeline as rozed-bot, read only, three items a page: read in full, newest page first, then again with what the first read gave, which asks for the newest page alone",
+  "recorded_at": "2026-11-07T05:17:05Z",
+  "repo": "sharkdp/fd",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}
