@@ -1,0 +1,34 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "AddPullRequestReviewThread",
+    "variables": {
+      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlhDMA",
+      "path": "e11/review.txt",
+      "body": "Fixture E11: line 25, outside the diff's hunks.",
+      "subjectType": "LINE",
+      "line": 25,
+      "side": "RIGHT"
+    },
+    "query_sha256": "4624cd7587d73c9a3571cc35ea71da931d03296ebbb6dc93f6bb3fd4e9cacd16"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4967",
+      "x-ratelimit-reset": "1794037090",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "33"
+    },
+    "body": {
+      "data": {
+        "addPullRequestReviewThread": {
+          "thread": null
+        }
+      }
+    }
+  }
+}

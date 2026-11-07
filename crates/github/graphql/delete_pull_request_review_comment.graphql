@@ -1,0 +1,8 @@
+# Deletes a comment in a review thread, pending or posted. A thread whose last comment goes is gone.
+mutation DeletePullRequestReviewComment($id: ID!) {
+  deletePullRequestReviewComment(input: { id: $id }) {
+    pullRequestReview {
+      id
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# Changes the text of a comment on a pull request itself.
+mutation UpdateIssueComment($id: ID!, $body: String!) {
+  updateIssueComment(input: { id: $id, body: $body }) {
+    issueComment {
+      id
+    }
+  }
+}

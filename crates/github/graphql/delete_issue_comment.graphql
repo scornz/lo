@@ -1,0 +1,6 @@
+# Deletes a comment on a pull request itself. Its answer holds nothing but the client's mutation ID.
+mutation DeleteIssueComment($id: ID!) {
+  deleteIssueComment(input: { id: $id }) {
+    clientMutationId
+  }
+}

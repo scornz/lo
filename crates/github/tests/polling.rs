@@ -2666,3 +2666,456 @@ async fn lookups_that_stop_short_run_again_while_the_list_stays_the_same(cx: &mu
     t.run_until(400);
     assert_eq!(lookups(&t), Vec::<u64>::new());
 }
+
+// Comments and reviews (`github::review_writes`): what each write reads again, with the review
+// threads, your pending review and the timeline kept by made-up reads that count their runs.
+
+/// How often each of PR #1's review reads ran, and, for the timeline, whether each run was given
+/// what Lo had.
+#[derive(Clone, Default)]
+struct ReviewRuns {
+    threads: Arc<std::sync::atomic::AtomicU32>,
+    pending: Arc<std::sync::atomic::AtomicU32>,
+    timeline: Arc<Mutex<Vec<bool>>>,
+}
+
+impl ReviewRuns {
+    fn threads(&self) -> u32 {
+        self.threads.load(Ordering::SeqCst)
+    }
+
+    fn pending(&self) -> u32 {
+        self.pending.load(Ordering::SeqCst)
+    }
+
+    /// Whether each timeline run since the last call was given what Lo had.
+    fn timeline(&self) -> Vec<bool> {
+        std::mem::take(&mut *self.timeline.lock())
+    }
+}
+
+/// PR #1's review threads: `count` of them, `PRRT_0` onwards, each with one posted comment,
+/// `PRRC_0` onwards.
+fn review_threads(count: usize) -> github::queries::ReviewThreadList {
+    pending_review_threads(count, 0)
+}
+
+/// [`review_threads`], the first `pending` of them in your pending review.
+fn pending_review_threads(count: usize, pending: usize) -> github::queries::ReviewThreadList {
+    let nodes: Vec<serde_json::Value> = (0..count)
+        .map(|n| {
+            serde_json::json!({
+                "id": format!("PRRT_{n}"), "path": "a.rs", "subjectType": "LINE",
+                "diffSide": "RIGHT", "startDiffSide": null, "line": 1, "startLine": null,
+                "originalLine": 1, "originalStartLine": null, "isOutdated": false,
+                "isResolved": false, "viewerCanReply": true, "viewerCanResolve": true,
+                "viewerCanUnresolve": false,
+                "comments": {
+                    "totalCount": 1,
+                    "pageInfo": {"hasNextPage": false, "endCursor": null},
+                    "nodes": [{
+                        "id": format!("PRRC_{n}"),
+                        "author": {"__typename": "User", "login": LOGIN},
+                        "body": "Hm.", "state": if n < pending { "PENDING" } else { "SUBMITTED" },
+                        "createdAt": "2026-11-06T12:00:00Z",
+                        "url": "https://github.com/rozed-dev/playground/pull/1",
+                        "isMinimized": false, "minimizedReason": null, "viewerCanUpdate": true,
+                        "viewerCanDelete": true, "commit": {"oid": "a"},
+                        "originalCommit": {"oid": "a"}
+                    }]
+                }
+            })
+        })
+        .collect();
+    github::queries::ReviewThreadList {
+        nodes: serde_json::from_value(nodes.into()).unwrap(),
+        missing: 0,
+    }
+}
+
+/// Keeps PR #1's review threads, holding `threads`, your pending review and its timeline, with
+/// made-up requests that count their runs in `runs`.
+fn keep_review_reads(
+    poller: &mut Poller,
+    runs: &ReviewRuns,
+    threads: github::queries::ReviewThreadList,
+    cx: &mut gpui::Context<Poller>,
+) {
+    use github::queries::timeline::Description;
+    use github::queries::{PullRequestTimeline, ViewerPendingReview};
+
+    let counted = runs.threads.clone();
+    poller.read_cached(
+        pr(1),
+        move |_, _| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let threads = threads.clone();
+            async move { Ok(threads) }
+        },
+        cx,
+    );
+    let counted = runs.pending.clone();
+    poller.read_cached(
+        pr(1),
+        move |_, _| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async move { Ok(ViewerPendingReview::default()) }
+        },
+        cx,
+    );
+    let given = runs.timeline.clone();
+    poller.read_cached(
+        pr(1),
+        move |_, known: Option<Arc<PullRequestTimeline>>| {
+            given.lock().push(known.is_some());
+            async move {
+                Ok(PullRequestTimeline {
+                    description: Description {
+                        author: None,
+                        body: String::new(),
+                        created_at: chrono::DateTime::UNIX_EPOCH,
+                        last_edited_at: None,
+                    },
+                    items: Vec::new(),
+                    left_out: 0,
+                    count: 0,
+                    shown_updated_at: None,
+                    read_in_full_at: chrono::DateTime::UNIX_EPOCH,
+                })
+            }
+        },
+        cx,
+    );
+}
+
+/// A mutation `operation` with `variables`, answered with `answer`, or the errors in it, for the
+/// GraphQL request `like` made.
+fn mutation(
+    like: &Interaction,
+    operation: &str,
+    variables: serde_json::Value,
+    answer: serde_json::Value,
+) -> Interaction {
+    let mut interaction = like.clone();
+    interaction.request.operation = Some(operation.into());
+    interaction.request.variables = Some(variables);
+    interaction.request.query_sha256 = None;
+    interaction.response.status = 200;
+    interaction.response.headers.clear();
+    interaction.response.body = Some(answer);
+    interaction
+}
+
+/// The recorded poll of PR #1 with its review reads kept, run until they've each run once.
+async fn reviewing(
+    name: &str,
+    answers: Vec<Interaction>,
+    threads: github::queries::ReviewThreadList,
+    cx: &mut TestAppContext,
+) -> (Polling, ReviewRuns) {
+    let mut interactions = recorded();
+    interactions.extend(answers);
+    let mut t = Polling::new(name, interactions, cx).await;
+    let runs = ReviewRuns::default();
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        keep_review_reads(poller, &runs, threads, cx);
+    });
+    t.run_until(10);
+    assert_eq!((runs.threads(), runs.pending()), (1, 1));
+    assert_eq!(runs.timeline(), [false]);
+    (t, runs)
+}
+
+#[gpui::test]
+async fn an_edit_reads_the_threads_again_or_the_whole_timeline(cx: &mut TestAppContext) {
+    use github::review_writes::CommentId;
+
+    let r = recorded();
+    let edited = |operation: &str, id: &str, field: &str| {
+        let answer = serde_json::json!({"data": {
+            operation[..1].to_lowercase() + &operation[1..]: {field: {"id": id}}
+        }});
+        mutation(
+            &r[1],
+            operation,
+            serde_json::json!({"id": id, "body": "Edited."}),
+            answer,
+        )
+    };
+    let answers = vec![
+        edited(
+            "UpdatePullRequestReviewComment",
+            "PRRC_0",
+            "pullRequestReviewComment",
+        ),
+        edited("UpdateIssueComment", "IC_1", "issueComment"),
+    ];
+    let (mut t, runs) = reviewing("edits_read_again", answers, review_threads(1), cx).await;
+
+    // The check sees no edit of a comment, so an edit in a thread reads the threads again.
+    let thread = CommentId::Thread("PRRC_0".into());
+    let edit = t.update(|poller, cx| poller.edit_comment(pr(1), thread, "Edited.".into(), cx));
+    t.run_until(20);
+    edit.await.unwrap();
+    assert_eq!((runs.threads(), runs.pending()), (2, 1));
+    assert_eq!(runs.timeline(), Vec::<bool>::new());
+
+    // One on the pull request itself reads the timeline again, in full: not given what Lo has,
+    // since the comment may be older than its newest page.
+    let comment = CommentId::Conversation("IC_1".into());
+    let edit = t.update(|poller, cx| poller.edit_comment(pr(1), comment, "Edited.".into(), cx));
+    t.run_until(30);
+    edit.await.unwrap();
+    assert_eq!(runs.threads(), 2);
+    assert_eq!(runs.timeline(), [false]);
+    // Its next refresh reads only what's new again.
+    t.run_until(340);
+    assert_eq!(runs.timeline(), [true]);
+}
+
+#[gpui::test]
+async fn a_write_to_a_thread_the_check_doesnt_read_reads_the_threads_again(
+    cx: &mut TestAppContext,
+) {
+    use github::review_writes::CommentId;
+    use review::pending::Mutation;
+
+    let r = recorded();
+    let resolved = |thread: &str| {
+        mutation(
+            &r[1],
+            "ResolveReviewThread",
+            serde_json::json!({"threadId": thread}),
+            serde_json::json!({"data": {"resolveReviewThread": {
+                "thread": {"id": thread, "isResolved": true}
+            }}}),
+        )
+    };
+    let answers = vec![
+        resolved("PRRT_0"),
+        resolved("PRRT_100"),
+        mutation(
+            &r[1],
+            "DeletePullRequestReviewComment",
+            serde_json::json!({"id": "PRRC_100"}),
+            serde_json::json!({"data": {"deletePullRequestReviewComment": {
+                "pullRequestReview": {"id": "PRR_1"}
+            }}}),
+        ),
+        mutation(
+            &r[1],
+            "AddPullRequestReviewThreadReply",
+            serde_json::json!({"pullRequestReviewThreadId": "PRRT_100", "body": "Agreed."}),
+            serde_json::json!({"data": {"addPullRequestReviewThreadReply": {"comment": {
+                "id": "PRRC_200", "state": "SUBMITTED",
+                "pullRequestReview": {"id": "PRR_2", "state": "COMMENTED"}
+            }}}}),
+        ),
+    ];
+    let (mut t, runs) = reviewing("threads_past_the_check", answers, review_threads(101), cx).await;
+
+    // The check reads the first 100 threads' state, so resolving one of them is left to it,
+    // which this replay doesn't change.
+    let resolve = t.update(|poller, cx| poller.resolve_thread(pr(1), "PRRT_0".into(), true, cx));
+    t.run_until(20);
+    resolve.await.unwrap();
+    assert_eq!(runs.threads(), 1);
+    // Past them, the threads are read again.
+    let resolve = t.update(|poller, cx| poller.resolve_thread(pr(1), "PRRT_100".into(), true, cx));
+    t.run_until(30);
+    resolve.await.unwrap();
+    assert_eq!(runs.threads(), 2);
+    // So are they after deleting a comment there, with the timeline in full: it counts the
+    // comments of the comment's review.
+    let comment = CommentId::Thread("PRRC_100".into());
+    let delete = t.update(|poller, cx| poller.delete_comment(pr(1), comment, cx));
+    t.run_until(40);
+    delete.await.unwrap();
+    assert_eq!(runs.threads(), 3);
+    assert_eq!(runs.timeline(), [false]);
+    // And after a reply posted there at once.
+    let reply = Mutation::PostReply {
+        thread: "PRRT_100".into(),
+        body: "Agreed.".into(),
+    };
+    let sent = t.update(|poller, cx| poller.send_review(pr(1), "PR_1".into(), reply, cx));
+    t.run_until(50);
+    assert_eq!(sent.await.unwrap().comment.as_deref(), Some("PRRC_200"));
+    assert_eq!(runs.threads(), 4);
+    assert_eq!(runs.pending(), 1);
+}
+
+#[gpui::test]
+async fn a_refused_second_pending_review_reads_your_pending_review_again(cx: &mut TestAppContext) {
+    use github::review_writes::Rejection;
+    use review::pending::Mutation;
+
+    let r = recorded();
+    let refused = mutation(
+        &r[1],
+        "AddPullRequestReview",
+        serde_json::json!({"pullRequestId": "PR_1", "commitOID": "a3"}),
+        serde_json::json!({
+            "data": {"addPullRequestReview": null},
+            "errors": [{
+                "type": "UNPROCESSABLE", "path": ["addPullRequestReview"],
+                "message": "User can only have one pending review per pull request"
+            }]
+        }),
+    );
+    let (mut t, runs) = reviewing("pending_elsewhere", vec![refused], review_threads(1), cx).await;
+
+    // Lo planned a new review: one was started elsewhere since it last read yours.
+    let start = Mutation::StartReview {
+        commit: "a3".into(),
+        thread: None,
+    };
+    let sent = t.update(|poller, cx| poller.send_review(pr(1), "PR_1".into(), start, cx));
+    t.run_until(20);
+    assert!(matches!(
+        sent.await,
+        Err(GithubError::Rejected(Rejection::PendingReviewExists))
+    ));
+    assert_eq!((runs.threads(), runs.pending()), (2, 2));
+    assert_eq!(runs.timeline(), Vec::<bool>::new());
+}
+
+#[gpui::test]
+async fn a_reply_that_joined_a_pending_review_lo_didnt_know_reads_it_again(
+    cx: &mut TestAppContext,
+) {
+    use review::pending::Mutation;
+
+    let r = recorded();
+    let joined = mutation(
+        &r[1],
+        "AddPullRequestReviewThreadReply",
+        serde_json::json!({"pullRequestReviewThreadId": "PRRT_0", "body": "Agreed."}),
+        serde_json::json!({"data": {"addPullRequestReviewThreadReply": {"comment": {
+            "id": "PRRC_9", "state": "PENDING",
+            "pullRequestReview": {"id": "PRR_elsewhere", "state": "PENDING"}
+        }}}}),
+    );
+    let (mut t, runs) = reviewing("joined_pending", vec![joined], review_threads(1), cx).await;
+
+    // Sent to be posted at once, it went into a pending review started elsewhere.
+    let reply = Mutation::PostReply {
+        thread: "PRRT_0".into(),
+        body: "Agreed.".into(),
+    };
+    let sent = t.update(|poller, cx| poller.send_review(pr(1), "PR_1".into(), reply, cx));
+    t.run_until(20);
+    let sent = sent.await.unwrap();
+    assert_eq!(sent.joined_pending.as_deref(), Some("PRR_elsewhere"));
+    assert_eq!((runs.threads(), runs.pending()), (2, 2));
+    assert_eq!(runs.timeline(), Vec::<bool>::new());
+}
+
+#[gpui::test]
+async fn a_write_refused_because_its_review_changed_elsewhere_reads_it_again(
+    cx: &mut TestAppContext,
+) {
+    use github::review_writes::Rejection;
+    use review::pending::{Mutation, NewThread};
+    use review::threads::{Line, Lines};
+
+    let r = recorded();
+    let thread = |line: u32| NewThread {
+        path: "a.rs".into(),
+        lines: Some(Lines::one(Line::right(line))),
+        body: "Hm.".into(),
+    };
+    let added = |line: u32| {
+        serde_json::json!({
+            "pullRequestReviewId": "PRR_1", "path": "a.rs", "body": "Hm.",
+            "subjectType": "LINE", "line": line, "side": "RIGHT"
+        })
+    };
+    let answers = vec![
+        // Deleted elsewhere: "not found".
+        mutation(
+            &r[1],
+            "AddPullRequestReviewThread",
+            added(1),
+            serde_json::json!({
+                "data": {"addPullRequestReviewThread": null},
+                "errors": [{
+                    "type": "NOT_FOUND", "path": ["addPullRequestReviewThread"],
+                    "message": "Could not resolve to a node with the global id of 'PRR_1'."
+                }]
+            }),
+        ),
+        // A line outside the diff, in a review still pending.
+        mutation(
+            &r[1],
+            "AddPullRequestReviewThread",
+            added(9),
+            serde_json::json!({"data": {"addPullRequestReviewThread": {"thread": null}}}),
+        ),
+        mutation(
+            &r[1],
+            "ReviewState",
+            serde_json::json!({"id": "PRR_1"}),
+            serde_json::json!({"data": {"node": {
+                "__typename": "PullRequestReview", "state": "PENDING"
+            }}}),
+        ),
+    ];
+    let (mut t, runs) = reviewing("review_changed", answers, review_threads(1), cx).await;
+
+    let add = |line| Mutation::AddThread {
+        review: "PRR_1".into(),
+        thread: thread(line),
+    };
+    let sent = t.update(|poller, cx| poller.send_review(pr(1), "PR_1".into(), add(1), cx));
+    t.run_until(20);
+    assert!(matches!(
+        sent.await,
+        Err(GithubError::Rejected(Rejection::Gone))
+    ));
+    assert_eq!((runs.threads(), runs.pending()), (2, 2));
+    // Refused as outside the diff, it may still have started a review elsewhere: read again.
+    let sent = t.update(|poller, cx| poller.send_review(pr(1), "PR_1".into(), add(9), cx));
+    t.run_until(30);
+    assert!(matches!(
+        sent.await,
+        Err(GithubError::Rejected(Rejection::NotInDiff))
+    ));
+    assert_eq!((runs.threads(), runs.pending()), (3, 3));
+    assert_eq!(runs.timeline(), Vec::<bool>::new());
+}
+
+#[gpui::test]
+async fn deleting_a_pending_comment_leaves_the_timeline_alone(cx: &mut TestAppContext) {
+    use github::review_writes::CommentId;
+
+    let r = recorded();
+    let deleted = |id: &str| {
+        mutation(
+            &r[1],
+            "DeletePullRequestReviewComment",
+            serde_json::json!({"id": id}),
+            serde_json::json!({"data": {"deletePullRequestReviewComment": {
+                "pullRequestReview": {"id": "PRR_1"}
+            }}}),
+        )
+    };
+    let answers = vec![deleted("PRRC_0"), deleted("PRRC_1")];
+    let threads = pending_review_threads(2, 1);
+    let (mut t, runs) = reviewing("delete_pending", answers, threads, cx).await;
+
+    // Your pending review isn't in the timeline: the check's count of its comments reads it again.
+    let pending = CommentId::Thread("PRRC_0".into());
+    let delete = t.update(|poller, cx| poller.delete_comment(pr(1), pending, cx));
+    t.run_until(20);
+    delete.await.unwrap();
+    assert_eq!(runs.timeline(), Vec::<bool>::new());
+    assert_eq!(runs.threads(), 1);
+    // A posted one's review is, and may be past the newest page.
+    let posted = CommentId::Thread("PRRC_1".into());
+    let delete = t.update(|poller, cx| poller.delete_comment(pr(1), posted, cx));
+    t.run_until(30);
+    delete.await.unwrap();
+    assert_eq!(runs.timeline(), [false]);
+}

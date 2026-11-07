@@ -8,8 +8,9 @@
 //! when an older item may have changed:
 //!
 //! - the page doesn't join what Lo has, or the counts don't move together, as after a deletion;
-//! - the time of the latest change to the items it shows moved, but nothing on the page changed,
-//!   as after an older comment is edited or hidden;
+//! - the time of the newest item it shows moved, but nothing on the page changed, as when an
+//!   item is added while an older one is deleted. An edit doesn't move that time (checked live),
+//!   so an older comment's edit by someone else shows at the next full read;
 //! - the page has a new dismissal of a review it doesn't hold, or a new force-push to a commit it
 //!   doesn't hold, which changes or replaces older items;
 //! - and at least every [`READ_IN_FULL_EVERY`], for what none of those show, such as checks run
@@ -65,7 +66,8 @@ pub struct PullRequestTimeline {
     /// How many items GitHub counted when it was read (`filteredCount`). A read of the newest
     /// page joins this one only when the two counts differ by as many items as it adds.
     pub count: usize,
-    /// The latest time of the items the timeline shows, edits included, when it was read.
+    /// When the newest item the timeline shows was made, as of when it was read. An edit doesn't
+    /// move it (checked live, in the `review_writes_e2e_23_*` recordings).
     #[schemars(with = "Option<String>")]
     pub shown_updated_at: Option<chrono::DateTime<Utc>>,
     /// When it was last read in full. Reads in between ask only for its newest page.
@@ -404,7 +406,7 @@ struct Page {
     /// How many items the timeline has, when the page was read without a cursor; otherwise how
     /// many come before the cursor.
     count: usize,
-    /// The latest time of the items the timeline shows, edits included.
+    /// When the newest item the timeline shows was made. An edit doesn't move it.
     shown_updated_at: Option<chrono::DateTime<Utc>>,
     has_previous_page: bool,
     start_cursor: Option<String>,
@@ -531,12 +533,25 @@ impl CacheEntry for PullRequestTimeline {
 }
 
 impl CachedRead for PullRequestTimeline {
-    /// The check counts the items the timeline shows and holds the latest one's time, edits
-    /// included; so an item added, edited or deleted changes them, and a mention or a
-    /// subscription doesn't. With them, the latest commit's checks, and when the description was
-    /// last edited.
-    const WATCHED: &'static [&'static str] =
-        &["/timelineEvents", "/statusCheckRollup", "/lastEditedAt"];
+    /// The check counts the items the timeline shows and holds when the newest was made; so an
+    /// item added or deleted changes them, and a mention or a subscription doesn't. An edit
+    /// changes neither (checked live), but it moves the pull request's own `updatedAt`, which a
+    /// new title and other changes move too: reading the newest page again then is cheap, and it
+    /// shows an edit there at the next poll. It never reads in full on that alone, which could
+    /// cost 10 pages for each edit, so an edit of an older item by someone else shows at the next
+    /// full read, within the hour; Lo's own edits read it in full themselves
+    /// ([`crate::poll::Poller::edit_comment`]). With them, the latest commit's checks, and when
+    /// the description was last edited.
+    ///
+    /// (`pull_request_check.graphql`'s comment on `timelineEvents` still says an edit moves its
+    /// time. Changing it changes the query's hash, so it waits for the next change to that query,
+    /// which re-records its cassettes anyway.)
+    const WATCHED: &'static [&'static str] = &[
+        "/timelineEvents",
+        "/statusCheckRollup",
+        "/lastEditedAt",
+        "/updatedAt",
+    ];
 }
 
 impl GithubClient {
@@ -1166,7 +1181,8 @@ mod tests {
         let mut items = plain(&["a", "b", "c", "d"]);
         items[0].1 = comment("Old");
         let known = timeline(&items, 0, 4);
-        // An older comment edited or hidden: the time moved, but the page is as it was.
+        // The newest item's time moved, but the page is as it was: an item came and an older one
+        // went.
         assert!(
             known
                 .joined(&page(&plain(&["c", "d"]), 4, 1), 100)
