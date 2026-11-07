@@ -145,14 +145,18 @@ Lo keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`,
 Lo binds its keys over Zed's. Each module binds its own in its `bind_keys`: `review_ui`'s
 `bind_keys` (`crates/review_ui/src/lib.rs`) calls those of `review_ui`'s modules, the PR tab's calls
 its parts' (`pr_tab/keys.rs`), and the Accounts modal binds its own (`crates/lo/src/accounts_ui.rs`).
-Keys for reading the pull request go through `pr_tab::keys::reading`. Tests in both crates read the
-context stack of every place in the window that takes keys, and fail when two of Lo's bindings both
-hold there with the same keystrokes, or with one's starting the other's (`review_ui::key_clashes`).
-A key that's added, changed or removed changes its row here.
+Keys for reading the diff go through `pr_tab::keys::reading`. Tests in both crates read the
+context stack of each place in the window that takes keys, from a window showing it. They fail when
+one of Lo's bindings holds in none of the places, so a binding in a new context needs a place, and
+when two of Lo's bindings both hold in one with the same keystrokes, or with one's starting the
+other's (`review_ui::key_clashes`). A key that's added, changed or removed changes its row here.
 
 Where a key works, in the PR tab (`crates/review_ui/src/pr_tab/keys.rs`): *tab* is anywhere in it
 (`KEY_CONTEXT`), *reading* is the tab outside any text box in it (`READING_CONTEXT`), *diff* is the
-diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CONTEXT`). Elsewhere:
+diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CONTEXT`). The tab's
+context says what its middle shows, `middle=diff` or `middle=view`, and keys that act on the diff
+hold only while it shows: *diff*, *reading the diff* (`DIFF_READING_CONTEXT`) and *file list, the
+diff showing* (`DIFF_FILE_LIST_CONTEXT`). Elsewhere:
 *window* is anywhere in Lo's window (`Workspace`), *open box* is the box `cmd-o` opens
 (`OpenPullRequest > Editor`), *recent list* is the list of recent pull requests
 (`RecentPullRequests`), *account picker* is the question about which account to use
@@ -168,16 +172,16 @@ diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CO
 | `cmd-r` | tab | `review_ui::ToggleThreads` | Shows or hides the threads panel |
 | `ctrl-o` | tab | `pane::GoBack` | Goes back to where the diff's cursor was before it jumped |
 | `ctrl-i` | tab | `pane::GoForward` | Goes forward again |
-| `e` | reading | `review_ui::ToggleViewed` | Marks the current file viewed and moves to the next unviewed file, or clears a viewed file's mark |
-| `] f` | reading | `review_ui::NextFile` | Moves to the next file in the diff |
-| `[ f` | reading | `review_ui::PreviousFile` | Moves to the previous file in the diff |
-| `] c` | reading | `review_ui::NextChange` | Moves to the next change, in whichever file it is |
-| `[ c` | reading | `review_ui::PreviousChange` | Moves to the previous change, in whichever file it is |
+| `e` | reading the diff | `review_ui::ToggleViewed` | Marks the current file viewed and moves to the next unviewed file, or clears a viewed file's mark |
+| `] f` | reading the diff | `review_ui::NextFile` | Moves to the next file in the diff |
+| `[ f` | reading the diff | `review_ui::PreviousFile` | Moves to the previous file in the diff |
+| `] c` | reading the diff | `review_ui::NextChange` | Moves to the next change, in whichever file it is |
+| `[ c` | reading the diff | `review_ui::PreviousChange` | Moves to the previous change, in whichever file it is |
 | `alt-o` | reading | `review_ui::ToggleFileOrder` | Switches the file list between review order and path order |
 | `tab` | diff | `review_ui::SwitchSide` | Side by side, moves the cursor to the diff's other side |
-| `alt-v` | diff, file list | `review_ui::ToggleDiffLayout` | Shows the diff inline or side by side |
-| `alt-w` | diff, file list | `review_ui::ToggleWhitespace` | Hides changes to whitespace alone, or shows them again |
-| `alt-a` | diff, file list | `review_ui::ExpandFile` | Opens the file at the cursor, or the one selected in the file list, when it's collapsed, loads it when it's too large to have loaded, and otherwise switches it between its changes and its whole text |
+| `alt-v` | diff; file list, the diff showing | `review_ui::ToggleDiffLayout` | Shows the diff inline or side by side |
+| `alt-w` | diff; file list, the diff showing | `review_ui::ToggleWhitespace` | Hides changes to whitespace alone, or shows them again |
+| `alt-a` | diff; file list, the diff showing | `review_ui::ExpandFile` | Opens the file at the cursor, or the one selected in the file list, when it's collapsed, loads it when it's too large to have loaded, and otherwise switches it between its changes and its whole text |
 | `o` | file list | `review_ui::ToggleFileOrder` | Switches the file list between review order and path order |
 | `j` | file list | `menu::SelectNext` | Selects the next file, and scrolls the diff to it |
 | `k` | file list | `menu::SelectPrevious` | Selects the previous file, and scrolls the diff to it |
