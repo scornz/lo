@@ -1,0 +1,48 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "AddPullRequestReview",
+    "variables": {
+      "pullRequestId": "PR_kwDOVleUfc8AAAABNeGO7Q",
+      "commitOID": "5a48d2255817f0f19dfdfc3168925f0cdb85c630",
+      "threads": [
+        {
+          "body": "Fixture E11: a line thread, the first comment of a pending review.",
+          "line": 10,
+          "path": "e11/review.txt",
+          "side": "RIGHT"
+        }
+      ]
+    },
+    "query_sha256": "17ac10967c9a6bf346be6b9bf98c5e3ad4c704b65b45396aae8af8b8178c5851"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4928",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "72"
+    },
+    "body": {
+      "data": {
+        "addPullRequestReview": {
+          "pullRequestReview": {
+            "id": "PRR_kwDOVleUfc8AAAABWlR4mQ",
+            "state": "PENDING",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOVleUfc8AAAABDD6ZnQ"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

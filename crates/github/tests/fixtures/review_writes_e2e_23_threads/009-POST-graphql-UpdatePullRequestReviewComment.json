@@ -1,0 +1,43 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "UpdatePullRequestReviewComment",
+    "variables": {
+      "id": "PRRC_kwDOVleUfc8AAAABDD6fyw",
+      "body": ""
+    },
+    "query_sha256": "9a66dfb07e6ae1b2df5b455b472fb2e3f2cc7cf917220ae6900c4f6d486afd60"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4899",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "101"
+    },
+    "body": {
+      "data": {
+        "updatePullRequestReviewComment": null
+      },
+      "errors": [
+        {
+          "type": "UNPROCESSABLE",
+          "path": [
+            "updatePullRequestReviewComment"
+          ],
+          "locations": [
+            {
+              "line": 3,
+              "column": 3
+            }
+          ],
+          "message": "Body can't be blank"
+        }
+      ]
+    }
+  }
+}

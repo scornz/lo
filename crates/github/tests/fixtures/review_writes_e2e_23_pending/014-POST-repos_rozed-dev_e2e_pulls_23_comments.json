@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/repos/rozed-dev/e2e/pulls/23/comments",
+    "body_sha256": "26496c3b3ebda67d45fc3607c3cf5863362aa2d2ec9866755e75fedc987f2b66"
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-github-api-version-selected": "2022-11-28",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4994",
+      "x-ratelimit-reset": "1794034152",
+      "x-ratelimit-resource": "core",
+      "x-ratelimit-used": "6"
+    },
+    "body": {
+      "message": "Validation Failed",
+      "errors": [
+        {
+          "resource": "PullRequestReview",
+          "code": "custom",
+          "field": "user_id",
+          "message": "user_id can only have one pending review per pull request"
+        }
+      ],
+      "documentation_url": "https://docs.github.com/rest/pulls/comments#create-a-review-comment-for-a-pull-request",
+      "status": "422"
+    }
+  }
+}

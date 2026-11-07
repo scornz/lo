@@ -1,0 +1,48 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "AddPullRequestReviewThread",
+    "variables": {
+      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlR4mQ",
+      "path": "e11/review.txt",
+      "body": "Fixture E11: a range from the base's line 10 to the head's line 11.",
+      "subjectType": "LINE",
+      "line": 11,
+      "side": "RIGHT",
+      "startLine": 10,
+      "startSide": "LEFT"
+    },
+    "query_sha256": "4624cd7587d73c9a3571cc35ea71da931d03296ebbb6dc93f6bb3fd4e9cacd16"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4926",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "74"
+    },
+    "body": {
+      "data": {
+        "addPullRequestReviewThread": {
+          "thread": {
+            "id": "PRRT_kwDOVleUfc60y13u",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOVleUfc8AAAABDD6anA",
+                  "pullRequestReview": {
+                    "id": "PRR_kwDOVleUfc8AAAABWlR4mQ"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

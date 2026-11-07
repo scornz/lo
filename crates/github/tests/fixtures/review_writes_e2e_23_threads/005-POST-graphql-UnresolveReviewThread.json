@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "UnresolveReviewThread",
+    "variables": {
+      "threadId": "PRRT_kwDOVleUfc60y104"
+    },
+    "query_sha256": "dafb664e4eafb7698d8161c8dc7ca7d303107e31325b2869d21623dcd067c4c8"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4903",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "97"
+    },
+    "body": {
+      "data": {
+        "unresolveReviewThread": {
+          "thread": {
+            "id": "PRRT_kwDOVleUfc60y104",
+            "isResolved": false
+          }
+        }
+      }
+    }
+  }
+}

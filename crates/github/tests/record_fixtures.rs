@@ -1,7 +1,8 @@
 //! Records the cassettes in `tests/fixtures` from `rozed-dev/playground`, a private repo where PR
 //! #1 (`stack-a` → `main`) and PR #2 (`stack-b` → `stack-a`) form stack #3. The push histories
 //! and stacks come from `rozed-dev/e2e`'s fixtures (`script/e2e/README.md`), and from
-//! `sharkdp/fd` and `github/gh-stack`, read only.
+//! `sharkdp/fd` and `github/gh-stack`, read only. `review_writes_e2e_23` writes comments and
+//! reviews to E11, `rozed-dev/e2e#23`, a fixture of rozed-bot's own, and records them.
 //!
 //! Each test is ignored; run them by hand, one cassette or all:
 //!
@@ -59,18 +60,32 @@ fn record_with_schema<F: Future<Output = ()>>(
     schema: Option<String>,
     run: impl FnOnce(GithubClient) -> F,
 ) {
-    let token = token();
-    let http = Arc::new(
+    record_as(token(), name, description, repo, schema, run);
+}
+
+fn http() -> Arc<reqwest_client::ReqwestClient> {
+    Arc::new(
         reqwest_client::ReqwestClient::user_agent(&github::user_agent())
             .expect("starting the HTTP client"),
-    );
+    )
+}
+
+/// [`record_with_schema`] with `token`, returning what `run` returns.
+fn record_as<T, F: Future<Output = T>>(
+    token: Token,
+    name: &str,
+    description: &str,
+    repo: &str,
+    schema: Option<String>,
+    run: impl FnOnce(GithubClient) -> F,
+) -> T {
     let recorder = RecordingHttpClient::new(
-        http,
+        http(),
         &fixtures_dir().join(name),
         vec![token.expose().as_bytes().to_vec()],
     )
     .expect("starting the recorder");
-    block_on(run(GithubClient::new(Arc::new(recorder.clone()), token)));
+    let result = block_on(run(GithubClient::new(Arc::new(recorder.clone()), token)));
     recorder
         .finish(CassetteInfo {
             description: description.into(),
@@ -83,6 +98,7 @@ fn record_with_schema<F: Future<Output = ()>>(
             schema,
         })
         .expect("finishing the cassette");
+    result
 }
 
 #[test]
@@ -861,4 +877,176 @@ fn rest_pull_files_berry_7077() {
                 .unwrap();
         },
     );
+}
+
+// The replay tests read every field of what the scenarios saw; this prints some.
+#[allow(dead_code)]
+#[path = "scenarios/review_writes.rs"]
+mod scenarios;
+
+/// Writes to E11, `rozed-dev/e2e#23` (`script/e2e/README.md`), as rozed-bot, recording each of
+/// `scenarios`' writes into a cassette of its own, then deletes the comments it can. Submitted
+/// reviews stay: GitHub doesn't delete them. Prints what GitHub answered.
+#[test]
+#[ignore = "writes to rozed-dev/e2e#23 as rozed-bot and records it; run by hand"]
+fn review_writes_e2e_23() {
+    use github::review_writes::CommentId;
+
+    let token = token();
+    let plain = GithubClient::new(http(), token.clone());
+    // Writes go only to rozed-bot's own fixture: check whose token it is first.
+    let user = block_on(plain.user()).unwrap();
+    assert_eq!(user.user.login, scenarios::BOT);
+    let pause = |duration| std::thread::sleep(duration);
+    let record = |name: &str, description: &str| {
+        (
+            format!("review_writes_e2e_23_{name}"),
+            description.to_string(),
+        )
+    };
+
+    let (name, description) = record(
+        "pending",
+        "rozed-bot's pending review on rozed-dev/e2e#23 (E11): started with a line thread, then a \
+         range from the base to the head and a file-level thread, a line outside the diff and a \
+         file the PR doesn't change refused, a reply, a comment posted at once refused while it's \
+         pending, then submitted as a comment",
+    );
+    let pending = record_as(
+        token.clone(),
+        &name,
+        &description,
+        scenarios::REPO,
+        schema_commit(),
+        |client| async move { scenarios::pending(&client, &pause).await },
+    );
+    eprintln!("pending: started {:?}", pending.started);
+    eprintln!("pending: after start {:?}", pending.after_start);
+    eprintln!(
+        "pending: range {:?}, file {:?}",
+        pending.range, pending.file
+    );
+    eprintln!("pending: outside {:?}", pending.outside);
+    eprintln!("pending: unchanged file {:?}", pending.unchanged);
+    eprintln!("pending: threads {:#?}", pending.threads.threads());
+    eprintln!("pending: reply {:?}", pending.reply);
+    eprintln!("pending: before submit {:?}", pending.before_submit);
+    eprintln!(
+        "pending: check's pending review {:?}",
+        pending.check.viewer_pending_review
+    );
+    eprintln!(
+        "pending: posted while pending {:?}",
+        pending.post_while_pending
+    );
+    eprintln!(
+        "pending: file comment while pending {:?}",
+        pending.file_comment_while_pending
+    );
+    eprintln!(
+        "pending: submitted {:?}, after {:?}",
+        pending.submitted, pending.after
+    );
+
+    let (name, description) = record(
+        "posted",
+        "Comments posted at once on rozed-dev/e2e#23 (E11) by rozed-bot, its author: a reply, a \
+         line thread, a REST file-level comment and a review with only a summary; approving, \
+         requesting changes and an empty comment refused; then a reply that starts an empty \
+         pending review, submitted without a summary",
+    );
+    let posted = record_as(
+        token.clone(),
+        &name,
+        &description,
+        scenarios::REPO,
+        schema_commit(),
+        |client| async move { scenarios::posted(&client, &pause).await },
+    );
+    eprintln!("posted: reply {:?}", posted.reply);
+    eprintln!("posted: line {:?}, file {:?}", posted.line, posted.file);
+    eprintln!("posted: summary {:?}", posted.summary);
+    eprintln!("posted: approve {:?}", posted.approve);
+    eprintln!("posted: request changes {:?}", posted.request_changes);
+    eprintln!("posted: empty {:?}", posted.empty);
+    eprintln!(
+        "posted: started empty {:?}, joined {:?}, submitted {:?}, after {:?}",
+        posted.started_empty, posted.joined, posted.submitted_empty, posted.after
+    );
+
+    let (name, description) = record(
+        "threads",
+        "On rozed-dev/e2e#23 (E11), as rozed-bot: a thread resolved and unresolved, a reply \
+         edited, edited blank, and deleted twice, with the check read after each",
+    );
+    let threads = record_as(
+        token.clone(),
+        &name,
+        &description,
+        scenarios::REPO,
+        schema_commit(),
+        |client| async move { scenarios::threads(&client, &pause).await },
+    );
+    eprintln!(
+        "threads: resolved {:?}, unresolved {:?}",
+        threads.resolved, threads.unresolved
+    );
+    eprintln!(
+        "threads: edited {:?}, blank {:?}",
+        threads.edited, threads.blank
+    );
+    eprintln!(
+        "threads: deleted {:?}, again {:?}",
+        threads.deleted, threads.deleted_again
+    );
+    for (step, check) in threads.checks.iter().enumerate() {
+        eprintln!(
+            "threads: check {step}: threads {:?}, timeline {:?}",
+            serde_json::to_value(&check.review_threads).unwrap(),
+            serde_json::to_value(&check.timeline_events).unwrap()
+        );
+    }
+
+    let (name, description) = record(
+        "conversation",
+        "On rozed-dev/e2e#23 (E11), as rozed-bot: two comments on the pull request itself, the \
+         first edited, then both deleted, with the check read before and after each step",
+    );
+    let conversation = record_as(
+        token.clone(),
+        &name,
+        &description,
+        scenarios::REPO,
+        schema_commit(),
+        |client| async move { scenarios::conversation(&client, &pause).await },
+    );
+    eprintln!(
+        "conversation: edited {:?}, deleted {:?}",
+        conversation.edited, conversation.deleted
+    );
+    for (step, check) in conversation.checks.iter().enumerate() {
+        eprintln!(
+            "conversation: check {step}: comments {:?}, timeline {:?}, timeline items {:?}",
+            serde_json::to_value(&check.comments).unwrap(),
+            serde_json::to_value(&check.timeline_events).unwrap(),
+            serde_json::to_value(&check.timeline_items).unwrap()
+        );
+    }
+
+    // Clean up, unrecorded: every comment of rozed-bot's these wrote. A thread goes with its last.
+    block_on(async {
+        let threads = plain.review_threads(&scenarios::pull()).await.unwrap();
+        let comments = (threads.nodes.iter())
+            .flat_map(|thread| thread.comments.nodes.iter().flatten().flatten())
+            .filter(|comment| {
+                comment.author.as_ref().map(|author| author.login.as_str()) == Some(scenarios::BOT)
+                    && comment.body.starts_with(scenarios::MARK)
+            });
+        for comment in comments {
+            let deleted = plain
+                .delete_comment(&CommentId::Thread(comment.id.clone()))
+                .await;
+            eprintln!("clean-up: deleted {}: {deleted:?}", comment.id);
+        }
+    });
 }

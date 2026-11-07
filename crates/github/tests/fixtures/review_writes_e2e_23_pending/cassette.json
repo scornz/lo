@@ -1,0 +1,6 @@
+{
+  "description": "rozed-bot's pending review on rozed-dev/e2e#23 (E11): started with a line thread, then a range from the base to the head and a file-level thread, a line outside the diff and a file the PR doesn't change refused, a reply, a comment posted at once refused while it's pending, then submitted as a comment",
+  "recorded_at": "2026-11-07T06:02:11Z",
+  "repo": "rozed-dev/e2e",
+  "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
+}

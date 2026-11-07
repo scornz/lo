@@ -1,0 +1,44 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "AddPullRequestReviewThread",
+    "variables": {
+      "pullRequestReviewId": "PRR_kwDOVleUfc8AAAABWlR4mQ",
+      "path": "e11/notes.md",
+      "body": "Fixture E11: a file-level thread.",
+      "subjectType": "FILE"
+    },
+    "query_sha256": "4624cd7587d73c9a3571cc35ea71da931d03296ebbb6dc93f6bb3fd4e9cacd16"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4925",
+      "x-ratelimit-reset": "1794032211",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "75"
+    },
+    "body": {
+      "data": {
+        "addPullRequestReviewThread": {
+          "thread": {
+            "id": "PRRT_kwDOVleUfc60y15Q",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOVleUfc8AAAABDD6bFg",
+                  "pullRequestReview": {
+                    "id": "PRR_kwDOVleUfc8AAAABWlR4mQ"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
