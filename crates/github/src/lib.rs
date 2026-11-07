@@ -13,6 +13,7 @@ mod client;
 pub mod credentials;
 pub mod db;
 pub mod device_flow;
+pub mod drafts;
 mod error;
 pub mod files;
 pub mod gh_import;

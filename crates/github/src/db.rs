@@ -153,6 +153,27 @@ impl Domain for LoDb {
                 FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
             ) STRICT;
         ),
+        sql!(
+            // Text typed into comment boxes and not yet posted, per account, pull request and
+            // comment box, so a crash or a restart loses nothing. Not cached data, so clearing the
+            // cache keeps them; removing the account removes its rows.
+            CREATE TABLE drafts(
+                host TEXT NOT NULL,
+                account TEXT NOT NULL COLLATE NOCASE,
+                owner TEXT NOT NULL COLLATE NOCASE,
+                repo TEXT NOT NULL COLLATE NOCASE,
+                number INTEGER NOT NULL,
+                // The comment box, as JSON (crate::drafts): a new thread's revision, file and
+                // lines, the thread a reply answers, the comment an edit changes, the summary or
+                // the conversation. Lo writes one box the same way each time.
+                place TEXT NOT NULL,
+                text TEXT NOT NULL,
+                // When it last changed, in seconds since the Unix epoch.
+                saved_at INTEGER NOT NULL,
+                PRIMARY KEY(host, account, owner, repo, number, place),
+                FOREIGN KEY(host, account) REFERENCES accounts(host, login) ON DELETE CASCADE
+            ) STRICT;
+        ),
     ];
 }
 
@@ -816,6 +837,68 @@ mod tests {
                 }]
             );
             assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
+        });
+    }
+
+    /// Lo's database as it was before drafts: with revision marks.
+    struct BeforeDrafts;
+
+    impl Domain for BeforeDrafts {
+        const NAME: &str = LoDb::NAME;
+        // The first five steps.
+        const MIGRATIONS: &[&str] = LoDb::MIGRATIONS.split_at(5).0;
+    }
+
+    #[test]
+    fn upgrades_a_database_from_before_drafts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lo.sqlite");
+        futures::executor::block_on(async {
+            let old = ThreadSafeConnection::builder::<BeforeDrafts>(&path.to_string_lossy(), true)
+                .with_db_initialization_query(DB_INITIALIZE_QUERY)
+                .with_connection_initialize_query(CONNECTION_INITIALIZE_QUERY)
+                .build()
+                .await
+                .unwrap();
+            old.write(|connection| {
+                connection.exec_bound::<Account>(sql!(
+                    INSERT INTO accounts(host, login, user_id, name, avatar_url, scopes, source, added_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ))?(account("a", 1))?;
+                connection.exec(sql!(
+                    INSERT INTO seen_heads(host, account, owner, repo, number, head, first_seen)
+                    VALUES ("github.com", "a", "o", "r", 1, "h1", 100)
+                ))?()?;
+                connection.exec(sql!(
+                    INSERT INTO last_seen(host, account, owner, repo, number, head, seen_at)
+                    VALUES ("github.com", "a", "o", "r", 1, "h1", 100)
+                ))?()
+            })
+            .await
+            .unwrap();
+            drop(old);
+
+            let db = LoDb::open(&path).await.unwrap();
+            let pull = crate::PullRef::new("o", "r", 1);
+            let marks = crate::revision_marks::RevisionMarks::new(db.clone());
+            assert_eq!(marks.last_seen("a", &pull).unwrap().as_deref(), Some("h1"));
+            assert_eq!(marks.seen_heads(&pull).unwrap().len(), 1);
+            let drafts = crate::drafts::DraftStore::new(db);
+            assert!(drafts.load().unwrap().is_empty());
+            let key = review::drafts::DraftKey {
+                account: "a".into(),
+                pull_request: review::drafts::PullRequestId {
+                    owner: "o".into(),
+                    repo: "r".into(),
+                    number: 1,
+                },
+                place: review::drafts::Place::Summary,
+            };
+            drafts
+                .save(&key, "Looks good.", std::time::SystemTime::now())
+                .await
+                .unwrap();
+            assert_eq!(drafts.load().unwrap().get(&key), Some("Looks good."));
         });
     }
 
