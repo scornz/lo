@@ -34,7 +34,7 @@ requests their coding agents open.
 GitHub's web UI is fine for the odd review. When reviewing is most of your day, you want what an
 editor gives you: a fast diff, real code navigation and a key for everything. Lo is built on
 [Zed](https://zed.dev)'s crates, used as libraries, so its diff is Zed's side-by-side diff and its
-code view is Zed's editor. Around them, Lo is built for reviewing many pull requests: review
+code view is Zed's editor. Around them, Lo adds what reviewing many pull requests needs: review
 order and viewed marks today, then stacks, revisions and merging.
 
 Lo keeps to a few rules:
@@ -56,8 +56,8 @@ Lo keeps to a few rules:
 - **Instant, then whole.** GitHub's diff shows at once while Lo copies the pull request into a
   local partial clone. Then Zed's side-by-side diff of whole files takes over, at the same file and
   line.
-- **Review order.** Each source file comes with its tests, then config, then generated files. One
-  key switches to path order.
+- **Review order.** Each source file is followed by its tests, then come config files, then
+  generated ones. One key switches to path order.
 - **Less noise.** Generated files, lockfiles and very large files start collapsed, each saying why.
   One key shows the diff inline, and another hides changes to whitespace alone.
 - **Viewed marks.** `e` sets GitHub's own viewed mark on a file and moves to the next unviewed one.
