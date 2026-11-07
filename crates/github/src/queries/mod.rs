@@ -11,14 +11,18 @@ use std::collections::HashSet;
 use crate::error::GithubError;
 
 pub mod mark_file_as_viewed;
+pub mod merged_pull_requests;
 pub mod open_pull_requests;
 pub mod pull_request;
 pub mod pull_request_check;
 pub mod pull_request_revisions;
+pub mod stack_layers;
+pub mod trunk_rules;
 pub mod unmark_file_as_viewed;
 pub mod viewer;
 
 pub use mark_file_as_viewed::MarkFileAsViewed;
+pub use merged_pull_requests::{BranchLookup, MergedPullRequest, MergedPullRequests, StackEntry};
 pub use open_pull_requests::{OpenPullRequest, OpenPullRequestList, OpenPullRequests};
 pub use pull_request::{
     FileViewedState, PullRequest, PullRequestData, PullRequestFile, PullRequestState,
@@ -28,6 +32,8 @@ pub use pull_request_check::{
     PullRequestReviewDecision, StatusState,
 };
 pub use pull_request_revisions::{PullRequestRevisions, PullRequestRevisionsData};
+pub use stack_layers::{StackLayer, StackLayerList, StackLayers, ViewedFiles};
+pub use trunk_rules::{TrunkRuleList, TrunkRules};
 pub use unmark_file_as_viewed::UnmarkFileAsViewed;
 pub use viewer::{Viewer, ViewerData};
 

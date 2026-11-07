@@ -737,7 +737,7 @@ impl GithubClient {
 
 /// Whether an error fails a whole push history: the network, the rate limit and the token stop
 /// every request after it too, and the poller waits them out.
-fn stops_the_read(error: &GithubError) -> bool {
+pub(crate) fn stops_the_read(error: &GithubError) -> bool {
     matches!(
         error,
         GithubError::Network(_)

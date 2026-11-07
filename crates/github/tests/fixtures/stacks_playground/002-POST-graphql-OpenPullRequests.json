@@ -1,0 +1,150 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "OpenPullRequests",
+    "variables": {
+      "owner": "rozed-dev",
+      "name": "playground",
+      "first": 100,
+      "after": null,
+      "merged": 20
+    },
+    "query_sha256": "1988bca2b12653d0a9337df73b8b9e4796a177e2d44a0d34bff05d234ac3e88d"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4979",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "21"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4979,
+          "used": 21,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "defaultBranchRef": {
+            "name": "main"
+          },
+          "pullRequests": {
+            "totalCount": 2,
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQwODoxNTowN1rPAAAAATUMBQc="
+            },
+            "nodes": [
+              {
+                "id": "PR_kwDOVk6v9M8AAAABNQwF5A",
+                "number": 2,
+                "title": "feat: stack layer B",
+                "isDraft": false,
+                "createdAt": "2026-11-06T08:15:08Z",
+                "updatedAt": "2026-11-06T08:15:08Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "stack-a",
+                "baseRefOid": "b046244d9569964088e952243e5e557312322488",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "b046244d9569964088e952243e5e557312322488"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "stack-b",
+                "headRefOid": "d712aa7652cc723fee5fd9b3eba867b0480d40da",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d712aa7652cc723fee5fd9b3eba867b0480d40da"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 3,
+                    "size": 2,
+                    "baseRefName": "main"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDOVk6v9M8AAAABNQwFBw",
+                "number": 1,
+                "title": "feat: stack layer A",
+                "isDraft": false,
+                "createdAt": "2026-11-06T08:15:07Z",
+                "updatedAt": "2026-11-06T08:15:07Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rozed-bot"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "6ce218eb1930c49db64d5744c76a6739d4525e82",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "6ce218eb1930c49db64d5744c76a6739d4525e82"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "stack-a",
+                "headRefOid": "b046244d9569964088e952243e5e557312322488",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "rozed-dev"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "b046244d9569964088e952243e5e557312322488"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 1,
+                  "stack": {
+                    "number": 3,
+                    "size": 2,
+                    "baseRefName": "main"
+                  }
+                }
+              }
+            ]
+          },
+          "mergedPullRequests": {
+            "nodes": []
+          }
+        }
+      }
+    }
+  }
+}

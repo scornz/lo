@@ -1,0 +1,30 @@
+# The branch rulesets that apply to a repository, its organization's included, with what each one
+# enforces: which of them name the repository's trunks (`crate::trunks`). Anyone who can read the
+# repository sees its active rulesets. It costs 1 point: 101 connections.
+query TrunkRules($owner: String!, $name: String!) {
+  rateLimit {
+    cost
+    limit
+    remaining
+    used
+    resetAt
+  }
+  repository(owner: $owner, name: $name) {
+    rulesets(first: 100, targets: [BRANCH]) {
+      nodes {
+        enforcement
+        conditions {
+          refName {
+            include
+            exclude
+          }
+        }
+        rules(first: 50) {
+          nodes {
+            type
+          }
+        }
+      }
+    }
+  }
+}

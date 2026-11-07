@@ -1,0 +1,4171 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.github.com/graphql",
+    "operation": "OpenPullRequests",
+    "variables": {
+      "owner": "cli",
+      "name": "cli",
+      "first": 100,
+      "after": null,
+      "merged": 20
+    },
+    "query_sha256": "1988bca2b12653d0a9337df73b8b9e4796a177e2d44a0d34bff05d234ac3e88d"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "x-ratelimit-limit": "5000",
+      "x-ratelimit-remaining": "4968",
+      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-resource": "graphql",
+      "x-ratelimit-used": "32"
+    },
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1,
+          "limit": 5000,
+          "remaining": 4968,
+          "used": 32,
+          "resetAt": "2026-11-07T04:10:20Z"
+        },
+        "repository": {
+          "defaultBranchRef": {
+            "name": "trunk"
+          },
+          "pullRequests": {
+            "totalCount": 59,
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNC0xMC0zMFQwNTo0MDowNlrOgFQzGQ=="
+            },
+            "nodes": [
+              {
+                "id": "PR_kwDODKw3uc8AAAABNUnlvA",
+                "number": 14964,
+                "title": "chore(deps): Bump the codeql-actions group with 3 updates",
+                "isDraft": false,
+                "createdAt": "2026-11-06T14:03:12Z",
+                "updatedAt": "2026-11-07T02:48:00Z",
+                "author": {
+                  "__typename": "Bot",
+                  "login": "dependabot"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "eeb44bc432c0107de002dadd34a61b4e2bd15882",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "dependabot/github_actions/codeql-actions-92276e7fb0",
+                "headRefOid": "dab49c4e4a2c5b75c27cd8bae26fbb0970316364",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "dab49c4e4a2c5b75c27cd8bae26fbb0970316364"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABNUnlKg",
+                "number": 14963,
+                "title": "chore(deps): Bump github.com/spf13/pflag from 1.0.10 to 1.1.0",
+                "isDraft": false,
+                "createdAt": "2026-11-06T14:03:11Z",
+                "updatedAt": "2026-11-07T02:54:13Z",
+                "author": {
+                  "__typename": "Bot",
+                  "login": "dependabot"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "eeb44bc432c0107de002dadd34a61b4e2bd15882",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "dependabot/go_modules/github.com/spf13/pflag-1.1.0",
+                "headRefOid": "af2d65ef9846c62d16f0d7b41d11abc45104ee68",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "af2d65ef9846c62d16f0d7b41d11abc45104ee68"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqWfxQ",
+                "number": 14927,
+                "title": "Add guided multi-account setup and evaluation",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:20:00Z",
+                "updatedAt": "2026-11-03T21:29:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-07-explain",
+                "baseRefOid": "c70a8cddf12c7352e64e4a93e8155c96bee7e38e",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "c70a8cddf12c7352e64e4a93e8155c96bee7e38e"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-08-evaluation",
+                "headRefOid": "d43c4e3ad3c34332c803a568f85f116e3ee58f19",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "320a9fdc8ed111b79e2892b332442d0fd62dee59"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "1d6b4cff2e9cbf4face7e55ca89c939460b8f006"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c7938065d0639ce6abf13743209150291a757a2f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d43c4e3ad3c34332c803a568f85f116e3ee58f19"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 8,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqVTew",
+                "number": 14926,
+                "title": "Explain account and Git identity selection",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:18:21Z",
+                "updatedAt": "2026-11-03T21:28:58Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-06-ssh",
+                "baseRefOid": "2203164ed0fd16789e7d9e22679cd708a70c13c2",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "2203164ed0fd16789e7d9e22679cd708a70c13c2"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-07-explain",
+                "headRefOid": "c70a8cddf12c7352e64e4a93e8155c96bee7e38e",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "7ee640bf23bc971e71768a2d81f56716c888fa70"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c70a8cddf12c7352e64e4a93e8155c96bee7e38e"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 7,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqUBCQ",
+                "number": 14925,
+                "title": "Preserve existing SSH connection commands",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:16:35Z",
+                "updatedAt": "2026-11-03T21:29:09Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-05-attribution",
+                "baseRefOid": "60bf3dea2782353f8a76b45f680fd11aca4e3c7a",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "60bf3dea2782353f8a76b45f680fd11aca4e3c7a"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-06-ssh",
+                "headRefOid": "2203164ed0fd16789e7d9e22679cd708a70c13c2",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "03c31a6133c6a6d3ae8c2d54c7439312fdaf4137"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2203164ed0fd16789e7d9e22679cd708a70c13c2"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 6,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqSQ7w",
+                "number": 14924,
+                "title": "Add Git attribution and profile email selection",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:14:11Z",
+                "updatedAt": "2026-11-03T21:29:13Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-04-owners",
+                "baseRefOid": "5d653e7e21e65df3fc0d58874e6b5fc0f061b344",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "5d653e7e21e65df3fc0d58874e6b5fc0f061b344"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-05-attribution",
+                "headRefOid": "60bf3dea2782353f8a76b45f680fd11aca4e3c7a",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0e9ab1ef4459f174b69ed070548bdab2669ff062"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "f6643579d125649a78265624e3b7f7afe001f548"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "60bf3dea2782353f8a76b45f680fd11aca4e3c7a"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 5,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqRAyw",
+                "number": 14923,
+                "title": "Add owner-based identity selection",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:12:27Z",
+                "updatedAt": "2026-11-03T21:29:08Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-03-directories",
+                "baseRefOid": "cdec123f39238bf931d65cad1b729aa06bd2b01c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "cdec123f39238bf931d65cad1b729aa06bd2b01c"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-04-owners",
+                "headRefOid": "5d653e7e21e65df3fc0d58874e6b5fc0f061b344",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "576e864e8ab36265fbced23b0651ce413e6bb94e"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "5d653e7e21e65df3fc0d58874e6b5fc0f061b344"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 4,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqP3sA",
+                "number": 14922,
+                "title": "Add directory-tree identity bindings",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:10:55Z",
+                "updatedAt": "2026-11-03T21:29:07Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-02-repository",
+                "baseRefOid": "a123f7736e7aaabe56b4662de888cc2bff1338a6",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "a123f7736e7aaabe56b4662de888cc2bff1338a6"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-03-directories",
+                "headRefOid": "cdec123f39238bf931d65cad1b729aa06bd2b01c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1c39f724029bc6c2b68c7cfea09261742d7b3103"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "cdec123f39238bf931d65cad1b729aa06bd2b01c"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 3,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqOh6g",
+                "number": 14921,
+                "title": "Add repository and worktree identities",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:09:11Z",
+                "updatedAt": "2026-11-03T21:29:16Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "williammartin-multiaccount-draft-01-account",
+                "baseRefOid": "2cbd5515878542a5125ec412045d2b3e365659b6",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "2cbd5515878542a5125ec412045d2b3e365659b6"
+                  },
+                  "refUpdateRule": null
+                },
+                "headRefName": "williammartin-multiaccount-draft-02-repository",
+                "headRefOid": "a123f7736e7aaabe56b4662de888cc2bff1338a6",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "7abc16532727ad0295f5ba2149828686c1dc3da3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a123f7736e7aaabe56b4662de888cc2bff1338a6"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABMqMrbA",
+                "number": 14920,
+                "title": "Add one-command account selection",
+                "isDraft": true,
+                "createdAt": "2026-11-03T21:06:57Z",
+                "updatedAt": "2026-11-05T19:40:45Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "eeb44bc432c0107de002dadd34a61b4e2bd15882",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "williammartin-multiaccount-draft-01-account",
+                "headRefOid": "2cbd5515878542a5125ec412045d2b3e365659b6",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "156ef520992f1ae2d769f4efc1533d5cf1ad38c4"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8aad501cd6ee8454c47b24eb81434543afebde5f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2cbd5515878542a5125ec412045d2b3e365659b6"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": {
+                  "position": 1,
+                  "stack": {
+                    "number": 14928,
+                    "size": 8,
+                    "baseRefName": "trunk"
+                  }
+                }
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABLKVR8g",
+                "number": 14846,
+                "title": "Add shared team PR preparation skill",
+                "isDraft": false,
+                "createdAt": "2026-10-28T02:05:57Z",
+                "updatedAt": "2026-10-28T02:11:55Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "tidy-dev"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "93d24ce9ffefb6cc86bde89b50271457bb0ef9cb",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "tidy-dev-prepare-team-pr-skill",
+                "headRefOid": "aaf296326df06cbafd523c12efa0112cdc53c10c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "2d46f41d86cdf52e0ee98ccca9c50ccb21ccd3af"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b8854df2a7fa975e8e0f41496d52d3a03e0f24ef"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "aaf296326df06cbafd523c12efa0112cdc53c10c"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABLE_4eQ",
+                "number": 14845,
+                "title": "Skip token refresh when gh's state directory is not writable",
+                "isDraft": false,
+                "createdAt": "2026-10-27T17:35:19Z",
+                "updatedAt": "2026-11-02T20:07:58Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "babakks"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "93d24ce9ffefb6cc86bde89b50271457bb0ef9cb",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "babakks/skip-refresh-ro-lock",
+                "headRefOid": "04c4ebf52e7033a83eb38e9741c8ace05bf8617b",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "7ac169aaed1712301fa6920fd7db44908adddfe3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "856786ce5925a1cc05dd91ea5712b59b33e36458"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "04c4ebf52e7033a83eb38e9741c8ace05bf8617b"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABJ1z6Sw",
+                "number": 14783,
+                "title": "release download: add --verify to check immutability and build provenance before downloading",
+                "isDraft": true,
+                "createdAt": "2026-10-21T17:05:55Z",
+                "updatedAt": "2026-10-27T14:10:10Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "mrecachinas"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "7948e8056e45ac3c729b829e0eafe2d0797a95c6",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "release-download-verify",
+                "headRefOid": "654d851d8145b2912fe474ceb0a47681854b37e2",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "mrecachinas"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0985b36ab3eb18e6c1390104442cd23c274097fa"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "84697246003bd3d2aa82859e322a6f9e521383aa"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "86f6863fdd48f097943cd91ab1f7c7516ad35f2d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "654d851d8145b2912fe474ceb0a47681854b37e2"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABJwiFQg",
+                "number": 14781,
+                "title": "Add global feature flag infrastructure",
+                "isDraft": true,
+                "createdAt": "2026-10-21T10:05:39Z",
+                "updatedAt": "2026-10-28T12:50:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "a81663f7d80d620b092dab3056778a79ff3e279c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "williammartin-global-feature-flags",
+                "headRefOid": "2e734c0e0a194e9b323e1b2aea98aea16b0f49d7",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d47d74e00c16641d1f83243ebece0aaf65b4a7fd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d8f4d7b6b4af9930ce9b520f16911baf53293c98"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3d86463c04a8e135abfd6224c6538067bcec8842"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2fc237757b18c4ad69e8068693614feceaf2cd58"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8879792205d66b9b6743af90c04c66779c378eb6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2e734c0e0a194e9b323e1b2aea98aea16b0f49d7"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABIaXG3A",
+                "number": 14689,
+                "title": "docs(skills): clarify that skill update replaces directory contents and discards local files",
+                "isDraft": false,
+                "createdAt": "2026-10-14T14:31:27Z",
+                "updatedAt": "2026-10-14T14:31:48Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "rajpreetcodes"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "ff67d7622da2503223b8437e8cfaa39e1f6bf0e2",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/skill-update-help-extra-files",
+                "headRefOid": "9a10c69b5e76659991861592d4c775def1112805",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "rajpreetcodes"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "9a10c69b5e76659991861592d4c775def1112805"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABIUZlvw",
+                "number": 14679,
+                "title": "Reject terminal stdin for `gh auth login --with-token`",
+                "isDraft": true,
+                "createdAt": "2026-10-14T05:05:15Z",
+                "updatedAt": "2026-10-14T05:07:25Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "BagToad"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "d6b82b12e67d108b7c82d76d943a3a47814acbc1",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/auth-login-with-token-tty-error",
+                "headRefOid": "2de1e0886a0cf896165db70e7729b28bd5b0febc",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "2de1e0886a0cf896165db70e7729b28bd5b0febc"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABHfAmIw",
+                "number": 14629,
+                "title": "docs(skills): add task triggers and newer capabilities to gh skill description",
+                "isDraft": false,
+                "createdAt": "2026-10-09T07:05:39Z",
+                "updatedAt": "2026-10-09T07:05:56Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "littfed"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "8db3c3107a174c51de4758f53d5b27911650931b",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/issue-14621",
+                "headRefOid": "57bfea5f807ffb0c78336679d052ab56217aafde",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "littfed"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "57bfea5f807ffb0c78336679d052ab56217aafde"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABCgasxg",
+                "number": 14373,
+                "title": "docs: Add step to install working version on Ubuntu Pro",
+                "isDraft": false,
+                "createdAt": "2026-09-07T10:43:26Z",
+                "updatedAt": "2026-09-07T13:43:01Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "acoulton"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "0d121e8c31204cdbe02b4a4b1be5e88bdc3c4662",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "patch-1",
+                "headRefOid": "682398a89f408d305fba87c2be1c25864aab4077",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "acoulton"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "682398a89f408d305fba87c2be1c25864aab4077"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABA8-AVg",
+                "number": 14259,
+                "title": "Clarify skill publish error for nested skill directories",
+                "isDraft": true,
+                "createdAt": "2026-08-25T14:52:22Z",
+                "updatedAt": "2026-09-23T21:33:59Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "tommaso-moro"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "5d3c4817f1619213951dbf15031bad04acb88392",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "tommaso-moro-fix-skill-publish-target-error",
+                "headRefOid": "2f45660ac3def807459297ff3124447e6beda364",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "851c3c22b58b3d0097db6b5152be4ad53ead1aea"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2f45660ac3def807459297ff3124447e6beda364"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc8AAAABAN-lpQ",
+                "number": 14196,
+                "title": "pr create: Fix remote resolution with `--fill` and `--base`",
+                "isDraft": true,
+                "createdAt": "2026-08-19T00:42:25Z",
+                "updatedAt": "2026-10-25T04:57:36Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "9999years"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "95d3a1db45abd547c2dafbee4f8a68ca53fb9c80",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "wiggles/xuzt",
+                "headRefOid": "1479d25fc7c5de74cba70863340d2f5003390be5",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "9999years"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1479d25fc7c5de74cba70863340d2f5003390be5"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc79fYTb",
+                "number": 14130,
+                "title": "Add support for reading issue field values",
+                "isDraft": true,
+                "createdAt": "2026-08-11T11:46:52Z",
+                "updatedAt": "2026-10-22T19:48:49Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "iulia-b"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "a526307b621c90dca18734bfedaa5533318edd1a",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue-fields/read-field-values",
+                "headRefOid": "45f237e6b8c6377d610be8590668853675e05d13",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "iulia-b"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e047187dbf15e383e3729b2a02b18428e2f728cc"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "45f237e6b8c6377d610be8590668853675e05d13"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc75yy7C",
+                "number": 14044,
+                "title": "ci: add Linux binary release for loong64, ppc64le, and riscv64",
+                "isDraft": true,
+                "createdAt": "2026-08-03T02:21:12Z",
+                "updatedAt": "2026-10-05T15:20:38Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "MingcongBai"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e83adbc0642994fae7c39a9a012eb34b8c81f4f1",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "upstream/new-linux-bin-arch",
+                "headRefOid": "1432a0e3c280cf056ced6787886b70f618f5ef88",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "MingcongBai"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1432a0e3c280cf056ced6787886b70f618f5ef88"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc75av_H",
+                "number": 14035,
+                "title": "Fix project scope errors during issue creation",
+                "isDraft": true,
+                "createdAt": "2026-08-01T16:12:06Z",
+                "updatedAt": "2026-10-23T15:08:26Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e87ed4c751918d89c87b041913973770a770dc5c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "maxbeizer-fix-project-scope-error",
+                "headRefOid": "8097bcc1e3e4542cea482292db78c30e4f16d107",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "c4ae4f2ff708252a125fafd920f1b0e831b1a087"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "446b12b06d0bbb6c37f745f8ccfbc356aa840204"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "50d4da5633679038218c89339a7a83ca0568ceee"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e8df76b9695d0b6dccd8b7f1ff2608dee471abac"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "5285e45738bbb65d76d0b3348f3b9730a06172be"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9fdf4bc340e2134284975f7ad345d1b2e085e4a4"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d3b202d0a9d8bd5d774ac52660684e92bd78f723"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "6be80aaeaf80435aef102e9917c3fcf95d07812c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d788f90688821342ac2ff1d947c39eabeb4f922a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "024a0847d526bfe26a86415c618ed64cf0e2d7d3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7f9200e26cf26ffa7e41a58acae89335054e2cea"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "82c644e5c9385e427ae3eba052deb62ac1dda354"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9d6f4845eccf65080cdd225b8ef7d5e7fdcff661"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "6fa32043ac34a5f48c812deb13a3af7a811564fe"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3bf3cccf11e11a1b20ade876b363179a0e9a0359"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "01b62887f2b4c7f68178f225810d626e3f150c2a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "478e57b7f0103449d4eab170ae8af06ba05e0b53"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "857c8bd2fe8c6d8739cc93e15c9f63f43eadfc01"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b485e5170318b6cf5e989c479dedbd40758224b0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8097bcc1e3e4542cea482292db78c30e4f16d107"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc74g0J1",
+                "number": 14017,
+                "title": "feat(discussion): add support for Discussion Templates",
+                "isDraft": true,
+                "createdAt": "2026-07-30T12:32:13Z",
+                "updatedAt": "2026-07-30T14:37:39Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "jamietanna"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "11a5ef817f10bcdc6f5de511e90836dab93a58c4",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "feat/discussion-templates",
+                "headRefOid": "3681470c9baa7044a0918ee3630f306074bb5b40",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "jamietanna"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "c513704ac116650e069438e2500e2973e5c218d7"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3681470c9baa7044a0918ee3630f306074bb5b40"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc72-fmP",
+                "number": 13982,
+                "title": "Add --latest-pre-release and --pin flags to gh extension upgrade",
+                "isDraft": false,
+                "createdAt": "2026-07-27T15:06:16Z",
+                "updatedAt": "2026-08-03T15:58:40Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "offbyone"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e83adbc0642994fae7c39a9a012eb34b8c81f4f1",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "o1/add-latest-pre-release-and-pin-flags-to-gh-extension-upgrade/nysoxynolqlo",
+                "headRefOid": "a560bea91b8cd58b3c0d78e5db98c7fdc8e5036b",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "offbyone"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "a560bea91b8cd58b3c0d78e5db98c7fdc8e5036b"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc71JSDT",
+                "number": 13948,
+                "title": "Add issue field support to gh CLI",
+                "isDraft": true,
+                "createdAt": "2026-07-23T01:07:49Z",
+                "updatedAt": "2026-09-03T15:21:08Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "ayy-bc"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "efe3f165dd297c85fff11473dbf586f2d39fbf86",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue-fields",
+                "headRefOid": "5c7f325d0c69b2af63fb3e73e6825de286df594f",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "ayy-bc"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "bb6a6cf8359b70a366d4522d416761b728ccbc20"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "5c7f325d0c69b2af63fb3e73e6825de286df594f"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc71JR07",
+                "number": 13947,
+                "title": "Add multi-select field support to gh project",
+                "isDraft": true,
+                "createdAt": "2026-07-23T01:07:38Z",
+                "updatedAt": "2026-07-23T15:39:39Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "ayy-bc"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "efe3f165dd297c85fff11473dbf586f2d39fbf86",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "multi-select-fields",
+                "headRefOid": "20012c27bde4f68d8bdbddffae0b7baafc78a8e5",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "ayy-bc"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "20012c27bde4f68d8bdbddffae0b7baafc78a8e5"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7yq-6M",
+                "number": 13899,
+                "title": "Warn instead of failing when issue fields can't be set",
+                "isDraft": false,
+                "createdAt": "2026-07-16T19:18:27Z",
+                "updatedAt": "2026-09-01T16:56:17Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "imkp1"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "d528f20f2ee02f6703773e9f56c90e3c3f5d46b0",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/13804-gh-issue-create-errors-after-successful",
+                "headRefOid": "7031269eafb54c8b814883a4757db7eb9f2a6100",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "imkp1"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "c82266c2dcc3285033605501837434af1faeddfe"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8fbdb9b0f4e293af8a30ab1e0b79511fe1e37630"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "745dc6816d3178220ca73b34836f72b08750254b"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "96a469b6bd159d4cff137d5eab4d13ceee4c9807"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0834fed05f9b44187c5258716eec029dabe524f9"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0542803263d97f05bb4d34773b39a95d29f74999"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "1c67e368bec8e7d99d92c176c414ea211f1d592a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3eb4a088eabcc5f2b43d15508e1f0e4a9db8a602"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7031269eafb54c8b814883a4757db7eb9f2a6100"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7ydmf8",
+                "number": 13894,
+                "title": "Support nested skill discovery without skills directories",
+                "isDraft": true,
+                "createdAt": "2026-07-16T10:38:21Z",
+                "updatedAt": "2026-10-23T19:18:57Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "tommaso-moro"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "55dbb4dc6b7edb10b48e3d7fc5bccd32318d1b55",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "tommaso-moro-skill-install-nested-discovery",
+                "headRefOid": "8f44336ccb889465115aa85319c275c8dec1c3b7",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "cc07fb815a8afb753a5fb21b9d4a00755846ee4d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b401b53abbb0e07c3581146260e0a6d4030308b6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a8a3b4297c01f341c61e698b61e8ed54ee0d80c5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8f44336ccb889465115aa85319c275c8dec1c3b7"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7tijZP",
+                "number": 13788,
+                "title": "fix: preserve percent-encoded path in DisplayURL",
+                "isDraft": false,
+                "createdAt": "2026-07-03T10:12:24Z",
+                "updatedAt": "2026-07-21T04:26:13Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "happysnaker"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix-percent-encoded-url",
+                "headRefOid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "happysnaker"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7tLQep",
+                "number": 13781,
+                "title": "feat(auth): Better multi-account `gh` account usage #13768",
+                "isDraft": true,
+                "createdAt": "2026-07-02T14:40:03Z",
+                "updatedAt": "2026-07-31T13:53:31Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "platinummonkey"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "4dee7a5ebe0e83f44225707e0ac4966d8984dc92",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "feature/context-scoped-accounts",
+                "headRefOid": "2071526f740ff790c11f84d97e6fcad9e6db3451",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "platinummonkey"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "4b186e3f4d837e0f9f6046b17b5c137bc9fffd90"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ea979d1c4d5aa85e07c8a7744bb611c929981813"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2071526f740ff790c11f84d97e6fcad9e6db3451"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7sNeYY",
+                "number": 13758,
+                "title": "fix(text): preserve percent-encoding in DisplayURL",
+                "isDraft": false,
+                "createdAt": "2026-06-30T12:00:22Z",
+                "updatedAt": "2026-09-03T15:21:07Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "salarkhannn"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "19201f36367ebd32188556fad7899e55655bbc00",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/display-url-percent-encoding",
+                "headRefOid": "ce08f095a8f75b3835479d0cc1b7b593404070e3",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "salarkhannn"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ce08f095a8f75b3835479d0cc1b7b593404070e3"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7pqAFR",
+                "number": 13707,
+                "title": "Add `issueFieldValues` to `gh issue view --json` fields",
+                "isDraft": true,
+                "createdAt": "2026-06-23T13:01:01Z",
+                "updatedAt": "2026-07-17T17:49:05Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "owenniblock"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "9ad0bccb4778a344f918d33d4eb7924eddaed9ac",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "owenniblock/issue-field-values",
+                "headRefOid": "86a3e7fb245d30583978bb03e47c09c071e2c6b8",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "owenniblock"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "86a3e7fb245d30583978bb03e47c09c071e2c6b8"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7o_Xxp",
+                "number": 13697,
+                "title": "Terminate ssh/scp options with \"--\" separator",
+                "isDraft": false,
+                "createdAt": "2026-06-22T03:43:47Z",
+                "updatedAt": "2026-08-24T14:00:22Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "v-anumol-baby"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "0274077b56a5ef8e575358721149cd02888b2a5f",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/codespaces-23695",
+                "headRefOid": "97b3de91a359ebcc167e529929d5f389e380ad23",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "v-anumol-baby"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "6dd511111ee34c3bbf2c4c96c834a0cb1b3fbcca"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8c8ab6e29d0e7bbab838993cb68bf4ce83d16a6c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3fd99bc6f884452eaba05cd39674ce375c44bd8f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "97b3de91a359ebcc167e529929d5f389e380ad23"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7mrzaT",
+                "number": 13665,
+                "title": "Update build and release workflow to use Actions network firewall private preview",
+                "isDraft": false,
+                "createdAt": "2026-06-15T18:51:42Z",
+                "updatedAt": "2026-09-03T15:21:05Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "steiza"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "f15dce85056f12cb83f902ab38a35b358676f612",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "use-actions-firewall",
+                "headRefOid": "1f937060b1954355c563203902e0fdaa3d07356b",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "1f937060b1954355c563203902e0fdaa3d07356b"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7jXTGz",
+                "number": 13602,
+                "title": "fix: honor --pin when --force is specified on extension install",
+                "isDraft": false,
+                "createdAt": "2026-06-06T05:24:39Z",
+                "updatedAt": "2026-09-03T15:21:06Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "AruneshDwivedi"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "5c9ec1c5f51d682dbf65b0c16f856d8b9303adff",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/pin-force-install",
+                "headRefOid": "fa75cf9a125353077ddf2e1556d0dc8b738929b0",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "AruneshDwivedi"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "fa75cf9a125353077ddf2e1556d0dc8b738929b0"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7ewIQA",
+                "number": 13506,
+                "title": "Add file version & copyright info to windows package",
+                "isDraft": false,
+                "createdAt": "2026-05-24T09:01:16Z",
+                "updatedAt": "2026-08-30T22:36:37Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "kilasuit"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "40b742f76d68e6b1f472942a6368db4b5d765641",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "copilot/add-file-version-copyright-info",
+                "headRefOid": "fdb4e47437a3140146e76d12c0f3b5dd23df34a1",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "kilasuit"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "17e1722aad86024a35f1f62627569a2e8e3b8cf7"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c4a7f85591222e9d6cf849b5a0e0f7b9b86b7873"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0a718221ba348647524dcfe982a55570ccf002f0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "fdb4e47437a3140146e76d12c0f3b5dd23df34a1"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7ev1FI",
+                "number": 13505,
+                "title": "Require repository name for visibility changes",
+                "isDraft": false,
+                "createdAt": "2026-05-24T08:11:00Z",
+                "updatedAt": "2026-05-24T08:19:32Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "stevenjoezhang"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e53ff321f06514b5ba290bbc4ef84f7e0efcd3dd",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "codex/repo-visibility-confirmation",
+                "headRefOid": "b310b7916194674a10ffd556358101b753004538",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "stevenjoezhang"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "b310b7916194674a10ffd556358101b753004538"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7crPvJ",
+                "number": 13450,
+                "title": "fix(auth logout): clear credentials from git credential helper on logout",
+                "isDraft": true,
+                "createdAt": "2026-05-18T13:47:01Z",
+                "updatedAt": "2026-05-26T20:03:11Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "babakks"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "81ed6d4e355446dbb4c1a7b038534948f7c195b8",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "babakks/cleanup-git-creds-on-logout",
+                "headRefOid": "615bed420eb73a3c549e0679e5e22a36585e8e25",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "615bed420eb73a3c549e0679e5e22a36585e8e25"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7aqND5",
+                "number": 13400,
+                "title": "Add `bearer_auth` config toggle for Authorization scheme",
+                "isDraft": false,
+                "createdAt": "2026-05-12T11:58:34Z",
+                "updatedAt": "2026-07-31T18:28:31Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "2b7e77674884953ac8bb904cd0272107a882caf7",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "wm-uber-auth-schema",
+                "headRefOid": "f4b6e8ab5bf31262e86fb98a2fbab1c399516efc",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0977eb88d6e4ed5c4f7acc0b14fced3d8087196c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "28d1fb016453c0863b852a386d97d15261128ae1"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "bd1341b92c450541ed3ad4d2063509f0b66029bf"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ef556618372d02489aab9c6ed8050a80112c6e8f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "09aa0be86a039547d7d007b1137efd370b2c931b"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2416ff51c6319d482a3a4cd88f1d0c132e971d72"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "bed9a8238013b967e10344801a6e7d5d7cf972ce"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "63b18b857f2914ce70ac3a7dfcc90afd496d5e1d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "77bdade94876ef76c36980f293064a2230f6c0a3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0625d57d7db5fd89e197d1649fa455d12c876a37"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "f4b6e8ab5bf31262e86fb98a2fbab1c399516efc"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7ZPqOJ",
+                "number": 13364,
+                "title": "Unhook common dimensions from skill telemetry events",
+                "isDraft": false,
+                "createdAt": "2026-05-07T17:32:32Z",
+                "updatedAt": "2026-05-13T10:42:19Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "2bc88628dc86a4bc0dfa499467218f9229365e89",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "wm-unhook-skills-telem",
+                "headRefOid": "3ec99ee5d97bc22d73f26a93fe3daff6b3489a0c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "66dc276c2160ddc1da592bccec77352b29a49431"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3ec99ee5d97bc22d73f26a93fe3daff6b3489a0c"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7X4ekl",
+                "number": 13340,
+                "title": "Paginate files and commits in `gh pr view --json`",
+                "isDraft": false,
+                "createdAt": "2026-05-04T05:10:01Z",
+                "updatedAt": "2026-09-07T15:10:48Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "SebTardif"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "b99d73d7421ae182b8ab3f5b4469dff93c792da9",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/pr-files-commits-pagination",
+                "headRefOid": "57c0c3d4b56970689ca401aecfe1a053ac705833",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "SebTardif"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0292162062300d33a185d9b761e94cbfd50753d4"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "57c0c3d4b56970689ca401aecfe1a053ac705833"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7UTMOH",
+                "number": 13251,
+                "title": "Add error telemetry",
+                "isDraft": true,
+                "createdAt": "2026-04-21T12:40:23Z",
+                "updatedAt": "2026-05-13T18:21:52Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "williammartin"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "2b7e77674884953ac8bb904cd0272107a882caf7",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "wm/record-error-telemetry",
+                "headRefOid": "11ebcf6e3d62e4b2d8111c224a448e6094164e5f",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e608b065a1b582784e47603e3107e594b8804632"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2487cf4deb4112d786b16bd2695e920d6e5c0245"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "661bd148b81bdac97f61930e661b411ff7fc2b0f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a10ddc37384f7c53d50fe781a448ffea11b08c35"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "11ebcf6e3d62e4b2d8111c224a448e6094164e5f"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7UHupT",
+                "number": 13247,
+                "title": "fix(project close): filter projects by open/closed state in interactive prompt",
+                "isDraft": false,
+                "createdAt": "2026-04-20T22:40:09Z",
+                "updatedAt": "2026-10-23T15:16:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e87ed4c751918d89c87b041913973770a770dc5c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix/project-close-filter-closed",
+                "headRefOid": "0657dea831d767158bd9aadabc394ceb6e44b8af",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d75f407e94b5ca804f71c0bd4da9d6cb9dfdef84"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "085622242dbf2733dcba8bca9ca8388120b184b0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3af5982ad15496fa4d2d9eecce60719a473088e6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c980a7761aefc57f3e9a7e59eafb6b86440f71af"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7a1f0107ce208802695d83091ba4794a5f3b2332"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b8ddf97122e302242381dc39d147fe2476a18eae"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b674a0f432ced2455804a7a11f5cbcae24ab840e"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c042763d7b0538146bfc3bbc862023ff4c71ec78"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0f0f702afdaa7d45e0134d24ce092141029fb1d4"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c78ab6420970004a184534e2e6895daa436973ce"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "bcf9029d55e5e4fd3fc30b6d43b549a10e68582c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0657dea831d767158bd9aadabc394ceb6e44b8af"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7SfT1a",
+                "number": 13155,
+                "title": "Adds multi-stream download support to gh run download",
+                "isDraft": false,
+                "createdAt": "2026-04-15T01:46:23Z",
+                "updatedAt": "2026-04-17T08:31:32Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "gitulisca"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "0cede16c5f3cc8e572bdcba2c519f08c230a3ff5",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "gitulisca/artifact-download-multi-stream-support",
+                "headRefOid": "533d55d45184a7b17e1e5bf7bfd3f80a2a1d2458",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "gitulisca"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "533d55d45184a7b17e1e5bf7bfd3f80a2a1d2458"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7M9TOv",
+                "number": 13017,
+                "title": "Enable medium/low-effort golangci-lint linters",
+                "isDraft": true,
+                "createdAt": "2026-03-24T10:33:37Z",
+                "updatedAt": "2026-05-09T07:09:22Z",
+                "author": {
+                  "__typename": "Bot",
+                  "login": "copilot-swe-agent"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "8723e3bb5270af646fe7535b21e4db337a5bd73e",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "copilot/enable-medium-low-effort-linters",
+                "headRefOid": "7c5268da2c010a846ca686f501f07da5c3782c77",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "6c11ecd9abb01b9b03472383ada7e098c07026ba"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "dca59d52b60765736eae28782d80c6514ccf668c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "fb2162c0278ab65201e663914a8b6e50cce58b08"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "7c5268da2c010a846ca686f501f07da5c3782c77"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7M4C9c",
+                "number": 13013,
+                "title": "fix: handle non-zipped artifact downloads",
+                "isDraft": false,
+                "createdAt": "2026-03-24T04:06:10Z",
+                "updatedAt": "2026-10-07T19:43:25Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "dsanders11"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "8723e3bb5270af646fe7535b21e4db337a5bd73e",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "fix-non-zipped-artifact-download",
+                "headRefOid": "b724142758f68492eef5d82b5be203727c134e17",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "dsanders11"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "5321b7c50809652bb5d269726014f75dfd76f781"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b724142758f68492eef5d82b5be203727c134e17"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7KvuRb",
+                "number": 12942,
+                "title": "Add `--editor` flag to `gh issue edit` and `gh pr edit`",
+                "isDraft": false,
+                "createdAt": "2026-03-15T18:14:16Z",
+                "updatedAt": "2026-10-23T15:17:10Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "e87ed4c751918d89c87b041913973770a770dc5c",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue-edit-editor-flag",
+                "headRefOid": "bdedb68faa1f542ba865cd8acf18eaade5293e00",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "maxbeizer"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3e87c14b7b3e2c9538123d5216f3d6caad891706"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ffb5ecf7bb78285fd38d1dcca6b4eb6dabb6f5e0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3ce19db6d774e9c7d8e481f1e8b2a89e8cb6f04a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ca96e2e5b02059f0ca19a0681626f6867c465c1c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "3726ad2769829015985d43235a7c0d695398b241"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "48b0a906b519c291b826ffa82c22bb394542e4e9"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e4dc9a73e7a18f7ebf2e3e666255f5cb74288f0c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "54a43dc717784fac9b919af13859a35563f16eb8"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "bdedb68faa1f542ba865cd8acf18eaade5293e00"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc7DtLZa",
+                "number": 12682,
+                "title": "Add supports for terminal hyperlinks in output (v2)",
+                "isDraft": true,
+                "createdAt": "2026-02-14T01:51:24Z",
+                "updatedAt": "2026-05-13T11:18:16Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "xzfc"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "1af2823fc330004cb1e00ecdde6032040237de6d",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "terminal-hyperlinks",
+                "headRefOid": "4b2ee8eb670ba9f77d54d59ab97ced618f024fb9",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "xzfc"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "c1409d1d993fa850e34931b22f602514eace3829"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9f9274a3a760534096478090a70fc18533617e47"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "4b2ee8eb670ba9f77d54d59ab97ced618f024fb9"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6rxZuG",
+                "number": 11844,
+                "title": "fix(pr create): keep tracking upstream at push if already set",
+                "isDraft": true,
+                "createdAt": "2025-10-02T13:44:23Z",
+                "updatedAt": "2025-10-02T13:57:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "babakks"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "32a9c4ba26de9ed19be3effb8cd352d5e89cb993",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "babakks/keep-branch-upstream",
+                "headRefOid": "68d56144aa3d45e0263931407ee02bb7fb5c1853",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e2d8163e512e7f0a5c2ef07871f53c7ac8f0ea83"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c1eebbf1446fbb1bd98f097813953bf890167db0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "dbb2cb1bf81f3d16d3f4556afa688cdae670845b"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c68df6d16676a1d75b00f32cbb962a17c7b56173"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c412303c5d63bdeeb94a290bcb104ca958f7ca68"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d55ecd046e9873eca0a1a0a5498ad3da11b5ef15"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "68d56144aa3d45e0263931407ee02bb7fb5c1853"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6k7B-q",
+                "number": 11569,
+                "title": "Decompress responses",
+                "isDraft": true,
+                "createdAt": "2025-08-22T17:37:11Z",
+                "updatedAt": "2026-08-16T03:29:34Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "89512590addc159fff0f13acca811d803d592ff9",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue11559",
+                "headRefOid": "e7a8e4559c3cb60f2cd7e6208f01ea80df3d9e4f",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e7a8e4559c3cb60f2cd7e6208f01ea80df3d9e4f"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6jcF1R",
+                "number": 11500,
+                "title": "Respect `--title` and `--body` in `pr create` web mode",
+                "isDraft": true,
+                "createdAt": "2025-08-13T09:06:33Z",
+                "updatedAt": "2025-08-14T08:13:56Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "babakks"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "1b083c20051900b81a86a3c866af4e3c428a9357",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "babakks/respect-title-body-in-web-mode-attempt-3",
+                "headRefOid": "887a69d5f789038a2ff18af755c304eb67ec3b57",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "cccb6b2f9b36c76614d0091fc535d6ebd1a8d960"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "6d1422845ec2f8da4c6368385e353877242462e0"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "887a69d5f789038a2ff18af755c304eb67ec3b57"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6gxAAW",
+                "number": 11388,
+                "title": "Add dynamic user switching based on git config gh.user (POC for #326)",
+                "isDraft": true,
+                "createdAt": "2025-07-26T15:45:55Z",
+                "updatedAt": "2026-10-23T12:13:20Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "MSch"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "1b94463127b649ebeb36f8950f2958377e3bf6eb",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "msch/dynamic-user-switching",
+                "headRefOid": "afd5c714767e551b09fabc8d7bc6638bcf75a41a",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "MSch"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "7c7f9c75ec7fbdda145d367d95383637f32ecf88"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "afd5c714767e551b09fabc8d7bc6638bcf75a41a"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6Rcft6",
+                "number": 10730,
+                "title": "Add support for custom SSH and SCP commands via environment variables",
+                "isDraft": false,
+                "createdAt": "2025-04-04T18:14:21Z",
+                "updatedAt": "2025-08-01T20:13:38Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "cmbrose"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "b52c131d4c4bc5b8f114a08fb5a464302bb61cdf",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "cmbrose/custom-ssh-scp-env-vars",
+                "headRefOid": "dfef036ff9dbfcbcf04b6a4f05ce5a3318a882f9",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": false,
+                "headRepositoryOwner": {
+                  "__typename": "Organization",
+                  "login": "cli"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "dfef036ff9dbfcbcf04b6a4f05ce5a3318a882f9"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6K9Q9r",
+                "number": 10423,
+                "title": "[gh env] Introduce `gh env list` subcommand",
+                "isDraft": false,
+                "createdAt": "2025-02-12T13:37:50Z",
+                "updatedAt": "2026-10-28T12:37:20Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "iamazeem"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "b8cf16dc2d4d8040470beba883847d002119925a",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "5149-gh-env-list",
+                "headRefOid": "fdc6dfb42c8679677e6b0c1481ca796b8eb773f7",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "iamazeem"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ee16d0961823f5c9c0883b18685ae4de17402fb9"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ebc7440a354aaeacd32bdada2cf5a438a37baf91"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "09fd825b61ca793b09d56cf9b3e8da5b3db083f3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "42661b18a5f67d8ddd9256802d8cb45c523622dd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "876bc277695805cb7e39437cad1a19fedd657e57"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ca3d9106f6fd62f22e118d012a04261cc2b22d79"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "731c02100337101b5203c5afbb2cd50664e6c249"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "f7aae654f01169db4e109a03dae8b30f27bf3620"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "88568aa5eb65dc18c376617ef8a59be2be0a87d3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "b5f73c5d0cf668bd99fe3a40edab0fd2b273db46"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "fdc6dfb42c8679677e6b0c1481ca796b8eb773f7"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6IT_ik",
+                "number": 10275,
+                "title": "Support useful template functions and modules in jq filters",
+                "isDraft": true,
+                "createdAt": "2025-01-20T07:54:54Z",
+                "updatedAt": "2025-02-06T01:29:03Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "fe74349fe460cd80c21116eabd2753c0ba746f63",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue10262",
+                "headRefOid": "dc16499be87ac81f8443f74d641150c4f14cf49c",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "dc16499be87ac81f8443f74d641150c4f14cf49c"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6IQ84r",
+                "number": 10273,
+                "title": "Process `--jq` before `--template`",
+                "isDraft": true,
+                "createdAt": "2025-01-19T10:28:26Z",
+                "updatedAt": "2025-01-19T22:48:00Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "fe74349fe460cd80c21116eabd2753c0ba746f63",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "issue8415",
+                "headRefOid": "8107da8820b7263908ba2a05825c9cf709af8565",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "heaths"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "06693babc1f3ab6d5eb45aba3ede0a1aaca46f3f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8107da8820b7263908ba2a05825c9cf709af8565"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6H7mjV",
+                "number": 10253,
+                "title": "Include headRepositoryId when creating a new PR",
+                "isDraft": true,
+                "createdAt": "2025-01-16T00:21:47Z",
+                "updatedAt": "2026-02-15T19:36:57Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "jacob-keller"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "0c8591064dec9ed95d7fba10a9decb5fff1ee605",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "include-head-repository-id",
+                "headRefOid": "f5b50e0660e26713cf66cbad775c45c8b3da07cf",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "jacob-keller"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "f5b50e0660e26713cf66cbad775c45c8b3da07cf"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              },
+              {
+                "id": "PR_kwDODKw3uc6AVDMZ",
+                "number": 9847,
+                "title": "[gh search issues] Support multiple author options",
+                "isDraft": true,
+                "createdAt": "2024-10-30T05:40:06Z",
+                "updatedAt": "2025-04-09T06:26:33Z",
+                "author": {
+                  "__typename": "User",
+                  "login": "Shion1305"
+                },
+                "baseRefName": "trunk",
+                "baseRefOid": "14d339d9ba87e87f34b7a25f00200a2062f87039",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "shion/9828",
+                "headRefOid": "9d50cfc37de553870844565c204dd17b2476dae5",
+                "headRef": {
+                  "refUpdateRule": null
+                },
+                "isCrossRepository": true,
+                "headRepositoryOwner": {
+                  "__typename": "User",
+                  "login": "Shion1305"
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "9d50cfc37de553870844565c204dd17b2476dae5"
+                      }
+                    }
+                  ]
+                },
+                "stackEntry": null
+              }
+            ]
+          },
+          "mergedPullRequests": {
+            "nodes": [
+              {
+                "number": 8294,
+                "createdAt": "2023-11-04T07:30:25Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "docs/release-download",
+                "headRefOid": "724125307bfe91a1cceb2a0406a8020fed6f6def",
+                "isCrossRepository": true,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "48ab24d08ec56a03ee76d0ddad470517cdb900bd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "724125307bfe91a1cceb2a0406a8020fed6f6def"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "ccf45cc7c6caa8686b608bd156b57ba1b9d939f0",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "f41f402a2098513344ac540439d775d1ad92d7ec"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14976,
+                "createdAt": "2026-11-07T00:19:18Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/triage-ghmock-skill",
+                "headRefOid": "6ceb78a575d98dbe06ac366e42501c67aee2b1c4",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "86ef059323d9d802959ca79d5db769d5d152114d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "6ceb78a575d98dbe06ac366e42501c67aee2b1c4"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "736c68f674113337685e3eb1f908602a03b8f99b",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "c235ae31c77c5aa99abdf947503b4f3649330938"
+                      },
+                      {
+                        "oid": "6ceb78a575d98dbe06ac366e42501c67aee2b1c4"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14972,
+                "createdAt": "2026-11-06T19:32:28Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/triage-ghmock-skill",
+                "headRefOid": "3e6aeafb1b796b862389c1abe4deba5e60fa0b01",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3e6aeafb1b796b862389c1abe4deba5e60fa0b01"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "c235ae31c77c5aa99abdf947503b4f3649330938",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be"
+                      },
+                      {
+                        "oid": "3e6aeafb1b796b862389c1abe4deba5e60fa0b01"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14960,
+                "createdAt": "2026-11-06T02:40:04Z",
+                "baseRefName": "bagtoad/triage-workflow-updates",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-ghmock-skill",
+                "headRefOid": "810eba8083328420293efab653503c506dd76dc7",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 8,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14957,
+                "createdAt": "2026-11-05T22:37:54Z",
+                "baseRefName": "bagtoad/triage-reproduction",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-workflow-updates",
+                "headRefOid": "8f4f216fc17f9ed822c4c7dd8d09455abb65a641",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0bd1e64dc197176cc2447dc8f99f730a9dc44f8f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "4cf6472870511ca02f10dbb5b22f7f2eae08199c"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "8f4f216fc17f9ed822c4c7dd8d09455abb65a641"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 7,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14956,
+                "createdAt": "2026-11-05T22:37:50Z",
+                "baseRefName": "bagtoad/triage-ghmock-extended-fixtures",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-reproduction",
+                "headRefOid": "93152e35cd55eb1bbc70dbd3ca81b097fcc906b6",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "3946c1415f2b45bd607282bee658d79745e50585"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "93152e35cd55eb1bbc70dbd3ca81b097fcc906b6"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 6,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14955,
+                "createdAt": "2026-11-05T22:37:46Z",
+                "baseRefName": "bagtoad/triage-ghmock-terminal",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-ghmock-extended-fixtures",
+                "headRefOid": "972fb938a57a183cfd47f0963efe75b61d87c8df",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "e1ec2a14fe4593a3f2b4d4cd5eed4e4f7b56a549"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "c379213db8fc57c2336e915b53867cf4abc03983"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "972fb938a57a183cfd47f0963efe75b61d87c8df"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 5,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14954,
+                "createdAt": "2026-11-05T22:37:43Z",
+                "baseRefName": "bagtoad/triage-ghmock-scaffolding",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-ghmock-terminal",
+                "headRefOid": "885d70b690f139c6f544769918bc6e325ae463ce",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "10656420196d79209a9035c888bbc1af254c1c5d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "099532ac9727f41f2b1c9b92aad30aabce012c4a"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "885d70b690f139c6f544769918bc6e325ae463ce"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 4,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14953,
+                "createdAt": "2026-11-05T22:37:39Z",
+                "baseRefName": "bagtoad/triage-ghmock-schema",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-ghmock-scaffolding",
+                "headRefOid": "d675e340e79dde5430b624a7f1dafb7946b61c0e",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "74053322190330bead9f2b3e3a67af815c47c003"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "896de9fc23115fb739f5b4eb0116826d730604ae"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d407d7b443c4f034250df748e34b1cffae3934c3"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d675e340e79dde5430b624a7f1dafb7946b61c0e"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 3,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14952,
+                "createdAt": "2026-11-05T22:37:36Z",
+                "baseRefName": "bagtoad/triage-ghmock-runner",
+                "baseRef": null,
+                "headRefName": "bagtoad/triage-ghmock-schema",
+                "headRefOid": "0f95a906f44f80ce4c718d664bc238e4e8cee8b6",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "df029a5787fa63b940519aaa5ba81bbee4fc01e5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "00e268c0cf3e1aa39e637fe3963e5660694df838"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "0f95a906f44f80ce4c718d664bc238e4e8cee8b6"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 2,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14951,
+                "createdAt": "2026-11-05T22:37:32Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/triage-ghmock-runner",
+                "headRefOid": "366f9c658e090ce52771a05058ea3561d85fc67f",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "89e71a427f63fdb99f3584a92182e4f76ca8ea34"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "ee91c585ce16be31623ea437015489e529e79432"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "366f9c658e090ce52771a05058ea3561d85fc67f"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "205239fd8fa51df92ab47bd93b62aa2b230a07be",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882"
+                      },
+                      {
+                        "oid": "810eba8083328420293efab653503c506dd76dc7"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 1,
+                  "stack": {
+                    "number": 14958
+                  }
+                }
+              },
+              {
+                "number": 14918,
+                "createdAt": "2026-11-03T17:30:30Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/gh-help-environment-fix",
+                "headRefOid": "f44bd1dcc58a718327a4d1df89ea3d1145c827b2",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "0fafae6df3857ba116026b3cc056f1383c1fc9f6"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "f7fd1d490b7edbccc21e0349ad16f09b6af08637"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "f44bd1dcc58a718327a4d1df89ea3d1145c827b2"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "eeb44bc432c0107de002dadd34a61b4e2bd15882",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "c4513d446bf98cfcbe72ed83f17cd3220174d88f"
+                      },
+                      {
+                        "oid": "f44bd1dcc58a718327a4d1df89ea3d1145c827b2"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14910,
+                "createdAt": "2026-11-03T00:13:07Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "tidy-dev-merge-blocker",
+                "headRefOid": "6a79004e03cf5efc85a8d27dca55937e745f8b20",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "d7ef60c60e9590daf94022f95ebf2b72f5306c5e"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "287907632527bf0a138569cb0eaa8f744d6f336d"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "6a79004e03cf5efc85a8d27dca55937e745f8b20"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "c4513d446bf98cfcbe72ed83f17cd3220174d88f",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "9c399f1520a45f1bffb968d7d6565ea4112937fa"
+                      },
+                      {
+                        "oid": "6a79004e03cf5efc85a8d27dca55937e745f8b20"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14907,
+                "createdAt": "2026-11-02T14:03:42Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "dependabot/go_modules/github.com/yuin/goldmark-1.8.7",
+                "headRefOid": "ec3ebb7ae96c22450bdc9d6d9e6327b103b386bf",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ec3ebb7ae96c22450bdc9d6d9e6327b103b386bf"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "9c399f1520a45f1bffb968d7d6565ea4112937fa",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "d06cd7d3e8925e9437ea6ac3029dd728a60c97fc"
+                      },
+                      {
+                        "oid": "ec3ebb7ae96c22450bdc9d6d9e6327b103b386bf"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14905,
+                "createdAt": "2026-11-02T14:03:04Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "dependabot/go_modules/github.com/sigstore/sigstore-go-1.4.0",
+                "headRefOid": "da8b8d3afafb6b5bb53e241343b1a8e6665aa162",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "da8b8d3afafb6b5bb53e241343b1a8e6665aa162"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "d06cd7d3e8925e9437ea6ac3029dd728a60c97fc",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "7e97c4c4f5124f5e74611c099a610989315f128b"
+                      },
+                      {
+                        "oid": "da8b8d3afafb6b5bb53e241343b1a8e6665aa162"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14906,
+                "createdAt": "2026-11-02T14:03:20Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "dependabot/go_modules/charm.land/bubbletea/v2-2.1.1",
+                "headRefOid": "7ed464c372b68460df8c2a6b63828a2b7adf6579",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "7ed464c372b68460df8c2a6b63828a2b7adf6579"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "7e97c4c4f5124f5e74611c099a610989315f128b",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "9490d204a2ba95434153dedce99898ce9f281426"
+                      },
+                      {
+                        "oid": "7ed464c372b68460df8c2a6b63828a2b7adf6579"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 42,
+                "createdAt": "2019-10-31T14:58:58Z",
+                "baseRefName": "prototype",
+                "baseRef": null,
+                "headRefName": "pr-status-list",
+                "headRefOid": "d8fbf86c774fa5d2487953d692949ebc44bbd7b5",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "bf1d64f37f0a9edb949905e84c253630e0ca611b"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "9fa0c24efb3b337c033a3ccba427657b86c8642f"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "e2d60854dc65771ac99198911a40f4e5191c1cd5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "2f1a49b677ed4f0f5c103d4a66627d4afb07c8f5"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "32e36ccef5f762aebb7b1b89e4160949deaee3ef"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a619455a2693ec73f0044a5375d8ff8f60091858"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "d8fbf86c774fa5d2487953d692949ebc44bbd7b5"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "a9b309b3f19953db4a3a90ecdd5b12a5d7988071",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "4c76f5c34997732b1f77a495f1e9a64e67439a1f"
+                      },
+                      {
+                        "oid": "d8fbf86c774fa5d2487953d692949ebc44bbd7b5"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
+                "number": 14879,
+                "createdAt": "2026-10-30T16:52:51Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "bagtoad/show-refs-option-like-ref-test",
+                "headRefOid": "f59a50225f9aa8f4907c718963be3616fa48fdd5",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "f59a50225f9aa8f4907c718963be3616fa48fdd5"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "9490d204a2ba95434153dedce99898ce9f281426",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "443baeba055cc78a0ff9fd9308dfc26aec860b87"
+                      },
+                      {
+                        "oid": "f59a50225f9aa8f4907c718963be3616fa48fdd5"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 6,
+                  "stack": {
+                    "number": 14352
+                  }
+                }
+              },
+              {
+                "number": 14355,
+                "createdAt": "2026-09-04T15:50:28Z",
+                "baseRefName": "williammartin-improve-git-tests",
+                "baseRef": null,
+                "headRefName": "williammartin-clean-git-test-seams",
+                "headRefOid": "934db7e6623e7b5c7a3ccb6a26e91ec4eb1a9002",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "934db7e6623e7b5c7a3ccb6a26e91ec4eb1a9002"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "443baeba055cc78a0ff9fd9308dfc26aec860b87",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "30eb70ca63a800733d9b802cc69862579478b0c3"
+                      },
+                      {
+                        "oid": "934db7e6623e7b5c7a3ccb6a26e91ec4eb1a9002"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 5,
+                  "stack": {
+                    "number": 14352
+                  }
+                }
+              },
+              {
+                "number": 14351,
+                "createdAt": "2026-09-04T15:36:50Z",
+                "baseRefName": "williammartin-git-transport-tests",
+                "baseRef": null,
+                "headRefName": "williammartin-improve-git-tests",
+                "headRefOid": "5714558c97ab317e32e319ebb75e6d1ea9761e68",
+                "isCrossRepository": false,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "5714558c97ab317e32e319ebb75e6d1ea9761e68"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "443baeba055cc78a0ff9fd9308dfc26aec860b87",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "30eb70ca63a800733d9b802cc69862579478b0c3"
+                      },
+                      {
+                        "oid": "934db7e6623e7b5c7a3ccb6a26e91ec4eb1a9002"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": {
+                  "position": 4,
+                  "stack": {
+                    "number": 14352
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

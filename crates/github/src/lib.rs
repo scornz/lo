@@ -29,6 +29,7 @@ pub mod record;
 pub mod replay;
 pub mod revision_marks;
 mod token;
+pub mod trunks;
 mod user;
 pub mod viewed;
 
