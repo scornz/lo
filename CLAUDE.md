@@ -142,17 +142,21 @@ Lo keeps its files in `~/.config/lo`, `~/Library/Application Support/Lo`,
 
 ## Keys
 
-Lo binds its keys over Zed's. Each module binds its own in its `bind_keys`, and `bind_keys` in
-`crates/review_ui/src/lib.rs` calls them all. A test fails when two of Lo's bindings share a
-keystroke and a context. A key that's added, changed or removed changes its row here.
+Lo binds its keys over Zed's. Each module binds its own in its `bind_keys`: `review_ui`'s
+`bind_keys` (`crates/review_ui/src/lib.rs`) calls those of `review_ui`'s modules, the PR tab's calls
+its parts' (`pr_tab/keys.rs`), and the Accounts modal binds its own (`crates/lo/src/accounts_ui.rs`).
+Keys for reading the pull request go through `pr_tab::keys::reading`. Tests in both crates read the
+context stack of every place in the window that takes keys, and fail when two of Lo's bindings both
+hold there with the same keystrokes, or with one's starting the other's (`review_ui::key_clashes`).
+A key that's added, changed or removed changes its row here.
 
 Where a key works, in the PR tab (`crates/review_ui/src/pr_tab/keys.rs`): *tab* is anywhere in it
 (`KEY_CONTEXT`), *reading* is the tab outside any text box in it (`READING_CONTEXT`), *diff* is the
 diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CONTEXT`). Elsewhere:
 *window* is anywhere in Lo's window (`Workspace`), *open box* is the box `cmd-o` opens
 (`OpenPullRequest > Editor`), *recent list* is the list of recent pull requests
-(`RecentPullRequests`), and *account picker* is the question about which account to use
-(`AccountPicker`).
+(`RecentPullRequests`), *account picker* is the question about which account to use
+(`AccountPicker`), and *accounts* is the Accounts modal (`AccountsModal`).
 
 | Key | Where | Action | What it does |
 |---|---|---|---|
@@ -183,7 +187,7 @@ diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CO
 | `down` | recent list | `menu::SelectNext` | Selects the next pull request |
 | `k` | recent list | `menu::SelectPrevious` | Selects the previous pull request |
 | `up` | recent list | `menu::SelectPrevious` | Selects the previous pull request |
-| `enter` | recent list | `menu::Confirm` | Opens the selected pull request, with the account it was opened with |
+| `enter` | recent list | `menu::Confirm` | Opens the selected pull request, with the account it was opened with if it's still signed in |
 | `cmd-w` | recent list | `workspace::CloseWindow` | Closes the window, as closing an empty pane does |
 | `j` | account picker | `menu::SelectNext` | Selects the next account |
 | `down` | account picker | `menu::SelectNext` | Selects the next account |
@@ -191,6 +195,8 @@ diff's editors (`DIFF_CONTEXT`), and *file list* is the file list (`FILE_LIST_CO
 | `up` | account picker | `menu::SelectPrevious` | Selects the previous account |
 | `enter` | account picker | `menu::Confirm` | Uses the selected account, and remembers it |
 | `escape` | account picker | `menu::Cancel` | Closes the picker without choosing |
+| `space` | accounts | `accounts::ToggleChosen` | Picks or unpicks the selected `gh` account to import |
+| `cmd-backspace` | accounts | `accounts::RemoveSelected` | Removes the selected account and its token, on a second press |
 
 ## Verify
 
