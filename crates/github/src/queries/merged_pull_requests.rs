@@ -3,13 +3,14 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use graphql_client::GraphQLQuery;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::open_pull_requests::OpenPullRequestList;
+use super::trunk_rules::TrunkRuleList;
 use super::{DateTime, GitObjectID, not_found};
 use crate::client::GithubClient;
 use crate::error::GithubError;
@@ -36,6 +37,9 @@ pub const BRANCHES_A_REQUEST: usize = 10;
 /// The most branches whose merged pull requests are looked up for one read, two requests' worth.
 /// Branches whose lookup is carried over from the last read don't count.
 pub const MAX_BRANCH_LOOKUPS: usize = 20;
+/// How long a lookup that found nothing is carried over, while its branch stays put: a pull
+/// request from the branch may have opened and merged since, which doesn't move the branch.
+pub const EMPTY_LOOKUP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// A branch whose merged pull requests were looked up, and what was found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -47,20 +51,43 @@ pub struct BranchLookup {
     pub tip: Option<String>,
     /// The numbers of the merged pull requests found.
     pub found: Vec<u64>,
+    /// When it was looked up.
+    #[schemars(with = "String")]
+    pub at: DateTime,
 }
 
 /// What an earlier read looked up, to carry over.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct Known<'a> {
     pub lookups: &'a [BranchLookup],
     /// The merged pull requests they found, among others.
     pub merged: &'a [MergedPullRequest],
+    /// The time now.
+    pub now: SystemTime,
 }
 
-impl Known<'_> {
-    /// What was found looking up `branch` at `tip`.
-    fn lookup(&self, branch: &str, tip: &Option<String>) -> Option<&BranchLookup> {
-        (self.lookups.iter()).find(|lookup| lookup.branch == branch && lookup.tip == *tip)
+impl<'a> Known<'a> {
+    /// Nothing known, at `now`.
+    pub fn none(now: SystemTime) -> Self {
+        Self {
+            lookups: &[],
+            merged: &[],
+            now,
+        }
+    }
+
+    /// What was found looking up `branch` at `tip`, unless it found nothing over
+    /// [`EMPTY_LOOKUP_MAX_AGE`] ago.
+    fn lookup(&self, branch: &str, tip: &Option<String>) -> Option<&'a BranchLookup> {
+        let fresh = |lookup: &BranchLookup| {
+            let age = self
+                .now
+                .duration_since(lookup.at.into())
+                .unwrap_or_default();
+            !lookup.found.is_empty() || age < EMPTY_LOOKUP_MAX_AGE
+        };
+        (self.lookups.iter())
+            .find(|lookup| lookup.branch == branch && lookup.tip == *tip && fresh(lookup))
     }
 }
 
@@ -280,6 +307,7 @@ impl GithubClient {
                 found: from_branch.map(|pr| pr.number).collect(),
                 branch,
                 tip,
+                at: known.now.into(),
             });
         }
         for pr in found {
@@ -292,23 +320,30 @@ impl GithubClient {
     /// those from each branch `stacks::branches_to_look_up` names, until every branch it names
     /// was looked up, or [`MAX_BRANCH_LOOKUPS`] were. What `known`, the list read before, found
     /// for a branch at the same tip is carried over. The branches that most open pull requests
-    /// target are looked up first. When the lookups stop short, past the most or after an error
-    /// that doesn't stop the read, the list says so ([`OpenPullRequestList::merged_truncated`]).
+    /// target are looked up first, and the repository's trunks, from `rules` among others, never
+    /// are. When the lookups stop short, past the most or after an error that doesn't stop the
+    /// read, the list says so ([`OpenPullRequestList::merged_truncated`]).
     pub async fn look_up_merged(
         &self,
         repo: &RepoRef,
         list: &mut OpenPullRequestList,
         known: Option<&OpenPullRequestList>,
+        rules: &TrunkRuleList,
+        now: SystemTime,
     ) -> Result<(), GithubError> {
-        let known = known.map_or_else(Known::default, |known| Known {
-            lookups: &known.lookups,
-            merged: &known.merged,
-        });
+        let known = known.map_or_else(
+            || Known::none(now),
+            |known| Known {
+                lookups: &known.lookups,
+                merged: &known.merged,
+                now,
+            },
+        );
         let mut looked_up = BTreeSet::new();
         let mut queried = 0;
         loop {
             let prs = list.stack_pull_requests(&[]);
-            let trunks = list.trunks(None).among(&prs);
+            let trunks = list.trunks(rules).among(&prs);
             let trunks: Vec<&str> = trunks.iter().map(String::as_str).collect();
             let mut branches: Vec<String> = (stacks::branches_to_look_up(&prs, &trunks)
                 .into_iter())

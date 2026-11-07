@@ -1,6 +1,6 @@
 {
   "description": "OpenPullRequests and TrunkRules for the playground, where PR #1 (stack-a -> main) and PR #2 (stack-b -> stack-a) form stack #3, then StackLayers for both",
-  "recorded_at": "2026-11-07T02:19:41Z",
+  "recorded_at": "2026-11-07T03:16:13Z",
   "repo": "rozed-dev/playground",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

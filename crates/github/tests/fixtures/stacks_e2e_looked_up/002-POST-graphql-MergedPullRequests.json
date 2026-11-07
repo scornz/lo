@@ -10,8 +10,8 @@
       "b1": "e12/base",
       "b2": "e3/x",
       "b3": "e6/base",
-      "b4": "e9/base",
-      "b5": "e10/base",
+      "b4": "e8/base",
+      "b5": "e9/base",
       "b6": "e10/base",
       "b7": "e10/base",
       "b8": "e10/base",
@@ -25,19 +25,19 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4983",
-      "x-ratelimit-reset": "1794020825",
+      "x-ratelimit-remaining": "4972",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "17"
+      "x-ratelimit-used": "28"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4983,
-          "used": 17,
-          "resetAt": "2026-11-07T03:07:05Z"
+          "remaining": 4972,
+          "used": 28,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "repository": {
           "b0": {

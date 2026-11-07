@@ -3,6 +3,7 @@
 //! ([`crate::poll::Poller::stack_layers`]).
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use graphql_client::GraphQLQuery;
 use schemars::JsonSchema;
@@ -82,14 +83,15 @@ impl StackLayerList {
 }
 
 impl StackLayer {
-    /// The branch GitHub last moved it from, once that branch was deleted: the head branch of the
-    /// layer it sat on, if that one merged.
+    /// The branch it last moved from: GitHub moves a layer once the branch it targeted is
+    /// deleted, and people change a layer's base once the layer below merged. It's the head
+    /// branch of the layer it sat on, if that one merged.
     pub fn moved_from(&self) -> Option<&str> {
+        use StackLayersNodesOnPullRequestMovedFromNodes as Event;
         let events = self.moved_from.nodes.iter().flatten().flatten();
         events.last().and_then(|event| match event {
-            StackLayersNodesOnPullRequestMovedFromNodes::AutomaticBaseChangeSucceededEvent(
-                event,
-            ) => Some(event.old_base.as_str()),
+            Event::AutomaticBaseChangeSucceededEvent(event) => Some(event.old_base.as_str()),
+            Event::BaseRefChangedEvent(event) => Some(event.previous_ref_name.as_str()),
             _ => None,
         })
     }
@@ -145,13 +147,14 @@ impl CachedRead for StackLayerList {
 
 impl GithubClient {
     /// The layers whose node IDs are `ids`, [`PAGE_SIZE`] a request, in `repo`, with the merged
-    /// pull requests from the branches they were moved from. What `known`, read before, looked
-    /// up is carried over.
+    /// pull requests from the branches they moved from. What `known`, read before, looked up is
+    /// carried over, as of `now`.
     pub async fn stack_layers(
         &self,
         repo: &RepoRef,
         ids: &[String],
         known: Option<&StackLayerList>,
+        now: SystemTime,
     ) -> Result<StackLayerList, GithubError> {
         let mut list = StackLayerList {
             ids: ids.to_vec(),
@@ -183,15 +186,19 @@ impl GithubClient {
         moved_from.sort_unstable();
         moved_from.dedup();
         let wanted = moved_from.len();
-        // A deleted branch's tip is unknown, and its merged pull requests don't change.
-        let branches = moved_from
-            .into_iter()
+        // A deleted branch's tip is unknown, and a moved-from branch's merged pull requests
+        // rarely change.
+        let branches = (moved_from.into_iter())
             .map(|branch| (branch, None))
             .collect();
-        let known = known.map_or_else(Known::default, |known| Known {
-            lookups: &known.lookups,
-            merged: &known.merged,
-        });
+        let known = known.map_or_else(
+            || Known::none(now),
+            |known| Known {
+                lookups: &known.lookups,
+                merged: &known.merged,
+                now,
+            },
+        );
         let looked = self
             .look_up_branches(
                 repo,
@@ -221,8 +228,11 @@ pub async fn read_stack_layers(
     repo: RepoRef,
     ids: Vec<String>,
     known: Option<Arc<StackLayerList>>,
+    now: SystemTime,
 ) -> Result<StackLayerList, GithubError> {
-    client.stack_layers(&repo, &ids, known.as_deref()).await
+    client
+        .stack_layers(&repo, &ids, known.as_deref(), now)
+        .await
 }
 
 #[cfg(test)]

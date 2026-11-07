@@ -15,26 +15,26 @@
         "PR_kwDODKw3uc8AAAABMqWfxQ"
       ]
     },
-    "query_sha256": "4ae0abbf7dc6e9e7dcaac08c1188c417eab6de4d4e4d7791c367a9d660ceab04"
+    "query_sha256": "673c47bfc3241e6cca5502a2ae2c231e7ccb84b343bbaeb30b92bb218e8a9d47"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4982",
-      "x-ratelimit-reset": "1794020825",
+      "x-ratelimit-remaining": "4967",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "18"
+      "x-ratelimit-used": "33"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4982,
-          "used": 18,
-          "resetAt": "2026-11-07T03:07:05Z"
+          "remaining": 4967,
+          "used": 33,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "nodes": [
           {

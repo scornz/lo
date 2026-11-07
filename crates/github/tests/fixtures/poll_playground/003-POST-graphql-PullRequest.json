@@ -17,10 +17,10 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4990",
-      "x-ratelimit-reset": "1794020825",
+      "x-ratelimit-remaining": "4984",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "10"
+      "x-ratelimit-used": "16"
     },
     "body": {
       "data": {

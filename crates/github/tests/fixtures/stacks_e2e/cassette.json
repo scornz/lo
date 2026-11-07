@@ -1,6 +1,6 @@
 {
-  "description": "OpenPullRequests and TrunkRules for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, #4 c -> b, #5 e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 (#11 y -> e3/x, on #10 x, squash-merged, among the merged pull requests updated most recently); then StackLayers for E2's tree, the native stack and #11",
-  "recorded_at": "2026-11-07T02:19:44Z",
+  "description": "OpenPullRequests and TrunkRules for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, #4 c -> b, #5 e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 (#11 y -> e3/x, on #10 x, squash-merged, among the merged pull requests updated most recently); then StackLayers for E2's tree, the native stack, #11, and #19, whose base the fixtures script changed from main to e8/base",
+  "recorded_at": "2026-11-07T03:16:47Z",
   "repo": "rozed-dev/e2e",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

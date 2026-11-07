@@ -22,7 +22,7 @@ use github::poll::{
     RateLimitState, WallClock,
 };
 use github::push_history::PushHistory;
-use github::queries::{PullRequestData, StackLayerList, TrunkRuleList, pull_request};
+use github::queries::{PullRequestData, StackLayerList, pull_request};
 use github::replay::ReplayHttpClient;
 use github::{AuthenticatedUser, GithubError, PullRef, RepoRef, Target, Token, User};
 use gpui::{AppContext as _, BackgroundExecutor, Entity, TestAppContext};
@@ -296,6 +296,7 @@ impl Polling {
                 PollEvent::OpenPullRequests { repo, list } => {
                     format!("open PRs of {repo}: {}", list.pull_requests.len())
                 }
+                PollEvent::TrunkRules { repo } => format!("rulesets of {repo}"),
                 PollEvent::Failed { target, error } => format!("failed {target:?}: {error}"),
                 PollEvent::Read { pull, name } => format!("read {name} #{}", pull.number),
                 PollEvent::ReadFailed { pull, name, error } => {
@@ -324,18 +325,20 @@ fn log(entries: &[(u64, &str)]) -> Vec<(u64, String)> {
 /// The recorded poll: `[0]` GET /pulls/1, `[1]` its check, `[2]` its details, `[3]` GET
 /// /pulls/2, `[4]` GET of the open PRs, `[5]` OpenPullRequests, then the second poll: `[6]` a
 /// 304 for /pulls/1, `[7]` its check, `[8]` a 304 for /pulls/2, `[9]` a 304 for the open PRs.
+/// Last, `[10]` TrunkRules, which the first poll reads after OpenPullRequests.
 fn recorded() -> Vec<Interaction> {
     let (_, interactions) =
         cassette::read_cassette(&cassette::fixtures_dir().join("poll_playground")).unwrap();
     interactions.into_iter().map(|(_, i)| i).collect()
 }
 
-/// The recorded poll's answers for the repository's open PRs.
+/// The recorded poll's answers for the repository's open PRs, and its rulesets.
 fn repo_answers(recorded: &[Interaction]) -> Vec<Interaction> {
     vec![
         recorded[4].clone(),
         recorded[5].clone(),
         recorded[9].clone(),
+        recorded[10].clone(),
     ]
 }
 
@@ -461,6 +464,7 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
             (0, "GET /pulls/2"),
             (0, "GET /pulls?state=open&per_page=100"),
             (0, "OpenPullRequests"),
+            (0, "TrunkRules"),
         ])
     );
     assert_eq!(
@@ -470,6 +474,7 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
             "check #1",
             "details #1: feat: stack layer A",
             "summary #2: feat: stack layer B",
+            "rulesets of rozed-dev/playground",
             "open PRs of rozed-dev/playground: 2",
         ]
     );
@@ -490,7 +495,7 @@ async fn the_first_poll_fetches_everything_and_later_ones_only_ask(cx: &mut Test
     // The open PR is asked about changes since GitHub last updated it.
     let seen = t.http.replay.seen();
     let since = last_modified(&recorded()[0]);
-    assert_eq!(seen[6].header("if-modified-since"), Some(since.as_str()));
+    assert_eq!(seen[7].header("if-modified-since"), Some(since.as_str()));
     assert_eq!(t.status(), PollStatus::default());
 
     let answer = t.read(|poller| poller.pull_request(&pr(1))).unwrap();
@@ -541,7 +546,9 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
     let pull_one: Vec<_> = t
         .requests()
         .into_iter()
-        .filter(|(_, what)| !what.contains("/pulls?") && what != "OpenPullRequests")
+        .filter(|(_, what)| {
+            !what.contains("/pulls?") && what != "OpenPullRequests" && what != "TrunkRules"
+        })
         .collect();
     assert_eq!(
         pull_one,
@@ -570,6 +577,7 @@ async fn details_are_fetched_again_only_when_something_changed(cx: &mut TestAppC
             "summary #1: feat: stack layer A",
             "check #1",
             "details #1: feat: stack layer A",
+            "rulesets of rozed-dev/playground",
             "open PRs of rozed-dev/playground: 2",
             "check #1",
             "details #1: retitled",
@@ -748,6 +756,7 @@ async fn a_list_that_answers_200_unchanged_isnt_fetched_again(cx: &mut TestAppCo
         answering(r[9].clone(), "\"moved\"", "\"moved\""),
         r[3].clone(),
         r[8].clone(),
+        r[10].clone(),
     ];
     let mut t = Polling::new("unchanged_list", interactions, cx).await;
     t.update(|poller, cx| poller.watch(pr(2), cx));
@@ -821,6 +830,7 @@ async fn every_page_of_open_prs_is_watched(cx: &mut TestAppContext) {
         closed,
         r[3].clone(),
         r[8].clone(),
+        r[10].clone(),
     ];
     let mut t = Polling::new("pages", interactions, cx).await;
     t.update(|poller, cx| poller.watch(pr(2), cx));
@@ -836,6 +846,7 @@ async fn every_page_of_open_prs_is_watched(cx: &mut TestAppContext) {
             (0, "GET /pulls?state=open&per_page=100"),
             (0, "GET /pulls?state=open&per_page=100&page=2"),
             (0, "OpenPullRequests"),
+            (0, "TrunkRules"),
             // The first page is the same, but an older PR on the second closed.
             (120, "GET /pulls?state=open&per_page=100 (etag)"),
             (120, "GET /pulls?state=open&per_page=100&page=2 (etag)"),
@@ -1085,6 +1096,8 @@ async fn an_open_only_limit_with_nothing_open_wakes_at_the_reset(cx: &mut TestAp
         log(&[
             (3600, "GET /pulls/2 (since)"),
             (3600, "GET /pulls?state=open&per_page=100 (etag)"),
+            // Half an hour since the rulesets were read.
+            (3600, "TrunkRules"),
             (3600, "GET /pulls/1 (since)"),
         ])
     );
@@ -1254,6 +1267,7 @@ async fn offline_it_backs_off_and_answers_from_the_cache_with_its_age(cx: &mut T
             (1200, "PullRequest"),
             (1200, "GET /pulls?state=open&per_page=100"),
             (1200, "OpenPullRequests"),
+            (1200, "TrunkRules"),
         ])
     );
     assert_eq!(t.status(), PollStatus::default());
@@ -1319,6 +1333,7 @@ async fn opening_a_pr_while_offline_tries_at_once(cx: &mut TestAppContext) {
             (70, "GET /pulls/1"),
             (70, "GET /pulls?state=open&per_page=100"),
             (70, "OpenPullRequests"),
+            (70, "TrunkRules"),
         ])
     );
     assert_eq!(t.status().offline, None);
@@ -1508,6 +1523,7 @@ async fn a_waiting_write_goes_before_the_polls_that_come_due(cx: &mut TestAppCon
             "PullRequest",
             "GET /pulls?state=open&per_page=100",
             "OpenPullRequests",
+            "TrunkRules",
         ],
         "{requests:?}"
     );
@@ -1610,20 +1626,20 @@ async fn a_write_finishes_when_its_caller_stops_waiting(cx: &mut TestAppContext)
     )
     .await;
     t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
-    t.run_until(5);
+    t.run_until(6);
     t.requests();
     // The tab that asked for it closes while it's in flight.
     let write = t.update(post_comment);
-    assert_eq!(t.requests(), log(&[(5, "POST /issues/1/comments")]));
+    assert_eq!(t.requests(), log(&[(6, "POST /issues/1/comments")]));
     drop(write);
-    t.run_until(10);
+    t.run_until(11);
     // It finished: what it changed is fetched again.
     assert_eq!(
         t.requests(),
         log(&[
-            (6, "GET /pulls/1 (since)"),
-            (7, "PullRequestCheck"),
-            (8, "PullRequest"),
+            (7, "GET /pulls/1 (since)"),
+            (8, "PullRequestCheck"),
+            (9, "PullRequest"),
         ])
     );
 }
@@ -1732,6 +1748,7 @@ async fn a_token_that_cant_be_read_is_tried_again(cx: &mut TestAppContext) {
             (20, "PullRequest"),
             (20, "GET /pulls?state=open&per_page=100"),
             (20, "OpenPullRequests"),
+            (20, "TrunkRules"),
         ])
     );
     assert_eq!(t.status(), PollStatus::default());
@@ -1812,6 +1829,7 @@ async fn a_failed_poll_is_reported_and_tried_again_at_its_interval(cx: &mut Test
             (0, "GET /pulls/99"),
             (0, "GET /pulls?state=open&per_page=100"),
             (0, "OpenPullRequests"),
+            (0, "TrunkRules"),
             (120, "GET /pulls/99"),
             (120, "GET /pulls?state=open&per_page=100 (etag)"),
         ])
@@ -2230,23 +2248,24 @@ async fn a_write_goes_between_the_requests_of_a_long_cached_read(cx: &mut TestAp
             cx,
         );
     });
-    // The open PR's poll and the repository's take the first five seconds; the read starts at 5.
-    t.run_until(6);
+    // The open PR's poll and the repository's, with its rulesets, take the first six seconds;
+    // the read starts at 6.
+    t.run_until(7);
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     let write = t.update(post_comment);
-    t.run_until(12);
+    t.run_until(13);
     write.await.unwrap();
 
     let requests: Vec<(u64, String)> = (t.requests().into_iter())
-        .filter(|(secs, _)| (5..=8).contains(secs))
+        .filter(|(secs, _)| (6..=9).contains(secs))
         .collect();
     assert_eq!(
         requests,
         log(&[
-            (5, "GET /pulls/1"),
             (6, "GET /pulls/1"),
-            (7, "POST /issues/1/comments"),
-            (8, "GET /pulls/1"),
+            (7, "GET /pulls/1"),
+            (8, "POST /issues/1/comments"),
+            (9, "GET /pulls/1"),
         ])
     );
 }
@@ -2328,7 +2347,7 @@ async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_lay
     let mut t = Polling::new("stack_layers", interactions, cx).await;
     let at_once = t.update(|poller, cx| {
         poller.set_open(Some(pr(1)), cx);
-        poller.stack_layers(pr(1), ids.clone(), cx)
+        poller.stack_layers(pr(1), vec![ids[1].clone()], cx)
     });
     assert_eq!(at_once, None);
     t.run();
@@ -2341,27 +2360,29 @@ async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_lay
     assert_eq!(stack_layers(t.requests()), [0]);
     assert!(t.events().contains(&"read StackLayers #1".to_string()));
     let read = |t: &Polling| t.read(|poller| poller.cached_read::<StackLayerList>(&pr(1)));
-    assert_eq!(layer_numbers(&read(&t).unwrap().value), [1, 2]);
+    assert_eq!(layer_numbers(&read(&t).unwrap().value), [2]);
 
-    // Asking about the same layers again reads nothing new, while the open PR's check doesn't
+    // Asking about the same layer again reads nothing new, while the open PR's check doesn't
     // change.
-    let held = t.update(|poller, cx| poller.stack_layers(pr(1), ids.clone(), cx));
-    assert_eq!(layer_numbers(&held.unwrap().value), [1, 2]);
-    // In another order, they're the same layers.
-    let reversed = ids.iter().rev().cloned().collect();
-    t.update(|poller, cx| poller.stack_layers(pr(1), reversed, cx));
+    let held = t.update(|poller, cx| poller.stack_layers(pr(1), vec![ids[1].clone()], cx));
+    assert_eq!(layer_numbers(&held.unwrap().value), [2]);
     t.run_until(60);
     assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
 
-    // Asking about other layers gives what it holds, and reads them at once.
-    let held = t.update(|poller, cx| poller.stack_layers(pr(1), vec![ids[1].clone()], cx));
-    assert_eq!(held.unwrap().value.ids, ids);
+    // Asking about a layer it doesn't read gives what it holds, and reads both at once.
+    let held = t.update(|poller, cx| poller.stack_layers(pr(1), ids.clone(), cx));
+    assert_eq!(held.unwrap().value.ids, ids[1..]);
     assert_eq!(stack_layers(t.requests()), [60]);
     let layers = read(&t).unwrap().value;
     assert_eq!(
         (layers.ids.as_slice(), layer_numbers(&layers)),
-        (&ids[1..], vec![2])
+        (&ids[..], vec![1, 2])
     );
+
+    // Another tree asking about one of them, or both in another order, shares that read.
+    t.update(|poller, cx| poller.stack_layers(pr(1), vec![ids[1].clone()], cx));
+    let reversed = ids.iter().rev().cloned().collect();
+    t.update(|poller, cx| poller.stack_layers(pr(1), reversed, cx));
     t.run_until(120);
     assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
 }
@@ -2400,33 +2421,62 @@ async fn asking_about_other_layers_while_they_are_read_reads_them_again(cx: &mut
     .await;
     t.update(|poller, cx| {
         poller.set_open(Some(pr(1)), cx);
-        poller.stack_layers(pr(1), ids.clone(), cx);
-    });
-    // The open PR's poll and the repository's take the first five seconds; the layers are read
-    // from 5 to 6.
-    t.run_until(5);
-    assert_eq!(stack_layer_reads(t.requests()), [5]);
-    t.update(|poller, cx| {
         poller.stack_layers(pr(1), vec![ids[1].clone()], cx);
     });
-    t.run_until(10);
-    // The answer about both layers isn't taken as the answer about PR #2 alone.
+    // The open PR's poll and the repository's, with its rulesets, take the first six seconds;
+    // PR #2's layer is read from 6 to 7.
+    t.run_until(6);
     assert_eq!(stack_layer_reads(t.requests()), [6]);
+    t.update(|poller, cx| {
+        poller.stack_layers(pr(1), ids.clone(), cx);
+    });
+    t.run_until(10);
+    // The answer about PR #2 alone isn't taken as the answer about both.
+    assert_eq!(stack_layer_reads(t.requests()), [7]);
     let layers = t
         .read(|poller| poller.cached_read::<StackLayerList>(&pr(1)))
         .unwrap()
         .value;
-    assert_eq!(layers.ids, ids[1..]);
+    assert_eq!(layers.ids, ids);
     t.run_until(60);
     assert_eq!(stack_layer_reads(t.requests()), Vec::<u64>::new());
 }
 
+/// A comment on PR `number`, as the recorded answer to `r`'s first request says.
+fn comment_on(r: &[Interaction], number: i64) -> Interaction {
+    let mut interaction = comment(r);
+    interaction.request.url =
+        format!("https://api.github.com/repos/rozed-dev/playground/issues/{number}/comments");
+    interaction
+}
+
+fn post_comment_on(
+    number: i64,
+) -> impl FnOnce(
+    &mut Poller,
+    &mut gpui::Context<Poller>,
+) -> gpui::Task<Result<serde_json::Value, github::GithubError>> {
+    move |poller, cx| {
+        poller.write(
+            pr(number),
+            move |client| async move {
+                let path = format!("/repos/rozed-dev/playground/issues/{number}/comments");
+                (client.post::<serde_json::Value, _>(&path, &serde_json::json!({"body": "hi"})))
+                    .await
+            },
+            cx,
+        )
+    }
+}
+
 #[gpui::test]
-async fn a_write_to_a_layer_reads_the_layers_again(cx: &mut TestAppContext) {
+async fn writes_to_another_layer_read_the_layers_again_once_a_burst_is_over(
+    cx: &mut TestAppContext,
+) {
     let r = recorded();
     let (both, ids) = stack_layers_answer();
     let mut interactions = r.clone();
-    interactions.extend([both, comment(&r)]);
+    interactions.extend([both, comment(&r), comment_on(&r, 2)]);
     let mut t = Polling::new("stack_layers_written", interactions, cx).await;
     t.update(|poller, cx| {
         poller.set_open(Some(pr(1)), cx);
@@ -2434,43 +2484,183 @@ async fn a_write_to_a_layer_reads_the_layers_again(cx: &mut TestAppContext) {
     });
     t.run_until(30);
     assert_eq!(stack_layer_reads(t.requests()), [0]);
-    // A comment on PR #1, a layer: the tree may show its review or viewed files differently.
+
+    // Writes to the open PR, such as viewed marks, aren't read back: its tab holds them.
     let write = t.update(post_comment);
-    t.run_until(31);
+    t.run_until(40);
     write.await.unwrap();
-    assert_eq!(stack_layer_reads(t.requests()), [30]);
+    assert_eq!(stack_layer_reads(t.requests()), Vec::<u64>::new());
+
+    // Three comments on PR #2, the layer above, a second apart: one read, two seconds after the
+    // last.
+    for _ in 0..3 {
+        let write = t.update(post_comment_on(2));
+        t.run_until(t.now() + 1);
+        write.await.unwrap();
+    }
+    t.run_until(50);
+    assert_eq!(stack_layer_reads(t.requests()), [44]);
 }
 
 #[gpui::test]
-async fn trunk_rules_are_read_with_the_open_pr_and_refreshed_every_five_minutes(
-    cx: &mut TestAppContext,
-) {
+async fn each_lookup_takes_a_turn_in_the_queue(cx: &mut TestAppContext) {
+    // PR #1 targets `b`, which merged into `a`, which merged into `main`: two lookups.
     let r = recorded();
-    let (_, interactions) =
-        cassette::read_cassette(&cassette::fixtures_dir().join("stacks_playground")).unwrap();
-    let (_, rules) = (interactions.into_iter())
-        .find(|(_, i)| i.request.operation.as_deref() == Some("TrunkRules"))
-        .unwrap();
-    let mut all = r.clone();
-    all.push(rules);
-    let mut t = Polling::new("trunk_rules", all, cx).await;
-    let at_once = t.update(|poller, cx| {
-        poller.set_open(Some(pr(1)), cx);
-        poller.trunk_rules(pr(1), cx)
+    let open = with_body(r[5].clone(), |body| {
+        let nodes = &mut body["data"]["repository"]["pullRequests"]["nodes"];
+        nodes[1]["baseRefName"] = "b".into();
     });
-    assert_eq!(at_once, None);
+    let merged = |base: &str, head: &str, number: i64| {
+        serde_json::json!({
+            "number": number, "createdAt": "2026-11-06T07:00:00Z", "baseRefName": base,
+            "baseRef": null, "headRefName": head, "headRefOid": format!("{number:040}"),
+            "isCrossRepository": false, "commits": {"nodes": []},
+            "mergeCommit": null, "stackEntry": null,
+        })
+    };
+    let looked_up = |branch: &str, found: serde_json::Value| {
+        let mut variables =
+            serde_json::json!({"owner": "rozed-dev", "name": "playground", "first": 5});
+        let mut repository = serde_json::json!({});
+        for index in 0..10 {
+            variables[format!("b{index}")] = branch.into();
+            let nodes = if index == 0 {
+                vec![found.clone()]
+            } else {
+                vec![]
+            };
+            repository[format!("b{index}")] = serde_json::json!({ "nodes": nodes });
+        }
+        let mut answer = r[5].clone();
+        answer.request.operation = Some("MergedPullRequests".into());
+        answer.request.variables = Some(variables);
+        answer.request.query_sha256 = None;
+        answer.response.body = Some(serde_json::json!({"data": {
+            "rateLimit": null, "repository": repository,
+        }}));
+        answer
+    };
+    let mut interactions = r.clone();
+    interactions[5] = open;
+    interactions.extend([
+        looked_up("b", merged("a", "b", 902)),
+        looked_up("a", merged("main", "a", 901)),
+        comment(&r),
+    ]);
+    let mut t = Polling::with(
+        "lookups_yield",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    // The open PR's poll takes 0–3 s, the repository's 3–5 s, its rulesets 5–6 s, and the first
+    // lookup 6–7 s. A comment sent then goes before the second lookup.
+    t.run_until(6);
+    let write = t.update(post_comment);
+    t.run_until(12);
+    write.await.unwrap();
+    let requests: Vec<String> = (t.requests().into_iter())
+        .map(|(_, what)| what)
+        .filter(|what| what == "MergedPullRequests" || what.starts_with("POST"))
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            "MergedPullRequests",
+            "POST /issues/1/comments",
+            "MergedPullRequests"
+        ]
+    );
+    let list = t
+        .read(|poller| poller.open_pull_requests(&playground()))
+        .unwrap();
+    let merged: Vec<u64> = list.value.merged.iter().map(|pr| pr.number).collect();
+    assert_eq!(merged, [902, 901]);
+}
+
+#[gpui::test]
+async fn rulesets_are_read_with_the_repository_and_again_every_half_hour(cx: &mut TestAppContext) {
+    let mut t = Polling::new("trunk_rules", recorded(), cx).await;
+    assert_eq!(t.read(|poller| poller.trunk_rules(&playground())), None);
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
     let reads = |t: &Polling| -> Vec<u64> {
         (t.requests().into_iter())
             .filter(|(_, what)| what == "TrunkRules")
             .map(|(secs, _)| secs)
             .collect()
     };
-    t.run();
     assert_eq!(reads(&t), [0]);
-    let rules = t.read(|poller| poller.cached_read::<TrunkRuleList>(&pr(1)));
-    assert_eq!(rules.unwrap().value.unavailable, None);
-    t.run_until(299);
+    assert!(
+        t.events()
+            .contains(&"rulesets of rozed-dev/playground".to_string())
+    );
+    let rules = t.read(|poller| poller.trunk_rules(&playground())).unwrap();
+    assert_eq!(rules.value.unavailable, None);
+    // Every PR in the repository has them, not only the open one.
+    t.update(|poller, cx| poller.watch(pr(2), cx));
+    assert!(t.read(|poller| poller.trunk_rules(&playground())).is_some());
+    t.run_until(1799);
     assert_eq!(reads(&t), Vec::<u64>::new());
-    t.run_until(301);
-    assert_eq!(reads(&t), [300]);
+    t.run_until(1920);
+    assert_eq!(reads(&t), [1800]);
+
+    // After a restart, they're there at once.
+    t.restart();
+    t.update(|poller, cx| poller.watch(pr(1), cx));
+    assert!(t.read(|poller| poller.trunk_rules(&playground())).is_some());
+}
+
+#[gpui::test]
+async fn lookups_that_stop_short_run_again_while_the_list_stays_the_same(cx: &mut TestAppContext) {
+    // PR #1 targets `gone`, and GitHub fails to look it up at first.
+    let r = recorded();
+    let open = with_body(r[5].clone(), |body| {
+        let nodes = &mut body["data"]["repository"]["pullRequests"]["nodes"];
+        nodes[1]["baseRefName"] = "gone".into();
+    });
+    let looked_up = |status: u16| {
+        let mut variables =
+            serde_json::json!({"owner": "rozed-dev", "name": "playground", "first": 5});
+        let mut repository = serde_json::json!({});
+        for index in 0..10 {
+            variables[format!("b{index}")] = "gone".into();
+            repository[format!("b{index}")] = serde_json::json!({ "nodes": [] });
+        }
+        let mut answer = r[5].clone();
+        answer.request.operation = Some("MergedPullRequests".into());
+        answer.request.variables = Some(variables);
+        answer.request.query_sha256 = None;
+        answer.response.status = status;
+        answer.response.body = Some(serde_json::json!({"data": {
+            "rateLimit": null, "repository": repository,
+        }}));
+        answer
+    };
+    let mut interactions = r.clone();
+    interactions[5] = open;
+    interactions.extend([looked_up(502), looked_up(200)]);
+    let mut t = Polling::new("lookups_retried", interactions, cx).await;
+    t.update(|poller, cx| poller.set_open(Some(pr(1)), cx));
+    t.run();
+    let list = t.read(|poller| poller.open_pull_requests(&playground()));
+    assert!(list.unwrap().value.merged_truncated);
+    let lookups = |t: &Polling| -> Vec<u64> {
+        (t.requests().into_iter())
+            .filter(|(_, what)| what == "MergedPullRequests")
+            .map(|(secs, _)| secs)
+            .collect()
+    };
+    assert_eq!(lookups(&t), [0]);
+    // The PRs don't change, but the lookups run again at the repository's next poll.
+    t.run_until(130);
+    assert_eq!(lookups(&t), [120]);
+    let list = t.read(|poller| poller.open_pull_requests(&playground()));
+    let list = list.unwrap().value;
+    assert!(!list.merged_truncated);
+    assert_eq!(list.lookups[0].branch, "gone");
+    t.run_until(400);
+    assert_eq!(lookups(&t), Vec::<u64>::new());
 }

@@ -38,8 +38,8 @@ fn client_for(http: Arc<ReplayHttpClient>) -> (GithubClient, Arc<ReplayHttpClien
 /// ones looked up, its trunk rules, and its client, for the layers.
 fn open(cassette: &str, repo: &RepoRef) -> (OpenPullRequestList, TrunkRuleList, GithubClient) {
     let (client, _) = client(cassette);
-    let list = block_on(client.open_pull_requests(repo)).unwrap();
-    let rules = block_on(client.trunk_rules(repo, None)).unwrap();
+    let rules = block_on(client.trunk_rules(repo, None, &[])).unwrap();
+    let list = block_on(client.open_pull_requests(repo, &rules)).unwrap();
     (list, rules, client)
 }
 
@@ -73,6 +73,15 @@ fn on_branch(branch: &str) -> Parent {
     Parent::Branch(branch.into())
 }
 
+/// A repository without rulesets.
+fn no_rules() -> TrunkRuleList {
+    TrunkRuleList::default()
+}
+
+fn now() -> std::time::SystemTime {
+    std::time::SystemTime::now()
+}
+
 #[test]
 fn the_playgrounds_github_stack() {
     let playground = RepoRef::new("rozed-dev", "playground");
@@ -80,7 +89,7 @@ fn the_playgrounds_github_stack() {
     // Each read costs a point.
     assert_eq!(client.rate_limits().last_graphql_cost, Some(1));
     assert_eq!(rules, TrunkRuleList::default());
-    let trunks = list.trunks(Some(&rules));
+    let trunks = list.trunks(&rules);
     assert_eq!(trunks.default_branch.as_deref(), Some("main"));
     assert!(trunks.protected.is_empty());
     assert!(list.merged.is_empty());
@@ -103,7 +112,7 @@ fn the_playgrounds_github_stack() {
         })
     );
 
-    let stacks = list.stacks(Some(&rules), &[]);
+    let stacks = list.stacks(&rules, &[]);
     assert_eq!(roots(&stacks), ["main"]);
     assert_eq!(walk(&stacks, 2), [(1, 0), (2, 1)]);
     assert_eq!(link(&stacks, 1), (on_branch("main"), None));
@@ -114,7 +123,8 @@ fn the_playgrounds_github_stack() {
     let pr = list.pull_request(2).unwrap();
     assert_eq!(pr.author.as_ref().unwrap().login, "rozed-bot");
     assert_eq!(pr.title, "feat: stack layer B");
-    let layers = block_on(client.stack_layers(&playground, &ids(&list, &[1, 2]), None)).unwrap();
+    let layers =
+        block_on(client.stack_layers(&playground, &ids(&list, &[1, 2]), None, now())).unwrap();
     assert_eq!(client.rate_limits().last_graphql_cost, Some(1));
     let numbers: Vec<i64> = layers.layers.iter().map(|layer| layer.number).collect();
     assert_eq!(numbers, [1, 2]);
@@ -179,24 +189,27 @@ fn e2s_tree_and_github_stack_and_e3s_rebase() {
             ("e10/base", 0),
             ("e12/base", 0),
             ("e6/base", 0),
+            ("e8/base", 0),
             ("e9/base", 0)
         ]
     );
     assert!(list.lookups.iter().all(|lookup| lookup.tip.is_some()));
     assert!(!list.merged_truncated);
 
-    let stacks = list.stacks(Some(&rules), &[]);
+    let stacks = list.stacks(&rules, &[]);
     assert!(stacks.cycles().is_empty());
     assert_eq!(
         roots(&stacks),
-        ["main", "e10/base", "e12/base", "e6/base", "e9/base"]
+        [
+            "main", "e10/base", "e12/base", "e6/base", "e8/base", "e9/base"
+        ]
     );
     // A stack for each bottom layer on `main`, oldest first: E2's tree, its GitHub stack, E3's
     // y (whose x merged), E1's revisions, and the later fixtures'.
     let bottoms: Vec<u64> = (stacks.roots()[0].stacks.iter())
         .map(|stack| stack.layers[0])
         .collect();
-    assert_eq!(bottoms, [2, 7, 11, 16, 17, 19]);
+    assert_eq!(bottoms, [2, 7, 11, 16, 17]);
 
     // E2: a, b, then c and e on b in the order they were opened, and d on c.
     assert_eq!(walk(&stacks, 2), [(2, 0), (3, 1), (4, 2), (6, 3), (5, 2)]);
@@ -217,11 +230,11 @@ fn e2s_tree_and_github_stack_and_e3s_rebase() {
 
     assert_e3_needs_rebase(&stacks);
 
-    let asked = ids(&list, &[2, 3, 4, 6, 5, 7, 8, 11]);
-    let layers = block_on(client.stack_layers(&e2e, &asked, None)).unwrap();
+    let asked = ids(&list, &[2, 3, 4, 6, 5, 7, 8, 11, 19]);
+    let layers = block_on(client.stack_layers(&e2e, &asked, None, now())).unwrap();
     assert_eq!(layers.ids, asked);
     let numbers: Vec<i64> = layers.layers.iter().map(|layer| layer.number).collect();
-    assert_eq!(numbers, [2, 3, 4, 6, 5, 7, 8, 11]);
+    assert_eq!(numbers, [2, 3, 4, 6, 5, 7, 8, 11, 19]);
     // d changes the files of a, b and c, and its own.
     let d = layers.layer(&asked[3]).unwrap();
     assert_eq!(
@@ -233,14 +246,15 @@ fn e2s_tree_and_github_stack_and_e3s_rebase() {
         }
     );
     assert_eq!(d.head_ref_oid, list.pull_request(6).unwrap().head_ref_oid);
-    // No layer was moved: e3/x is still there.
-    assert!(
-        layers
-            .layers
-            .iter()
-            .all(|layer| layer.moved_from().is_none())
-    );
+    // The fixtures script changed #19's base from `main` to `e8/base`, which shows as the branch
+    // it moved from; no merged pull request came from `main`. No other layer moved: e3/x is
+    // still there.
+    let moved: Vec<_> = (layers.layers.iter())
+        .filter_map(|layer| Some((layer.number, layer.moved_from()?)))
+        .collect();
+    assert_eq!(moved, [(19, "main")]);
     assert!(layers.merged.is_empty());
+    assert_eq!(layers.lookups_failed, None);
 }
 
 #[test]
@@ -248,7 +262,7 @@ fn e3s_merged_layer_is_looked_up_by_its_branch() {
     let e2e = RepoRef::new("rozed-dev", "e2e");
     let (client, http) = client("stacks_e2e_looked_up");
     let mut list = block_on(client.open_pull_requests_paged(&e2e, PAGE_SIZE, 0)).unwrap();
-    block_on(client.look_up_merged(&e2e, &mut list, None)).unwrap();
+    block_on(client.look_up_merged(&e2e, &mut list, None, &no_rules(), now())).unwrap();
     // Without the merged pull requests updated most recently, `e3/x`, which y targets, is looked
     // up with the later fixtures' bases, in one request.
     let seen = http.seen();
@@ -258,7 +272,7 @@ fn e3s_merged_layer_is_looked_up_by_its_branch() {
     assert_eq!(request["variables"]["b2"], "e3/x");
     let merged: Vec<u64> = list.merged.iter().map(|pr| pr.number).collect();
     assert_eq!(merged, [10]);
-    assert_e3_needs_rebase(&list.stacks(None, &[]));
+    assert_e3_needs_rebase(&list.stacks(&no_rules(), &[]));
 }
 
 #[test]
@@ -269,26 +283,28 @@ fn policy_rulesets_for_every_branch_name_no_trunks() {
     // scanning on the default branch only enforce a policy; the default branch's pull requests
     // and the enterprise release branches' gate merging.
     assert_eq!(rules.unavailable, None);
-    let includes: Vec<&str> = (rules.rulesets.iter())
-        .map(|ruleset| ruleset.include[0].as_str())
+    let includes: Vec<_> = (rules.rulesets.iter())
+        .map(|ruleset| (ruleset.include[0].as_str(), ruleset.gates_merging))
         .collect();
     assert_eq!(
         includes,
         [
-            "refs/heads/enterprise-2.*-release",
-            "refs/heads/enterprise-*.*.*-release",
-            "refs/heads/enterprise-*.*-release",
-            "~DEFAULT_BRANCH"
+            ("~ALL", false),
+            ("~DEFAULT_BRANCH", false),
+            ("refs/heads/enterprise-2.*-release", true),
+            ("refs/heads/enterprise-*.*.*-release", true),
+            ("refs/heads/enterprise-*.*-release", true),
+            ("~DEFAULT_BRANCH", true)
         ]
     );
-    let trunks = list.trunks(Some(&rules));
+    let trunks = list.trunks(&rules);
     assert!(trunks.contains("enterprise-3.18-release"));
     assert!(!trunks.contains("enterprise-3.18.1-backport-2"));
     let prs = list.stack_pull_requests(&[]);
     assert_eq!(trunks.among(&prs), ["main"]);
 
     // Every open pull request sits on `main` by itself, none of them a trunk.
-    let stacks = list.stacks(Some(&rules), &[]);
+    let stacks = list.stacks(&rules, &[]);
     for pr in &list.pull_requests {
         assert!(!trunks.contains(&pr.head_ref_name), "{}", pr.head_ref_name);
         assert_eq!(link(&stacks, pr.number as u64), (on_branch("main"), None));
@@ -299,7 +315,7 @@ fn policy_rulesets_for_every_branch_name_no_trunks() {
     assert_eq!((entry.stack, entry.position), (580, 2));
 
     let every: Vec<String> = list.pull_requests.iter().map(|pr| pr.id.clone()).collect();
-    let layers = block_on(client.stack_layers(&gh_stack, &every, None)).unwrap();
+    let layers = block_on(client.stack_layers(&gh_stack, &every, None, now())).unwrap();
     assert_eq!(layers.layers.len(), list.pull_requests.len());
     let layer = layers.layer(&list.pull_requests[0].id).unwrap();
     assert_eq!(
@@ -322,13 +338,16 @@ fn a_reader_sees_branch_protection_through_pull_requests() {
     // rozed-bot can't administer cli/cli, so the repository's list of branch protection rules
     // would be empty; `trunk`'s rule shows on the pull requests that target it. The one ruleset,
     // Copilot reviews on `~ALL`, gates nothing.
-    assert!(rules.rulesets.is_empty());
-    let trunks = list.trunks(Some(&rules));
+    let gates: Vec<_> = (rules.rulesets.iter())
+        .map(|ruleset| (ruleset.include.as_slice(), ruleset.gates_merging))
+        .collect();
+    assert_eq!(gates, [(&["~ALL".to_string()][..], false)]);
+    let trunks = list.trunks(&rules);
     assert_eq!(trunks.default_branch.as_deref(), Some("trunk"));
     assert_eq!(trunks.protected, ["trunk"]);
 
     // William Martin's drafts: a GitHub stack of eight layers on `trunk`.
-    let stacks = list.stacks(Some(&rules), &[]);
+    let stacks = list.stacks(&rules, &[]);
     let bottom = (list.pull_requests.iter())
         .find(|pr| pr.head_ref_name == "williammartin-multiaccount-draft-01-account")
         .unwrap();
@@ -345,7 +364,7 @@ fn a_reader_sees_branch_protection_through_pull_requests() {
     let ids: Vec<String> = (walked.iter())
         .map(|&(number, _)| list.pull_request(number as i64).unwrap().id.clone())
         .collect();
-    let layers = block_on(client.stack_layers(&cli, &ids, None)).unwrap();
+    let layers = block_on(client.stack_layers(&cli, &ids, None, now())).unwrap();
     assert_eq!(layers.layers.len(), 8);
 }
 
@@ -527,7 +546,7 @@ fn read(
     let mut all = vec![open_page(open, vec![], RECENTLY_UPDATED_MERGED)];
     all.extend(answers);
     let (client, _) = client_for(replay(all));
-    block_on(client.open_pull_requests(&repo())).unwrap()
+    block_on(client.open_pull_requests(&repo(), &no_rules())).unwrap()
 }
 
 #[test]
@@ -547,7 +566,7 @@ fn a_release_pull_request_from_a_protected_branch_holds_no_layers() {
         // `develop` is a trunk, so nothing is looked up.
         vec![],
     );
-    let stacks = list.stacks(None, &[]);
+    let stacks = list.stacks(&no_rules(), &[]);
     assert_eq!(roots(&stacks), ["main", "develop"]);
     assert_eq!(link(&stacks, 1), (on_branch("main"), None));
     assert_eq!(link(&stacks, 2), (on_branch("develop"), None));
@@ -555,7 +574,7 @@ fn a_release_pull_request_from_a_protected_branch_holds_no_layers() {
 
     // Without the rule, the release PR swallows every PR into `develop`.
     let list = read(vec![release, one, two], vec![]);
-    let stacks = list.stacks(None, &[]);
+    let stacks = list.stacks(&no_rules(), &[]);
     assert_eq!(link(&stacks, 2), (Parent::Pr(1), Some(Rule::BaseBranch)));
     assert_eq!(walk(&stacks, 1), [(1, 0), (2, 1), (3, 1)]);
 }
@@ -581,7 +600,7 @@ fn merged_layers_are_looked_up_down_to_a_trunk() {
     // `b` was squashed, so its head isn't in `a`. `a`'s merge commit has its head as a parent.
     assert_eq!(merged, [(2, false), (1, true)]);
     assert!(!list.merged_truncated);
-    let stacks = list.stacks(None, &[]);
+    let stacks = list.stacks(&no_rules(), &[]);
     let layer = stacks.layer(3).unwrap();
     assert_eq!(layer.parent, on_branch("main"));
     assert_eq!(
@@ -597,7 +616,7 @@ fn lookups_are_carried_over_while_their_branch_stays_put() {
         open_page(vec![open.clone()], vec![], RECENTLY_UPDATED_MERGED),
         looked_up(&["gone"], vec![vec![]]),
     ]));
-    let known = block_on(client.open_pull_requests(&repo())).unwrap();
+    let known = block_on(client.open_pull_requests(&repo(), &no_rules())).unwrap();
     assert_eq!(http.seen().len(), 2);
     assert_eq!(known.lookups[0].tip, Some(oid("gone")));
 
@@ -605,7 +624,7 @@ fn lookups_are_carried_over_while_their_branch_stays_put() {
     let o_r = repo();
     let pages = client.open_pull_requests_paged(&o_r, PAGE_SIZE, RECENTLY_UPDATED_MERGED);
     let mut again = block_on(pages).unwrap();
-    block_on(client.look_up_merged(&repo(), &mut again, Some(&known))).unwrap();
+    block_on(client.look_up_merged(&repo(), &mut again, Some(&known), &no_rules(), now())).unwrap();
     assert_eq!(http.seen().len(), 3);
     assert_eq!(again.lookups, known.lookups);
 
@@ -618,7 +637,7 @@ fn lookups_are_carried_over_while_their_branch_stays_put() {
     ]));
     let pages = client.open_pull_requests_paged(&o_r, PAGE_SIZE, RECENTLY_UPDATED_MERGED);
     let mut later = block_on(pages).unwrap();
-    block_on(client.look_up_merged(&repo(), &mut later, Some(&known))).unwrap();
+    block_on(client.look_up_merged(&repo(), &mut later, Some(&known), &no_rules(), now())).unwrap();
     assert_eq!(http.seen().len(), 2);
     assert_eq!(later.lookups[0].tip, Some(oid("moved")));
 }
@@ -669,8 +688,8 @@ fn the_merged_pull_requests_updated_most_recently_mark_a_moved_layer() {
         let o_r = repo();
         let pages = client.open_pull_requests_paged(&o_r, PAGE_SIZE, recently);
         let mut list = block_on(pages).unwrap();
-        block_on(client.look_up_merged(&repo(), &mut list, None)).unwrap();
-        list.stacks(None, &[])
+        block_on(client.look_up_merged(&repo(), &mut list, None, &no_rules(), now())).unwrap();
+        list.stacks(&no_rules(), &[])
     };
     let within = stacks(RECENTLY_UPDATED_MERGED, vec![a]);
     assert_eq!(
@@ -696,21 +715,24 @@ fn a_layer_github_moved_finds_the_merged_layer_it_sat_on() {
         layers(&["PR_2"], vec![layer(2, Some("a"))]),
         looked_up(&["a"], vec![vec![a]]),
     ]));
-    let list = block_on(client.open_pull_requests(&repo())).unwrap();
-    assert_eq!(list.stacks(None, &[]).layer(2).unwrap().needs_rebase, None);
+    let list = block_on(client.open_pull_requests(&repo(), &no_rules())).unwrap();
+    assert_eq!(
+        list.stacks(&no_rules(), &[]).layer(2).unwrap().needs_rebase,
+        None
+    );
 
     let ids = vec!["PR_2".to_string()];
-    let layers = block_on(client.stack_layers(&repo(), &ids, None)).unwrap();
+    let layers = block_on(client.stack_layers(&repo(), &ids, None, now())).unwrap();
     assert_eq!(layers.layers[0].moved_from(), Some("a"));
     assert_eq!(layers.lookups_failed, None);
-    let stacks = list.stacks(None, &layers.merged);
+    let stacks = list.stacks(&no_rules(), &layers.merged);
     let b = stacks.layer(2).unwrap();
     assert_eq!(b.parent, on_branch("main"));
     assert_eq!(b.needs_rebase.as_ref().map(|needs| needs.merged), Some(1));
     assert_eq!(http.seen().len(), 3);
 
     // Read again, the deleted branch's lookup is carried over.
-    let again = block_on(client.stack_layers(&repo(), &ids, Some(&layers))).unwrap();
+    let again = block_on(client.stack_layers(&repo(), &ids, Some(&layers), now())).unwrap();
     assert_eq!(again.merged, layers.merged);
     assert_eq!(http.seen().len(), 4);
 }
@@ -732,20 +754,41 @@ fn rulesets_name_trunks_only_when_active_and_gating_merges() {
         ruleset("ACTIVE", &["~ALL"], &["refs/heads/feature/**/*"], &["UPDATE"]),
         // Every branch, with no exception.
         ruleset("ACTIVE", &["~ALL"], &[], &["MERGE_QUEUE"]),
+        // GitHub's defaults for a new ruleset, on one branch and on a pattern.
+        ruleset(
+            "ACTIVE",
+            &["refs/heads/feature/kept", "refs/heads/feature/next-*"],
+            &[],
+            &["DELETION", "NON_FAST_FORWARD"],
+        ),
     ]});
     let (client, _) = client_for(replay(vec![
         trunk_rules(rulesets),
         open_page(vec![], vec![], RECENTLY_UPDATED_MERGED),
     ]));
-    let rules = block_on(client.trunk_rules(&repo(), None)).unwrap();
-    assert_eq!(rules.rulesets.len(), 3);
-    let list = block_on(client.open_pull_requests(&repo())).unwrap();
-    let trunks = list.trunks(Some(&rules));
+    let rules = block_on(client.trunk_rules(&repo(), None, &[])).unwrap();
+    // All but the one being tried out.
+    let gates: Vec<bool> = rules
+        .rulesets
+        .iter()
+        .map(|ruleset| ruleset.gates_merging)
+        .collect();
+    assert_eq!(gates, [true, false, true, true, false]);
+    let list = block_on(client.open_pull_requests(&repo(), &no_rules())).unwrap();
+    let trunks = list.trunks(&rules);
     assert!(trunks.contains("release/2.0"));
     assert!(trunks.contains("develop"));
     assert!(trunks.contains("staging"), "every branch but work branches");
     assert!(!trunks.contains("feature/a"));
     assert!(!trunks.contains("feature/a/b"));
+    assert!(
+        trunks.contains("feature/kept"),
+        "named exactly, whatever it enforces"
+    );
+    assert!(
+        !trunks.contains("feature/next-1"),
+        "a pattern that gates nothing"
+    );
 }
 
 #[test]
@@ -760,7 +803,7 @@ fn rulesets_that_cant_be_read_leave_the_trunks_to_the_rest() {
         }],
     }));
     let (client, _) = client_for(replay(vec![refused]));
-    let rules = block_on(client.trunk_rules(&repo(), None)).unwrap();
+    let rules = block_on(client.trunk_rules(&repo(), None, &[])).unwrap();
     assert!(rules.rulesets.is_empty());
     let reason = rules.unavailable.as_deref().unwrap();
     assert!(reason.contains("Resource not accessible"), "{reason}");
@@ -769,10 +812,111 @@ fn rulesets_that_cant_be_read_leave_the_trunks_to_the_rest() {
         rulesets: vec![github::trunks::RefNames {
             include: vec!["refs/heads/develop".into()],
             exclude: Vec::new(),
+            gates_merging: true,
         }],
         unavailable: None,
     };
-    let rules = block_on(client.trunk_rules(&repo(), Some(&known))).unwrap();
+    let rules = block_on(client.trunk_rules(&repo(), Some(&known), &[])).unwrap();
     assert_eq!(rules.rulesets, known.rulesets);
     assert!(rules.unavailable.is_some());
+}
+
+#[test]
+fn ruleset_trunks_are_never_looked_up_as_layers() {
+    // `develop` is protected by a ruleset alone, which pull requests' own branches don't show.
+    let release = open_pr(1, "main", "develop", &["d1"]);
+    let feature = open_pr(2, "develop", "feat", &["f1"]);
+    let (client, http) = client_for(replay(vec![
+        trunk_rules(serde_json::json!({"nodes": [
+            ruleset("ACTIVE", &["refs/heads/develop"], &[], &["DELETION"]),
+        ]})),
+        open_page(vec![release, feature], vec![], RECENTLY_UPDATED_MERGED),
+    ]));
+    let rules = block_on(client.trunk_rules(&repo(), None, &[])).unwrap();
+    let list = block_on(client.open_pull_requests(&repo(), &rules)).unwrap();
+    // No lookup of `develop`: the replay would have no answer for it.
+    assert_eq!(http.seen().len(), 2);
+    assert!(list.lookups.is_empty());
+    let stacks = list.stacks(&rules, &[]);
+    assert_eq!(link(&stacks, 2), (on_branch("develop"), None));
+}
+
+#[test]
+fn a_forks_protected_head_isnt_the_repositorys() {
+    let mut fork = protected(open_pr(1, "main", "release", &["r1"]), "headRef", "release");
+    fork["isCrossRepository"] = true.into();
+    let ours = protected(open_pr(2, "main", "x", &["x1"]), "baseRef", "main");
+    let list = read(vec![fork, ours], vec![]);
+    assert_eq!(list.trunks(&no_rules()).protected, ["main"]);
+}
+
+#[test]
+fn branches_are_checked_one_by_one_when_the_rulesets_cant_be_read() {
+    let mut refused = trunk_rules(serde_json::Value::Null);
+    refused.response.body = Some(serde_json::json!({
+        "data": {"rateLimit": null, "repository": {"rulesets": null}},
+        "errors": [{"type": "FORBIDDEN", "path": ["repository", "rulesets"], "message": "No"}],
+    }));
+    let rules_of = |branch: &str, types: &[&str]| {
+        let rules: Vec<serde_json::Value> = (types.iter())
+            .map(|rule| serde_json::json!({"type": rule, "ruleset_id": 1}))
+            .collect();
+        github::cassette::Interaction {
+            request: github::cassette::RecordedRequest {
+                method: "GET".into(),
+                url: format!("https://api.github.com/repos/o/r/rules/branches/{branch}"),
+                ..Default::default()
+            },
+            response: github::cassette::RecordedResponse {
+                status: 200,
+                headers: Default::default(),
+                body: Some(serde_json::Value::Array(rules)),
+                body_text: None,
+            },
+        }
+    };
+    // A release PR from `develop`, which features target, and a stack `a` ← `b`.
+    let open = vec![
+        open_pr(1, "main", "develop", &["d1"]),
+        open_pr(2, "develop", "feat", &["f1"]),
+        open_pr(3, "main", "a", &["a1"]),
+        open_pr(4, "a", "b", &["b1"]),
+    ];
+    let (client, _) = client_for(replay(vec![
+        open_page(open, vec![], RECENTLY_UPDATED_MERGED),
+        refused,
+        rules_of("a", &["copilot_code_review"]),
+        rules_of("develop", &["deletion", "pull_request"]),
+    ]));
+    let list =
+        block_on(client.open_pull_requests_paged(&repo(), PAGE_SIZE, RECENTLY_UPDATED_MERGED))
+            .unwrap();
+    assert_eq!(list.branches_to_check(), ["a", "develop"]);
+    let rules = block_on(client.trunk_rules(&repo(), None, &list.branches_to_check())).unwrap();
+    assert!(rules.unavailable.is_some());
+    let stacks = list.stacks(&rules, &[]);
+    assert_eq!(link(&stacks, 2), (on_branch("develop"), None));
+    assert_eq!(link(&stacks, 4), (Parent::Pr(3), Some(Rule::BaseBranch)));
+}
+
+#[test]
+fn a_lookup_that_found_nothing_is_read_again_after_a_day() {
+    let open = open_pr(2, "gone", "y", &["y1"]);
+    let (client, http) = client_for(replay(vec![
+        open_page(vec![open], vec![], RECENTLY_UPDATED_MERGED),
+        looked_up(&["gone"], vec![vec![]]),
+    ]));
+    let known = block_on(client.open_pull_requests(&repo(), &no_rules())).unwrap();
+    assert_eq!(http.seen().len(), 2);
+    let o_r = repo();
+    let again = |at: std::time::SystemTime| {
+        let pages = client.open_pull_requests_paged(&o_r, PAGE_SIZE, RECENTLY_UPDATED_MERGED);
+        let mut list = block_on(pages).unwrap();
+        block_on(client.look_up_merged(&o_r, &mut list, Some(&known), &no_rules(), at)).unwrap();
+    };
+    let hour = std::time::Duration::from_secs(3600);
+    again(now() + 23 * hour);
+    assert_eq!(http.seen().len(), 3, "carried over within a day");
+    again(now() + 25 * hour);
+    assert_eq!(http.seen().len(), 5, "looked up again after one");
 }

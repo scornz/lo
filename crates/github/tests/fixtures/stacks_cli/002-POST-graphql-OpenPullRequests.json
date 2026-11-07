@@ -17,19 +17,19 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4970",
-      "x-ratelimit-reset": "1794020281",
+      "x-ratelimit-remaining": "4968",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "30"
+      "x-ratelimit-used": "32"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4970,
-          "used": 30,
-          "resetAt": "2026-11-07T02:58:01Z"
+          "remaining": 4968,
+          "used": 32,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "repository": {
           "defaultBranchRef": {
@@ -48,7 +48,7 @@
                 "title": "chore(deps): Bump the codeql-actions group with 3 updates",
                 "isDraft": false,
                 "createdAt": "2026-11-06T14:03:12Z",
-                "updatedAt": "2026-11-07T01:48:17Z",
+                "updatedAt": "2026-11-07T02:48:00Z",
                 "author": {
                   "__typename": "Bot",
                   "login": "dependabot"
@@ -91,7 +91,7 @@
                 "title": "chore(deps): Bump github.com/spf13/pflag from 1.0.10 to 1.1.0",
                 "isDraft": false,
                 "createdAt": "2026-11-06T14:03:11Z",
-                "updatedAt": "2026-11-07T01:53:41Z",
+                "updatedAt": "2026-11-07T02:54:13Z",
                 "author": {
                   "__typename": "Bot",
                   "login": "dependabot"
@@ -3261,6 +3261,48 @@
           "mergedPullRequests": {
             "nodes": [
               {
+                "number": 8294,
+                "createdAt": "2023-11-04T07:30:25Z",
+                "baseRefName": "trunk",
+                "baseRef": {
+                  "target": {
+                    "__typename": "Commit",
+                    "oid": "736c68f674113337685e3eb1f908602a03b8f99b"
+                  },
+                  "refUpdateRule": {
+                    "pattern": "trunk"
+                  }
+                },
+                "headRefName": "docs/release-download",
+                "headRefOid": "724125307bfe91a1cceb2a0406a8020fed6f6def",
+                "isCrossRepository": true,
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "48ab24d08ec56a03ee76d0ddad470517cdb900bd"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "724125307bfe91a1cceb2a0406a8020fed6f6def"
+                      }
+                    }
+                  ]
+                },
+                "mergeCommit": {
+                  "oid": "ccf45cc7c6caa8686b608bd156b57ba1b9d939f0",
+                  "parents": {
+                    "nodes": [
+                      {
+                        "oid": "f41f402a2098513344ac540439d775d1ad92d7ec"
+                      }
+                    ]
+                  }
+                },
+                "stackEntry": null
+              },
+              {
                 "number": 14976,
                 "createdAt": "2026-11-07T00:19:18Z",
                 "baseRefName": "trunk",
@@ -4115,43 +4157,6 @@
                 },
                 "stackEntry": {
                   "position": 4,
-                  "stack": {
-                    "number": 14352
-                  }
-                }
-              },
-              {
-                "number": 14350,
-                "createdAt": "2026-09-04T15:25:04Z",
-                "baseRefName": "williammartin-git-graph-tests",
-                "baseRef": null,
-                "headRefName": "williammartin-git-transport-tests",
-                "headRefOid": "2720566f305f87dd99bbede991511994612d37ef",
-                "isCrossRepository": false,
-                "commits": {
-                  "nodes": [
-                    {
-                      "commit": {
-                        "oid": "2720566f305f87dd99bbede991511994612d37ef"
-                      }
-                    }
-                  ]
-                },
-                "mergeCommit": {
-                  "oid": "443baeba055cc78a0ff9fd9308dfc26aec860b87",
-                  "parents": {
-                    "nodes": [
-                      {
-                        "oid": "30eb70ca63a800733d9b802cc69862579478b0c3"
-                      },
-                      {
-                        "oid": "934db7e6623e7b5c7a3ccb6a26e91ec4eb1a9002"
-                      }
-                    ]
-                  }
-                },
-                "stackEntry": {
-                  "position": 3,
                   "stack": {
                     "number": 14352
                   }

@@ -203,6 +203,8 @@ pub(crate) struct ReadState {
     /// How many times it was made due at once whatever its stamp (`Poller::read_again`). A run
     /// that started before the last time doesn't stamp its value, so it's read again.
     pub generation: u64,
+    /// When it's due again after a write it shows, whatever its stamp.
+    pub again_at: Option<Instant>,
 }
 
 /// One run of a read, as a poll.
@@ -215,6 +217,8 @@ pub(crate) struct ReadJob {
     pub stamp: String,
     /// The read's [`ReadState::generation`] when it started.
     pub generation: u64,
+    /// When it started.
+    pub started: Instant,
 }
 
 impl fmt::Debug for ReadJob {

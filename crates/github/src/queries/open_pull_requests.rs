@@ -84,12 +84,14 @@ impl OpenPullRequestList {
     }
 
     /// What decides the repository's trunks: its default branch, the protection rules that cover
-    /// its pull requests' branches, and the rulesets in `rules`, once they've been read.
-    pub fn trunks(&self, rules: Option<&TrunkRuleList>) -> Trunks {
+    /// its pull requests' branches, and the repository's rulesets, `rules`.
+    pub fn trunks(&self, rules: &TrunkRuleList) -> Trunks {
         let open = self.pull_requests.iter().flat_map(|pr| {
             let base = (pr.base_ref.as_ref())
                 .and_then(|base| Some(&base.ref_update_rule.as_ref()?.pattern));
+            // A fork's rule is about the fork's branches.
             let head = (pr.head_ref.as_ref())
+                .filter(|_| !pr.is_cross_repository)
                 .and_then(|head| Some(&head.ref_update_rule.as_ref()?.pattern));
             base.into_iter().chain(head)
         });
@@ -103,24 +105,40 @@ impl OpenPullRequestList {
         Trunks {
             default_branch: self.default_branch.clone(),
             protected,
-            rulesets: rules
-                .map(|rules| rules.rulesets.clone())
-                .unwrap_or_default(),
+            rulesets: rules.rulesets.clone(),
         }
     }
 
-    /// The repository's stacks, with the rulesets in `rules` and the merged pull requests of
+    /// The repository's stacks, with its rulesets, `rules`, and the merged pull requests of
     /// `more`, such as those below the layers GitHub moved
     /// ([`super::stack_layers::StackLayerList::merged`]).
-    pub fn stacks(
-        &self,
-        rules: Option<&TrunkRuleList>,
-        more: &[MergedPullRequest],
-    ) -> stacks::Stacks {
+    ///
+    /// Until the rulesets have been read once ([`crate::poll::Poller::trunk_rules`]), a tree is
+    /// "loading", not one built without them: a branch only a ruleset protects, such as a
+    /// `develop` with a release pull request open from it, would hold every layer on it.
+    pub fn stacks(&self, rules: &TrunkRuleList, more: &[MergedPullRequest]) -> stacks::Stacks {
         let prs = self.stack_pull_requests(more);
         let trunks = self.trunks(rules).among(&prs);
         let trunks: Vec<&str> = trunks.iter().map(String::as_str).collect();
         stacks::Stacks::find(&prs, &trunks)
+    }
+
+    /// The branches that open pull requests both target and come from, other than the default
+    /// branch: the ones whose being a trunk changes the stacks, and which
+    /// [`GithubClient::trunk_rules`] checks one by one when it can't read the rulesets.
+    pub fn branches_to_check(&self) -> Vec<String> {
+        let heads: std::collections::BTreeSet<&str> = (self.pull_requests.iter())
+            .filter(|pr| !pr.is_cross_repository)
+            .map(|pr| pr.head_ref_name.as_str())
+            .collect();
+        let mut branches: Vec<String> = (self.pull_requests.iter())
+            .map(|pr| pr.base_ref_name.as_str())
+            .filter(|base| heads.contains(base) && self.default_branch.as_deref() != Some(*base))
+            .map(String::from)
+            .collect();
+        branches.sort_unstable();
+        branches.dedup();
+        branches
     }
 
     /// `branch`'s tip, as a pull request that targets it says.
@@ -162,14 +180,17 @@ impl From<&OpenPullRequest> for stacks::PullRequest {
 
 impl GithubClient {
     /// A repository's open pull requests, newest first, up to [`MAX_OPEN_PULL_REQUESTS`], with
-    /// the merged pull requests finding stacks needs.
+    /// the merged pull requests finding stacks needs, its rulesets being `rules`.
     pub async fn open_pull_requests(
         &self,
         repo: &RepoRef,
+        rules: &TrunkRuleList,
     ) -> Result<OpenPullRequestList, GithubError> {
         let mut list =
             (self.open_pull_requests_paged(repo, PAGE_SIZE, RECENTLY_UPDATED_MERGED)).await?;
-        self.look_up_merged(repo, &mut list, None).await?;
+        let now = std::time::SystemTime::now();
+        self.look_up_merged(repo, &mut list, None, rules, now)
+            .await?;
         Ok(list)
     }
 

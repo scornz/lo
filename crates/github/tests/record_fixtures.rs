@@ -22,7 +22,7 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use github::cassette::{CassetteInfo, fixtures_dir};
 use github::queries::open_pull_requests::RECENTLY_UPDATED_MERGED;
-use github::queries::{FileViewedState, OpenPullRequestList, PAGE_SIZE};
+use github::queries::{FileViewedState, OpenPullRequestList, PAGE_SIZE, TrunkRuleList};
 use github::record::RecordingHttpClient;
 use github::{Conditional, GithubClient, ListedPull, PullRef, PullSummary, RepoRef, Token};
 use serde::de::IgnoredAny;
@@ -381,7 +381,8 @@ fn poll_playground() {
         "Two polls in the poller's order, the second unchanged: PR #1 as the open PR (GET, \
          PullRequestCheck, then PullRequest the first time), PR #2 as a watched one (GET), and \
          the playground's open PRs (GET of the list, then OpenPullRequests the first time). The \
-         second poll asks about each PR since its last update, and about the list with its ETag",
+         second poll asks about each PR since its last update, and about the list with its ETag. \
+         Then TrunkRules, which the first poll reads after OpenPullRequests",
         |client| async move {
             let open = PullRef::new("rozed-dev", "playground", 1);
             let watched = PullRef::new("rozed-dev", "playground", 2);
@@ -408,7 +409,10 @@ fn poll_playground() {
                     .await
                     .unwrap(),
             );
-            client.open_pull_requests(&repo).await.unwrap();
+            client
+                .open_pull_requests(&repo, &TrunkRuleList::default())
+                .await
+                .unwrap();
 
             let since = open_summary.last_modified();
             let unchanged = client
@@ -431,6 +435,9 @@ fn poll_playground() {
                 .await
                 .unwrap();
             assert_eq!(unchanged, Conditional::NotModified);
+            // The first poll reads the playground's rulesets after its open PRs. Recorded last,
+            // so the answers above keep their places in the cassette.
+            client.trunk_rules(&repo, None, &[]).await.unwrap();
         },
     );
 }
@@ -545,7 +552,7 @@ fn push_history_fd_2202() {
 
 /// The node IDs of the layers of the stack `number` is in, in the order the tree walks them.
 fn stack_ids(list: &OpenPullRequestList, number: u64) -> Vec<String> {
-    let stacks = list.stacks(None, &[]);
+    let stacks = list.stacks(&TrunkRuleList::default(), &[]);
     let stack = stacks.stack_of(number).expect("a layer of a stack");
     (stack.layers.iter())
         .map(|&layer| {
@@ -570,11 +577,12 @@ fn record_stacks(
         &full_name,
         schema_commit(),
         |client| async move {
-            let list = client.open_pull_requests(&repo).await.unwrap();
-            let rules = client.trunk_rules(&repo, None).await.unwrap();
+            let rules = client.trunk_rules(&repo, None, &[]).await.unwrap();
             assert_eq!(rules.unavailable, None);
+            let list = client.open_pull_requests(&repo, &rules).await.unwrap();
             let ids = layers(&list);
-            client.stack_layers(&repo, &ids, None).await.unwrap();
+            let now = std::time::SystemTime::now();
+            client.stack_layers(&repo, &ids, None, now).await.unwrap();
         },
     );
 }
@@ -599,12 +607,14 @@ fn stacks_e2e() {
         "OpenPullRequests and TrunkRules for rozed-dev/e2e: E2's tree (#2 a -> main, #3 b -> a, \
          #4 c -> b, #5 e -> b, #6 d -> main holding c), its native stack #9 (#7, #8), and E3 \
          (#11 y -> e3/x, on #10 x, squash-merged, among the merged pull requests updated most \
-         recently); then StackLayers for E2's tree, the native stack and #11",
+         recently); then StackLayers for E2's tree, the native stack, #11, and #19, whose base \
+         the fixtures script changed from main to e8/base",
         RepoRef::new("rozed-dev", "e2e"),
         |list| {
             let mut ids = stack_ids(list, 2);
             ids.extend(stack_ids(list, 7));
             ids.extend(stack_ids(list, 11));
+            ids.extend(stack_ids(list, 19));
             ids
         },
     );
@@ -626,7 +636,11 @@ fn stacks_e2e_looked_up() {
                 .open_pull_requests_paged(&repo, PAGE_SIZE, 0)
                 .await
                 .unwrap();
-            client.look_up_merged(&repo, &mut list, None).await.unwrap();
+            let (rules, now) = (TrunkRuleList::default(), std::time::SystemTime::now());
+            client
+                .look_up_merged(&repo, &mut list, None, &rules, now)
+                .await
+                .unwrap();
             assert!(list.merged.iter().any(|pr| pr.number == 10));
         },
     );

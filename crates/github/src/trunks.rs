@@ -5,12 +5,14 @@
 //! - **Branch protection rules** come from each pull request's base and head branch
 //!   (`refUpdateRule { pattern }`), which anyone who can read the repository sees. The
 //!   repository's own list (`branchProtectionRules`) is empty for anyone who can't administer it.
-//! - **Rulesets** count only when they're active and gate merging, with a rule that requires a
-//!   pull request, a merge queue, status checks or deployments, or restricts updates: branches
-//!   nobody pushes work to. A ruleset that only enforces a policy, such as signed commits, Copilot
-//!   review or no force pushes, often covers work branches too. They're read on their own
-//!   ([`crate::queries::trunk_rules`]), and without them the trunks are the default branch and the
-//!   protected branches.
+//! - **Rulesets** count only when they're active. One that names a branch exactly, such as
+//!   `refs/heads/develop` or `~DEFAULT_BRANCH`, makes it a trunk whatever it enforces, even only
+//!   GitHub's defaults for a new ruleset (no deletions, no force pushes). One that matches by
+//!   pattern counts only when it gates merging, with a rule that requires a pull request, a merge
+//!   queue, status checks or deployments, or restricts updates: branches nobody pushes work to. A
+//!   pattern ruleset that only enforces a policy, such as signed commits or Copilot review, often
+//!   covers work branches too. Rulesets are the repository's, read on their own
+//!   ([`crate::queries::trunk_rules`]).
 //! - **A rule that covers every branch** says nothing about which are long-lived, so it makes no
 //!   branch a trunk: an include of `~ALL` or of wildcards alone, such as `*` or
 //!   `refs/heads/*/**/*`, in a ruleset without excludes, or a protection rule's `*`. With excludes,
@@ -36,17 +38,20 @@ pub struct Trunks {
     /// The patterns of the branch protection rules that cover its pull requests' branches,
     /// matched against branch names.
     pub protected: Vec<String>,
-    /// The ref name conditions of the active branch rulesets that gate merging.
+    /// The ref name conditions of the repository's active branch rulesets.
     pub rulesets: Vec<RefNames>,
 }
 
-/// A branch ruleset's ref name condition (`conditions { refName { include exclude } }`): it
-/// covers a branch when one of `include` matches it and none of `exclude` does. Patterns match a
-/// branch's full ref name, such as `refs/heads/main`, or are `~DEFAULT_BRANCH` or `~ALL`.
+/// An active branch ruleset's ref name condition (`conditions { refName { include exclude } }`):
+/// it covers a branch when one of `include` matches it and none of `exclude` does. Patterns match
+/// a branch's full ref name, such as `refs/heads/main`, or are `~DEFAULT_BRANCH` or `~ALL`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RefNames {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+    /// Whether the ruleset gates merging ([`crate::queries::trunk_rules::GATING_RULES`]), which a
+    /// pattern include needs to name trunks.
+    pub gates_merging: bool,
 }
 
 impl Trunks {
@@ -88,15 +93,17 @@ impl RefNames {
         self.include.iter().any(matches) && !self.exclude.iter().any(matches)
     }
 
-    /// Whether the condition names `branch` as a trunk: it covers it, by an include that doesn't
-    /// cover every branch, or does but comes with excludes.
+    /// Whether the ruleset names `branch` as a trunk: it covers it by an exact include, or by a
+    /// pattern while it gates merging. A pattern that covers every branch counts only with
+    /// excludes.
     fn names(&self, branch: &str, default_branch: Option<&str>) -> bool {
         let matches = |pattern: &String| ref_matches(pattern, branch, default_branch);
         let everything_but = !self.exclude.is_empty();
-        (self.include.iter())
-            .filter(|pattern| everything_but || !covers_every_branch(pattern))
-            .any(matches)
-            && !self.exclude.iter().any(matches)
+        let counts = |pattern: &&String| {
+            is_exact(pattern)
+                || (self.gates_merging && (everything_but || !covers_every_branch(pattern)))
+        };
+        self.include.iter().filter(counts).any(matches) && !self.exclude.iter().any(matches)
     }
 }
 
@@ -107,6 +114,13 @@ fn ref_matches(pattern: &str, branch: &str, default_branch: Option<&str>) -> boo
         DEFAULT_BRANCH => default_branch == Some(branch),
         pattern => fnmatch(pattern, &format!("{HEADS}{branch}")),
     }
+}
+
+/// Whether a ruleset's include names one branch: `~DEFAULT_BRANCH`, or a full ref name without
+/// wildcards or sets.
+fn is_exact(pattern: &str) -> bool {
+    pattern == DEFAULT_BRANCH
+        || (pattern.starts_with(HEADS) && !pattern.contains(['*', '?', '[', '\\']))
 }
 
 /// Whether a protection rule's or ruleset's pattern covers every branch, or nearly: `~ALL`, or
@@ -302,11 +316,38 @@ mod tests {
         ));
     }
 
+    /// A ruleset that gates merging.
     fn refs(include: &[&str], exclude: &[&str]) -> RefNames {
         RefNames {
             include: include.iter().map(|s| s.to_string()).collect(),
             exclude: exclude.iter().map(|s| s.to_string()).collect(),
+            gates_merging: true,
         }
+    }
+
+    #[test]
+    fn a_ruleset_that_names_a_branch_exactly_makes_it_a_trunk_whatever_it_enforces() {
+        // GitHub's defaults for a new ruleset: no deletions, no force pushes.
+        let defaults = |include: &[&str]| RefNames {
+            gates_merging: false,
+            ..refs(include, &[])
+        };
+        let repo = trunks(
+            "main",
+            &[],
+            vec![
+                defaults(&["refs/heads/develop", "refs/heads/release/*"]),
+                defaults(&["refs/heads/feature/*"]),
+            ],
+        );
+        assert!(repo.contains("develop"));
+        assert!(!repo.contains("release/2.0"));
+        assert!(!repo.contains("feature/a"));
+        assert!(is_exact("refs/heads/v1.x"));
+        assert!(is_exact(DEFAULT_BRANCH));
+        assert!(!is_exact("refs/heads/v[0-9].x"));
+        assert!(!is_exact(ALL));
+        assert!(!is_exact("develop"));
     }
 
     #[test]

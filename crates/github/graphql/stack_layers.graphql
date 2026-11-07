@@ -1,8 +1,8 @@
 # What a stack's tree shows of its layers (design §4, "The stack tree") that the open pull request
 # list doesn't keep current: each layer's review decision, checks and merge queue entry, and how
-# many of its first 100 files the viewer has viewed. Also the branch GitHub last moved each layer
-# from, after that branch was deleted, so the merged layer below can be looked up. Asked for by
-# node ID, at most 100 at a time.
+# many of its first 100 files the viewer has viewed. Also the branch each layer last moved from,
+# whether GitHub moved it after that branch was deleted or someone changed its base, so the merged
+# layer below can be looked up. Asked for by node ID, at most 100 at a time.
 query StackLayers($ids: [ID!]!) {
   rateLimit {
     cost
@@ -33,11 +33,17 @@ query StackLayers($ids: [ID!]!) {
           viewerViewedState
         }
       }
-      movedFrom: timelineItems(itemTypes: [AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT], last: 1) {
+      movedFrom: timelineItems(
+        itemTypes: [AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT, BASE_REF_CHANGED_EVENT]
+        last: 1
+      ) {
         nodes {
           __typename
           ... on AutomaticBaseChangeSucceededEvent {
             oldBase
+          }
+          ... on BaseRefChangedEvent {
+            previousRefName
           }
         }
       }

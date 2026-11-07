@@ -752,7 +752,7 @@ mod tests {
             OpenPullRequestList::NAME,
             Stamped::<PushHistory>::NAME,
             Stamped::<StackLayerList>::NAME,
-            Stamped::<TrunkRuleList>::NAME,
+            TrunkRuleList::NAME,
         ];
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "{names:?}");
@@ -771,20 +771,17 @@ mod tests {
                     Stamped::<StackLayerList>::NAME,
                     Stamped::<StackLayerList>::version()
                 ),
-                (
-                    Stamped::<TrunkRuleList>::NAME,
-                    Stamped::<TrunkRuleList>::version()
-                ),
+                (TrunkRuleList::NAME, TrunkRuleList::version()),
             ],
             [
                 ("pull", "b2f1fdde71669374".to_string()),
                 ("pulls", "7c1cc8e8b3c05b05".to_string()),
                 ("PullRequest", "2f6a282f3dfcbf15".to_string()),
                 ("PullRequestCheck", "098cc23f0fe0c48d".to_string()),
-                ("OpenPullRequests", "0da2c08ba764f68c".to_string()),
+                ("OpenPullRequests", "64bdb1e8ba14f7e0".to_string()),
                 ("PushHistory", "1f9c5b1925f77e8b".to_string()),
-                ("StackLayers", "fc5afbb6e28bead7".to_string()),
-                ("TrunkRules", "d527a7fc1df832b5".to_string()),
+                ("StackLayers", "a79d34dd50325fec".to_string()),
+                ("TrunkRules", "22f61a7701923aef".to_string()),
             ]
         );
     }

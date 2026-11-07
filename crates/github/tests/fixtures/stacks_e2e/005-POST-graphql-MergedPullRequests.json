@@ -6,16 +6,16 @@
     "variables": {
       "owner": "rozed-dev",
       "name": "e2e",
-      "b0": "e10/base",
-      "b1": "e12/base",
-      "b2": "e6/base",
-      "b3": "e9/base",
-      "b4": "e10/base",
-      "b5": "e10/base",
-      "b6": "e10/base",
-      "b7": "e10/base",
-      "b8": "e10/base",
-      "b9": "e10/base",
+      "b0": "main",
+      "b1": "main",
+      "b2": "main",
+      "b3": "main",
+      "b4": "main",
+      "b5": "main",
+      "b6": "main",
+      "b7": "main",
+      "b8": "main",
+      "b9": "main",
       "first": 5
     },
     "query_sha256": "feccbc8aa9cf1e8c6d522dde0846b357b68c66a87c9d5b9e84008e9be191a0ff"
@@ -25,19 +25,19 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4985",
-      "x-ratelimit-reset": "1794020825",
+      "x-ratelimit-remaining": "4962",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "15"
+      "x-ratelimit-used": "38"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4985,
-          "used": 15,
-          "resetAt": "2026-11-07T03:07:05Z"
+          "remaining": 4962,
+          "used": 38,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "repository": {
           "b0": {

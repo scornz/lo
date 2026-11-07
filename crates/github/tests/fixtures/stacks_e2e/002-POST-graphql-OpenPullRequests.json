@@ -17,19 +17,19 @@
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4986",
-      "x-ratelimit-reset": "1794020825",
+      "x-ratelimit-remaining": "4965",
+      "x-ratelimit-reset": "1794024620",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "14"
+      "x-ratelimit-used": "35"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4986,
-          "used": 14,
-          "resetAt": "2026-11-07T03:07:05Z"
+          "remaining": 4965,
+          "used": 35,
+          "resetAt": "2026-11-07T04:10:20Z"
         },
         "repository": {
           "defaultBranchRef": {
@@ -171,12 +171,12 @@
                 "title": "E8: hostile files",
                 "isDraft": false,
                 "createdAt": "2026-11-07T02:15:03Z",
-                "updatedAt": "2026-11-07T02:15:03Z",
+                "updatedAt": "2026-11-07T02:53:24Z",
                 "author": {
                   "__typename": "User",
                   "login": "rozed-bot"
                 },
-                "baseRefName": "main",
+                "baseRefName": "e8/base",
                 "baseRefOid": "a45754b66cccf1879cd0a252c781639330e6d1fa",
                 "baseRef": {
                   "target": {
@@ -186,7 +186,7 @@
                   "refUpdateRule": null
                 },
                 "headRefName": "e8/hostile",
-                "headRefOid": "46253d2f3d91bc6add95bbc639d2ff21a6bdf643",
+                "headRefOid": "a35edcfe93323cdd1be3a153b9e2765ce28e3e83",
                 "headRef": {
                   "refUpdateRule": null
                 },
@@ -200,6 +200,11 @@
                     {
                       "commit": {
                         "oid": "46253d2f3d91bc6add95bbc639d2ff21a6bdf643"
+                      }
+                    },
+                    {
+                      "commit": {
+                        "oid": "a35edcfe93323cdd1be3a153b9e2765ce28e3e83"
                       }
                     }
                   ]
