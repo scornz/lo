@@ -13,6 +13,8 @@ concurrency:
 jobs:
   # Building on a hosted macOS runner is slow, so PRs that only touch docs, agent files, the license,
   # the brand assets or the e2e fixture scripts skip the Rust job. ci-ok passes when it's skipped.
+  # Nothing the build reads lives in brand/ yet. Once the app icon there feeds the build, narrow
+  # brand/* so changes to it run the Rust job.
   changes:
     name: changes
     runs-on: ubuntu-latest

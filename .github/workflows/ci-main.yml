@@ -1,0 +1,48 @@
+# The quick checks from ci.yml, run on every push to main, so the README's CI badge
+# (ci-main.yml, ?branch=main) shows main's state rather than the last pull request's. ci.yml runs
+# only on pull requests, and its Rust job is too slow to repeat for every merge. Keep these jobs in
+# step with ci.yml's.
+name: ci-main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  symlinks:
+    name: symlinks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the agent symlinks
+        run: script/check-symlinks.sh
+
+  # Goes when script/rename-to-lo.sh does, with the rename job in ci.yml.
+  rename:
+    name: rename
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that only the kept names use the first name
+        run: script/rename-to-lo.sh --check
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the e2e fixture scripts
+        run: shellcheck --version && shellcheck script/e2e/*.sh
