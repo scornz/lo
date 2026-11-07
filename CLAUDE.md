@@ -17,6 +17,45 @@ agent and environment variables (`LO_*`). `crates/lo/tests/visible_name.rs` fail
 literal that says lowercase `lo` as a word. The test org `rozed-dev`, its bot `rozed-bot` and the
 Zed fork's first patch branch, `rozed/v1.27.0`, keep the project's first name.
 
+`script/rename-to-lo.sh` renames a branch from before the rename: merge `origin/main`, run it,
+then fix by hand the lines it lists, and the Markdown lines it says it changed. On a branch that
+changes only docs, run it with `--list` and edit by hand instead: docs about the rename use both
+names, and the rewrite can't tell those lines apart. A line that has to say the first name, such as one about
+the rename, ends in `<!-- rename:keep -->`. CI runs the script with `--check`, which fails while
+any other line outside the kept names says it.
+
+Dev state from before the rename stays in the first name's folders, which Lo never reads. Delete
+them and sign in again, or move them with these commands, in bash, with every copy of the app quit.
+Release builds' Keychain items under the old `rozed://` scheme stay behind. <!-- rename:keep -->
+Delete them in Keychain Access.
+
+```sh
+mv ~/.config/rozed ~/.config/lo # rename:keep
+mv ~/Library/Application\ Support/rozed ~/Library/Application\ Support/Lo # rename:keep
+mv ~/Library/Caches/rozed ~/Library/Caches/Lo # rename:keep
+# The database's file, and the key sqlez stores its migrations under.
+for db in ~/Library/Application\ Support/Lo/db/0-*/rozed.sqlite; do # rename:keep
+  [ -f "$db" ] || continue
+  sqlite3 "$db" 'PRAGMA wal_checkpoint(TRUNCATE)' "UPDATE migrations SET domain = 'lo' WHERE domain = 'rozed'" # rename:keep
+  for f in "$db"*; do mv "$f" "${f/rozed.sqlite/lo.sqlite}"; done # rename:keep
+done
+# The clones' pins and files, and the --trust checkouts' links to their clone.
+for repo in ~/Library/Caches/Lo/repos/github.com/*/*.git; do
+  [ -d "$repo" ] || continue
+  git --git-dir="$repo" for-each-ref --format='create refs/lo/%(refname:strip=2) %(objectname)%0adelete %(refname) %(objectname)' refs/rozed/ | git --git-dir="$repo" update-ref --stdin # rename:keep
+  for name in last-used unavailable; do
+    if [ -e "$repo/rozed-$name" ]; then mv "$repo/rozed-$name" "$repo/lo-$name"; fi # rename:keep
+  done
+done
+for checkout in ~/Library/Caches/Lo/checkouts/github.com/*/*/pull-*; do
+  [ -d "$checkout" ] || continue
+  repo=${checkout%/pull-*}
+  git --git-dir="${repo/checkouts/repos}.git" worktree repair "$checkout"
+done
+# The debug token store, re-keyed without printing a token.
+(cd ~/.config/lo && umask 077 && jq 'with_entries(.key |= sub("^rozed-dev://"; "lo-dev://"))' credentials.json > credentials.json.new && mv credentials.json.new credentials.json) # rename:keep
+```
+
 ## Principles
 
 These bind every change (design §1).
@@ -145,11 +184,10 @@ default branch, and Lo's patch commits never are.
 On top of `v1.27.0`, in order. To change, reorder or drop one, make a new branch (see "Updating
 Zed").
 
-1. Lo's folders, in `paths`. Sets `APP_NAME` to `"Lo"` in `crates/paths/src/paths.rs`, so Lo
-   uses `~/.config/lo`, `~/Library/Application Support/Lo`, `~/Library/Caches/Lo` and
-   `~/Library/Logs/Lo`, never Zed's folders. On `rozed/v1.27.0` it's two commits: this one, made
-   under the project's first name, and patch 5. A new branch makes them one, `paths: use Lo's
-   folders`.
+1. `paths: use rozed's folders`. Sets `APP_NAME` in `crates/paths/src/paths.rs` to the <!-- rename:keep -->
+   project's first name, which patch 5 changes to `"Lo"`, so Lo uses `~/.config/lo`,
+   `~/Library/Application Support/Lo`, `~/Library/Caches/Lo` and `~/Library/Logs/Lo`, never Zed's
+   folders. A new branch makes patches 1 and 5 one commit, `paths: use Lo's folders`.
 2. `project: let an app ignore worktrees' own settings files`. Adds
    `SettingsObserver::ignore_worktree_settings_files` and `Project::settings_observer`. Lo calls
    it on every project, so a repository's `.zed/settings.json`, `.zed/tasks.json`,
@@ -163,7 +201,8 @@ Zed").
    `Editor::expand_excerpt_buttons_disabled`. GitHub's diff of a pull request shows hunks only,
    and its excerpts must never expand.
 5. `paths: name the app Lo`. Sets `APP_NAME` to `"Lo"`, renaming the folders patch 1 set. Only
-   `rozed/v1.27.0` has it; see patch 1.
+   `rozed/v1.27.0` has it; see patch 1. Both change the same line, so a Zed release that changes
+   it fails patches 1 and 5 together, for one cause.
 
 ### Cargo settings copied from Zed
 
