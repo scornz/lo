@@ -1,15 +1,18 @@
 //! Keeps Lo's window read-only where Zed's workspace would offer to open, create or edit files:
-//! no welcome page and no "+" menu in a pane, none of [`FileActions`] from anywhere, nothing
-//! opened from files dropped on the window, and any editor the workspace opens, such as the one a
-//! file header's "Open File" opens, is read-only.
+//! no welcome page and no "+" menu in a pane, none of [`FileActions`] from anywhere, no closing
+//! that saves first, no terminal or task, nothing opened from files dropped on the window, and any
+//! editor the workspace opens, such as the one a file header's "Open File" opens, is read-only.
+//! What vim adds is refused in `crate::vim_mode::refusals`.
 
 use std::any::TypeId;
 
 use command_palette_hooks::CommandPaletteFilter;
 use editor::Editor;
-use gpui::{Action, App, Context, Div, Entity, ExternalPaths, InteractiveElement as _};
+use gpui::{Action, App, Context, Div, Entity, ExternalPaths, InteractiveElement as _, Window};
 use workspace::item::ItemHandle;
 use workspace::{Pane, Workspace};
+
+use crate::vim_mode::refusals::{self, NoTerminals, Refusal};
 
 /// Lists the actions that open, create or write files, or open a window, so the same list is
 /// captured, hidden from the command palette and left out of the keymap.
@@ -81,6 +84,11 @@ file_actions![
     workspace::SaveWithoutFormat,
     workspace::FormatAndSave,
     workspace::ToggleReadOnlyFile,
+    // Reading a file from disk into its buffer again (vim's `:e`).
+    editor::actions::ReloadFile,
+    // Vim's switches write Lo's settings file, which Lo doesn't read yet.
+    vim::ToggleVimMode,
+    vim::ToggleHelixMode,
     // Handing a file to the app macOS picks for it, which may run it.
     zed_actions::workspace::OpenWithSystem,
     // Changing the repository: its files, index, stashes, commits, branches or remotes.
@@ -139,8 +147,18 @@ pub(crate) fn configure_workspace(workspace: &mut Workspace, cx: &mut Context<Wo
     for pane in workspace.panes().to_vec() {
         configure_pane(&pane, cx);
     }
+    // Lo runs no terminal or task, which vim's `:!` asks the workspace for.
+    workspace.set_terminal_provider(NoTerminals);
     workspace.register_action_renderer(|div, _, _, _| {
         FileActions::capture(div)
+            // `:wq`, `:x` and the like close the tab saving it first. Nothing in Lo's window has
+            // anything to save; the keys say "write", so Lo says it doesn't.
+            .capture_action(|close: &workspace::CloseActiveItem, window, cx| {
+                refuse_saving_close(close, window, cx)
+            })
+            .capture_action(|close: &workspace::CloseAllItemsAndPanes, window, cx| {
+                refuse_saving_close(close, window, cx)
+            })
             // A pane opens files and folders dropped on it, as a worktree Zed trusts to run
             // language servers in. Lo never opens a path it didn't create, so a drag from
             // Finder ends as soon as it enters the window, before any pane can take the drop.
@@ -150,6 +168,14 @@ pub(crate) fn configure_workspace(workspace: &mut Workspace, cx: &mut Context<Wo
                 }
             })
     });
+}
+
+/// Stops `close` if it closes saving first.
+fn refuse_saving_close(close: &dyn Action, window: &mut Window, cx: &mut App) {
+    if refusals::saves_on_close(close) {
+        refusals::refuse(Refusal::Files, window, cx);
+        cx.stop_propagation();
+    }
 }
 
 /// Hides Zed's welcome page and the tab bar's "+" and split menus.

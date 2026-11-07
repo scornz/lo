@@ -227,6 +227,9 @@ fn main() {
         command_palette::init(cx);
         let accounts = accounts_ui::init(cx);
         review_ui::init(accounts, cx);
+        // After `review_ui::init`, which binds Zed's keys and vim's, so the modal's keys go over
+        // them.
+        accounts_ui::bind_keys(cx);
 
         cx.on_action(|_: &zed_actions::Quit, cx| cx.quit());
         cx.set_menus([Menu::new("Lo").items([

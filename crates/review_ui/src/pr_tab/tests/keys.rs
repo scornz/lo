@@ -15,16 +15,37 @@ fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
                 .collect()
         };
         let tab = ["Workspace", "Pane", "PrTab middle=diff"];
-        let diff = stack(&[&tab[..], &["Editor mode=full multibuffer"]].concat());
+        let diff = "Editor mode=full multibuffer PrDiff";
+        let vim_diff = "Editor mode=full multibuffer PrDiff VimControl vim_mode=normal";
+        let diffs = [
+            stack(&[&tab[..], &[diff]].concat()),
+            stack(&[&tab[..], &[vim_diff]].concat()),
+        ];
         let file_list = stack(&[&tab[..], &["PrFileList"]].concat());
-        // A comment box in the diff, as milestone 8 adds, or any other text box in the tab.
-        let text_box = stack(
-            &[
-                &tab[..],
-                &["Editor mode=full multibuffer", "Editor mode=auto_height"],
-            ]
-            .concat(),
-        );
+        // A comment box in the diff, as milestone 8 adds. While it has focus, Zed leaves the
+        // diff's own context, `PrDiff` and vim's included, out of the stack. Without that, the
+        // box's size alone keeps Lo's keys out.
+        let text_boxes = [
+            stack(
+                &[
+                    &tab[..],
+                    &["Editor mode=full multibuffer", "Editor mode=auto_height"],
+                ]
+                .concat(),
+            ),
+            stack(&[&tab[..], &[diff, "Editor mode=auto_height"]].concat()),
+            stack(
+                &[
+                    &tab[..],
+                    &[
+                        "Editor mode=full multibuffer",
+                        "Editor mode=auto_height VimControl vim_mode=normal",
+                    ],
+                ]
+                .concat(),
+            ),
+        ];
+        // Any other text box in the tab.
         let line = stack(&[&tab[..], &["Editor mode=single_line"]].concat());
         let lo = |input: &'static str, contexts: &[gpui::KeyContext]| {
             let keystrokes: Vec<gpui::Keystroke> = input
@@ -48,16 +69,21 @@ fn the_tabs_typing_keys_type_in_a_text_box_inside_it(cx: &mut TestAppContext) {
             ("[ c", "review_ui::PreviousChange"),
             ("alt-o", "review_ui::ToggleFileOrder"),
         ] {
-            assert_eq!(lo(keys, &diff).0, [action], "{keys} in the diff");
+            for diff in &diffs {
+                assert_eq!(lo(keys, diff).0, [action], "{keys} in the diff");
+            }
             assert_eq!(lo(keys, &file_list).0, [action], "{keys} in the file list");
-            for contexts in [&text_box, &line] {
+            for contexts in text_boxes.iter().chain([&line]) {
                 assert_eq!(lo(keys, contexts).0, [""; 0], "{keys} in a text box");
             }
         }
         // A bracket types at once, not waiting for a second key.
         for prefix in ["]", "["] {
-            assert!(lo(prefix, &diff).1, "{prefix} waits in the diff");
-            assert!(!lo(prefix, &text_box).1, "{prefix} types in a text box");
+            assert!(lo(prefix, &diffs[0]).1, "{prefix} waits in the diff");
+            assert!(
+                !lo(prefix, &text_boxes[0]).1,
+                "{prefix} types in a text box"
+            );
         }
     });
 }
@@ -146,7 +172,12 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
             bindings.first().map(|binding| binding.action().name())
         };
         let tab = "PrTab middle=diff";
-        let diff = ["Workspace", "Pane", tab, "Editor mode=full multibuffer"];
+        let diff = [
+            "Workspace",
+            "Pane",
+            tab,
+            "Editor mode=full multibuffer PrDiff",
+        ];
         let file_list = ["Workspace", "Pane", tab, "PrFileList"];
         let comment = ["Workspace", "Pane", tab, "Editor mode=auto_height"];
         // A comment box can be a full editor too, of one buffer.
@@ -175,8 +206,9 @@ fn los_keys_win_over_zeds_and_leave_text_fields_alone(cx: &mut TestAppContext) {
 /// Each of Lo's keys does one thing wherever it's typed: on the context stack of every place in the
 /// window that takes keys, read from a window showing it, no two of Lo's bindings hold with the
 /// same keystrokes, or with one's starting the other's (see [`crate::key_clashes`]). Every binding
-/// holds in one of the places, so a binding in a new context needs a place here. The `lo` crate
-/// checks its Accounts modal the same way.
+/// holds in one of the places, so a binding in a new context needs a place here. Where one of
+/// Lo's and one of vim's fight, `keys::OVER_VIM` or `keys::UNDER_VIM` says which wins. The `lo`
+/// crate checks its Accounts modal the same way.
 #[gpui::test]
 async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppContext) {
     let (workspace, cx) = workspace(cx).await;
@@ -221,6 +253,18 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
     tab.update_in(cx, |tab, window, cx| tab.focus_diff(window, cx));
     places.push(focused("the diff", "Editor", cx));
     let diff_stack = places.last().unwrap().stack.clone();
+    // Vim's other modes in the diff, and while it waits for the rest of a command. The diff
+    // never enters insert mode.
+    for (name, keys) in [
+        ("the diff in vim's visual mode", "v"),
+        ("the diff after vim's `y`", "y"),
+        ("the diff after vim's `f`", "f"),
+        ("the diff with a count", "3"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        places.push(focused(name, "Editor", cx));
+        cx.simulate_keystrokes("escape");
+    }
     cx.update(|window, cx| {
         let left = diff.read(cx).lhs_editor().unwrap().focus_handle(cx);
         window.focus(&left, cx)
@@ -232,14 +276,39 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         tab.show_middle(Middle::View(PartView::new(&view, cx)), window, cx)
     });
     places.push(focused("a view in the diff's place", "Probe", cx));
+    // A text box with vim's keys, typing, in a view in the diff's place.
+    let text_box = cx.update(|window, cx| {
+        cx.new(|cx| crate::vim_mode::modal(Editor::auto_height(1, 10, window, cx)))
+    });
+    tab.update_in(cx, |tab, window, cx| {
+        tab.show_middle(Middle::View(PartView::new(&text_box, cx)), window, cx)
+    });
+    cx.simulate_keystrokes("i");
+    places.push(focused("a text box in vim's insert mode", "Editor", cx));
+    assert_eq!(
+        places
+            .last()
+            .unwrap()
+            .stack
+            .last()
+            .unwrap()
+            .get("vim_mode")
+            .map(|m| m.as_ref()),
+        Some("insert")
+    );
+    cx.simulate_keystrokes("escape");
     tab.update_in(cx, |tab, window, cx| {
         tab.show_middle(Middle::Diff, window, cx)
     });
-    // A text box in the diff, such as a comment box, and a line of text in the tab.
+    // A text box in the diff, such as a comment box, with vim's keys, and a line of text in the
+    // tab. While the box has focus, Zed leaves the diff's own context out of the stack, `PrDiff`
+    // and vim's included.
     for (name, editor) in [
         (
             "a text box in the diff",
-            cx.update(|window, cx| cx.new(|cx| Editor::auto_height(1, 10, window, cx))),
+            cx.update(|window, cx| {
+                cx.new(|cx| crate::vim_mode::modal(Editor::auto_height(1, 10, window, cx)))
+            }),
         ),
         (
             "a line of text in the tab",
@@ -247,8 +316,9 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         ),
     ] {
         let mut stack = diff_stack.clone();
-        if name.ends_with("in the tab") {
-            stack.pop();
+        stack.pop();
+        if name.ends_with("in the diff") {
+            stack.push(gpui::KeyContext::parse("Editor mode=full multibuffer").unwrap());
         }
         stack.push(
             cx.update(|window, cx| editor.update(cx, |editor, cx| editor.key_context(window, cx))),
@@ -274,12 +344,22 @@ async fn no_two_of_los_bindings_fight_where_keys_are_typed(cx: &mut TestAppConte
         // Lo's bindings alone.
         cx.clear_key_bindings();
         crate::bind_keys(cx);
-        let keymap = cx.key_bindings();
-        let keymap = keymap.borrow();
-        assert!(keymap.bindings().len() > 30);
-        let unplaced = crate::key_clashes::unplaced(keymap.bindings(), &places);
+        let lo: Vec<gpui::KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
+        assert!(lo.len() > 30);
+        let unplaced = crate::key_clashes::unplaced(&lo, &places);
         assert!(unplaced.is_empty(), "{unplaced:#?}");
-        let clashes = crate::key_clashes::clashes(keymap.bindings(), &places);
+        let clashes = crate::key_clashes::clashes(&lo, &places);
         assert!(clashes.is_empty(), "{clashes:#?}");
+        // And with vim's.
+        let vim = crate::key_clashes::vim_bindings(cx);
+        assert!(vim.len() > 300);
+        let fights = crate::key_clashes::with_vim(
+            &lo,
+            &vim,
+            &places,
+            crate::pr_tab::keys::OVER_VIM,
+            crate::pr_tab::keys::UNDER_VIM,
+        );
+        assert!(fights.is_empty(), "{fights:#?}");
     });
 }

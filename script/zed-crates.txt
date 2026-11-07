@@ -61,6 +61,7 @@ oauth_callback_server
 path
 paths
 picker
+picker_preview
 prettier
 project
 proto
@@ -72,6 +73,7 @@ reqwest_client
 rope
 rpc
 scheduler
+search
 session
 settings
 settings_content
@@ -94,6 +96,7 @@ ui
 ui_input
 ui_macros
 util
+vim
 vim_mode_setting
 watch
 workspace

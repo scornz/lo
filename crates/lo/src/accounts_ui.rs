@@ -44,7 +44,8 @@ actions!(
 
 const KEY_CONTEXT: &str = "AccountsModal";
 
-/// The modal's keys, over Zed's. CLAUDE.md's "Keys" table lists them, with `review_ui`'s.
+/// The modal's keys, over Zed's and vim's: bind them after `review_ui::init`, which binds those.
+/// CLAUDE.md's "Keys" table lists them, with `review_ui`'s.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("space", ToggleChosen, Some(KEY_CONTEXT)),
@@ -52,16 +53,23 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// The modal's keys that win over vim's, by keystrokes and action (see
+/// `review_ui::key_clashes::with_vim`).
+#[cfg(test)]
+const OVER_VIM: &[(&str, &str)] = &[
+    // Vim's `space` sequences outside an editor, such as `space w h`, which move between panes.
+    ("space", "accounts::ToggleChosen"),
+];
+
 /// Set when Lo's database couldn't be opened, so the modal can say why accounts are missing.
 struct AccountsUnavailable(SharedString);
 
 impl Global for AccountsUnavailable {}
 
-/// Opens Lo's database, loads the accounts and registers the modal's actions. Call it after
-/// the app's HTTP client is set. The task resolves to the loaded accounts and their database, or
-/// to `None` when the database couldn't be opened.
+/// Opens Lo's database, loads the accounts and registers the modal's actions, but binds no keys
+/// ([`bind_keys`]). Call it after the app's HTTP client is set. The task resolves to the loaded
+/// accounts and their database, or to `None` when the database couldn't be opened.
 pub fn init(cx: &mut App) -> Task<Option<(Entity<Accounts>, LoDb)>> {
-    bind_keys(cx);
     // The app menu enables an item only when something on the focused element's path handles
     // its action, and before anything in the window is focused nothing is. This handler keeps
     // "Accounts…" working then. It runs while the window that dispatched the action is being
@@ -1143,7 +1151,8 @@ mod tests {
     /// Each of Lo's keys does one thing in the Accounts modal, read from a window showing it: this
     /// crate's bindings all hold there, and no two of Lo's bindings, this crate's and
     /// `review_ui`'s, hold there with the same keystrokes, or with one's starting the other's.
-    /// `review_ui` checks the rest of the window the same way.
+    /// Where one of Lo's and one of vim's fight, [`OVER_VIM`] says Lo's wins. `review_ui` checks
+    /// the rest of the window the same way.
     #[gpui::test]
     async fn no_two_of_los_bindings_fight_in_the_accounts_modal(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -1181,9 +1190,13 @@ mod tests {
             assert!(unplaced.is_empty(), "{unplaced:#?}");
             // With `review_ui`'s, Lo's bindings alone.
             review_ui::bind_keys(cx);
-            let keymap = keymap.borrow();
-            let clashes = review_ui::key_clashes::clashes(keymap.bindings(), &places);
+            let lo: Vec<KeyBinding> = keymap.borrow().bindings().cloned().collect();
+            let clashes = review_ui::key_clashes::clashes(&lo, &places);
             assert!(clashes.is_empty(), "{clashes:#?}");
+            // And with vim's.
+            let vim = review_ui::key_clashes::vim_bindings(cx);
+            let fights = review_ui::key_clashes::with_vim(&lo, &vim, &places, OVER_VIM, &[]);
+            assert!(fights.is_empty(), "{fights:#?}");
         });
     }
 

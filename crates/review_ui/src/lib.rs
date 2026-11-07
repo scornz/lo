@@ -12,6 +12,7 @@ pub mod github_layer;
 mod image_preview;
 pub mod key_clashes;
 mod keymap;
+pub mod links;
 pub mod local_copies;
 pub mod local_project;
 pub mod open_box;
@@ -29,6 +30,7 @@ pub mod tabs;
 mod test_support;
 pub mod trust;
 pub mod viewed_marks;
+pub mod vim_mode;
 pub mod window_title;
 
 use github::accounts::Accounts;
@@ -42,8 +44,9 @@ pub use pr_diff::Trust;
 pub use pr_link::PrLink;
 pub use pr_tab::{PrTab, PrTabEvent, open};
 
-/// Sets up the PR tab: Zed's keys and its own, `cmd-o`, the GitHub layer from `accounts` (the loaded accounts and
-/// their database, or `None` without one), and Lo's changes to every workspace.
+/// Sets up the PR tab: Zed's keys, vim's and its own, `cmd-o`, the GitHub layer from `accounts`
+/// (the loaded accounts and their database, or `None` without one), and Lo's changes to every
+/// workspace.
 pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
     github_layer::init(accounts, cx);
     init_workspaces(cx);
@@ -52,6 +55,8 @@ pub fn init(accounts: Task<Option<(Entity<Accounts>, LoDb)>>, cx: &mut App) {
 /// [`init`] without the GitHub layer, for tests: pull requests open without signing in. Call it
 /// after the command palette is set up.
 pub fn init_workspaces(cx: &mut App) {
+    // Vim's on before the keymap loads, which binds vim's keys only when it is.
+    vim_mode::init(cx);
     // Of two bindings for a key in the same place, the later one wins: Lo's.
     keymap::load(cx);
     bind_keys(cx);

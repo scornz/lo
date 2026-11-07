@@ -7196,6 +7196,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "picker_preview"
+version = "0.1.0"
+dependencies = [
+ "editor",
+ "gpui",
+ "language",
+ "multi_buffer",
+ "picker",
+ "project",
+ "rope",
+ "settings",
+ "ui",
+ "util",
+]
+
+[[package]]
 name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8322,6 +8338,7 @@ dependencies = [
  "anyhow",
  "buffer_diff",
  "chrono",
+ "command_palette",
  "command_palette_hooks",
  "credentials_provider",
  "db",
@@ -8335,6 +8352,7 @@ dependencies = [
  "imara-diff",
  "language",
  "libc",
+ "linkify",
  "log",
  "menu",
  "multi_buffer",
@@ -8349,12 +8367,15 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "task",
  "tempfile",
  "theme",
  "theme_settings",
  "ui",
  "usvg",
  "util",
+ "vim",
+ "vim_mode_setting",
  "workspace",
  "zed_actions",
 ]
@@ -8775,6 +8796,43 @@ name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
+
+[[package]]
+name = "search"
+version = "0.1.0"
+dependencies = [
+ "any_vec",
+ "anyhow",
+ "bitflags 2.13.1",
+ "collections",
+ "db",
+ "editor",
+ "file_icons",
+ "fs",
+ "futures",
+ "gpui",
+ "itertools 0.14.0",
+ "language",
+ "log",
+ "menu",
+ "multi_buffer",
+ "picker",
+ "picker_preview",
+ "project",
+ "regex",
+ "serde_json",
+ "settings",
+ "smol",
+ "text",
+ "theme",
+ "theme_settings",
+ "tracing",
+ "ui",
+ "util",
+ "workspace",
+ "zed_actions",
+ "ztracing",
+]
 
 [[package]]
 name = "security-framework"
@@ -11003,6 +11061,43 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "collections",
+ "command_palette",
+ "command_palette_hooks",
+ "db",
+ "editor",
+ "futures",
+ "fuzzy",
+ "gpui",
+ "itertools 0.14.0",
+ "language",
+ "log",
+ "menu",
+ "multi_buffer",
+ "picker",
+ "project",
+ "regex",
+ "schemars",
+ "search",
+ "serde",
+ "serde_json",
+ "settings",
+ "task",
+ "text",
+ "theme",
+ "theme_settings",
+ "ui",
+ "util",
+ "vim_mode_setting",
+ "workspace",
+ "zed_actions",
+]
 
 [[package]]
 name = "vim_mode_setting"

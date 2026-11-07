@@ -7,8 +7,13 @@
 //!
 //! Tests in `review_ui` and `lo` read the context stack of each place their windows have, check
 //! that every binding holds in one of them ([`unplaced`]), then check the places ([`clashes`]).
+//!
+//! Vim's keymap is Zed's, not Lo's, so its bindings may fight each other. Where one of vim's and
+//! one of Lo's fight, each crate lists which wins, and [`with_vim`] checks the lists.
 
-use gpui::{KeyBinding, KeyContext, Keystroke, Modifiers, OperatingSystem};
+use std::collections::HashSet;
+
+use gpui::{App, KeyBinding, KeyContext, Keystroke, Modifiers, OperatingSystem};
 
 /// Where keys are typed in Lo's window: the context stack from the window's root to the focused
 /// element.
@@ -62,6 +67,125 @@ pub fn unplaced<'a>(
                 .all(|place| depth(binding, &place.stack).is_none())
         })
         .map(|binding| format!("No place has {}", describe(binding)))
+        .collect()
+}
+
+/// Vim's bindings, as Lo binds them when vim is on: before Lo's own.
+pub fn vim_bindings(cx: &App) -> Vec<KeyBinding> {
+    crate::keymap::vim_bindings(cx)
+}
+
+/// Each pair of one of `lo`'s bindings and one of `vim`'s that both hold somewhere in `places`
+/// with different actions, and the same keystrokes or one's starting the other's, unless the pair
+/// is listed. Lo's bindings are bound after vim's, as Lo binds them, so Lo's wins unless vim's is
+/// deeper with the same keystrokes. A shorter binding of Lo's runs at once, hiding vim's longer
+/// one, and a longer one of Lo's makes vim's shorter one wait for more keys, so Lo's wins those
+/// too.
+///
+/// `over` lists Lo's bindings that may win, by keystrokes and Lo's action; `under` lists vim's
+/// that may win, by keystrokes and vim's action. Each entry must win somewhere in `places`, so a
+/// list never names a fight that's gone. Vim's `null` bindings never hide Lo's, which bind
+/// without a source, as a user's do.
+pub fn with_vim(
+    lo: &[KeyBinding],
+    vim: &[KeyBinding],
+    places: &[Place],
+    over: &[(&'static str, &str)],
+    under: &[(&'static str, &str)],
+) -> Vec<String> {
+    let entry = |binding: &KeyBinding| (presses(binding.keystrokes()), binding.action().name());
+    let listed = |list: &[(&'static str, &str)]| -> Vec<(Vec<(Modifiers, String)>, String)> {
+        list.iter()
+            .map(|(keys, action)| {
+                let keystrokes: Vec<Keystroke> = keys
+                    .split(' ')
+                    .map(|key| Keystroke::parse(key).expect("a keystroke"))
+                    .collect();
+                (keystrokes.iter().map(press).collect(), action.to_string())
+            })
+            .collect()
+    };
+    let (over, under) = (listed(over), listed(under));
+    let vim: Vec<&KeyBinding> = vim
+        .iter()
+        .filter(|binding| {
+            let action = binding.action();
+            !gpui::is_no_action(action) && !gpui::is_unbind(action)
+        })
+        .collect();
+    let mut used = HashSet::new();
+    let mut fights = Vec::new();
+    for place in places {
+        let los = holding(lo.iter(), place);
+        let vims = holding(vim.iter().copied(), place);
+        for (lo, lo_depth) in &los {
+            for (vim, vim_depth) in &vims {
+                if !(starts(lo, vim) || starts(vim, lo)) || lo.action().partial_eq(vim.action()) {
+                    continue;
+                }
+                let same_keys = lo.keystrokes().len() == vim.keystrokes().len();
+                let vim_wins = same_keys && vim_depth > lo_depth;
+                let (winner, list, whose) = if vim_wins {
+                    (vim, &under, "UNDER_VIM")
+                } else {
+                    (lo, &over, "OVER_VIM")
+                };
+                let (keys, action) = entry(winner);
+                match list
+                    .iter()
+                    .position(|(listed, name)| *listed == keys && name == action)
+                {
+                    Some(index) => {
+                        used.insert((whose, index));
+                    }
+                    None => {
+                        let (winner, loser) = match vim_wins {
+                            true => (
+                                format!("vim's {}", describe(vim)),
+                                format!("Lo's {}", describe(lo)),
+                            ),
+                            false => (
+                                format!("Lo's {}", describe(lo)),
+                                format!("vim's {}", describe(vim)),
+                            ),
+                        };
+                        fights.push(format!(
+                            "In {}: {winner} wins over {loser} (depths {lo_depth} for Lo's, \
+                             {vim_depth} for vim's), and {whose} doesn't list it",
+                            place.name
+                        ))
+                    }
+                }
+            }
+        }
+    }
+    for (whose, list) in [("OVER_VIM", &over), ("UNDER_VIM", &under)] {
+        for (index, (_, action)) in list.iter().enumerate() {
+            if !used.contains(&(whose, index)) {
+                fights.push(format!(
+                    "{whose} lists {action} at its keys, but it wins over nothing in any place"
+                ));
+            }
+        }
+    }
+    fights
+}
+
+/// Each of `bindings` that holds in `place`, and how deep.
+fn holding<'a>(
+    bindings: impl Iterator<Item = &'a KeyBinding>,
+    place: &Place,
+) -> Vec<(&'a KeyBinding, usize)> {
+    bindings
+        .filter_map(|binding| Some((binding, depth(binding, &place.stack)?)))
+        .collect()
+}
+
+/// The key and modifiers that press each of `keystrokes`.
+fn presses(keystrokes: &[gpui::KeybindingKeystroke]) -> Vec<(Modifiers, String)> {
+    keystrokes
+        .iter()
+        .map(|keystroke| press(keystroke.inner()))
         .collect()
 }
 
@@ -175,7 +299,7 @@ mod tests {
 
     use crate::pr_tab::keys::{DIFF_CONTEXT, KEY_CONTEXT, READING_CONTEXT};
 
-    gpui::actions!(key_clashes_test, [First, Second]);
+    gpui::actions!(key_clashes_test, [First, Second, Third]);
 
     /// The diff and the file list, as the tab has them.
     fn places() -> Vec<Place> {
@@ -192,7 +316,7 @@ mod tests {
                     "Workspace",
                     "Pane",
                     "PrTab middle=diff",
-                    "Editor mode=full multibuffer",
+                    "Editor mode=full multibuffer PrDiff",
                 ]),
             },
             Place {
@@ -272,5 +396,51 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn lo_and_vim_fight_where_both_hold_unless_a_list_says_who_wins() {
+        let fights = |lo: &[KeyBinding],
+                      vim: &[KeyBinding],
+                      over: &[(&'static str, &str)],
+                      under: &[(&'static str, &str)]| {
+            with_vim(lo, vim, &places(), over, under)
+        };
+        let vims_e = [KeyBinding::new("e", Second, Some("Editor"))];
+        // As deep as vim's, Lo's wins, bound later.
+        let los_e = [KeyBinding::new("e", First, Some("Editor"))];
+        let unlisted = fights(&los_e, &vims_e, &[], &[]);
+        assert_eq!(
+            unlisted,
+            [
+                "In the diff: Lo's `e` for key_clashes_test::First in `Editor` wins over vim's `e` \
+                 for key_clashes_test::Second in `Editor` (depths 4 for Lo's, 4 for vim's), and \
+                 OVER_VIM doesn't list it"
+            ]
+        );
+        let over = [("e", "key_clashes_test::First")];
+        assert!(fights(&los_e, &vims_e, &over, &[]).is_empty());
+        // Shallower, vim's wins.
+        let tabs_e = [KeyBinding::new("e", First, Some("PrTab"))];
+        let vim_wins = fights(&tabs_e, &vims_e, &over, &[]);
+        assert_eq!(vim_wins.len(), 2, "{vim_wins:#?}");
+        assert!(vim_wins[0].contains("vim's `e`"), "{vim_wins:#?}");
+        assert!(vim_wins[1].starts_with("OVER_VIM lists"), "{vim_wins:#?}");
+        let under = [("e", "key_clashes_test::Second")];
+        assert!(fights(&tabs_e, &vims_e, &[], &under).is_empty());
+        // Lo's shorter one runs at once, and its longer one makes vim's wait: Lo's wins either way.
+        for (lo, vim) in [("g", "g g"), ("g g", "g")] {
+            let lo = KeyBinding::new(lo, First, Some("PrTab"));
+            let vim = KeyBinding::new(vim, Second, Some("Editor"));
+            assert_eq!(fights(&[lo], &[vim], &[], &[]).len(), 1);
+        }
+        // The same action, vim's `null`, or keys that differ don't fight.
+        let quiet = [
+            KeyBinding::new("e", First, Some("Editor")),
+            KeyBinding::new("e", gpui::NoAction, Some("Editor")),
+            KeyBinding::new("w", Third, Some("Editor")),
+        ];
+        let lo = KeyBinding::new("e", First, Some("PrTab"));
+        assert!(fights(&[lo], &quiet, &[], &[]).is_empty());
     }
 }

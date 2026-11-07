@@ -20,6 +20,7 @@ image.workspace = true
 imara-diff.workspace = true
 language.workspace = true
 libc.workspace = true
+linkify.workspace = true
 log.workspace = true
 menu.workspace = true
 multi_buffer.workspace = true
@@ -31,13 +32,17 @@ review.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 settings.workspace = true
+task.workspace = true
 ui.workspace = true
 usvg.workspace = true
 util.workspace = true
+vim.workspace = true
+vim_mode_setting.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 
 [dev-dependencies]
+command_palette.workspace = true
 credentials_provider = { workspace = true, features = ["test-support"] }
 db = { workspace = true, features = ["test-support"] }
 github = { workspace = true, features = ["test-support"] }
