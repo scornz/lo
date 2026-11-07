@@ -10,26 +10,26 @@
       "last": 3,
       "before": null
     },
-    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+    "query_sha256": "63b4b91e010e4f6cd8a24f3ccd09a7a6ca2f5b98954de823c1f18177caefedaf"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4996",
-      "x-ratelimit-reset": "1794028315",
+      "x-ratelimit-remaining": "4981",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "4"
+      "x-ratelimit-used": "19"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4996,
-          "used": 4,
-          "resetAt": "2026-11-07T05:11:55Z"
+          "remaining": 4981,
+          "used": 19,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "repository": {
           "pullRequest": {
@@ -40,6 +40,9 @@
             "body": "Enabling use-jemalloc does nothing on some targets, including riscv64 and 32-bit musl, even when the builder has a working jemalloc setup.\n\nRemove the platform restrictions from the dependency and allocator selection so Cargo builds can opt in explicitly. The Makefile and release workflow select jemalloc for the same targets as before. CI uses FD_BUILD_FEATURES, and the helper runs with Bash.\n\nThe Makefile sources the helper in one shell and records the selected features in a stamp that changes only when the selection changes. Target overrides use Cargo's target-specific binary path, including a configured target directory, instead of forcing Cargo to run every time.\n\nAll 287 Linux unit/integration tests and all-target, all-feature Clippy pass. Real Make/Cargo checks pass for unchanged settings, switching jemalloc on and off, a target-specific build, and completion generation. Shell syntax and workflow YAML checks pass. riscv64 and 32-bit musl were checked for dependency selection, not compiled or run.\n\nWindows unit tests pass. Windows integration tests require a symlink privilege unavailable here, and Windows Clippy reports errors in unchanged upstream code.\n\nFixes #1822.\n",
             "createdAt": "2026-11-03T07:06:59Z",
             "lastEditedAt": "2026-11-03T10:05:53Z",
+            "timelineEvents": {
+              "updatedAt": "2026-11-06T14:25:39Z"
+            },
             "timelineItems": {
               "filteredCount": 8,
               "pageInfo": {

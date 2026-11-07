@@ -1,6 +1,6 @@
 {
-  "description": "cli/cli#13057's timeline as rozed-bot, read only: a merged pull request with commits, force-pushes, reviews, review requests, cross-references, auto-merge and its merge, two pages newest first, the second repeating items pushed at the same second as the first's oldest; then again with what that read gave, which asks for the newest page alone",
-  "recorded_at": "2026-11-07T04:07:47Z",
+  "description": "cli/cli#13057's timeline as rozed-bot, read only: a merged pull request with commits, force-pushes, reviews, review requests, cross-references, auto-merge and its merge, two pages newest first, the second repeating items pushed at the same second as the first's oldest. Read again with what that read gave, it asks for the newest page alone, which the replay answers again, so the cassette holds it once",
+  "recorded_at": "2026-11-07T05:17:09Z",
   "repo": "cli/cli",
   "schema": "github/docs@03caf3ce9bc56af9d147500036b0bb6dda352674"
 }

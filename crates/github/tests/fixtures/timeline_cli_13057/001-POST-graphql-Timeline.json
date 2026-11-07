@@ -10,26 +10,26 @@
       "last": 100,
       "before": null
     },
-    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+    "query_sha256": "63b4b91e010e4f6cd8a24f3ccd09a7a6ca2f5b98954de823c1f18177caefedaf"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4898",
-      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-remaining": "4980",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "102"
+      "x-ratelimit-used": "20"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4898,
-          "used": 102,
-          "resetAt": "2026-11-07T04:10:20Z"
+          "remaining": 4980,
+          "used": 20,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "repository": {
           "pullRequest": {
@@ -40,31 +40,16 @@
             "body": "# Add Issues 2.0 support: issue types, sub-issues, and relationships\n\nCloses #10298\nCloses #9696\nCloses #11757\nCloses #12477\nCloses #12152\n\nAdds support for GitHub's Issues 2.0 features across `gh issue create`, `edit`, `view`, and `list`.\n\n## New flags\n\n### `gh issue create`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--parent 100` | Add as a sub-issue of the specified parent (number or URL) |\n| `--blocked-by 200,201` | Mark as blocked by these issues |\n| `--blocking 300` | Mark as blocking these issues |\n\nInteractive mode prompts for issue type when the repo has types configured.\n\n### `gh issue edit`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Set the issue type |\n| `--set-parent 100` | Set or replace the parent issue |\n| `--remove-parent` | Remove the parent issue |\n| `--add-sub-issue 123,124` | Add sub-issues |\n| `--remove-sub-issue 123` | Remove a sub-issue |\n| `--add-blocked-by 200` | Add blocked-by relationship |\n| `--remove-blocked-by 201` | Remove blocked-by relationship |\n| `--add-blocking 300,301` | Add blocking relationships |\n| `--remove-blocking 300` | Remove blocking relationship |\n\nInteractive mode adds Type and Parent to the field picker. Batch editing\nsupported for `--type` across multiple issues.\n\n### `gh issue view`\n\nTTY output now displays:\n- Issue type on the state line (e.g., `Bug · Open`)\n- Type, Parent, Blocked by, Blocking metadata rows\n- Sub-issues section with completion progress (e.g., `Sub-issues · 3/5 (60%)`)\n\nJSON output supports new fields: `issueType`, `parent`, `subIssues`,\n`subIssuesSummary`, `blockedBy`, `blocking`. The `subIssues`, `blockedBy`,\nand `blocking` fields are objects of the shape `{ \"nodes\": [...], \"totalCount\": N }`\n(rather than flat arrays) so consumers can detect when the truncation\nlimit is reached. Each node and the `parent` object include the canonical\n`id`.\n\n### `gh issue list`\n\n| Flag | Description |\n|------|-------------|\n| `--type Bug` | Filter issues by type |\n\n## GHES compatibility\n\n- **Issue types and sub-issues**: GA on all supported GHES versions (3.17+). No feature detection needed.\n- **Relationships** (blocked-by/blocking): Requires GHES 3.19+. Feature detection via `__type` schema introspection for the `blockedBy` field on the Issue type. Unsupported GHES versions receive a clear error message. Gated with `// TODO IssueRelationshipsCleanup` for cleanup when GHES 3.18 support ends.\n\n## Implementation details\n\n- Post-creation mutations for type, parent, and relationships (same pattern as projectV2 and assignee mutations)\n- `--blocking` and `--add-blocking` swap API arguments: calls `addBlockedBy(issueId=OTHER, blockingIssueId=THIS)`\n- Cross-repo references supported via URL for `--parent`, `--blocked-by`, `--blocking`, and sub-issue flags\n- Shared helpers extracted to `pkg/cmd/issue/shared/resolve.go` (`ResolveIssueRef`, `ResolveIssueTypeName`)\n- Issue-only fields (Type, Parent) gated behind `Allowed` in the Editable pattern to prevent leaking into `gh pr edit`\n- Issue type names with spaces are quoted in search queries (`type:\"Bug Report\"`)\n\n## Testing\n\n- **34 new flag parsing tests** across create, edit, and list\n- **18 new HTTP mock behavior tests** covering mutations, error cases, and GHES unsupported paths\n- **5 new view tests** (TTY rendering, JSON export)\n- **2 regression tests** (issue-only fields don't leak into PR edit, no-new-fields view unchanged)\n\n## Changes\n\n17 files changed, 2105 insertions(+), 18 deletions(-)\n\n| File | Change |\n|------|--------|\n| `api/queries_issue.go` | New types, Issue struct fields, mutation functions, helpers |\n| `api/query_builder.go` | GraphQL fragment cases, `issueOnlyFields` |\n| `api/export_pr.go` | ExportData cases for new fields |\n| `internal/featuredetection/` | `IssueRelationshipsSupported` detection |\n| `pkg/cmd/issue/create/create.go` | New flags, post-creation mutations, interactive type picker |\n| `pkg/cmd/issue/edit/edit.go` | New flags, mutations, interactive Type/Parent picker |\n| `pkg/cmd/issue/view/view.go` | TTY rendering, conditional relationship fields |\n| `pkg/cmd/issue/list/list.go` | `--type` filter via search path |\n| `pkg/cmd/issue/shared/resolve.go` | Shared `ResolveIssueRef`, `ResolveIssueTypeName` |\n| `pkg/cmd/pr/shared/editable.go` | `IssueType`/`Parent` fields, `Allowed` gating |\n| `pkg/cmd/pr/shared/params.go` | `IssueType` in `FilterOptions` and search query |\n\n## Key notes for reviewers\n\n- **`--blocking` arg swap**: The GitHub API only has `addBlockedBy(issueId, blockingIssueId)`. To support `--blocking`, we swap the arguments — the OTHER issue becomes `issueId` and THIS issue becomes `blockingIssueId`. Same for `--remove-blocking`.\n- **Editable `Allowed` gating**: `IssueType` and `Parent` are added to the shared `Editable` struct but gated behind `Allowed = true`, which only the issue edit command sets. This prevents these issue-only fields from leaking into `gh pr edit`'s interactive picker. Regression test in `survey_test.go`.\n- **View relationship fields are GHES-gated**: `blockedBy` and `blocking` are only added to the GraphQL query when `IssueRelationshipsSupported` is true. Without this, `gh issue view` would break on GHES 3.17–3.18 where these fields don't exist.\n- **Batch edit type resolution**: When editing multiple issues with `--type`, the type name is resolved to an ID once before the loop rather than per-issue, avoiding N-1 redundant `RepoIssueTypes` API calls.\n\n## Manual test results\n\nAll scenarios tested against on github.com.\n\n\n<b>24/24 scenarios passing</b> (click to expand)\n\n### Issue types\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 1 | `create-with-type` | `gh issue create --title \"...\" --type Bug` | ✅ [#1](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/1) created, type=Bug verified |\n| 2 | `create-error-invalid-type` | `gh issue create --title \"Oops\" --type Bugz` | ✅ Error: `type \"Bugz\" not found; available types: Task, Bug, Feature` |\n| 3 | `edit-change-type` | `gh issue edit 1 --type Feature` | ✅ Type changed to Feature verified |\n| 4 | `create-interactive-type` | `gh issue create` (interactive) | ✅ [#21](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/21) Type picker shown, Bug selected and set |\n\n### Sub-issues\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 5 | `create-with-parent` | `gh issue create --title \"...\" --parent 3` | ✅ [#4](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/4) created as sub-issue of #3 |\n| 6 | `edit-set-parent` | `gh issue edit 5 --set-parent 3` | ✅ Parent set, verified via `--json parent` |\n| 7 | `edit-remove-parent` | `gh issue edit 5 --remove-parent` | ✅ Parent removed, verified null |\n| 8 | `edit-add-sub-issues` | `gh issue edit 3 --add-sub-issue 6,7` | ✅ Sub-issues added, verified via `--json subIssues` |\n| 9 | `edit-remove-sub-issue` | `gh issue edit 3 --remove-sub-issue 6` | ✅ Sub-issue removed |\n| 10 | `edit-error-mutual-parent` | `gh issue edit 5 --set-parent 1 --remove-parent` | ✅ Error: `specify only one of --set-parent or --remove-parent` |\n\n### Relationships\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 11 | `create-with-relationships` | `gh issue create --blocked-by 8 --blocking 9` | ✅ [#11](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/11) blockedBy=#8, blocking=#9 verified |\n| 12 | `edit-add-remove-blocked-by` | `gh issue edit 14 --add-blocked-by 12 --remove-blocked-by 13` | ✅ Relationships updated |\n| 13 | `edit-add-blocking` | `gh issue edit 14 --add-blocking 15,16` | ✅ Blocking relationships added (swapped args verified) |\n\n### View\n\n| # | Scenario | Verification | Result |\n|---|----------|-------------|--------|\n| 14 | `view-with-type` | TTY shows `Bug · Open` on state line, `Type: Bug` row | ✅ |\n| 15 | `view-parent-sub-issues` | TTY shows Parent row, Sub-issues section with progress | ✅ |\n| 16 | `view-child-parent` | TTY shows parent reference for child issue | ✅ |\n| 17 | `view-relationships` | TTY shows Blocked by and Blocking rows | ✅ |\n| 18 | `view-json-issueType` | `--json issueType` returns id, name, description, color | ✅ |\n| 19 | `view-json-parent-subIssues` | `--json parent,subIssues,subIssuesSummary` returns structured data | ✅ |\n| 20 | `view-json-relationships` | `--json blockedBy,blocking` returns `{ nodes: [...], totalCount: N }` with id, number, title, url, state | ✅ |\n\n### List\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 21 | `list-filter-by-type` | `gh issue list --type Bug` | ✅ Filtered results returned |\n\n### Combined\n\n| # | Scenario | Command | Result |\n|---|----------|---------|--------|\n| 22 | `create-all-flags` | `gh issue create --type Task --parent 3 --blocked-by 8 --blocking 9` | ✅ [#17](https://github.com/bagtoad-enterprise-cloud-testing/garbage/issues/17) all fields set |\n| 23 | `edit-batch-type` | `gh issue edit 18 19 20 --type Bug` | ✅ All 3 issues updated to Bug |\n| 24 | `edit-interactive` | `gh issue edit 21` (interactive) | ✅ Picker shows Type and Parent fields |\n\n\n\n**TODO**: GHES-specific scenarios (`create-error-ghes-relationships`), but GHES feature detection does have unit test coverage with mock introspection responses.\n\n",
             "createdAt": "2026-03-30T00:42:33Z",
             "lastEditedAt": "2026-05-06T21:08:32Z",
+            "timelineEvents": {
+              "updatedAt": "2026-11-07T04:26:11Z"
+            },
             "timelineItems": {
-              "filteredCount": 112,
+              "filteredCount": 113,
               "pageInfo": {
                 "hasPreviousPage": true,
-                "startCursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj"
+                "startCursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDozZjFkZjUxM2M1MzBjMDMwNWZiMTBjZmMzZmIyYTIxNTMwY2ZlYTk2"
               },
               "edges": [
-                {
-                  "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj",
-                  "node": {
-                    "__typename": "PullRequestCommit",
-                    "gitCommit": {
-                      "oid": "c00bc6a9b4999e4fd35e1457b37be20788b9e94c",
-                      "messageHeadline": "fix: address code review findings from multi-model review",
-                      "committedDate": "2026-04-30T14:49:43Z",
-                      "author": {
-                        "name": "Kynan Ware",
-                        "user": {
-                          "login": "BagToad"
-                        }
-                      },
-                      "statusCheckRollup": null
-                    }
-                  }
-                },
                 {
                   "cursor": "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDozZjFkZjUxM2M1MzBjMDMwNWZiMTBjZmMzZmIyYTIxNTMwY2ZlYTk2",
                   "node": {
@@ -1834,6 +1819,27 @@
                       "url": "https://github.com/COSMOS-Aero-Engineering/COSMOS-TVC-Hopper/pull/113",
                       "repository": {
                         "nameWithOwner": "COSMOS-Aero-Engineering/COSMOS-TVC-Hopper"
+                      }
+                    }
+                  }
+                },
+                {
+                  "cursor": "Y3Vyc29yOnYyOpPPAAABobRBwrgCqzIwNDMzMTQ5Njgy",
+                  "node": {
+                    "__typename": "CrossReferencedEvent",
+                    "actor": {
+                      "__typename": "User",
+                      "login": "scornz"
+                    },
+                    "createdAt": "2026-11-07T04:26:11Z",
+                    "willCloseTarget": false,
+                    "source": {
+                      "__typename": "PullRequest",
+                      "number": 37,
+                      "title": "feat(github): read review threads, your pending review and the timeline",
+                      "url": "https://github.com/scornz/lo/pull/37",
+                      "repository": {
+                        "nameWithOwner": "scornz/lo"
                       }
                     }
                   }

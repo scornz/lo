@@ -778,14 +778,12 @@ fn timeline_cli_13057() {
         "cli/cli#13057's timeline as rozed-bot, read only: a merged pull request with commits, \
          force-pushes, reviews, review requests, cross-references, auto-merge and its merge, two \
          pages newest first, the second repeating items pushed at the same second as the first's \
-         oldest; then again with what that read gave, which asks for the newest page alone",
+         oldest. Read again with what that read gave, it asks for the newest page alone, which \
+         the replay answers again, so the cassette holds it once",
         "cli/cli",
         |client| async move {
             let pull = PullRef::new("cli", "cli", 13057);
-            let now = recorded_now();
-            let first = client.timeline(&pull, None, now).await.unwrap();
-            let again = client.timeline(&pull, Some(&first), now).await.unwrap();
-            assert_eq!(again, first, "the timeline changed while it was recorded");
+            client.timeline(&pull, None, recorded_now()).await.unwrap();
         },
     );
 }

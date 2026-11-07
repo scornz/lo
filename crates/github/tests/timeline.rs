@@ -75,7 +75,9 @@ fn fd_2212s_timeline_is_read_in_full_then_by_its_newest_page() {
     assert_eq!(pages.len(), 4);
     assert_eq!(pages[0], None);
     assert!(pages[1..].iter().all(Option::is_some));
-    assert_eq!(first.left_out, 0);
+    assert_eq!((first.left_out, first.count), (0, 8));
+    // The cross-reference from scornz/lo#13, the latest item the timeline shows.
+    assert_eq!(first.shown_updated_at, Some(at("2026-11-06T14:25:39Z")));
     assert_eq!(
         first.read_in_full_at,
         chrono::DateTime::<chrono::Utc>::from(noon())
@@ -182,16 +184,17 @@ fn cli_13057s_timeline_reads_each_item_once_where_items_share_a_time() {
     assert_eq!(pages.len(), 2);
 
     // Every item once, as many as GitHub counts.
-    assert_eq!(first.items.len(), 112);
+    assert_eq!(first.items.len(), 113);
     assert_eq!(first.left_out, 0);
     let cursors: HashSet<&str> = (first.items.iter())
         .map(|entry| entry.cursor.as_str())
         .collect();
-    assert_eq!(cursors.len(), 112);
+    assert_eq!(cursors.len(), 113);
 
-    // The 14 commits of a rebase share a time. The newest page held 7 of them, so the page before
-    // it was read before the first item after them, which holds all 14 again: reading before the
-    // newest page's first commit would have skipped one.
+    // The 14 commits of a rebase share a time. The newest page held 6 of them, so the page before
+    // it was read before the first item after them, which holds all 14 again. Reading before the
+    // newest page's first commit would have skipped the 8 GitHub lists before it but compares
+    // after it.
     let rebased = (first.items.iter())
         .position(|entry| {
             matches!(&entry.item, TimelineItem::Commit(commit) if commit.oid.starts_with("c0025738"))
@@ -207,7 +210,7 @@ fn cli_13057s_timeline_reads_each_item_once_where_items_share_a_time() {
     );
     let newest_first = &first.items[first.items.len() - 100];
     assert!(
-        matches!(&newest_first.item, TimelineItem::Commit(commit) if commit.oid.starts_with("c00bc6a9"))
+        matches!(&newest_first.item, TimelineItem::Commit(commit) if commit.oid.starts_with("3f1df513"))
     );
 
     // What the items say.
@@ -292,7 +295,7 @@ fn cli_13057s_timeline_reads_each_item_once_where_items_share_a_time() {
     let references = (all.iter())
         .filter(|item| matches!(item, TimelineItem::CrossReference { .. }))
         .count();
-    assert_eq!(references, 36);
+    assert_eq!(references, 37);
 
     // Its newest page again joins what it has.
     let again = block_on(client.timeline(&pull, Some(&first), noon())).unwrap();

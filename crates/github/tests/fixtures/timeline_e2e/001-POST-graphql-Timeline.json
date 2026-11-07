@@ -10,26 +10,26 @@
       "last": 100,
       "before": null
     },
-    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+    "query_sha256": "63b4b91e010e4f6cd8a24f3ccd09a7a6ca2f5b98954de823c1f18177caefedaf"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4894",
-      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-remaining": "4977",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "106"
+      "x-ratelimit-used": "23"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4894,
-          "used": 106,
-          "resetAt": "2026-11-07T04:10:20Z"
+          "remaining": 4977,
+          "used": 23,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "repository": {
           "pullRequest": {
@@ -40,6 +40,9 @@
             "body": "Fixture E1 (revisions). Three normal pushes, r1 to r3, each changing `e1/a.txt` or `e1/b.txt`, and rozed-bot's COMMENT review on r2. `push-r4` adds r4, touching both files, `rebase-r5` moves `main` and rebases this PR on GitHub, and `push-r6` adds r6 after the rebase. Made by `script/e2e/fixtures.sh` in scornz/rozed.",
             "createdAt": "2026-11-06T19:27:51Z",
             "lastEditedAt": null,
+            "timelineEvents": {
+              "updatedAt": "2026-11-06T19:29:45Z"
+            },
             "timelineItems": {
               "filteredCount": 9,
               "pageInfo": {

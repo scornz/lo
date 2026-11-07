@@ -10,26 +10,26 @@
       "last": 100,
       "before": null
     },
-    "query_sha256": "d4c12de74bda1e07d095f03141d061a8e6b868d42b4f3b62ee71b6488e928881"
+    "query_sha256": "63b4b91e010e4f6cd8a24f3ccd09a7a6ca2f5b98954de823c1f18177caefedaf"
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "x-ratelimit-limit": "5000",
-      "x-ratelimit-remaining": "4895",
-      "x-ratelimit-reset": "1794024620",
+      "x-ratelimit-remaining": "4978",
+      "x-ratelimit-reset": "1794032211",
       "x-ratelimit-resource": "graphql",
-      "x-ratelimit-used": "105"
+      "x-ratelimit-used": "22"
     },
     "body": {
       "data": {
         "rateLimit": {
           "cost": 1,
           "limit": 5000,
-          "remaining": 4895,
-          "used": 105,
-          "resetAt": "2026-11-07T04:10:20Z"
+          "remaining": 4978,
+          "used": 22,
+          "resetAt": "2026-11-07T06:16:51Z"
         },
         "repository": {
           "pullRequest": {
@@ -40,6 +40,9 @@
             "body": "Throwaway PR for checking GitHub's review API behaviour for rozed. Will be closed, not merged.",
             "createdAt": "2026-11-06T16:20:29Z",
             "lastEditedAt": null,
+            "timelineEvents": {
+              "updatedAt": "2026-11-06T16:25:49Z"
+            },
             "timelineItems": {
               "filteredCount": 12,
               "pageInfo": {

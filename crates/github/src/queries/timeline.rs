@@ -5,11 +5,19 @@
 //! GraphQL has no ETags, so a timeline read again asks only for its newest page, and keeps the
 //! older items it has: each item's cursor says where the page joins them. A long timeline costs a
 //! point a page the first time, and a point each time it's read again. It's read in full again
-//! when the page doesn't join what Lo has or the counts don't add up, as after a deletion, and at
-//! least every [`READ_IN_FULL_EVERY`], so edits to older items show.
+//! when an older item may have changed:
+//!
+//! - the page doesn't join what Lo has, or the counts don't move together, as after a deletion;
+//! - the time of the latest change to the items it shows moved, but nothing on the page changed,
+//!   as after an older comment is edited or hidden;
+//! - the page has a new dismissal of a review it doesn't hold, or a new force-push to a commit it
+//!   doesn't hold, which changes or replaces older items;
+//! - and at least every [`READ_IN_FULL_EVERY`], for what none of those show, such as checks run
+//!   again on an older commit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
@@ -52,9 +60,14 @@ pub struct PullRequestTimeline {
     /// The items, oldest first, each by its cursor: every item, or the latest
     /// [`MAX_TIMELINE_PAGES`] pages of them.
     pub items: Vec<TimelineEntry>,
-    /// How many items GitHub counts that weren't read: the older ones, past
-    /// [`MAX_TIMELINE_PAGES`] pages.
+    /// How many older items weren't read, past [`MAX_TIMELINE_PAGES`] pages.
     pub left_out: usize,
+    /// How many items GitHub counted when it was read (`filteredCount`). A read of the newest
+    /// page joins this one only when the two counts differ by as many items as it adds.
+    pub count: usize,
+    /// The latest time of the items the timeline shows, edits included, when it was read.
+    #[schemars(with = "Option<String>")]
+    pub shown_updated_at: Option<chrono::DateTime<Utc>>,
     /// When it was last read in full. Reads in between ask only for its newest page.
     #[schemars(with = "String")]
     pub read_in_full_at: chrono::DateTime<Utc>,
@@ -172,10 +185,11 @@ pub enum TimelineItem {
         to: String,
         how: BaseChange,
     },
-    /// `ReviewDismissedEvent`: `reviewer`'s review, which was `previous_state`, a
-    /// `PullRequestReviewState`, was dismissed.
+    /// `ReviewDismissedEvent`: `reviewer`'s review, whose node ID is `review`, and which was
+    /// `previous_state`, a `PullRequestReviewState`, was dismissed.
     ReviewDismissed {
         event: Event,
+        review: Option<String>,
         reviewer: Option<String>,
         message: Option<String>,
         previous_state: String,
@@ -336,8 +350,9 @@ impl PullRequestTimeline {
     }
 
     /// This timeline with `page`, its newest, joined on: the items from the page's first on are
-    /// the page's. `None` when the page doesn't join, or the items don't add up to GitHub's count,
-    /// so it's read in full.
+    /// the page's. `None` when it must be read in full instead: the page doesn't join, the items
+    /// it adds don't match how far GitHub's count moved, or an older item may have changed (see
+    /// the module's docs).
     fn joined(&self, page: &Page, max_items: usize) -> Option<Self> {
         let first = page.entries.first()?;
         let at = (self.items.iter()).position(|entry| entry.cursor == first.cursor)?;
@@ -349,7 +364,24 @@ impl PullRequestTimeline {
             .cloned()
             .collect();
         items.extend(page.entries.iter().cloned());
-        if items.len() + self.left_out != page.count {
+        let added = items.len() as i64 - self.items.len() as i64;
+        if added != page.count as i64 - self.count as i64 {
+            return None;
+        }
+        let known: HashMap<&str, &TimelineItem> = (self.items.iter())
+            .map(|entry| (entry.cursor.as_str(), &entry.item))
+            .collect();
+        let new: Vec<&TimelineItem> = (page.entries.iter())
+            .filter(|entry| !known.contains_key(entry.cursor.as_str()))
+            .map(|entry| &entry.item)
+            .collect();
+        let changed = !new.is_empty()
+            || (page.entries.iter())
+                .any(|entry| known.get(entry.cursor.as_str()) != Some(&&entry.item));
+        if page.shown_updated_at != self.shown_updated_at && !changed {
+            return None;
+        }
+        if new.iter().any(|item| !page.holds_subject(item)) {
             return None;
         }
         let dropped = items.len().saturating_sub(max_items);
@@ -358,6 +390,8 @@ impl PullRequestTimeline {
             description: page.description.clone(),
             items,
             left_out: self.left_out + dropped,
+            count: page.count,
+            shown_updated_at: page.shown_updated_at,
             read_in_full_at: self.read_in_full_at,
         })
     }
@@ -370,28 +404,54 @@ struct Page {
     /// How many items the timeline has, when the page was read without a cursor; otherwise how
     /// many come before the cursor.
     count: usize,
+    /// The latest time of the items the timeline shows, edits included.
+    shown_updated_at: Option<chrono::DateTime<Utc>>,
     has_previous_page: bool,
     start_cursor: Option<String>,
 }
 
 impl Page {
+    /// Whether the page holds what `item` changes, when it's an item that changes an older one: a
+    /// dismissal changes the review it dismisses, and a force-push replaces the commits before it
+    /// with those up to the one it pushed. A force-push of the base branch changes the pull
+    /// request's commits, none of which it names.
+    fn holds_subject(&self, item: &TimelineItem) -> bool {
+        match item {
+            TimelineItem::ReviewDismissed { review, .. } => (self.entries.iter()).any(|entry| {
+                matches!(&entry.item, TimelineItem::Review(held) if Some(&held.id) == review.as_ref())
+            }),
+            TimelineItem::ForcePushed { branch, after, .. } => {
+                *branch == Branch::Head
+                    && (self.entries.iter()).any(|entry| {
+                        matches!(&entry.item, TimelineItem::Commit(held) if Some(&held.oid) == after.as_ref())
+                    })
+            }
+            _ => true,
+        }
+    }
+
     /// The cursor to read the page before this one before, or `None` when this is the first.
     ///
     /// GitHub lists items that share a time in one order, but `before` compares them in another,
     /// so reading before a page's first item skips some of the items that share its time and
     /// repeats others (seen on cli/cli#13057, whose rebased commits share a time). Reading before
     /// the page's first item with a later time reads all of them, and the ones this page holds
-    /// are dropped as repeats. That needs the time each cursor holds, in a format GitHub doesn't
-    /// document, so a cursor that doesn't read as one, or a page whose items share one time, is
-    /// read before its start, as GitHub's paging intends.
+    /// are dropped as repeats, so each page after the newest reads one item or more again. That
+    /// needs the time each cursor holds, in a format GitHub doesn't document, so a cursor that
+    /// doesn't read as one, or a page whose items share one time, is read before its start, as
+    /// GitHub's paging intends. `skip`, GitHub's offset paging, isn't an alternative: on
+    /// rust-lang/rust#145108 it lists 252 of 547 items.
     fn before(&self) -> Option<String> {
         if !self.has_previous_page {
             return None;
         }
-        let first = self
-            .entries
-            .first()
-            .and_then(|entry| cursor_time(&entry.cursor));
+        let first = self.entries.first().and_then(|entry| {
+            let time = cursor_time(&entry.cursor);
+            if time.is_none() {
+                cursor_unread(&entry.cursor);
+            }
+            time
+        });
         let later = first.and_then(|first| {
             (self.entries.iter())
                 .find(|entry| cursor_time(&entry.cursor).is_some_and(|time| time != first))
@@ -399,6 +459,16 @@ impl Page {
         later
             .map(|entry| entry.cursor.clone())
             .or_else(|| self.start_cursor.clone())
+    }
+}
+
+/// Says, once, that a timeline cursor doesn't hold a time Lo can read, as when GitHub changes
+/// their format: long timelines then page as GitHub's paging intends, which can skip items that
+/// share a time.
+fn cursor_unread(cursor: &str) {
+    static SAID: AtomicBool = AtomicBool::new(false);
+    if !SAID.swap(true, Ordering::Relaxed) {
+        log::warn!("a timeline cursor holds no time Lo can read: {cursor}");
     }
 }
 
@@ -493,8 +563,11 @@ impl GithubClient {
         let max_items = MAX_TIMELINE_PAGES * usize::try_from(page_size).unwrap_or(1);
         let newest = self.timeline_page(pull, page_size, None).await?;
         if !newest.has_previous_page {
+            counted(pull, newest.count, newest.entries.len());
             return Ok(PullRequestTimeline {
-                left_out: newest.count.saturating_sub(newest.entries.len()),
+                left_out: 0,
+                count: newest.count,
+                shown_updated_at: newest.shown_updated_at,
                 description: newest.description,
                 items: newest.entries,
                 read_in_full_at: now.into(),
@@ -512,8 +585,10 @@ impl GithubClient {
         let mut asked = HashSet::new();
         let mut before = newest.before();
         let mut pages = vec![newest.entries];
+        let mut truncated = false;
         while let Some(cursor) = before.take() {
             if pages.len() >= MAX_TIMELINE_PAGES {
+                truncated = true;
                 break;
             }
             if !asked.insert(cursor.clone()) {
@@ -535,8 +610,16 @@ impl GithubClient {
         let mut items: Vec<TimelineEntry> = pages.into_iter().rev().flatten().collect();
         let dropped = items.len().saturating_sub(max_items);
         items.drain(..dropped);
+        let left_out = if truncated || dropped > 0 {
+            count.saturating_sub(items.len())
+        } else {
+            counted(pull, count, items.len());
+            0
+        };
         Ok(PullRequestTimeline {
-            left_out: count.saturating_sub(items.len()),
+            left_out,
+            count,
+            shown_updated_at: newest.shown_updated_at,
             description: newest.description,
             items,
             read_in_full_at: now.into(),
@@ -582,9 +665,18 @@ impl GithubClient {
                 })
                 .collect(),
             count: usize::try_from(items.filtered_count).unwrap_or_default(),
+            shown_updated_at: Some(pull_request.timeline_events.updated_at),
             has_previous_page: items.page_info.has_previous_page,
             start_cursor: items.page_info.start_cursor,
         })
+    }
+}
+
+/// Says when GitHub counts more or fewer items than it listed, for a timeline read to its oldest
+/// item. Joins still work, since they compare how far the counts move.
+fn counted(pull: &PullRef, count: usize, listed: usize) {
+    if count != listed {
+        log::info!("GitHub counts {count} timeline items of {pull}, and listed {listed}");
     }
 }
 
@@ -818,6 +910,7 @@ fn item(node: Node) -> TimelineItem {
             how: BaseChange::AutomaticFailed,
         },
         Node::ReviewDismissedEvent(dismissed) => TimelineItem::ReviewDismissed {
+            review: (dismissed.review.as_ref()).map(|review| review.id.clone()),
             reviewer: (dismissed.review.as_ref())
                 .and_then(|review| review.author.as_ref())
                 .map(|author| author.login.clone()),
@@ -870,14 +963,16 @@ mod tests {
         "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDpjMDBiYzZhOWI0OTk5ZTRmZDM1ZTE0NTdiMzdiZTIwNzg4YjllOTRj",
         "Y3Vyc29yOnYyOpPPAAABnd7d-1gH2gAzMzQ2MzU4MjYzMDozZjFkZjUxM2M1MzBjMDMwNWZiMTBjZmMzZmIyYTIxNTMwY2ZlYTk2",
     ];
-    const LATER: &str = "Y3Vyc29yOnYyOpPPAAABnd7eAygBqzI1MDM5MDQ0";
+    const LATER: &str = "Y3Vyc29yOnYyOpPPAAABnd7eAygBqzI1MDM5MDQ0OTIx";
 
     #[test]
     fn a_cursor_holds_its_items_time() {
         let [a, b] = SAME_TIME.map(cursor_time);
         assert!(a.is_some());
         assert_eq!(a, b);
+        assert!(cursor_time(LATER).is_some());
         assert_ne!(cursor_time(LATER), a);
+        assert!(base64_decode(LATER).unwrap().ends_with(b"25039044921"));
         // sharkdp/fd#2212's, padded.
         assert!(cursor_time("Y3Vyc29yOnYyOpPPAAABoaDfW7gAqjY2MDA3MzI5MjM=").is_some());
         for unknown in ["", "not base64!", "Y3Vyc29yOnYxOg==", "Y3Vyc29yOnYyOg=="] {
@@ -887,13 +982,94 @@ mod tests {
         assert_eq!(base64_decode("_-8").unwrap(), [0xff, 0xef]);
     }
 
-    fn entry(cursor: &str) -> TimelineEntry {
-        TimelineEntry {
-            cursor: cursor.into(),
-            item: TimelineItem::Other {
-                typename: Some("SubscribedEvent".into()),
-            },
+    fn other() -> TimelineItem {
+        TimelineItem::Other {
+            typename: Some("SubscribedEvent".into()),
         }
+    }
+
+    fn at(minute: i64) -> chrono::DateTime<Utc> {
+        chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(minute)
+    }
+
+    fn event() -> Event {
+        Event {
+            actor: Some("alice".into()),
+            at: at(0),
+        }
+    }
+
+    fn comment(body: &str) -> TimelineItem {
+        TimelineItem::Comment(Comment {
+            id: "IC_1".into(),
+            author: Some("alice".into()),
+            body: body.into(),
+            created_at: at(0),
+            last_edited_at: None,
+            url: String::new(),
+            hidden: None,
+            viewer_can_update: true,
+            viewer_can_delete: true,
+        })
+    }
+
+    fn review(id: &str) -> TimelineItem {
+        TimelineItem::Review(Review {
+            id: id.into(),
+            author: Some("bob".into()),
+            body: String::new(),
+            state: "APPROVED".into(),
+            created_at: at(0),
+            submitted_at: Some(at(0)),
+            last_edited_at: None,
+            url: String::new(),
+            hidden: false,
+            commit: None,
+            comments: 0,
+        })
+    }
+
+    fn commit(oid: &str) -> TimelineItem {
+        TimelineItem::Commit(Commit {
+            oid: oid.into(),
+            headline: String::new(),
+            author_login: None,
+            author_name: None,
+            committed_at: at(0),
+            checks: None,
+        })
+    }
+
+    fn dismissed(review: &str) -> TimelineItem {
+        TimelineItem::ReviewDismissed {
+            event: event(),
+            review: Some(review.into()),
+            reviewer: Some("bob".into()),
+            message: None,
+            previous_state: "APPROVED".into(),
+        }
+    }
+
+    fn force_pushed(branch: Branch, after: &str) -> TimelineItem {
+        TimelineItem::ForcePushed {
+            event: event(),
+            branch,
+            before: None,
+            after: Some(after.into()),
+        }
+    }
+
+    fn entries(items: &[(&str, TimelineItem)]) -> Vec<TimelineEntry> {
+        (items.iter())
+            .map(|(cursor, item)| TimelineEntry {
+                cursor: cursor.to_string(),
+                item: item.clone(),
+            })
+            .collect()
+    }
+
+    fn plain<'a>(cursors: &[&'a str]) -> Vec<(&'a str, TimelineItem)> {
+        cursors.iter().map(|cursor| (*cursor, other())).collect()
     }
 
     fn description() -> Description {
@@ -905,21 +1081,32 @@ mod tests {
         }
     }
 
-    fn page(cursors: &[&str], count: usize) -> Page {
+    /// A newest page holding `items`, read when GitHub counted `count` items and the items the
+    /// timeline shows last changed at minute `changed`.
+    fn page(items: &[(&str, TimelineItem)], count: usize, changed: i64) -> Page {
         Page {
             description: description(),
-            entries: cursors.iter().map(|cursor| entry(cursor)).collect(),
+            entries: entries(items),
             count,
+            shown_updated_at: Some(at(changed)),
             has_previous_page: true,
-            start_cursor: cursors.first().map(|cursor| cursor.to_string()),
+            start_cursor: items.first().map(|(cursor, _)| cursor.to_string()),
         }
     }
 
-    fn timeline(cursors: &[&str], left_out: usize) -> PullRequestTimeline {
+    /// A timeline holding `items` with `left_out` older ones, read when GitHub counted `count`
+    /// items and the items it shows last changed at minute 0.
+    fn timeline(
+        items: &[(&str, TimelineItem)],
+        left_out: usize,
+        count: usize,
+    ) -> PullRequestTimeline {
         PullRequestTimeline {
             description: description(),
-            items: cursors.iter().map(|cursor| entry(cursor)).collect(),
+            items: entries(items),
             left_out,
+            count,
+            shown_updated_at: Some(at(0)),
             read_in_full_at: chrono::DateTime::UNIX_EPOCH,
         }
     }
@@ -932,35 +1119,114 @@ mod tests {
 
     #[test]
     fn a_newest_page_joins_the_items_before_it() {
-        let known = timeline(&["a", "b", "c", "d"], 1);
-        // One item added after d, and c edited, which the page holds as it is now.
-        let joined = known.joined(&page(&["c", "d", "e"], 6), 100).unwrap();
+        let known = timeline(&plain(&["a", "b", "c", "d"]), 1, 5);
+        // One item added after d.
+        let newest = page(&plain(&["c", "d", "e"]), 6, 1);
+        let joined = known.joined(&newest, 100).unwrap();
         assert_eq!(cursors(&joined), ["a", "b", "c", "d", "e"]);
-        assert_eq!(joined.left_out, 1);
+        assert_eq!((joined.left_out, joined.count), (1, 6));
+        assert_eq!(joined.shown_updated_at, Some(at(1)));
         // Past the most it keeps, the oldest are left out.
-        let joined = known.joined(&page(&["c", "d", "e"], 6), 4).unwrap();
+        let joined = known.joined(&newest, 4).unwrap();
         assert_eq!(cursors(&joined), ["b", "c", "d", "e"]);
         assert_eq!(joined.left_out, 2);
+        // An item on the page edited: the page holds it as it is now.
+        let mut items = plain(&["a", "b", "c", "d"]);
+        items[2].1 = comment("Before");
+        let known = timeline(&items, 0, 4);
+        let edited = [("c", comment("After")), ("d", other())];
+        let joined = known.joined(&page(&edited, 4, 1), 100).unwrap();
+        assert_eq!(joined.items[2].item, comment("After"));
     }
 
     #[test]
     fn a_newest_page_that_doesnt_add_up_is_read_in_full() {
-        let known = timeline(&["a", "b", "c", "d"], 0);
-        // An older item was deleted, or one was added before the page.
-        assert!(known.joined(&page(&["c", "d", "e"], 4), 100).is_none());
-        assert!(known.joined(&page(&["c", "d", "e"], 6), 100).is_none());
+        let known = timeline(&plain(&["a", "b", "c", "d"]), 0, 4);
+        // An older item deleted while one was added, or one added before the page.
+        assert!(
+            known
+                .joined(&page(&plain(&["c", "d", "e"]), 4, 1), 100)
+                .is_none()
+        );
+        assert!(
+            known
+                .joined(&page(&plain(&["c", "d", "e"]), 6, 1), 100)
+                .is_none()
+        );
         // More items were added than a page holds.
-        assert!(known.joined(&page(&["x", "y", "z"], 7), 100).is_none());
+        assert!(
+            known
+                .joined(&page(&plain(&["x", "y", "z"]), 7, 1), 100)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_change_to_the_shown_items_the_page_doesnt_hold_is_read_in_full() {
+        let mut items = plain(&["a", "b", "c", "d"]);
+        items[0].1 = comment("Old");
+        let known = timeline(&items, 0, 4);
+        // An older comment edited or hidden: the time moved, but the page is as it was.
+        assert!(
+            known
+                .joined(&page(&plain(&["c", "d"]), 4, 1), 100)
+                .is_none()
+        );
+        // Nothing the timeline shows changed, such as a mention.
+        assert!(
+            known
+                .joined(&page(&plain(&["c", "d"]), 4, 0), 100)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_new_dismissal_or_force_push_of_what_the_page_doesnt_hold_is_read_in_full() {
+        let mut items = plain(&["a", "b", "c"]);
+        items[0].1 = review("PRR_old");
+        items[1].1 = commit("c1");
+        let known = timeline(&items, 0, 3);
+
+        // The approval it dismisses is older than the page.
+        let late = [("c", other()), ("d", dismissed("PRR_old"))];
+        assert!(known.joined(&page(&late, 4, 1), 100).is_none());
+        // A force-push whose commits were committed before the page, as a rebase keeping its
+        // committer dates leaves them; and one of the base branch.
+        let pushed = [("c", other()), ("d", force_pushed(Branch::Head, "c9"))];
+        assert!(known.joined(&page(&pushed, 4, 1), 100).is_none());
+        let base = [("c", other()), ("d", force_pushed(Branch::Base, "b9"))];
+        assert!(known.joined(&page(&base, 4, 1), 100).is_none());
+
+        // The page holds what they change.
+        let held = [
+            ("c", other()),
+            ("d", review("PRR_new")),
+            ("e", dismissed("PRR_new")),
+            ("f", commit("c9")),
+            ("g", force_pushed(Branch::Head, "c9")),
+        ];
+        assert!(known.joined(&page(&held, 7, 1), 100).is_some());
+        // A dismissal it has already joined changes nothing more.
+        let joined = timeline(&late, 2, 4);
+        assert!(joined.joined(&page(&late, 4, 0), 100).is_some());
     }
 
     #[test]
     fn a_page_is_read_before_its_first_item_with_a_later_time() {
-        let mut tied = page(&[SAME_TIME[0], SAME_TIME[1], LATER], 3);
+        let items = [
+            (SAME_TIME[0], other()),
+            (SAME_TIME[1], other()),
+            (LATER, other()),
+        ];
+        let mut tied = page(&items, 3, 0);
         assert_eq!(tied.before().as_deref(), Some(LATER));
         // All of one time, or cursors Lo can't read: before its start.
         tied.entries.pop();
         assert_eq!(tied.before().as_deref(), Some(SAME_TIME[0]));
-        assert_eq!(page(&["x", "y"], 2).before().as_deref(), Some("x"));
+        assert_eq!(
+            page(&plain(&["x", "y"]), 2, 0).before().as_deref(),
+            Some("x")
+        );
         // The first page has none before it.
         tied.has_previous_page = false;
         assert_eq!(tied.before(), None);
@@ -968,7 +1234,7 @@ mod tests {
 
     #[test]
     fn a_timeline_is_read_in_full_hourly() {
-        let known = timeline(&["a"], 0);
+        let known = timeline(&plain(&["a"]), 0, 1);
         let read = SystemTime::from(known.read_in_full_at);
         assert!(!known.due_in_full(read + READ_IN_FULL_EVERY - Duration::from_secs(1)));
         assert!(known.due_in_full(read + READ_IN_FULL_EVERY));
