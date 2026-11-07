@@ -2347,6 +2347,9 @@ async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_lay
     // change.
     let held = t.update(|poller, cx| poller.stack_layers(pr(1), ids.clone(), cx));
     assert_eq!(layer_numbers(&held.unwrap().value), [1, 2]);
+    // In another order, they're the same layers.
+    let reversed = ids.iter().rev().cloned().collect();
+    t.update(|poller, cx| poller.stack_layers(pr(1), reversed, cx));
     t.run_until(60);
     assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
 
@@ -2361,6 +2364,81 @@ async fn stack_layers_are_read_after_the_open_prs_poll_and_at_once_for_other_lay
     );
     t.run_until(120);
     assert_eq!(stack_layers(t.requests()), Vec::<u64>::new());
+}
+
+/// When each `StackLayers` request in `requests` was sent.
+fn stack_layer_reads(requests: Vec<(u64, String)>) -> Vec<u64> {
+    (requests.into_iter())
+        .filter(|(_, what)| what == "StackLayers")
+        .map(|(secs, _)| secs)
+        .collect()
+}
+
+/// The recorded `StackLayers` answer about PR #2 alone, and the one about both, with their IDs.
+fn top_and_both() -> (Interaction, Interaction, Vec<String>) {
+    let (both, ids) = stack_layers_answer();
+    let mut top = with_body(both.clone(), |body| {
+        body["data"]["nodes"].as_array_mut().unwrap().remove(0);
+    });
+    top.request.variables.as_mut().unwrap()["ids"] = serde_json::json!([ids[1]]);
+    (top, both, ids)
+}
+
+#[gpui::test]
+async fn asking_about_other_layers_while_they_are_read_reads_them_again(cx: &mut TestAppContext) {
+    let r = recorded();
+    let (top, both, ids) = top_and_both();
+    let mut interactions = r.clone();
+    interactions.extend([both, top]);
+    let mut t = Polling::with(
+        "stack_layers_in_flight",
+        interactions,
+        Some(Duration::from_secs(1)),
+        AccountSource::DeviceFlow,
+        cx,
+    )
+    .await;
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        poller.stack_layers(pr(1), ids.clone(), cx);
+    });
+    // The open PR's poll and the repository's take the first five seconds; the layers are read
+    // from 5 to 6.
+    t.run_until(5);
+    assert_eq!(stack_layer_reads(t.requests()), [5]);
+    t.update(|poller, cx| {
+        poller.stack_layers(pr(1), vec![ids[1].clone()], cx);
+    });
+    t.run_until(10);
+    // The answer about both layers isn't taken as the answer about PR #2 alone.
+    assert_eq!(stack_layer_reads(t.requests()), [6]);
+    let layers = t
+        .read(|poller| poller.cached_read::<StackLayerList>(&pr(1)))
+        .unwrap()
+        .value;
+    assert_eq!(layers.ids, ids[1..]);
+    t.run_until(60);
+    assert_eq!(stack_layer_reads(t.requests()), Vec::<u64>::new());
+}
+
+#[gpui::test]
+async fn a_write_to_a_layer_reads_the_layers_again(cx: &mut TestAppContext) {
+    let r = recorded();
+    let (both, ids) = stack_layers_answer();
+    let mut interactions = r.clone();
+    interactions.extend([both, comment(&r)]);
+    let mut t = Polling::new("stack_layers_written", interactions, cx).await;
+    t.update(|poller, cx| {
+        poller.set_open(Some(pr(1)), cx);
+        poller.stack_layers(pr(1), ids.clone(), cx);
+    });
+    t.run_until(30);
+    assert_eq!(stack_layer_reads(t.requests()), [0]);
+    // A comment on PR #1, a layer: the tree may show its review or viewed files differently.
+    let write = t.update(post_comment);
+    t.run_until(31);
+    write.await.unwrap();
+    assert_eq!(stack_layer_reads(t.requests()), [30]);
 }
 
 #[gpui::test]

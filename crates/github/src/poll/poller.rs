@@ -1,6 +1,6 @@
 //! One account's poller: what it watches, when each poll is due, and what each answer changed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
@@ -226,6 +226,7 @@ enum Outcome {
         name: &'static str,
         value: Value,
         stamp: String,
+        generation: u64,
     },
 }
 
@@ -360,6 +361,7 @@ impl Job {
                 name: read.name,
                 value: (read.run)(client, read.known).await?,
                 stamp: read.stamp,
+                generation: read.generation,
             }),
         }
     }
@@ -397,6 +399,8 @@ pub struct Poller {
     opened_at: Option<SystemTime>,
     pulls: BTreeMap<PullRef, PullState>,
     repos: BTreeMap<RepoRef, RepoState>,
+    /// The layers each pull request's stack tree last asked about ([`Poller::stack_layers`]).
+    layer_ids: BTreeMap<PullRef, BTreeSet<String>>,
     limits: RateLimits,
     cooldown: Option<Cooldown>,
     secondary_attempts: u32,
@@ -460,6 +464,7 @@ impl Poller {
             opened_at: None,
             pulls: BTreeMap::new(),
             repos: BTreeMap::new(),
+            layer_ids: BTreeMap::new(),
             limits: RateLimits::default(),
             cooldown: None,
             secondary_attempts: 0,
@@ -541,6 +546,7 @@ impl Poller {
             return;
         }
         self.failures.remove(&Target::Pull(pull.clone()));
+        self.layer_ids.remove(pull);
         if self.open.as_ref() == Some(pull) {
             self.open = None;
             self.opened_at = None;
@@ -676,6 +682,7 @@ impl Poller {
                         fetched_at,
                         failures: 0,
                         retry_at: None,
+                        generation: 0,
                     },
                 );
                 self.wake();
@@ -713,9 +720,9 @@ impl Poller {
     /// What the stack tree shows of the layers whose node IDs are `ids`, kept for `pull`, the
     /// layer that's open, as [`Self::read_cached`] keeps it. It's read again when the open layer's
     /// state, head, review decision, checks, queue entry or retargets change ([`StackLayerList`]'s
-    /// [`CachedRead::WATCHED`]), on the 5-minute refresh, and at once when the layers asked for
-    /// aren't the ones it holds. Until then it returns what it holds, which may be another set of
-    /// layers.
+    /// [`CachedRead::WATCHED`]), when Lo writes to one of the layers, on the 5-minute refresh,
+    /// and at once when asked about another set of layers, in any order. Until then it returns
+    /// what it holds, which may be about another set.
     pub fn stack_layers(
         &mut self,
         pull: PullRef,
@@ -728,7 +735,14 @@ impl Poller {
             move |client, known| read_stack_layers(client, repo.clone(), asked.clone(), known),
             cx,
         );
-        if (cached.as_ref()).is_some_and(|cached| cached.value.ids != ids) {
+        let asked: BTreeSet<String> = ids.into_iter().collect();
+        let held = (cached.as_ref())
+            .map(|cached| cached.value.ids.iter().cloned().collect::<BTreeSet<_>>());
+        let changed = match self.layer_ids.insert(pull.clone(), asked.clone()) {
+            Some(before) => before != asked,
+            None => held.is_some_and(|held| held != asked),
+        };
+        if changed {
             self.read_again::<StackLayerList>(&pull, cx);
         }
         cached
@@ -751,14 +765,33 @@ impl Poller {
     }
 
     /// Makes a read [`Self::read_cached`] keeps for `pull` due at once, whatever the fields it
-    /// watches say.
+    /// watches say. A run already under way doesn't stamp what it reads, so it runs again.
     fn read_again<T: CachedRead>(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
         let state = self.pulls.get_mut(pull);
-        if let Some(read) = state.and_then(|state| state.reads.get_mut(T::NAME))
-            && read.stamp.take().is_some()
-        {
+        if let Some(read) = state.and_then(|state| state.reads.get_mut(T::NAME)) {
+            read.stamp = None;
+            read.generation += 1;
             self.wake();
             cx.notify();
+        }
+    }
+
+    /// After a write to `pull`, makes every stack tree that shows it read its layers again.
+    fn layer_written(&mut self, pull: &PullRef, cx: &mut Context<Self>) {
+        let showing: Vec<PullRef> = (self.pulls.iter())
+            .filter(|(other, state)| {
+                let layers = state.reads.get(StackLayerList::NAME);
+                let layers =
+                    layers.and_then(|read| read.value.as_ref()?.downcast_ref::<StackLayerList>());
+                other.repo == pull.repo
+                    && layers.is_some_and(|layers| {
+                        (layers.layers.iter()).any(|layer| layer.number == pull.number)
+                    })
+            })
+            .map(|(other, _)| other.clone())
+            .collect();
+        for other in showing {
+            self.read_again::<StackLayerList>(&other, cx);
         }
     }
 
@@ -768,8 +801,9 @@ impl Poller {
     ///
     /// Afterwards what Lo knows about `target` is out of date, whether or not the write
     /// succeeded (a failed one may still have reached GitHub): a pull request's details are
-    /// fetched in full again, a repository's open PRs are listed again, and either is polled at
-    /// once if it's watched. A rate limit the write runs into pauses polling as a poll's would.
+    /// fetched in full again, and so are the layers of every stack tree that shows it, such as
+    /// its viewed files; a repository's open PRs are listed again; and either is polled at once
+    /// if it's watched. A rate limit the write runs into pauses polling as a poll's would.
     ///
     /// The write goes on if the returned task is dropped, so closing what asked for it can't cut
     /// a merge or a review off halfway.
@@ -854,6 +888,7 @@ impl Poller {
                     state.check = None;
                     state.schedule.force();
                 }
+                self.layer_written(pull, cx);
                 async move { cache.remove::<PullRequestCheckData>(&login, &key).await }.boxed()
             }
             Target::Repo(repo) => {
@@ -1018,6 +1053,7 @@ impl Poller {
                         run: read.run.clone(),
                         known: read.value.clone(),
                         stamp: current,
+                        generation: read.generation,
                     };
                     next = Some((
                         at,
@@ -1462,7 +1498,15 @@ impl Poller {
                     }
                 }
             }
-            (Outcome::Read { name, value, stamp }, Target::Pull(pull)) => {
+            (
+                Outcome::Read {
+                    name,
+                    value,
+                    stamp,
+                    generation,
+                },
+                Target::Pull(pull),
+            ) => {
                 let state = self.pulls.get_mut(pull);
                 let Some(read) = state.and_then(|state| state.reads.get_mut(name)) else {
                     return writes;
@@ -1470,9 +1514,10 @@ impl Poller {
                 let changed =
                     (read.value.as_ref()).is_none_or(|known| !(read.ty.same)(known, &value));
                 // A value that isn't complete is kept without a stamp, so it's read again once
-                // its wait is over.
+                // its wait is over. So is one whose read started before it was asked to read
+                // again, which it then does at once.
                 let complete = (read.ty.complete)(&value);
-                let stamp = complete.then_some(stamp);
+                let stamp = (complete && generation == read.generation).then_some(stamp);
                 let restamped = read.stamp != stamp;
                 read.value = Some(value.clone());
                 read.stamp = stamp.clone();
