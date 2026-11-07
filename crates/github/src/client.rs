@@ -143,7 +143,8 @@ impl GithubClient {
     }
 
     /// This client, waiting at `gate` before each request ([`RequestGate`]). It shares the token
-    /// and rate limits.
+    /// and rate limits. Never use one gated by an account's queue inside that queue's turn, as in
+    /// `RequestQueue::read` or `write`: its requests would wait for the turn being held, forever.
     pub fn gated(&self, gate: RequestGate) -> Self {
         Self {
             gate: Some(gate),
