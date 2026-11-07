@@ -11,27 +11,36 @@ use super::{DiffSource, PrTab, Status};
 use crate::account::Acting;
 use crate::poll_state::{self, PollNote};
 
-/// A place in the header's row of slots, right of the title, where a feature shows its view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeaderSlot {
+/// Declares [`HeaderSlot`] and [`HeaderSlot::ALL`] from one list, so the row has every slot, in
+/// the order listed, and a slot's index into it can't be out of range.
+macro_rules! header_slots {
+    ($($(#[doc = $doc:literal])* $slot:ident,)*) => {
+        /// A place in the header's row of slots, right of the title, where a feature shows its
+        /// view.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum HeaderSlot {
+            $($(#[doc = $doc])* $slot,)*
+        }
+
+        impl HeaderSlot {
+            /// Every slot, in the order the header shows them.
+            pub const ALL: &[Self] = &[$(Self::$slot,)*];
+        }
+    };
+}
+
+// In the order design §10 lists the header in: the pull request, its merge status, then the
+// revision picker. Where the pull request sits in its stack goes with the pull request, first, and
+// your pending review is of the revisions compared, so it comes after them.
+header_slots! {
     /// The stack the pull request is in, and which of its layers the tab shows.
     Stack,
+    /// Where merging the pull request stands.
+    MergeStatus,
     /// The revisions the diff compares, which picks others.
     Revisions,
     /// Your pending review.
     PendingReview,
-    /// Where merging the pull request stands.
-    MergeStatus,
-}
-
-impl HeaderSlot {
-    /// Every slot, in the order the header shows them.
-    pub const ALL: [Self; 4] = [
-        Self::Stack,
-        Self::Revisions,
-        Self::PendingReview,
-        Self::MergeStatus,
-    ];
 }
 
 impl PrTab {
@@ -127,8 +136,8 @@ impl PrTab {
             .child(
                 h_flex().flex_shrink_0().gap_2().children(
                     HeaderSlot::ALL
-                        .into_iter()
-                        .filter_map(|slot| self.render_header_slot(slot, cx)),
+                        .iter()
+                        .filter_map(|slot| self.render_header_slot(*slot, cx)),
                 ),
             )
     }
